@@ -1,0 +1,13 @@
+# Build output
+build/
+
+# Bundled toolchain (re-downloadable via build.sh sources; ~200MB)
+toolchain/
+
+# Local runtime artifacts
+*.log
+*.pdb
+imgui.ini
+
+# Downloaded charts & audio (personal use, do not redistribute)
+charts/
