@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 namespace game
 {
@@ -26,7 +27,8 @@ namespace
     }
 } // namespace
 
-void drawHud(platform::Renderer& renderer, const HudState& state, float songTimeSec, int windowW, int windowH, bool dumpJudgeSheet)
+void drawHud(platform::Renderer& renderer, const HudState& state, float songTimeSec, int windowW, int windowH,
+    const std::vector<HitFx>& hitEffects, float leadInSec, bool dumpJudgeSheet)
 {
     ImDrawList* drawList = ImGui::GetForegroundDrawList();
 
@@ -52,6 +54,43 @@ void drawHud(platform::Renderer& renderer, const HudState& state, float songTime
             ImVec2(clipRatio, 1.0f),
             tint);
     };
+
+    // ------------------------------------------------------------------
+    // Intro: fade the playfield in from black, then the start gradient
+    // fades out as the music approaches.
+    // ------------------------------------------------------------------
+    if (songTimeSec < 0.0f) {
+        const float sinceStart = songTimeSec + leadInSec;
+        const float fadeIn = std::clamp(sinceStart / 1.8f, 0.0f, 1.0f);
+        if (fadeIn < 1.0f) {
+            const ImU32 black = IM_COL32(0, 0, 0, static_cast<int>((1.0f - fadeIn) * 255.0f));
+            drawList->AddRectFilled(ImVec2(0, 0), ImVec2(static_cast<float>(windowW), static_cast<float>(windowH)), black);
+        }
+        const float gradAlpha = std::clamp(sinceStart / (leadInSec * 0.6f), 0.0f, 1.0f);
+        img("start_grad", 0.0f, 1080.0f - 340.0f, 1920.0f, 340.0f, (1.0f - gradAlpha) * 0.3f);
+    }
+
+    // ------------------------------------------------------------------
+    // Judgement hit effects - only spawned by real hits (main.cpp pushes
+    // them into hitEffects on a successful judge).
+    // ------------------------------------------------------------------
+    for (const HitFx& fx : hitEffects) {
+        const platform::Renderer::HudSprite* sprite = renderer.hud("effect_hit");
+        if (sprite == nullptr || sprite->id == 0) {
+            break;
+        }
+        const float t = std::clamp(fx.age / 0.35f, 0.0f, 1.0f);
+        const float alpha = 1.0f - t;
+        const float grow = 1.0f + t * 0.6f;
+        float sx = 0.0f, sy = 0.0f, sx2 = 0.0f, sy2 = 0.0f;
+        renderer.worldToScreen(fx.center - 1.1f * grow, 0.0f, sx, sy);
+        renderer.worldToScreen(fx.center + 1.1f * grow, 0.0f, sx2, sy2);
+        const ImU32 tint = IM_COL32(255, 255, 255, static_cast<int>(alpha * 255.0f));
+        drawList->AddImage(
+            reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(sprite->id)),
+            ImVec2(sx, sy), ImVec2(sx2, sy2),
+            ImVec2(0, 0), ImVec2(1, 1), tint);
+    }
 
     // ------------------------------------------------------------------
     // Score panel (top-left)
@@ -134,14 +173,18 @@ void drawHud(platform::Renderer& renderer, const HudState& state, float songTime
     }
 
     // ------------------------------------------------------------------
-    // Judge text (PERFECT / GREAT / GOOD) - only on a successful hit.
-    // The official overlay ships one combined "PERFECT GREAT GOOD BAD"
-    // sprite as judge/v3/1.png and a separate "MISS" as judge/v3/2.png.
-    // We use them that way instead of trying to pick per-grade sprites.
+    // Judge text. Official sprites: 1=PERFECT 2=GREAT 3=GOOD 4=BAD
+    // 5=MISS 6=AUTO. Only shown on an actual judge; miss uses sprite 5.
     // ------------------------------------------------------------------
     const float since = songTimeSec - state.lastJudgeAtSec;
-    if (state.lastJudge != game::Judge::Miss && state.lastJudge != game::Judge::None && since >= 0.0f && since < 0.5f) {
-        const char* key = "judge_1";
+    int judgeSprite = 0;
+    if (state.lastJudge == game::Judge::Perfect) judgeSprite = 1;
+    else if (state.lastJudge == game::Judge::Great) judgeSprite = 2;
+    else if (state.lastJudge == game::Judge::Good) judgeSprite = 3;
+    else if (state.lastJudge == game::Judge::Miss) judgeSprite = 5;
+
+    if (judgeSprite > 0 && since >= 0.0f && since < 0.5f) {
+        const std::string key = "judge_" + std::to_string(judgeSprite);
         const platform::Renderer::HudSprite* sprite = renderer.hud(key);
         if (sprite != nullptr && sprite->height > 0) {
             const float h = 60.0f;
@@ -149,13 +192,6 @@ void drawHud(platform::Renderer& renderer, const HudState& state, float songTime
             const float alpha = since < 0.35f ? 1.0f : 1.0f - (since - 0.35f) / 0.15f;
             const float pop = since < 0.08f ? 1.18f : 1.0f;
             img(key, 960.0f - w * 0.5f * pop, 560.0f - h * 0.5f * pop, w * pop, h * pop, alpha);
-        }
-    } else if (state.lastJudge == game::Judge::Miss && since >= 0.0f && since < 0.5f) {
-        const platform::Renderer::HudSprite* sprite = renderer.hud("judge_2");
-        if (sprite != nullptr && sprite->height > 0) {
-            const float h = 60.0f;
-            const float w = h * (static_cast<float>(sprite->width) / static_cast<float>(sprite->height));
-            img("judge_2", 960.0f - w * 0.5f, 560.0f - h * 0.5f, w, h);
         }
     }
 

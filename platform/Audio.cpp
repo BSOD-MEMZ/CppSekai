@@ -133,7 +133,8 @@ double AudioEngine::songTime() const
     }
     const std::uint64_t now = ma_engine_get_time_in_pcm_frames(const_cast<ma_engine*>(&mEngine));
     if (!mMusicStarted) {
-        return mLeadInSec - static_cast<double>(now - mAnchorFrames) / sampleRate();
+        // Lead-in: start at -leadInSec and climb toward zero.
+        return -mLeadInSec + static_cast<double>(now - mAnchorFrames) / sampleRate();
     }
     return static_cast<double>(now - mMusicStartFrames) / sampleRate() + mMusicDelaySec;
 }

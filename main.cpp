@@ -231,6 +231,9 @@ int main(int argc, char** argv)
         std::fprintf(stderr, "asset load failed: %s\n", error.c_str());
         return 1;
     }
+    // Autoplay keeps the core's own note-hit effect timeline; player mode
+    // uses judgement-driven effects instead.
+    renderer.setDrawCoreEffects(autoPlay);
 
     if (!renderer.loadHud(overlayDir, error)) {
         std::fprintf(stderr, "warning: HUD load failed: %s\n", error.c_str());
@@ -278,6 +281,15 @@ int main(int argc, char** argv)
         const float* events = core_api::getHitEventBuffer();
         const int count = core_api::getHitEventCount();
         judgement.load(events, count);
+
+        // Debug: dump the first events so time-base problems are visible
+        // in cppsekai.log.
+        for (int i = 0; i < count && i < 8; ++i) {
+            const int off = i * 7;
+            std::printf("hitEvent[%d] t=%.3f center=%.2f width=%.2f kind=%.0f end=%.3f\n",
+                i, events[off + 0], events[off + 1], events[off + 2], events[off + 3], events[off + 5]);
+        }
+        std::fflush(stdout);
     }
 
     // ------------------------------------------------------------------
@@ -308,9 +320,14 @@ int main(int argc, char** argv)
 
     std::vector<TouchTrack> touches;
     bool keyHeld[12] = {};
+    double lastFrameDeltaSec = 0.0;
+    Uint64 lastFrameCounter = SDL_GetPerformanceCounter();
     SDL_Event event;
 
     while (running) {
+        const Uint64 nowCounter = SDL_GetPerformanceCounter();
+        lastFrameDeltaSec = static_cast<double>(nowCounter - lastFrameCounter) / static_cast<double>(perfFreq);
+        lastFrameCounter = nowCounter;
         while (SDL_PollEvent(&event) != 0) {
             ImGui_ImplSDL2_ProcessEvent(&event);
             switch (event.type) {
@@ -449,13 +466,24 @@ int main(int argc, char** argv)
         const auto& stats = judgement.stats();
         static float lastSeenJudgeTime = -100.0f;
         static game::HudState hudState;
+        static std::vector<game::HitFx> hitEffects;
         hudState.score = stats.score;
         hudState.combo = stats.combo;
         if (stats.lastJudgeTimeSec != lastSeenJudgeTime) {
             lastSeenJudgeTime = stats.lastJudgeTimeSec;
             hudState.lastJudge = stats.lastJudge;
             hudState.lastJudgeAtSec = stats.lastJudgeTimeSec;
+            if (stats.lastJudge != game::Judge::Miss && stats.lastJudge != game::Judge::None) {
+                hitEffects.push_back(game::HitFx{stats.lastHitCenter, 0.0f});
+            }
         }
+        const float frameDelta = static_cast<float>(lastFrameDeltaSec);
+        for (auto& fx : hitEffects) {
+            fx.age += frameDelta;
+        }
+        hitEffects.erase(std::remove_if(hitEffects.begin(), hitEffects.end(),
+                             [](const game::HitFx& fx) { return fx.age > 0.35f; }),
+            hitEffects.end());
         hudState.lifeRatio = 1.0f; // TODO: wire to real life calculation
 
         // ------------------------------------------------------------------
@@ -471,7 +499,8 @@ int main(int argc, char** argv)
         ImGui::NewFrame();
 
         // pjsk overlay HUD (drawn into the foreground draw list).
-        game::drawHud(renderer, hudState, static_cast<float>(songTime), windowW, windowH, dumpJudgeSheet);
+        game::drawHud(renderer, hudState, static_cast<float>(songTime), windowW, windowH, hitEffects,
+            static_cast<float>(leadInSec), dumpJudgeSheet);
 
         {
             const auto& stats = judgement.stats();

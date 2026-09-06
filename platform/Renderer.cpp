@@ -365,6 +365,13 @@ bool Renderer::loadAssets(const std::string& assetDir, std::string& outError)
     return true;
 }
 
+void Renderer::worldToScreen(float worldX, float worldY, float& outX, float& outY) const
+{
+    const std::array<float, 2> clip = worldToClip(worldX, worldY);
+    outX = (clip[0] * 0.5f + 0.5f) * static_cast<float>(mWidth);
+    outY = (1.0f - (clip[1] * 0.5f + 0.5f)) * static_cast<float>(mHeight);
+}
+
 const Renderer::HudSprite* Renderer::hud(const std::string& name) const
 {
     const auto it = mHudSprites.find(name);
@@ -408,6 +415,9 @@ bool Renderer::loadHud(const std::string& overlayDir, std::string& outError)
     }
     add("digit_plus", "score/digit/plus.png");
     add("digit_splus", "score/digit/splus.png");
+
+    add("effect_hit", "../effect.png");
+    add("start_grad", "start_grad.png");
 
     outError.clear();
     return !mHudSprites.empty();
@@ -586,6 +596,9 @@ void Renderer::renderFrame(const float* packedQuads, int quadCount, float backgr
         const int offset = quad * 25;
         const int rawTextureId = static_cast<int>(std::lround(packedQuads[offset + 24]));
         const bool isEffect = rawTextureId >= 3;
+        if (isEffect && !mDrawCoreEffects) {
+            continue; // autoplay effects are replaced by judgement-driven ones
+        }
         const int bucket = rawTextureId <= 2 ? rawTextureId : 3;
         const int blend = rawTextureId == 4 ? BLEND_ADDITIVE : BLEND_NORMAL;
 

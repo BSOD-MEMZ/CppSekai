@@ -37,6 +37,15 @@ class Renderer
     bool loadHud(const std::string& overlayDir, std::string& outError);
     [[nodiscard]] const HudSprite* hud(const std::string& name) const;
 
+    // The chart core fires its note-hit effect timeline automatically
+    // (autoplay-style). Player mode replaces it with judgement-driven
+    // effects, so core effect quads (textureId >= 3) are opt-in.
+    void setDrawCoreEffects(bool enabled) { mDrawCoreEffects = enabled; }
+
+    // Projects a playfield world position to window pixel coordinates
+    // (y down). Used to place judgement effects on the judge line.
+    void worldToScreen(float worldX, float worldY, float& outX, float& outY) const;
+
     // Draws background + stage, then the packed runtime quads produced by
     // the chart core's render(chartTimeSec).
     void renderFrame(const float* packedQuads, int quadCount, float backgroundBrightness);
@@ -88,6 +97,7 @@ class Renderer
     std::vector<float> mStaticStageVertices;
 
     std::map<std::string, HudSprite> mHudSprites;
+    bool mDrawCoreEffects = false;
 };
 
 } // namespace platform

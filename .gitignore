@@ -1,13 +1,16 @@
 # Build output
 build/
 
-# Bundled toolchain (re-downloadable via build.sh sources; ~200MB)
+# Bundled toolchain (~300MB; re-fetch with: bash setup.sh)
 toolchain/
+
+# Game assets from upstream repo (pjsk sprites / SE; re-fetch with: bash setup.sh)
+assets/
+
+# Downloaded charts & audio (official game data; personal use only)
+charts/
 
 # Local runtime artifacts
 *.log
 *.pdb
 imgui.ini
-
-# Downloaded charts & audio (personal use, do not redistribute)
-charts/

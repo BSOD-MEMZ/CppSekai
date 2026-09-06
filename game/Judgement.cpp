@@ -140,6 +140,7 @@ HitNote* JudgementEngine::findCandidate(float lanePos, float songTimeSec, float 
     best->state = 1;
     const bool critical = best->flags != 0.0f;
     mStats.lastHitKind = best->kind;
+    mStats.lastHitCenter = best->center;
     registerJudge(judge, critical, best->volume);
     return best;
 }
@@ -167,7 +168,8 @@ Judge JudgementEngine::flick(float lanePos, float songTimeSec, float margin)
 
 void JudgementEngine::update(float songTimeSec)
 {
-    if (!mLoaded) {
+    // Nothing can be judged during the lead-in (negative chart time).
+    if (!mLoaded || songTimeSec < 0.0f) {
         return;
     }
 

@@ -9,9 +9,16 @@
 #include "game/Judgement.hpp"
 
 #include <string>
+#include <vector>
 
 namespace game
 {
+
+struct HitFx
+{
+    float center = 0.0f; // lane coordinate of the hit
+    float age = 0.0f;    // seconds since the hit
+};
 
 struct HudState
 {
@@ -23,6 +30,6 @@ struct HudState
 };
 
 void drawHud(platform::Renderer& renderer, const HudState& state, float songTimeSec, int windowW, int windowH,
-    bool dumpJudgeSheet = false);
+    const std::vector<HitFx>& hitEffects = {}, float leadInSec = 3.5f, bool dumpJudgeSheet = false);
 
 } // namespace game

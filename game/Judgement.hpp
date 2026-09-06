@@ -63,7 +63,8 @@ struct JudgementStats
     Judge lastJudge = Judge::None;
     float lastJudgeTimeSec = -100.0f;
     bool lastJudgeCritical = false;
-    float lastHitKind = -1.0f; // HitEvent kind of the last successful player hit
+    float lastHitKind = -1.0f;   // HitEvent kind of the last successful player hit
+    float lastHitCenter = 0.0f;  // lane coordinate of the last successful player hit
 };
 
 class JudgementEngine
