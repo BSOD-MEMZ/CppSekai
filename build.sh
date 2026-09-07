@@ -35,6 +35,8 @@ SOURCES=(
     platform/Audio.cpp
     game/Judgement.cpp
     game/Hud.cpp
+    game/Intro.cpp
+    game/SongSelect.cpp
     core/native/src/mmw_preview.cpp
     core/native/mmw_port/Math.cpp
     core/native/mmw_port/MinMax.cpp

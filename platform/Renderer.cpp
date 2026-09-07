@@ -95,7 +95,6 @@ inline void loadAll()
 using namespace gl;
 
 #define STB_IMAGE_IMPLEMENTATION
-#define STBI_ONLY_PNG
 #include "../third_party/mmw_preview/vendor/stb_image.h"
 
 namespace platform
@@ -240,6 +239,11 @@ Renderer::~Renderer()
     deleteTexture(mLongNoteLine);
     deleteTexture(mTouchLine);
     deleteTexture(mEffect);
+    deleteTexture(mWhite);
+    if (mCover.id != 0) {
+        glDeleteTextures(1, &mCover.id);
+        mCover.id = 0;
+    }
     if (mProgram != 0) {
         glDeleteProgram(mProgram);
     }
@@ -281,6 +285,19 @@ bool Renderer::init(int width, int height, std::string& outError)
     glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, FLOATS_PER_VERTEX * sizeof(float), reinterpret_cast<void*>(8 * sizeof(float)));
 
     glBindVertexArray(0);
+
+    // 1x1 white pixel: the lane highlight is a coloured, alpha-graded quad.
+    {
+        const unsigned char whitePixel[4] = {255, 255, 255, 255};
+        glGenTextures(1, &mWhite.id);
+        glBindTexture(GL_TEXTURE_2D, mWhite.id);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, whitePixel);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        mWhite.width = 1;
+        mWhite.height = 1;
+    }
 
     glUseProgram(mProgram);
     glUniform1i(glGetUniformLocation(mProgram, "uTexture"), 0);
@@ -423,6 +440,91 @@ bool Renderer::loadHud(const std::string& overlayDir, std::string& outError)
     return !mHudSprites.empty();
 }
 
+bool Renderer::loadCover(const std::string& path, std::string& outError)
+{
+    clearCover();
+    if (path.empty()) {
+        return false;
+    }
+    const Texture texture = loadTextureFromFile(path, outError);
+    if (texture.id == 0) {
+        return false;
+    }
+    mCover = HudSprite{texture.id, texture.width, texture.height};
+    outError.clear();
+    return true;
+}
+
+void Renderer::clearCover()
+{
+    if (mCover.id != 0) {
+        glDeleteTextures(1, &mCover.id);
+        mCover.id = 0;
+    }
+    mCover.width = 0;
+    mCover.height = 0;
+}
+
+namespace
+{
+    // The playfield is a fake-perspective space: a lane coordinate x at
+    // height y is drawn at world (x * y, y). y = 1 is the judge line,
+    // y -> 0 is the vanishing point at the top of the stage.
+    constexpr float LANE_GLOW_BOTTOM_Y = 1.06f;
+    constexpr float LANE_GLOW_TOP_Y = 0.16f;
+} // namespace
+
+void Renderer::drawLaneGlows()
+{
+    if (mLaneGlows.empty() || mWhite.id == 0) {
+        return;
+    }
+
+    std::vector<float> vertices;
+    vertices.reserve(mLaneGlows.size() * 6 * FLOATS_PER_VERTEX);
+
+    for (const LaneGlow& glow : mLaneGlows) {
+        if (glow.intensity <= 0.001f) {
+            continue;
+        }
+        const float left = glow.center - glow.halfWidth;
+        const float right = glow.center + glow.halfWidth;
+        // bottom -> top, alpha fades out towards the vanishing point
+        const std::array<std::array<float, 3>, 4> world{{
+            {right * LANE_GLOW_BOTTOM_Y, LANE_GLOW_BOTTOM_Y, 0.85f},
+            {right * LANE_GLOW_TOP_Y, LANE_GLOW_TOP_Y, 0.0f},
+            {left * LANE_GLOW_TOP_Y, LANE_GLOW_TOP_Y, 0.0f},
+            {left * LANE_GLOW_BOTTOM_Y, LANE_GLOW_BOTTOM_Y, 0.85f},
+        }};
+        std::array<std::array<float, 2>, 4> clip{};
+        for (int i = 0; i < 4; ++i) {
+            clip[i] = worldToClip(world[i][0], world[i][1]);
+        }
+
+        const float peak = std::clamp(glow.intensity, 0.0f, 1.4f) * 0.55f;
+        auto push = [&](int index) {
+            const float alpha = world[index][2] * peak;
+            vertices.push_back(clip[index][0]);
+            vertices.push_back(clip[index][1]);
+            vertices.push_back(0.5f);
+            vertices.push_back(0.5f);
+            vertices.push_back(mLaneGlowTint[0]);
+            vertices.push_back(mLaneGlowTint[1]);
+            vertices.push_back(mLaneGlowTint[2]);
+            vertices.push_back(alpha);
+            vertices.push_back(1.0f);
+        };
+        push(0);
+        push(1);
+        push(2);
+        push(0);
+        push(2);
+        push(3);
+    }
+
+    drawVertices(mWhite, vertices, false, BLEND_ADDITIVE);
+}
+
 std::array<float, 2> Renderer::worldToClip(float worldX, float worldY) const
 {
     const float sourceAspect = static_cast<float>(mWidth) / static_cast<float>(mHeight);
@@ -525,8 +627,9 @@ void Renderer::buildStaticVertices()
     buildQuad(mStaticStageVertices, mStage, stagePoints, {0.0f, 0.0f, 2048.0f, 1176.0f}, {1.0f, 1.0f, 1.0f, 1.0f});
 }
 
-void Renderer::drawStaticScene(float backgroundBrightness)
+void Renderer::drawStaticScene(float backgroundBrightness, float playfieldVisibility)
 {
+    const float visibility = std::max(0.0f, std::min(1.0f, playfieldVisibility));
     std::vector<float> background = mStaticBackgroundVertices;
     for (size_t i = 4; i < background.size(); i += FLOATS_PER_VERTEX) {
         background[i + 0] *= backgroundBrightness;
@@ -534,7 +637,14 @@ void Renderer::drawStaticScene(float backgroundBrightness)
         background[i + 2] *= backgroundBrightness;
     }
     drawVertices(mBackground, background, false, BLEND_NORMAL);
-    drawVertices(mStage, mStaticStageVertices, false, BLEND_NORMAL);
+    if (visibility <= 0.001f) {
+        return;
+    }
+    std::vector<float> stage = mStaticStageVertices;
+    for (size_t i = 7; i < stage.size(); i += FLOATS_PER_VERTEX) {
+        stage[i] *= visibility;
+    }
+    drawVertices(mStage, stage, false, BLEND_NORMAL);
 }
 
 void Renderer::drawVertices(const Texture& texture, const std::vector<float>& vertices, bool effectPass, int blendMode)
@@ -568,15 +678,21 @@ void Renderer::drawVertices(const Texture& texture, const std::vector<float>& ve
     glBindVertexArray(0);
 }
 
-void Renderer::renderFrame(const float* packedQuads, int quadCount, float backgroundBrightness)
+void Renderer::renderFrame(const float* packedQuads, int quadCount, float backgroundBrightness,
+    float playfieldVisibility)
 {
+    const float visibility = std::max(0.0f, std::min(1.0f, playfieldVisibility));
     GLint viewport[4] = {0, 0, 0, 0};
     glGetIntegerv(GL_VIEWPORT, viewport);
     glClearColor(0.03f, 0.03f, 0.05f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
     glViewport(0, 0, mWidth, mHeight);
 
-    drawStaticScene(backgroundBrightness);
+    drawStaticScene(backgroundBrightness, visibility);
+    if (visibility <= 0.001f) {
+        return;
+    }
+    drawLaneGlows();
 
     // Iterate runtime quads and batch consecutive quads sharing the same
     // texture bucket + blend mode, preserving the core's z order.
@@ -616,7 +732,7 @@ void Renderer::renderFrame(const float* packedQuads, int quadCount, float backgr
         const Texture& texture = bucket == 0 ? mNotes : bucket == 1 ? mLongNoteLine
                                                     : bucket == 2   ? mTouchLine
                                                                     : mEffect;
-        const float alphaMultiplier = isEffect ? 1.0f : 1.0f;
+        const float alphaMultiplier = visibility;
 
         std::array<std::array<float, 2>, 4> clip{};
         std::array<float, 4> reciprocalW{};

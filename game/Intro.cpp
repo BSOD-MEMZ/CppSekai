@@ -1,0 +1,472 @@
+// CppSekai - opening intro card (see Intro.hpp).
+// 1:1 port of drawOpeningIntroOverlay() / introCardAlpha() /
+// openingPlayfieldVisibility() / loadIntroFonts() from
+// core/native/src/mmw_overlay_player.cpp (sekai-mmw-preview-web, AGPL-3.0).
+#include "Intro.hpp"
+
+#include "imgui.h"
+
+#include <algorithm>
+#include <array>
+#include <cctype>
+#include <cmath>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+
+namespace game
+{
+namespace
+{
+    // ---- Upstream constants (mmw_overlay_player.cpp) --------------------
+    constexpr float INTRO_ENTER_FADE_SEC = 0.52f; // unused upstream, kept for reference
+    constexpr float INTRO_EXIT_FADE_SEC = 0.56f;
+    constexpr float INTRO_BG_ALPHA = 0.82f;
+    constexpr float INTRO_GRAD_ALPHA = 0.10f;
+    constexpr float INTRO_GRAD_START_SEC = 1.0f;
+    constexpr float INTRO_GRAD_DURATION_SEC = 2.0f;
+    constexpr float INTRO_GRAD_DRAW_WIDTH = 2001.0f;
+    constexpr float INTRO_GRAD_DRAW_HEIGHT = 1125.0f;
+    constexpr float INTRO_GRAD_START_Y = 1500.0f;
+    constexpr float INTRO_GRAD_END_Y = 0.0f;
+    constexpr float INTRO_COVER_LEFT_PX = 148.0f;
+    constexpr float INTRO_COVER_BOTTOM_PX = 104.0f;
+    constexpr float INTRO_COVER_SIZE_PX = 350.0f;
+    constexpr float INTRO_TEXT_LEFT_WITH_COVER_PX = 540.0f;
+    constexpr float INTRO_TEXT_LEFT_NO_COVER_PX = 186.0f;
+    constexpr float INTRO_TEXT_BOTTOM_PX = 110.0f;
+    constexpr float INTRO_TEXT_BLOCK_SHIFT_Y_PX = 26.0f;
+    constexpr float INTRO_DIFF_LABEL_Y_OFFSET_PX = 9.0f;
+    constexpr float INTRO_TITLE_DRAW_SIZE_PX = 38.0f;
+    constexpr float INTRO_TITLE_LETTER_SPACING_PX = 5.0f;
+    constexpr float INTRO_DIFF_DRAW_SIZE_PX = 28.0f;
+    constexpr float INTRO_BODY_DRAW_SIZE_PX = 26.0f;
+    constexpr float INTRO_DESC1_ROW_OFFSET_PX = 88.0f;
+    constexpr float INTRO_DESC2_ROW_OFFSET_PX = 136.0f;
+
+    ImFont* gTitleFont = nullptr;
+    ImFont* gBodyFont = nullptr;
+    ImFont* gDiffFont = nullptr;
+
+    float clamp01(float value)
+    {
+        return std::max(0.0f, std::min(1.0f, value));
+    }
+
+    float easeOutQuad(float value)
+    {
+        const float clamped = clamp01(value);
+        return 1.0f - (1.0f - clamped) * (1.0f - clamped);
+    }
+
+    std::string trimText(std::string value)
+    {
+        while (!value.empty() && std::isspace(static_cast<unsigned char>(value.front())) != 0) {
+            value.erase(value.begin());
+        }
+        while (!value.empty() && std::isspace(static_cast<unsigned char>(value.back())) != 0) {
+            value.pop_back();
+        }
+        return value;
+    }
+
+    std::string toUpper(std::string value)
+    {
+        std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
+            return static_cast<char>(std::toupper(c));
+        });
+        return value;
+    }
+
+    size_t utf8CodepointLength(unsigned char leadByte)
+    {
+        if ((leadByte & 0x80u) == 0) {
+            return 1;
+        }
+        if ((leadByte & 0xE0u) == 0xC0u) {
+            return 2;
+        }
+        if ((leadByte & 0xF0u) == 0xE0u) {
+            return 3;
+        }
+        if ((leadByte & 0xF8u) == 0xF0u) {
+            return 4;
+        }
+        return 1;
+    }
+
+    void drawSpacedUtf8Text(ImDrawList* drawList, ImFont* font, float fontSize, ImVec2 position, ImU32 color,
+        const std::string& text, float extraSpacing, float maxWidth)
+    {
+        if (drawList == nullptr || font == nullptr || text.empty()) {
+            return;
+        }
+
+        const char* cursor = text.c_str();
+        const char* end = cursor + text.size();
+        float x = position.x;
+        const float maxX = maxWidth > 0.0f ? position.x + maxWidth : FLT_MAX;
+
+        while (cursor < end) {
+            const size_t glyphLength = std::min(
+                utf8CodepointLength(static_cast<unsigned char>(*cursor)),
+                static_cast<size_t>(end - cursor));
+            const std::string glyph(cursor, glyphLength);
+            const float glyphWidth = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, glyph.c_str()).x;
+            if (x + glyphWidth > maxX) {
+                break;
+            }
+            drawList->AddText(font, fontSize, ImVec2(x, position.y), color, glyph.c_str());
+            x += glyphWidth + extraSpacing;
+            cursor += glyphLength;
+        }
+    }
+
+    std::string normalizeDifficulty(std::string value)
+    {
+        value = toUpper(trimText(value));
+        value.erase(std::remove_if(value.begin(), value.end(),
+                        [](unsigned char c) { return std::isspace(c) != 0; }),
+            value.end());
+        if (value == "0") {
+            return "EASY";
+        }
+        if (value == "1") {
+            return "NORMAL";
+        }
+        if (value == "2") {
+            return "HARD";
+        }
+        if (value == "3") {
+            return "EXPERT";
+        }
+        if (value == "4") {
+            return "MASTER";
+        }
+        if (value == "5") {
+            return "APPEND";
+        }
+        if (value == "6") {
+            return "ETERNAL";
+        }
+        return value;
+    }
+
+    std::string inferDifficultyFromSusPath(std::string susPath)
+    {
+        susPath = toUpper(susPath);
+        const std::array<std::string, 7> ordered{
+            "ETERNAL", "APPEND", "MASTER", "EXPERT", "HARD", "NORMAL", "EASY"
+        };
+        for (const auto& candidate : ordered) {
+            if (susPath.find(candidate) != std::string::npos) {
+                return candidate;
+            }
+        }
+        return "";
+    }
+
+    int alphaByte(float v)
+    {
+        return static_cast<int>(std::lround(clamp01(v) * 255.0f));
+    }
+} // namespace
+
+void loadIntroFonts(const std::string& fontDir)
+{
+    ImGuiIO& io = ImGui::GetIO();
+
+    // Same candidate order as upstream loadIntroFonts(). The Rodin EB face is
+    // CFF-based and stb_truetype cannot rasterize it, so the loader silently
+    // falls through to the Noto TTF - exactly like the web build.
+    auto addFont = [&](const std::vector<std::string>& candidates, float size) -> ImFont* {
+        for (const std::string& name : candidates) {
+            const std::string path = fontDir + "/" + name;
+            std::FILE* probe = std::fopen(path.c_str(), "rb");
+            if (probe == nullptr) {
+                continue;
+            }
+            std::fclose(probe);
+            ImFontConfig config;
+            config.OversampleH = 2;
+            config.OversampleV = 2;
+            config.RasterizerMultiply = 1.0f;
+            std::snprintf(config.Name, sizeof(config.Name), "%s", name.c_str());
+            ImFont* font = io.Fonts->AddFontFromFileTTF(path.c_str(), size, &config,
+                io.Fonts->GetGlyphRangesJapanese());
+            if (font != nullptr) {
+                // ロ ミ 初 音 作 詞 - report which of these actually rasterized.
+                const ImWchar probes[] = {0x30ED, 0x30DF, 0x521D, 0x97F3, 0x4F5C, 0x8A5E};
+                std::string missing;
+                ImFontBaked* baked = font->GetFontBaked(size);
+                for (const ImWchar c : probes) {
+                    if (baked == nullptr || baked->FindGlyphNoFallback(c) == nullptr) {
+                        char buf[16];
+                        std::snprintf(buf, sizeof(buf), "%04X ", c);
+                        missing += buf;
+                    }
+                }
+                std::printf("[intro] font %s @%.0fpx loaded%s\n", name.c_str(), size,
+                    missing.empty() ? " (all probes ok)" : (" MISSING: " + missing).c_str());
+                return font;
+            }
+            std::printf("[intro] font %s rejected by stb_truetype\n", name.c_str());
+        }
+        return nullptr;
+    };
+
+    gBodyFont = addFont({"FOT-RodinNTLGPro-DB.ttf"}, 42.0f);
+    gTitleFont = addFont({"FOT-RodinNTLG Pro EB.otf", "FOT-RodinNTLGPro-EB.ttf", "NotoSansCJKSC-Black.ttf"}, 38.0f);
+    gDiffFont = addFont({"FOT-RodinNTLG Pro EB.otf", "FOT-RodinNTLGPro-EB.ttf", "NotoSansCJKSC-Black.ttf"}, 20.0f);
+
+    if (gBodyFont == nullptr) {
+        gBodyFont = io.Fonts->AddFontDefault();
+    }
+    if (gTitleFont == nullptr) {
+        gTitleFont = gBodyFont;
+    }
+    if (gDiffFont == nullptr) {
+        gDiffFont = gTitleFont;
+    }
+    io.Fonts->Build();
+}
+
+ImFont* titleFont()
+{
+    return gTitleFont;
+}
+
+ImFont* bodyFont()
+{
+    return gBodyFont;
+}
+
+ImFont* difficultyFont()
+{
+    return gDiffFont;
+}
+
+IntroInfo buildIntroInfo(const IntroMetadata& metadata, bool hasCover)
+{
+    IntroInfo intro;
+    intro.hasCover = hasCover;
+    intro.title = trimText(metadata.title);
+    if (intro.title.empty()) {
+        intro.title = "Unknown Title";
+    }
+
+    const std::string lyricist = trimText(metadata.lyricist).empty() ? std::string("-") : trimText(metadata.lyricist);
+    std::string composer = trimText(metadata.composer);
+    if (composer.empty()) {
+        composer = "-";
+    }
+    const std::string arranger = trimText(metadata.arranger).empty() ? std::string("-") : trimText(metadata.arranger);
+    const std::string vocal = trimText(metadata.vocal).empty() ? std::string("-") : trimText(metadata.vocal);
+
+    intro.description1 = "作詞：" + lyricist + "　作曲：" + composer + "　編曲：" + arranger;
+    intro.description2 = "Vo. " + vocal;
+    intro.difficulty = normalizeDifficulty(trimText(metadata.difficulty));
+    if (intro.difficulty.empty()) {
+        intro.difficulty = inferDifficultyFromSusPath(metadata.susPath);
+    }
+
+    intro.hasContent = intro.hasCover || !intro.title.empty() || !intro.description1.empty()
+        || !intro.description2.empty() || !intro.difficulty.empty();
+    return intro;
+}
+
+float introCardAlpha(float outputTimeSec, bool hasIntroContent)
+{
+    if (!hasIntroContent || outputTimeSec < 0.0f) {
+        return 0.0f;
+    }
+    const float fadeOutStartSec = std::max(0.0f, kHudIntroDurationSec - INTRO_EXIT_FADE_SEC);
+    if (outputTimeSec < fadeOutStartSec) {
+        return 1.0f;
+    }
+    if (outputTimeSec < kHudIntroDurationSec) {
+        return clamp01(1.0f - (outputTimeSec - fadeOutStartSec) / std::max(0.001f, INTRO_EXIT_FADE_SEC));
+    }
+    return 0.0f;
+}
+
+float openingPlayfieldVisibility(float outputTimeSec, bool hasIntroContent)
+{
+    if (!hasIntroContent || outputTimeSec < 0.0f) {
+        return 1.0f;
+    }
+    const float revealStartSec = kHudIntroDurationSec + kIntroCleanBgDurationSec;
+    if (outputTimeSec < revealStartSec) {
+        return 0.0f;
+    }
+    return clamp01((outputTimeSec - revealStartSec) / kIntroPlayfieldFadeInSec);
+}
+
+void drawIntro(platform::Renderer& renderer, const IntroInfo& intro, float outputTimeSec,
+    int windowW, int windowH)
+{
+    const float cardAlpha = introCardAlpha(outputTimeSec, intro.hasContent);
+    const float maskAlpha =
+        (intro.hasContent && outputTimeSec >= 0.0f && outputTimeSec < kHudIntroDurationSec)
+            ? INTRO_BG_ALPHA
+            : 0.0f;
+    if (cardAlpha <= 0.001f && maskAlpha <= 0.001f) {
+        return;
+    }
+
+    ImDrawList* overlay = ImGui::GetForegroundDrawList();
+    const float scale = std::min(static_cast<float>(windowW) / 1920.0f, static_cast<float>(windowH) / 1080.0f);
+    const float offsetX = (static_cast<float>(windowW) - 1920.0f * scale) * 0.5f;
+    const float offsetY = (static_cast<float>(windowH) - 1080.0f * scale) * 0.5f;
+    auto px = [&](float x) { return offsetX + x * scale; };
+    auto py = [&](float y) { return offsetY + y * scale; };
+    auto ps = [&](float v) { return v * scale; };
+
+    auto drawHudImage = [&](const platform::Renderer::HudSprite* sprite, float x, float y, float width, float height,
+                            float alpha) {
+        if (sprite == nullptr || sprite->id == 0 || width <= 0.1f || height <= 0.1f) {
+            return;
+        }
+        overlay->AddImage(
+            reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(sprite->id)),
+            ImVec2(x, y), ImVec2(x + width, y + height),
+            ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f),
+            IM_COL32(255, 255, 255, alphaByte(alpha)));
+    };
+
+    // Full-screen purple mask; the stage and notes are hidden underneath.
+    if (maskAlpha > 0.001f) {
+        overlay->AddRectFilled(
+            ImVec2(px(0.0f), py(0.0f)),
+            ImVec2(px(1920.0f), py(1080.0f)),
+            IM_COL32(104, 104, 156, alphaByte(maskAlpha)));
+    }
+
+    // Two rising gradient waves (overlay/start_grad.png).
+    const platform::Renderer::HudSprite* gradTexture = renderer.hud("start_grad");
+    if (maskAlpha > 0.001f && gradTexture != nullptr && gradTexture->id != 0) {
+        const float introTimeSec = std::min(
+            kHudIntroDurationSec + INTRO_GRAD_DURATION_SEC * 0.5f,
+            std::max(0.0f, outputTimeSec + INTRO_GRAD_DURATION_SEC * 0.5f));
+        for (int waveIndex = 0; waveIndex < 2; ++waveIndex) {
+            const float waveStartSec = INTRO_GRAD_START_SEC + static_cast<float>(waveIndex) * INTRO_GRAD_DURATION_SEC;
+            const float normalized = (introTimeSec - waveStartSec) / INTRO_GRAD_DURATION_SEC;
+            if (normalized <= 0.0f || normalized >= 1.0f) {
+                continue;
+            }
+            const float eased = easeOutQuad(normalized);
+            const float offsetYValue = INTRO_GRAD_START_Y + (INTRO_GRAD_END_Y - INTRO_GRAD_START_Y) * eased;
+            const float drawX = (1920.0f - INTRO_GRAD_DRAW_WIDTH) * 0.5f;
+            const float drawY = (1080.0f - INTRO_GRAD_DRAW_HEIGHT) * 0.5f + offsetYValue;
+            drawHudImage(gradTexture, px(drawX), py(drawY),
+                ps(INTRO_GRAD_DRAW_WIDTH), ps(INTRO_GRAD_DRAW_HEIGHT), INTRO_GRAD_ALPHA);
+        }
+    }
+
+    // Jacket + difficulty badge.
+    if (cardAlpha > 0.001f && intro.hasCover) {
+        const platform::Renderer::HudSprite* coverTexture = renderer.cover();
+        if (coverTexture != nullptr && coverTexture->id != 0) {
+            const float coverTop = 1080.0f - INTRO_COVER_BOTTOM_PX - INTRO_COVER_SIZE_PX;
+            if (!intro.difficulty.empty()) {
+                const std::string upper = toUpper(intro.difficulty);
+                const int diffAlpha = alphaByte(cardAlpha);
+                auto difficultyColor = [&](const std::string& upperDifficulty) -> ImU32 {
+                    if (upperDifficulty == "EASY") {
+                        return IM_COL32(75, 207, 138, diffAlpha);
+                    }
+                    if (upperDifficulty == "NORMAL") {
+                        return IM_COL32(90, 140, 255, diffAlpha);
+                    }
+                    if (upperDifficulty == "HARD") {
+                        return IM_COL32(242, 150, 77, diffAlpha);
+                    }
+                    if (upperDifficulty == "EXPERT") {
+                        return IM_COL32(239, 90, 102, diffAlpha);
+                    }
+                    if (upperDifficulty == "MASTER") {
+                        return IM_COL32(181, 91, 255, diffAlpha);
+                    }
+                    if (upperDifficulty == "APPEND") {
+                        return IM_COL32(179, 162, 255, diffAlpha);
+                    }
+                    if (upperDifficulty == "ETERNAL") {
+                        return IM_COL32(241, 192, 79, diffAlpha);
+                    }
+                    return IM_COL32(169, 56, 255, diffAlpha);
+                };
+                const float diffX = INTRO_COVER_LEFT_PX - 40.0f;
+                const float diffTop = coverTop + 36.0f;
+                const float diffSize = INTRO_COVER_SIZE_PX;
+                if (upper == "APPEND") {
+                    constexpr int appendStartR = 0xAD;
+                    constexpr int appendStartG = 0x9F;
+                    constexpr int appendStartB = 0xF6;
+                    constexpr int appendEndR = 0xEF;
+                    constexpr int appendEndG = 0x8D;
+                    constexpr int appendEndB = 0xDA;
+                    constexpr int appendMidR = (appendStartR + appendEndR) / 2;
+                    constexpr int appendMidG = (appendStartG + appendEndG) / 2;
+                    constexpr int appendMidB = (appendStartB + appendEndB) / 2;
+                    overlay->AddRectFilledMultiColor(
+                        ImVec2(px(diffX), py(diffTop)),
+                        ImVec2(px(diffX + diffSize), py(diffTop + diffSize)),
+                        IM_COL32(appendStartR, appendStartG, appendStartB, diffAlpha),
+                        IM_COL32(appendMidR, appendMidG, appendMidB, diffAlpha),
+                        IM_COL32(appendEndR, appendEndG, appendEndB, diffAlpha),
+                        IM_COL32(appendMidR, appendMidG, appendMidB, diffAlpha));
+                } else {
+                    overlay->AddRectFilled(
+                        ImVec2(px(diffX), py(diffTop)),
+                        ImVec2(px(diffX + diffSize), py(diffTop + diffSize)),
+                        difficultyColor(upper));
+                }
+                overlay->AddText(
+                    gDiffFont,
+                    ps(INTRO_DIFF_DRAW_SIZE_PX),
+                    ImVec2(px(diffX + 10.0f), py(diffTop + diffSize - 42.0f + INTRO_DIFF_LABEL_Y_OFFSET_PX)),
+                    IM_COL32(247, 250, 255, diffAlpha),
+                    intro.difficulty.c_str());
+            }
+            drawHudImage(coverTexture, px(INTRO_COVER_LEFT_PX), py(coverTop),
+                ps(INTRO_COVER_SIZE_PX), ps(INTRO_COVER_SIZE_PX), cardAlpha);
+        }
+    }
+
+    const float textLeft = intro.hasCover ? INTRO_TEXT_LEFT_WITH_COVER_PX : INTRO_TEXT_LEFT_NO_COVER_PX;
+    const float blockTop = 1080.0f - INTRO_TEXT_BOTTOM_PX - 180.0f + INTRO_TEXT_BLOCK_SHIFT_Y_PX;
+    const float textMaxWidth = std::max(320.0f, 1920.0f - textLeft - 120.0f);
+    const ImU32 titleColor = IM_COL32(246, 251, 255, alphaByte(cardAlpha));
+    const ImU32 metaColor = IM_COL32(255, 255, 255, alphaByte(cardAlpha));
+    if (cardAlpha > 0.001f) {
+        drawSpacedUtf8Text(
+            overlay,
+            gTitleFont,
+            ps(INTRO_TITLE_DRAW_SIZE_PX),
+            ImVec2(px(textLeft), py(blockTop)),
+            titleColor,
+            intro.title,
+            ps(INTRO_TITLE_LETTER_SPACING_PX),
+            ps(textMaxWidth));
+        overlay->AddText(
+            gBodyFont,
+            ps(INTRO_BODY_DRAW_SIZE_PX),
+            ImVec2(px(textLeft), py(blockTop + INTRO_DESC1_ROW_OFFSET_PX)),
+            metaColor,
+            intro.description1.c_str(),
+            nullptr,
+            ps(textMaxWidth));
+        overlay->AddText(
+            gBodyFont,
+            ps(INTRO_BODY_DRAW_SIZE_PX),
+            ImVec2(px(textLeft), py(blockTop + INTRO_DESC2_ROW_OFFSET_PX)),
+            metaColor,
+            intro.description2.c_str(),
+            nullptr,
+            ps(textMaxWidth));
+    }
+
+    (void)INTRO_ENTER_FADE_SEC;
+}
+
+} // namespace game

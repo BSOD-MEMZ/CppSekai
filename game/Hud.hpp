@@ -16,8 +16,9 @@ namespace game
 
 struct HitFx
 {
-    float center = 0.0f; // lane coordinate of the hit
-    float age = 0.0f;    // seconds since the hit
+    float center = 0.0f;   // lane coordinate of the hit
+    float age = 0.0f;      // seconds since the hit
+    float strength = 1.0f; // 1 = judged hit, <1 = plain lane press feedback
 };
 
 struct HudState

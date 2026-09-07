@@ -11,6 +11,7 @@ namespace game
 namespace
 {
     constexpr float SCORE_ROOT_SCALE = 1.5f;
+    constexpr float JUDGE_LINE_Y = 1.0f; // fake-perspective height of the judge line
 
     constexpr float scoreX(float v) { return 36.0f + v * SCORE_ROOT_SCALE; }
     constexpr float scoreY(float v) { return -3.0f + v * SCORE_ROOT_SCALE; }
@@ -56,23 +57,13 @@ void drawHud(platform::Renderer& renderer, const HudState& state, float songTime
     };
 
     // ------------------------------------------------------------------
-    // Intro: fade the playfield in from black, then the start gradient
-    // fades out as the music approaches.
+    // Intro: main.cpp owns the opening card + the playfield fade (see
+    // game/Intro.cpp); nothing to draw here.
     // ------------------------------------------------------------------
-    if (songTimeSec < 0.0f) {
-        const float sinceStart = songTimeSec + leadInSec;
-        const float fadeIn = std::clamp(sinceStart / 1.8f, 0.0f, 1.0f);
-        if (fadeIn < 1.0f) {
-            const ImU32 black = IM_COL32(0, 0, 0, static_cast<int>((1.0f - fadeIn) * 255.0f));
-            drawList->AddRectFilled(ImVec2(0, 0), ImVec2(static_cast<float>(windowW), static_cast<float>(windowH)), black);
-        }
-        const float gradAlpha = std::clamp(sinceStart / (leadInSec * 0.6f), 0.0f, 1.0f);
-        img("start_grad", 0.0f, 1080.0f - 340.0f, 1920.0f, 340.0f, (1.0f - gradAlpha) * 0.3f);
-    }
 
     // ------------------------------------------------------------------
-    // Judgement hit effects - only spawned by real hits (main.cpp pushes
-    // them into hitEffects on a successful judge).
+    // Judgement hit effects - spawned by real hits and by lane presses
+    // (a press without a note still flashes the judge line).
     // ------------------------------------------------------------------
     for (const HitFx& fx : hitEffects) {
         const platform::Renderer::HudSprite* sprite = renderer.hud("effect_hit");
@@ -80,11 +71,13 @@ void drawHud(platform::Renderer& renderer, const HudState& state, float songTime
             break;
         }
         const float t = std::clamp(fx.age / 0.35f, 0.0f, 1.0f);
-        const float alpha = 1.0f - t;
-        const float grow = 1.0f + t * 0.6f;
+        const float alpha = (1.0f - t) * std::clamp(fx.strength, 0.0f, 1.0f);
+        const float grow = (1.0f + t * 0.6f) * (0.55f + 0.45f * std::clamp(fx.strength, 0.0f, 1.0f));
         float sx = 0.0f, sy = 0.0f, sx2 = 0.0f, sy2 = 0.0f;
-        renderer.worldToScreen(fx.center - 1.1f * grow, 0.0f, sx, sy);
-        renderer.worldToScreen(fx.center + 1.1f * grow, 0.0f, sx2, sy2);
+        // The playfield is a fake perspective: a lane coordinate x at
+        // height y is drawn at world (x * y, y); y = 1 is the judge line.
+        renderer.worldToScreen((fx.center - 1.1f * grow) * JUDGE_LINE_Y, JUDGE_LINE_Y, sx, sy);
+        renderer.worldToScreen((fx.center + 1.1f * grow) * JUDGE_LINE_Y, JUDGE_LINE_Y, sx2, sy2);
         const ImU32 tint = IM_COL32(255, 255, 255, static_cast<int>(alpha * 255.0f));
         drawList->AddImage(
             reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(sprite->id)),
