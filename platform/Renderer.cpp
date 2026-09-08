@@ -413,6 +413,9 @@ bool Renderer::loadHud(const std::string& overlayDir, std::string& outError)
     add("combo_tag_glow", "combo/pe.png");
     add("life_bg", "life/v3/bg.png");
     add("life_fill", "life/v3/normal.png");
+    add("life_danger", "life/v3/danger.png");
+    add("life_overflow", "life/v3/overflow.png");
+    add("ui_close", "../ui/close.png");
 
     for (int i = 1; i <= 6; ++i) {
         add("judge_" + std::to_string(i), "judge/v3/" + std::to_string(i) + ".png");

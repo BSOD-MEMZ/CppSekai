@@ -33,4 +33,15 @@ struct HudState
 void drawHud(platform::Renderer& renderer, const HudState& state, float songTimeSec, int windowW, int windowH,
     const std::vector<HitFx>& hitEffects = {}, float leadInSec = 3.5f, bool dumpJudgeSheet = false);
 
+// Pause button zone of the life bar, in 1920x1080 virtual HUD coordinates.
+// Clicking it opens the pause dialog.
+struct HudRect
+{
+    float x = 0.0f;
+    float y = 0.0f;
+    float w = 0.0f;
+    float h = 0.0f;
+};
+HudRect lifePauseRect();
+
 } // namespace game

@@ -118,7 +118,7 @@ class JudgementEngine
     JudgementStats mStats;
 
     Judge registerJudge(Judge judge, bool critical, float volume);
-    void registerMiss();
+    void registerMiss(float songTimeSec);
     HitNote* findCandidate(float lanePos, float songTimeSec, float margin, bool wantFlick);
     bool laneCovers(const HitNote& note, float lanePos, float margin) const;
 };

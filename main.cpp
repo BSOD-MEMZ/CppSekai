@@ -13,10 +13,12 @@
 #include "core_api.hpp"
 #include "platform/Audio.hpp"
 #include "platform/Renderer.hpp"
+#include "platform/SystemMedia.hpp"
 #include "game/Intro.hpp"
 #include "game/Judgement.hpp"
 #include "game/Hud.hpp"
 #include "game/SongSelect.hpp"
+#include "game/Ui.hpp"
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "third_party/stb_image_write.h"
@@ -36,6 +38,10 @@
 #include <sstream>
 #include <string>
 #include <vector>
+
+// Alignment overrides shared with startSession() (set from the command line).
+double gFillerSec = -1.0;    // < 0: auto-detect the leading silence
+double gUserOffsetSec = 0.0; // manual fine tune, seconds
 
 namespace
 {
@@ -92,11 +98,16 @@ namespace
         std::printf(
             "CppSekai - Project SEKAI style SUS chart player\n"
             "Usage: cppsekai [--sus <file.sus>] [--bgm <audio>] [--charts <dir>]\n"
-            "                [--offset <sec>] [--auto] [--speed <1-12>] [--se-volume <0-1>]\n"
-            "                [--lead-in <sec>] [--cover <image>] [--screenshot <png>]\n"
+            "                [--offset <sec>] [--filler <sec>] [--auto] [--speed <1-12>]\n"
+            "                [--se-volume <0-1>] [--lead-in <sec>] [--cover <image>]\n"
+            "                [--screenshot <png>] [--pjsk-font]\n"
             "                [--title <text>] [--lyricist <text>] [--composer <text>]\n"
             "                [--arranger <text>] [--vocal <text>] [--difficulty <text>]\n\n"
-            "No --sus: opens the song select screen (scans --charts, default ./charts).\n"
+            "No --sus: opens the song select screen (scans --charts, then charts/ next\n"
+            "to the exe, then the charts/ of the parent folder).\n"
+            "--filler: seconds of silence at the head of the BGM (auto-detected when\n"
+            "          omitted). --offset: manual fine tune in seconds.\n"
+            "--pjsk-font: use the bundled pjsk fonts instead of the system UI font.\n"
             "Keyboard: Z S X D C V G B H N J M = 12 lanes\n"
             "          SPACE = pause, F = fullscreen, H = debug panel, ESC = back/quit\n"
             "Touch   : multi-touch lanes, swipe up for flicks\n");
@@ -179,7 +190,23 @@ namespace
         if (!entry.bgmPath.empty()) {
             audio.loadMusic(entry.bgmPath, error);
         }
-        audio.setMusicDelay(waveOffset);
+        // Official pjsk audio starts with fillerSec seconds of silence; chart
+        // tick 0 is right after it. Sidecar > auto-detect > 0. The SUS
+        // #WAVEOFFSET (positive = audio plays later) is added on top.
+        double startPos = entry.audioStartSec;
+        if (startPos <= 0.0 && !entry.bgmPath.empty()) {
+            startPos = platform::AudioEngine::detectLeadingSilence(entry.bgmPath);
+            if (startPos > 0.0) {
+                std::printf("[audio] detected %.2fs of leading silence\n", startPos);
+            }
+        }
+        if (gFillerSec >= 0.0) {
+            startPos = gFillerSec;
+        }
+        audio.setMusicStartPos(startPos + waveOffset);
+        audio.setUserOffset(gUserOffsetSec);
+        std::printf("[audio] music starts at %.2fs (chart 0), user offset %+.3fs\n",
+            audio.musicStartPos(), audio.userOffset());
 
         renderer.loadCover(entry.coverPath, error);
         game::IntroMetadata metadata = gCardMetadata;
@@ -254,8 +281,8 @@ int main(int argc, char** argv)
     std::string bgmPath;
     std::string chartsDir;
     std::string coverPath;
-    double offsetSec = 0.0;
     bool offsetGiven = false;
+    bool useSystemFont = true;
     bool autoPlay = false;
     float noteSpeed = 8.0f;
     float seVolume = 0.8f;
@@ -263,6 +290,7 @@ int main(int argc, char** argv)
     double screenshotTimeSec = 4.0;
     double leadIn = 6.0; // intro card (4s) + playfield fade-in, then the music
     bool dumpJudgeSheet = false;
+    bool showPauseDialogShot = false; // headless check: force the pause dialog open
 
     for (int i = 1; i < utf8Argc; ++i) {
         const std::string arg = utf8Argv[i];
@@ -275,8 +303,12 @@ int main(int argc, char** argv)
         } else if (arg == "--cover" && i + 1 < utf8Argc) {
             coverPath = utf8Argv[++i];
         } else if (arg == "--offset" && i + 1 < utf8Argc) {
-            offsetSec = std::atof(utf8Argv[++i]);
+            gUserOffsetSec = std::atof(utf8Argv[++i]);
             offsetGiven = true;
+        } else if (arg == "--filler" && i + 1 < utf8Argc) {
+            gFillerSec = std::atof(utf8Argv[++i]);
+        } else if (arg == "--pjsk-font") {
+            useSystemFont = false;
         } else if (arg == "--auto") {
             autoPlay = true;
         } else if (arg == "--speed" && i + 1 < utf8Argc) {
@@ -291,6 +323,8 @@ int main(int argc, char** argv)
             leadIn = std::atof(utf8Argv[++i]);
         } else if (arg == "--judge-sheet") {
             dumpJudgeSheet = true;
+        } else if (arg == "--show-pause-dialog") {
+            showPauseDialogShot = true;
         } else if (arg == "--title" && i + 1 < utf8Argc) {
             gCardMetadata.title = utf8Argv[++i];
         } else if (arg == "--lyricist" && i + 1 < utf8Argc) {
@@ -373,8 +407,15 @@ int main(int argc, char** argv)
     const std::string overlayDir = baseDir + "assets\\mmw\\overlay";
     const std::string fontDir = baseDir + "assets\\mmw\\font";
     const std::string seDir = baseDir + "assets\\se";
-    if (chartsDir.empty()) {
-        chartsDir = baseDir + "charts";
+    // Where the charts live: next to the exe when packaged, otherwise the
+    // project's charts/ one level up (the usual build/ layout).
+    std::vector<std::string> chartCandidates;
+    if (!chartsDir.empty()) {
+        chartCandidates.push_back(chartsDir);
+    } else {
+        chartCandidates.push_back(baseDir + "charts");
+        chartCandidates.push_back(baseDir + "..\\charts");
+        chartCandidates.push_back(std::string("charts"));
     }
 
     if (!renderer.init(windowW, windowH, error)) {
@@ -392,6 +433,10 @@ int main(int argc, char** argv)
     if (!renderer.loadHud(overlayDir, error)) {
         std::fprintf(stderr, "warning: HUD load failed: %s\n", error.c_str());
         error.clear();
+    }
+    // Dialog close X (dark cross on transparent, assets/mmw/ui/close.png).
+    if (const platform::Renderer::HudSprite* closeSprite = renderer.hud("ui_close"); closeSprite != nullptr && closeSprite->id != 0) {
+        ui::setCloseTexture(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(closeSprite->id)));
     }
 
     // ------------------------------------------------------------------
@@ -426,19 +471,60 @@ int main(int argc, char** argv)
     ImGui::StyleColorsDark();
     ImGui_ImplSDL2_InitForOpenGL(window, glContext);
     ImGui_ImplOpenGL3_Init("#version 330 core");
-    game::loadIntroFonts(fontDir);
+    game::loadIntroFonts(fontDir, useSystemFont);
+
+    // ------------------------------------------------------------------
+    // Windows system media integration (SMTC + taskbar progress)
+    // ------------------------------------------------------------------
+    platform::SystemMedia systemMedia;
+    systemMedia.init(window);
 
     // ------------------------------------------------------------------
     // Song list / session
     // ------------------------------------------------------------------
-    std::vector<game::ChartEntry> entries = game::scanChartFolder(chartsDir);
+    // Pick the first candidate folder that actually contains a chart.
+    std::vector<game::ChartEntry> entries;
+    for (const std::string& candidate : chartCandidates) {
+        entries = game::scanChartFolder(candidate);
+        if (!entries.empty()) {
+            chartsDir = candidate;
+            break;
+        }
+    }
+    if (chartsDir.empty()) {
+        chartsDir = chartCandidates.front();
+    }
     std::printf("[select] %d chart(s) under %s\n", static_cast<int>(entries.size()), chartsDir.c_str());
+    if (entries.empty()) {
+        std::printf("[select] no .sus found. Looked in:\n");
+        for (const std::string& candidate : chartCandidates) {
+            std::printf("[select]   %s\n", candidate.c_str());
+        }
+    }
     int selected = entries.empty() ? -1 : 0;
     std::string loadedCoverPath;
 
     AppState state = susPath.empty() ? AppState::Select : AppState::Play;
     Session session;
     bool beginSessionClockPending = false;
+
+    // Reports the current song to Windows (SMTC) and sizes the taskbar bar.
+    double trackDurationSec = 0.0;
+    auto announceTrack = [&]() {
+        if (!session.active) {
+            return;
+        }
+        const double musicLen = audio.musicDurationSec();
+        double duration = 0.0;
+        if (musicLen > 0.0) {
+            duration = musicLen - audio.musicStartPos() - audio.userOffset();
+        }
+        if (duration <= 1.0) {
+            duration = core_api::getChartEndTimeSec();
+        }
+        trackDurationSec = std::max(0.0, duration);
+        systemMedia.setTrack(session.intro.title, session.entry.artist, trackDurationSec);
+    };
     if (state == AppState::Play) {
         game::ChartEntry entry;
         entry.susPath = susPath;
@@ -450,8 +536,9 @@ int main(int argc, char** argv)
             return 1;
         }
         if (offsetGiven) {
-            audio.setMusicDelay(offsetSec);
+            audio.setUserOffset(gUserOffsetSec);
         }
+        announceTrack();
         beginSessionClockPending = true;
     }
 
@@ -462,6 +549,7 @@ int main(int argc, char** argv)
     // to fade in, so the lead-in can never be shorter than that.
     const double leadInSec = std::max(leadIn, static_cast<double>(game::kMinLeadInSec));
     bool paused = false;
+    bool pauseDialogOpen = false; // pjsk style pause dialog (重试/放弃/继续演出)
     bool running = true;
     bool fullscreen = false;
     bool showDebug = true;
@@ -551,11 +639,11 @@ int main(int argc, char** argv)
                     } else if (event.key.keysym.sym == SDLK_h) {
                         showDebug = !showDebug;
                     } else if (state == AppState::Play && event.key.keysym.sym == SDLK_SPACE && !autoPlay) {
-                        paused = !paused;
-                        if (paused) {
+                        // Space opens the pause dialog (same as the HUD button).
+                        if (!pauseDialogOpen) {
+                            paused = true;
                             audio.pause();
-                        } else {
-                            audio.resume();
+                            pauseDialogOpen = true;
                         }
                     } else if (state == AppState::Play && !autoPlay && !paused) {
                         const double songTime = audio.hasMusic() ? audio.songTime() : wallSongTime();
@@ -651,7 +739,11 @@ int main(int argc, char** argv)
         }
 
         if (escapePressed) {
-            if (state == AppState::Play && susPath.empty()) {
+            if (pauseDialogOpen) {
+                pauseDialogOpen = false;
+                paused = false;
+                audio.resume();
+            } else if (state == AppState::Play && susPath.empty()) {
                 // back to the song list
                 audio.stopMusic();
                 touches.clear();
@@ -660,6 +752,7 @@ int main(int argc, char** argv)
                 paused = false;
                 session.active = false;
                 state = AppState::Select;
+                systemMedia.setTaskbarProgress(-1.0, false);
             } else {
                 running = false;
             }
@@ -693,6 +786,7 @@ int main(int argc, char** argv)
             if (action >= 0 && action < static_cast<int>(entries.size())) {
                 if (startSession(session, entries[static_cast<size_t>(action)], renderer, audio, judgement, noteSpeed, error)) {
                     loadedCoverPath = session.entry.coverPath;
+                    announceTrack();
                     touches.clear();
                     std::fill(std::begin(keyHeld), std::end(keyHeld), false);
                     lanePress.fill(0.0f);
@@ -721,6 +815,11 @@ int main(int argc, char** argv)
             const double songTime = audio.hasMusic() ? audio.songTime() : wallSongTime();
             audio.update();
             const float outputTime = static_cast<float>(songTime + leadInSec);
+
+            // Report to Windows: SMTC position + taskbar button progress.
+            systemMedia.updatePlayback(true, paused, songTime, trackDurationSec);
+            systemMedia.setTaskbarProgress(
+                trackDurationSec > 1.0 ? songTime / trackDurationSec : -1.0, paused);
 
             std::vector<float> holdLanes;
             for (int lane = 0; lane < 12; ++lane) {
@@ -812,12 +911,55 @@ int main(int argc, char** argv)
             }
             game::drawIntro(renderer, session.intro, outputTime, windowW, windowH);
 
+            // ----------------------------------------------------------
+            // Pause button zone (right end of the life bar).
+            // ----------------------------------------------------------
+            if (!autoPlay && !pauseDialogOpen && visibility > 0.0f && ImGui::IsMouseClicked(0)) {
+                const ImGuiIO& io = ImGui::GetIO();
+                const float hudScale = std::min(static_cast<float>(windowW) / 1920.0f,
+                    static_cast<float>(windowH) / 1080.0f);
+                const float hudOffX = (static_cast<float>(windowW) - 1920.0f * hudScale) * 0.5f;
+                const float hudOffY = (static_cast<float>(windowH) - 1080.0f * hudScale) * 0.5f;
+                const float vx = (io.MousePos.x - hudOffX) / hudScale;
+                const float vy = (io.MousePos.y - hudOffY) / hudScale;
+                const game::HudRect pauseRect = game::lifePauseRect();
+                if (vx >= pauseRect.x && vx <= pauseRect.x + pauseRect.w && vy >= pauseRect.y
+                    && vy <= pauseRect.y + pauseRect.h) {
+                    paused = true;
+                    audio.pause();
+                    pauseDialogOpen = true;
+                }
+            }
+
             if (showDebug) {
-                const auto& stats = judgement.stats();
-                ImGui::SetNextWindowPos(ImVec2(12, 12), ImGuiCond_Once);
-                ImGui::SetNextWindowSize(ImVec2(300, 260), ImGuiCond_Once);
-                ImGui::Begin("CppSekai", nullptr, ImGuiWindowFlags_NoCollapse);
-                ImGui::Text("time: %.2fs", songTime);
+                // pjsk style settings panel (rounded card, capsule buttons).
+                const float s = ui::scale();
+                const ImVec2 display = ImGui::GetIO().DisplaySize;
+                const ImVec2 cardSize = ImVec2(470.0f * s, 600.0f * s);
+                const ImVec2 cardCenter = ImVec2(20.0f * s + cardSize.x * 0.5f, 20.0f * s + cardSize.y * 0.5f);
+                bool closeClicked = false;
+                ui::beginCard("##settings", cardCenter, cardSize, true, false, &closeClicked);
+                if (closeClicked) {
+                    showDebug = false;
+                }
+                ImGui::SetCursorScreenPos(
+                    ImVec2(cardCenter.x - cardSize.x * 0.5f + 40.0f * s, cardCenter.y - cardSize.y * 0.5f + 46.0f * s));
+                ui::caption("设置", 34.0f * s, ui::kTitleText, cardSize.x - 80.0f * s);
+
+                ImGui::PushStyleColor(ImGuiCol_Text, ui::kBodyText);
+                ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(224, 224, 235, 255));
+                ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, IM_COL32(214, 214, 228, 255));
+                ImGui::PushStyleColor(ImGuiCol_FrameBgActive, IM_COL32(205, 205, 222, 255));
+                ImGui::PushStyleColor(ImGuiCol_SliderGrab, ui::kPrimary);
+                ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, ui::kPrimaryPress);
+                ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 14.0f * s);
+                ImGui::PushStyleVar(ImGuiStyleVar_GrabRounding, 14.0f * s);
+                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10.0f * s, 8.0f * s));
+                ImGui::PushFont(game::bodyFont(), 23.0f * s);
+                ImGui::PushItemWidth(210.0f * s);
+
+                ImGui::Text("time: %.2fs / %.2fs", songTime, trackDurationSec);
+                ImGui::Text("music start: %.2fs  offset: %+.0fms", audio.musicStartPos(), audio.userOffset() * 1000.0);
                 ImGui::Text("combo: %d (max %d)", stats.combo, stats.maxCombo);
                 ImGui::Text("score: %.0f", stats.score);
                 ImGui::Text("P %d  G %d  Good %d  Miss %d", stats.perfect, stats.great, stats.good, stats.miss);
@@ -830,9 +972,9 @@ int main(int argc, char** argv)
                     default: break;
                 }
                 ImGui::Text("judge: %s", judgeName);
-                static float offsetMs = 0.0f;
-                if (ImGui::SliderFloat("audio offset ms", &offsetMs, -500.0f, 500.0f, "%.0f")) {
-                    audio.setMusicDelay(static_cast<double>(offsetMs) / 1000.0);
+                static float offsetMs = static_cast<float>(gUserOffsetSec * 1000.0);
+                if (ImGui::SliderFloat("audio offset ms", &offsetMs, -2000.0f, 2000.0f, "%.0f")) {
+                    audio.setUserOffset(static_cast<double>(offsetMs) / 1000.0);
                 }
                 float speed = noteSpeed;
                 if (ImGui::SliderFloat("speed", &speed, 1.0f, 12.0f, "%.1f")) {
@@ -854,10 +996,57 @@ int main(int argc, char** argv)
                     windows.missAfterMs = good + 60.0f;
                     judgement.setWindows(windows);
                 }
-                ImGui::Separator();
-                ImGui::Text("%s", core_api::getMetadataTitle());
-                ImGui::Text("ESC: back to song list");
-                ImGui::End();
+                ImGui::PopFont();
+                ImGui::PopStyleVar(3);
+                ImGui::PopStyleColor(6);
+                ImGui::SetCursorScreenPos(ImVec2(cardCenter.x - cardSize.x * 0.5f + 40.0f * s,
+                    cardCenter.y + cardSize.y * 0.5f - 100.0f * s));
+                if (ui::capsuleButton("关闭", ImVec2(180.0f * s, 64.0f * s), false)) {
+                    showDebug = false;
+                }
+                ui::endCard();
+            }
+
+            // ----------------------------------------------------------
+            // Pause dialog: 重试 / 放弃 / 继续演出.
+            // ----------------------------------------------------------
+            if (showPauseDialogShot && !pauseDialogOpen && songTime > 0.5) {
+                paused = true;
+                audio.pause();
+                pauseDialogOpen = true;
+            }
+            if (pauseDialogOpen) {
+                const int action = ui::messageDialog(renderer, "##pauseDialog", "是否继续演出？",
+                    {std::string("重试"), std::string("放弃"), std::string("继续演出")},
+                    {false, false, true});
+                if (action == 0) {
+                    // Retry: reload the current chart from the top.
+                    pauseDialogOpen = false;
+                    paused = false;
+                    if (startSession(session, session.entry, renderer, audio, judgement, noteSpeed, error)) {
+                        announceTrack();
+                        beginSessionClock();
+                    } else {
+                        std::fprintf(stderr, "%s\n", error.c_str());
+                        error.clear();
+                    }
+                } else if (action == 1) {
+                    // Give up: back to the song list.
+                    pauseDialogOpen = false;
+                    audio.stopMusic();
+                    touches.clear();
+                    std::fill(std::begin(keyHeld), std::end(keyHeld), false);
+                    lanePress.fill(0.0f);
+                    paused = false;
+                    session.active = false;
+                    state = AppState::Select;
+                    systemMedia.setTaskbarProgress(-1.0, false);
+                } else if (action == 2 || action == -2) {
+                    // Continue (the X closes as "continue", nothing is lost).
+                    pauseDialogOpen = false;
+                    paused = false;
+                    audio.resume();
+                }
             }
 
             if (!screenshotPath.empty() && songTime >= screenshotTimeSec) {
@@ -880,6 +1069,7 @@ int main(int argc, char** argv)
     }
 
     audio.shutdown();
+    systemMedia.shutdown();
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplSDL2_Shutdown();
     ImGui::DestroyContext();

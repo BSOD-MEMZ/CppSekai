@@ -28,10 +28,21 @@ namespace
     }
 } // namespace
 
+HudRect lifePauseRect()
+{
+    // Right 600/2560 of the 640x150 virtual life panel.
+    constexpr float kLifeW = 640.0f;
+    constexpr float kLifeH = 150.0f;
+    return HudRect{1920.0f - kLifeW + kLifeW * (1960.0f / 2560.0f), 0.0f,
+        kLifeW * (600.0f / 2560.0f), kLifeH};
+}
+
 void drawHud(platform::Renderer& renderer, const HudState& state, float songTimeSec, int windowW, int windowH,
     const std::vector<HitFx>& hitEffects, float leadInSec, bool dumpJudgeSheet)
 {
-    ImDrawList* drawList = ImGui::GetForegroundDrawList();
+    // Background list: above the GL frame, but below pjsk dialog cards so
+    // pause dialogs / panels can dim and cover the HUD.
+    ImDrawList* drawList = ImGui::GetBackgroundDrawList();
 
     // Virtual 1920x1080 -> window transform (letterboxed, like the original).
     const float scale = std::min(static_cast<float>(windowW) / 1920.0f, static_cast<float>(windowH) / 1080.0f);
@@ -113,29 +124,61 @@ void drawHud(platform::Renderer& renderer, const HudState& state, float songTime
     }
 
     // ------------------------------------------------------------------
-    // Life panel (top-right)
+    // Life panel (top-right), pjsk life v3 sheet (2560x600, right 600x600
+    // is the pause button zone). Drawn 640x150 in virtual space.
     // ------------------------------------------------------------------
-    img("life_bg", 1442.0f, 11.0f, 444.0f, 104.0f);
-    img("life_fill", 1442.0f, 11.0f, 444.0f, 104.0f, 1.0f, std::clamp(state.lifeRatio, 0.0f, 1.0f));
+    constexpr float kLifeW = 640.0f;
+    constexpr float kLifeH = 150.0f;
+    const float lifeX = 1920.0f - kLifeW;
+    const float lifeY = 0.0f;
+    img("life_bg", lifeX, lifeY, kLifeW, kLifeH);
+
+    // The fill capsule lives at u in [0.148, 0.793], v in [0.40, 0.60] of the
+    // sheet; it drains from the right end (next to the pause button) back
+    // toward the heart as life is lost. Below 30% the red danger sheet is used.
+    const float ratio = std::clamp(state.lifeRatio, 0.0f, 1.0f);
+    if (ratio > 0.0f) {
+        const float fillU0 = 0.1484f;
+        const float fillU1 = 0.7930f;
+        const float fillV0 = 0.40f;
+        const float fillV1 = 0.60f;
+        const char* fillKey = ratio <= 0.30f ? "life_danger" : "life_fill";
+        const platform::Renderer::HudSprite* fill = renderer.hud(fillKey);
+        if (fill != nullptr && fill->id != 0) {
+            drawList->AddImage(
+                reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(fill->id)),
+                ImVec2(px(lifeX + fillU0 * kLifeW), py(lifeY + fillV0 * kLifeH)),
+                ImVec2(px(lifeX + (fillU0 + (fillU1 - fillU0) * ratio) * kLifeW),
+                    py(lifeY + fillV1 * kLifeH)),
+                ImVec2(0.0f, fillV0),
+                ImVec2((fillU1 - fillU0) * ratio, fillV1),
+                IM_COL32(255, 255, 255, 255));
+        }
+    }
+
+    // Life value digits, right-aligned left of the pause zone.
     {
-        const int lifeValue = std::max(0, static_cast<int>(std::lround(1000.0f * std::clamp(state.lifeRatio, 0.0f, 1.0f))));
+        const int lifeValue = std::max(0, static_cast<int>(std::lround(1000.0f * ratio)));
         const std::string lifeText = std::to_string(lifeValue);
+        const float rightEdge = lifeX + 470.0f;
+        const float centerY = lifeY + 62.0f;
+        float digitRight = rightEdge;
         for (size_t i = 0; i < lifeText.size(); ++i) {
             const std::string key(1, lifeText[lifeText.size() - 1 - i]);
-            const float slotX = 1442.0f + 319.0f - static_cast<float>(i) * 22.0f;
-            const float slotY = 11.0f + 10.0f;
-            const platform::Renderer::HudSprite* shadow = renderer.hud("life_digit_s" + key);
             const platform::Renderer::HudSprite* main = renderer.hud("life_digit_" + key);
-            const float shadowH = ps(37.0f);
-            const float mainH = ps(34.0f);
-            if (shadow != nullptr && shadow->height > 0) {
-                const float w = shadowH * (static_cast<float>(shadow->width) / static_cast<float>(shadow->height));
-                img("life_digit_s" + key, slotX - w * 0.5f / scale, slotY - 2.0f, w / scale, shadowH / scale);
-            }
-            if (main != nullptr && main->height > 0) {
-                const float w = mainH * (static_cast<float>(main->width) / static_cast<float>(main->height));
-                img("life_digit_" + key, slotX - w * 0.5f / scale, slotY, w / scale, mainH / scale);
-            }
+            const platform::Renderer::HudSprite* shadow = renderer.hud("life_digit_s" + key);
+            const float mainH = 52.0f;
+            const float shadowH = 57.0f;
+            const float w = main != nullptr && main->height > 0
+                ? mainH * (static_cast<float>(main->width) / static_cast<float>(main->height))
+                : mainH * 0.75f;
+            const float sw = shadow != nullptr && shadow->height > 0
+                ? shadowH * (static_cast<float>(shadow->width) / static_cast<float>(shadow->height))
+                : 0.0f;
+            const float x = digitRight - w;
+            img("life_digit_s" + key, x + (w - sw) * 0.5f, centerY - shadowH * 0.5f - 3.0f, sw, shadowH);
+            img("life_digit_" + key, x, centerY - mainH * 0.5f, w, mainH);
+            digitRight = x - 2.0f;
         }
     }
 

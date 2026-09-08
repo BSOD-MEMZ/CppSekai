@@ -20,6 +20,7 @@ extern "C"
     const char* getMetadataTitle(void);
     const char* getMetadataArtist(void);
     const char* getMetadataDesigner(void);
+    double getChartEndTimeSec(void);
 }
 
 namespace core_api
@@ -111,6 +112,11 @@ const char* getMetadataArtist()
 const char* getMetadataDesigner()
 {
     return ::getMetadataDesigner();
+}
+
+double getChartEndTimeSec()
+{
+    return ::getChartEndTimeSec();
 }
 
 double readWaveOffset(const std::string& susText)

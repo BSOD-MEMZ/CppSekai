@@ -1,0 +1,574 @@
+// CppSekai - Windows system media integration (see SystemMedia.hpp).
+//
+// Why this file hand-rolls the ABI: the build uses the bundled zig MinGW
+// toolchain, which ships no Windows SDK and therefore no windows.media.h. The
+// WinRT interfaces below are declared manually. Their vtable order and IIDs
+// were read from the system metadata
+// (C:\Windows\System32\WinMetadata\Windows.Media.winmd) - the declaration
+// order of an interface's methods in metadata is its ABI vtable order.
+#include "SystemMedia.hpp"
+
+#include <SDL.h>
+#include <SDL_syswm.h>
+
+#include <cmath>
+#include <cstdio>
+#include <cstring>
+#include <string>
+#include <vector>
+
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <objbase.h>
+#endif
+
+namespace platform
+{
+namespace
+{
+#ifdef _WIN32
+
+    // ---- GUIDs (from Windows.Media.winmd / Windows.Foundation.winmd) ------
+    // {99FA3FF4-1742-42A6-902E-087D41F965EC}
+    const GUID IID_ISystemMediaTransportControls = {
+        0x99FA3FF4, 0x1742, 0x42A6, {0x90, 0x2E, 0x08, 0x7D, 0x41, 0xF9, 0x65, 0xEC}};
+    // {8ABBC53E-FA55-4ECF-AD8E-C984E5DD1550}
+    const GUID IID_IDisplayUpdater = {
+        0x8ABBC53E, 0xFA55, 0x4ECF, {0xAD, 0x8E, 0xC9, 0x84, 0xE5, 0xDD, 0x15, 0x50}};
+    // {6BBF0C59-D0A0-4D26-92A0-F978E1D18E7B}
+    const GUID IID_IMusicDisplayProperties = {
+        0x6BBF0C59, 0xD0A0, 0x4D26, {0x92, 0xA0, 0xF9, 0x78, 0xE1, 0xD1, 0x8E, 0x7B}};
+    // {5125316A-C3A2-475B-8507-93534DC88F15}
+    const GUID IID_ITimelineProperties = {
+        0x5125316A, 0xC3A2, 0x475B, {0x85, 0x07, 0x93, 0x53, 0x4D, 0xC8, 0x8F, 0x15}};
+    // {629BDBC8-D932-4FF4-96B9-8D96C5C1E858}
+    const GUID IID_IPropertyValueStatics = {
+        0x629BDBC8, 0xD932, 0x4FF4, {0x96, 0xB9, 0x8D, 0x96, 0xC5, 0xC1, 0xE8, 0x58}};
+    // {DDB0472D-C911-4A1F-86D9-DC3D71A95F5A} - also in MinGW's
+    // systemmediatransportcontrolsinterop.h.
+    const GUID IID_ISystemMediaTransportControlsInterop = {
+        0xDDB0472D, 0xC911, 0x4A1F, {0x86, 0xD9, 0xDC, 0x3D, 0x71, 0xA9, 0x5F, 0x5A}};
+
+    // {56FDF344-FD6D-11D0-958A-006097C9A090} / {EA1AFB91-9E28-4B86-90E9-9E9F8A5EEFAF}
+    const GUID CLSID_TaskbarList_ = {
+        0x56FDF344, 0xFD6D, 0x11D0, {0x95, 0x8A, 0x00, 0x60, 0x97, 0xC9, 0xA0, 0x90}};
+    const GUID IID_ITaskbarList3_ = {
+        0xEA1AFB91, 0x9E28, 0x4B86, {0x90, 0xE9, 0x9E, 0x9F, 0x8A, 0x5E, 0xEF, 0xAF}};
+
+    // MediaPlaybackStatus (Windows.Media)
+    enum : int { StatusStopped = 3, StatusPlaying = 4, StatusPaused = 5 };
+    // MediaPlaybackType (Windows.Media)
+    enum : int { PlaybackTypeMusic = 1 };
+
+    constexpr unsigned long long kTicksPerSec = 10000000ULL; // 100ns units
+
+    // ---- WinRT ABI vtables ------------------------------------------------
+    // Every entry after the six IInspectable slots follows the metadata order.
+    struct ISMTCVtbl
+    {
+        HRESULT (STDMETHODCALLTYPE* QueryInterface)(void*, const GUID*, void**);
+        ULONG (STDMETHODCALLTYPE* AddRef)(void*);
+        ULONG (STDMETHODCALLTYPE* Release)(void*);
+        HRESULT (STDMETHODCALLTYPE* GetIids)(void*, ULONG*, GUID**);
+        HRESULT (STDMETHODCALLTYPE* GetRuntimeClassName)(void*, void**);
+        HRESULT (STDMETHODCALLTYPE* GetTrustLevel)(void*, int*);
+        // 6
+        HRESULT (STDMETHODCALLTYPE* get_PlaybackStatus)(void*, int*);
+        HRESULT (STDMETHODCALLTYPE* put_PlaybackStatus)(void*, int);
+        HRESULT (STDMETHODCALLTYPE* get_DisplayUpdater)(void*, void**);
+        HRESULT (STDMETHODCALLTYPE* get_SoundLevel)(void*, int*);
+        HRESULT (STDMETHODCALLTYPE* get_IsEnabled)(void*, unsigned char*);
+        HRESULT (STDMETHODCALLTYPE* put_IsEnabled)(void*, unsigned char);
+        HRESULT (STDMETHODCALLTYPE* get_IsPlayEnabled)(void*, unsigned char*);
+        HRESULT (STDMETHODCALLTYPE* put_IsPlayEnabled)(void*, unsigned char);
+        HRESULT (STDMETHODCALLTYPE* get_IsStopEnabled)(void*, unsigned char*);
+        HRESULT (STDMETHODCALLTYPE* put_IsStopEnabled)(void*, unsigned char);
+        HRESULT (STDMETHODCALLTYPE* get_IsPauseEnabled)(void*, unsigned char*);
+        HRESULT (STDMETHODCALLTYPE* put_IsPauseEnabled)(void*, unsigned char);
+        HRESULT (STDMETHODCALLTYPE* get_IsRecordEnabled)(void*, unsigned char*);
+        HRESULT (STDMETHODCALLTYPE* put_IsRecordEnabled)(void*, unsigned char);
+        HRESULT (STDMETHODCALLTYPE* get_IsFastForwardEnabled)(void*, unsigned char*);
+        HRESULT (STDMETHODCALLTYPE* put_IsFastForwardEnabled)(void*, unsigned char);
+        HRESULT (STDMETHODCALLTYPE* get_IsRewindEnabled)(void*, unsigned char*);
+        HRESULT (STDMETHODCALLTYPE* put_IsRewindEnabled)(void*, unsigned char);
+        HRESULT (STDMETHODCALLTYPE* get_IsPreviousEnabled)(void*, unsigned char*);
+        HRESULT (STDMETHODCALLTYPE* put_IsPreviousEnabled)(void*, unsigned char);
+        HRESULT (STDMETHODCALLTYPE* get_IsNextEnabled)(void*, unsigned char*);
+        HRESULT (STDMETHODCALLTYPE* put_IsNextEnabled)(void*, unsigned char);
+        HRESULT (STDMETHODCALLTYPE* get_IsChannelUpEnabled)(void*, unsigned char*);
+        HRESULT (STDMETHODCALLTYPE* put_IsChannelUpEnabled)(void*, unsigned char);
+        HRESULT (STDMETHODCALLTYPE* get_IsChannelDownEnabled)(void*, unsigned char*);
+        HRESULT (STDMETHODCALLTYPE* put_IsChannelDownEnabled)(void*, unsigned char);
+        HRESULT (STDMETHODCALLTYPE* add_ButtonPressed)(void*, void*, long long*);
+        HRESULT (STDMETHODCALLTYPE* remove_ButtonPressed)(void*, long long);
+        HRESULT (STDMETHODCALLTYPE* add_PropertyChanged)(void*, void*, long long*);
+        HRESULT (STDMETHODCALLTYPE* remove_PropertyChanged)(void*, long long);
+        HRESULT (STDMETHODCALLTYPE* get_AutoRepeatMode)(void*, int*);
+        HRESULT (STDMETHODCALLTYPE* put_AutoRepeatMode)(void*, int);
+        HRESULT (STDMETHODCALLTYPE* get_ShuffleEnabled)(void*, unsigned char*);
+        HRESULT (STDMETHODCALLTYPE* put_ShuffleEnabled)(void*, unsigned char);
+        HRESULT (STDMETHODCALLTYPE* get_PlaybackRate)(void*, double*);
+        HRESULT (STDMETHODCALLTYPE* put_PlaybackRate)(void*, double);
+        HRESULT (STDMETHODCALLTYPE* UpdateTimelineProperties)(void*, void*);
+    };
+
+    struct IDisplayUpdaterVtbl
+    {
+        HRESULT (STDMETHODCALLTYPE* QueryInterface)(void*, const GUID*, void**);
+        ULONG (STDMETHODCALLTYPE* AddRef)(void*);
+        ULONG (STDMETHODCALLTYPE* Release)(void*);
+        HRESULT (STDMETHODCALLTYPE* GetIids)(void*, ULONG*, GUID**);
+        HRESULT (STDMETHODCALLTYPE* GetRuntimeClassName)(void*, void**);
+        HRESULT (STDMETHODCALLTYPE* GetTrustLevel)(void*, int*);
+        // 6
+        HRESULT (STDMETHODCALLTYPE* get_Type)(void*, int*);
+        HRESULT (STDMETHODCALLTYPE* put_Type)(void*, int);
+        HRESULT (STDMETHODCALLTYPE* get_AppMediaId)(void*, void**);
+        HRESULT (STDMETHODCALLTYPE* put_AppMediaId)(void*, void*);
+        HRESULT (STDMETHODCALLTYPE* get_Thumbnail)(void*, void**);
+        HRESULT (STDMETHODCALLTYPE* put_Thumbnail)(void*, void*);
+        HRESULT (STDMETHODCALLTYPE* get_MusicProperties)(void*, void**);
+        HRESULT (STDMETHODCALLTYPE* get_VideoProperties)(void*, void**);
+        HRESULT (STDMETHODCALLTYPE* get_ImageProperties)(void*, void**);
+        HRESULT (STDMETHODCALLTYPE* CopyFromFileAsync)(void*, int, void*, void**);
+        HRESULT (STDMETHODCALLTYPE* ClearAll)(void*);
+        HRESULT (STDMETHODCALLTYPE* Update)(void*);
+    };
+
+    struct IMusicPropertiesVtbl
+    {
+        HRESULT (STDMETHODCALLTYPE* QueryInterface)(void*, const GUID*, void**);
+        ULONG (STDMETHODCALLTYPE* AddRef)(void*);
+        ULONG (STDMETHODCALLTYPE* Release)(void*);
+        HRESULT (STDMETHODCALLTYPE* GetIids)(void*, ULONG*, GUID**);
+        HRESULT (STDMETHODCALLTYPE* GetRuntimeClassName)(void*, void**);
+        HRESULT (STDMETHODCALLTYPE* GetTrustLevel)(void*, int*);
+        // 6
+        HRESULT (STDMETHODCALLTYPE* get_Title)(void*, void**);
+        HRESULT (STDMETHODCALLTYPE* put_Title)(void*, void*);
+        HRESULT (STDMETHODCALLTYPE* get_AlbumArtist)(void*, void**);
+        HRESULT (STDMETHODCALLTYPE* put_AlbumArtist)(void*, void*);
+        HRESULT (STDMETHODCALLTYPE* get_Artist)(void*, void**);
+        HRESULT (STDMETHODCALLTYPE* put_Artist)(void*, void*);
+    };
+
+    struct ITimelineVtbl
+    {
+        HRESULT (STDMETHODCALLTYPE* QueryInterface)(void*, const GUID*, void**);
+        ULONG (STDMETHODCALLTYPE* AddRef)(void*);
+        ULONG (STDMETHODCALLTYPE* Release)(void*);
+        HRESULT (STDMETHODCALLTYPE* GetIids)(void*, ULONG*, GUID**);
+        HRESULT (STDMETHODCALLTYPE* GetRuntimeClassName)(void*, void**);
+        HRESULT (STDMETHODCALLTYPE* GetTrustLevel)(void*, int*);
+        // 6
+        HRESULT (STDMETHODCALLTYPE* get_StartTime)(void*, void**);
+        HRESULT (STDMETHODCALLTYPE* put_StartTime)(void*, void*);
+        HRESULT (STDMETHODCALLTYPE* get_EndTime)(void*, void**);
+        HRESULT (STDMETHODCALLTYPE* put_EndTime)(void*, void*);
+        HRESULT (STDMETHODCALLTYPE* get_MinSeekTime)(void*, void**);
+        HRESULT (STDMETHODCALLTYPE* put_MinSeekTime)(void*, void*);
+        HRESULT (STDMETHODCALLTYPE* get_MaxSeekTime)(void*, void**);
+        HRESULT (STDMETHODCALLTYPE* put_MaxSeekTime)(void*, void*);
+        HRESULT (STDMETHODCALLTYPE* get_Position)(void*, void**);
+        HRESULT (STDMETHODCALLTYPE* put_Position)(void*, void*);
+    };
+
+    // Windows.Foundation.IPropertyValueStatics - only CreateTimeSpan is used.
+    struct IPropertyValueStaticsVtbl
+    {
+        HRESULT (STDMETHODCALLTYPE* QueryInterface)(void*, const GUID*, void**);
+        ULONG (STDMETHODCALLTYPE* AddRef)(void*);
+        ULONG (STDMETHODCALLTYPE* Release)(void*);
+        HRESULT (STDMETHODCALLTYPE* GetIids)(void*, ULONG*, GUID**);
+        HRESULT (STDMETHODCALLTYPE* GetRuntimeClassName)(void*, void**);
+        HRESULT (STDMETHODCALLTYPE* GetTrustLevel)(void*, int*);
+        // 6
+        HRESULT (STDMETHODCALLTYPE* CreateEmpty)(void*, void**);
+        HRESULT (STDMETHODCALLTYPE* CreateUInt8)(void*, unsigned char, void**);
+        HRESULT (STDMETHODCALLTYPE* CreateInt16)(void*, short, void**);
+        HRESULT (STDMETHODCALLTYPE* CreateUInt16)(void*, unsigned short, void**);
+        HRESULT (STDMETHODCALLTYPE* CreateInt32)(void*, int, void**);
+        HRESULT (STDMETHODCALLTYPE* CreateUInt32)(void*, unsigned int, void**);
+        HRESULT (STDMETHODCALLTYPE* CreateInt64)(void*, long long, void**);
+        HRESULT (STDMETHODCALLTYPE* CreateUInt64)(void*, unsigned long long, void**);
+        HRESULT (STDMETHODCALLTYPE* CreateSingle)(void*, float, void**);
+        HRESULT (STDMETHODCALLTYPE* CreateDouble)(void*, double, void**);
+        HRESULT (STDMETHODCALLTYPE* CreateChar16)(void*, unsigned short, void**);
+        HRESULT (STDMETHODCALLTYPE* CreateBoolean)(void*, unsigned char, void**);
+        HRESULT (STDMETHODCALLTYPE* CreateString)(void*, void*, void**);
+        HRESULT (STDMETHODCALLTYPE* CreateInspectable)(void*, void*, void**);
+        HRESULT (STDMETHODCALLTYPE* CreateGuid)(void*, const GUID*, void**);
+        HRESULT (STDMETHODCALLTYPE* CreateDateTime)(void*, long long, void**);
+        HRESULT (STDMETHODCALLTYPE* CreateTimeSpan)(void*, long long, void**);
+    };
+
+    struct IInteropVtbl
+    {
+        HRESULT (STDMETHODCALLTYPE* QueryInterface)(void*, const GUID*, void**);
+        ULONG (STDMETHODCALLTYPE* AddRef)(void*);
+        ULONG (STDMETHODCALLTYPE* Release)(void*);
+        HRESULT (STDMETHODCALLTYPE* GetIids)(void*, ULONG*, GUID**);
+        HRESULT (STDMETHODCALLTYPE* GetRuntimeClassName)(void*, void**);
+        HRESULT (STDMETHODCALLTYPE* GetTrustLevel)(void*, int*);
+        HRESULT (STDMETHODCALLTYPE* GetForWindow)(void*, HWND, const GUID*, void**);
+    };
+
+    struct ITaskbarList3Vtbl
+    {
+        HRESULT (STDMETHODCALLTYPE* QueryInterface)(void*, const GUID*, void**);
+        ULONG (STDMETHODCALLTYPE* AddRef)(void*);
+        ULONG (STDMETHODCALLTYPE* Release)(void*);
+        HRESULT (STDMETHODCALLTYPE* HrInit)(void*);
+        HRESULT (STDMETHODCALLTYPE* AddTab)(void*, HWND);
+        HRESULT (STDMETHODCALLTYPE* DeleteTab)(void*, HWND);
+        HRESULT (STDMETHODCALLTYPE* ActivateTab)(void*, HWND);
+        HRESULT (STDMETHODCALLTYPE* SetActiveAlt)(void*, HWND);
+        HRESULT (STDMETHODCALLTYPE* MarkFullscreenWindow)(void*, HWND, int);
+        HRESULT (STDMETHODCALLTYPE* SetProgressValue)(void*, HWND, unsigned long long, unsigned long long);
+        HRESULT (STDMETHODCALLTYPE* SetProgressState)(void*, HWND, int);
+    };
+
+    // obj points at the COM object; obj[0] is the vtable pointer.
+    template <typename Vtbl>
+    Vtbl* vt(void* obj)
+    {
+        return *reinterpret_cast<Vtbl**>(obj);
+    }
+
+    void safeRelease(void* obj)
+    {
+        if (obj == nullptr) {
+            return;
+        }
+        vt<ISMTCVtbl>(obj)->Release(obj);
+    }
+
+    // ---- Dynamic WinRT entry points (no import library available) ---------
+    using RoGetActivationFactoryFn = HRESULT(WINAPI*)(void* classId, const GUID* iid, void** factory);
+    using RoActivateInstanceFn = HRESULT(WINAPI*)(void* classId, void** instance);
+    using WindowsCreateStringFn = HRESULT(WINAPI*)(const wchar_t* src, unsigned length, void** str);
+    using WindowsDeleteStringFn = HRESULT(WINAPI*)(void* str);
+
+    HMODULE gCombase = nullptr;
+    RoGetActivationFactoryFn gRoGetActivationFactory = nullptr;
+    RoActivateInstanceFn gRoActivateInstance = nullptr;
+    WindowsCreateStringFn gCreateString = nullptr;
+    WindowsDeleteStringFn gDeleteString = nullptr;
+    bool gWinrtLoaded = false;
+
+    void loadWinrt()
+    {
+        if (gWinrtLoaded) {
+            return;
+        }
+        gWinrtLoaded = true;
+        gCombase = LoadLibraryW(L"combase.dll");
+        if (gCombase == nullptr) {
+            return;
+        }
+        gRoGetActivationFactory =
+            reinterpret_cast<RoGetActivationFactoryFn>(GetProcAddress(gCombase, "RoGetActivationFactory"));
+        gRoActivateInstance = reinterpret_cast<RoActivateInstanceFn>(GetProcAddress(gCombase, "RoActivateInstance"));
+        gCreateString = reinterpret_cast<WindowsCreateStringFn>(GetProcAddress(gCombase, "WindowsCreateString"));
+        gDeleteString = reinterpret_cast<WindowsDeleteStringFn>(GetProcAddress(gCombase, "WindowsDeleteString"));
+    }
+
+    // HSTRING wrapper. WinRT strings are ref-counted handles, not raw pointers.
+    struct HString
+    {
+        void* handle = nullptr;
+
+        explicit HString(const std::string& utf8)
+        {
+            if (gCreateString == nullptr || utf8.empty()) {
+                return;
+            }
+            const int wlen = MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), static_cast<int>(utf8.size()), nullptr, 0);
+            if (wlen <= 0) {
+                return;
+            }
+            std::vector<wchar_t> wide(static_cast<size_t>(wlen));
+            MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), static_cast<int>(utf8.size()), wide.data(), wlen);
+            if (FAILED(gCreateString(wide.data(), static_cast<unsigned>(wlen), &handle))) {
+                handle = nullptr;
+            }
+        }
+
+        explicit HString(const wchar_t* wide)
+        {
+            if (gCreateString == nullptr || wide == nullptr) {
+                return;
+            }
+            const int wlen = static_cast<int>(wcslen(wide));
+            if (FAILED(gCreateString(wide, static_cast<unsigned>(wlen), &handle))) {
+                handle = nullptr;
+            }
+        }
+
+        ~HString()
+        {
+            if (handle != nullptr && gDeleteString != nullptr) {
+                gDeleteString(handle);
+            }
+        }
+
+        HString(const HString&) = delete;
+        HString& operator=(const HString&) = delete;
+        bool valid() const { return handle != nullptr; }
+    };
+
+    void* createTimeSpan(void* statics, long long ticks)
+    {
+        void* boxed = nullptr;
+        if (statics == nullptr) {
+            return nullptr;
+        }
+        vt<IPropertyValueStaticsVtbl>(statics)->CreateTimeSpan(statics, ticks, &boxed);
+        return boxed;
+    }
+
+#else  // !_WIN32
+    void loadWinrt() {}
+#endif // _WIN32
+} // namespace
+
+bool SystemMedia::init(SDL_Window* window)
+{
+#ifdef _WIN32
+    loadWinrt();
+
+    if (window != nullptr) {
+        SDL_SysWMinfo info{};
+        SDL_VERSION(&info.version);
+        if (SDL_GetWindowWMInfo(window, &info) != SDL_TRUE) {
+            std::printf("[media] SDL_GetWindowWMInfo failed: %s\n", SDL_GetError());
+        } else {
+            mWindow = info.info.win.window;
+        }
+    }
+
+    // COM: SDL may already have initialized it; RPC_E_CHANGED_MODE is fine.
+    const HRESULT com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    mComInitialized = SUCCEEDED(com);
+
+    // ---- Taskbar progress -------------------------------------------------
+    void* taskbar = nullptr;
+    if (SUCCEEDED(CoCreateInstance(CLSID_TaskbarList_, nullptr, CLSCTX_INPROC_SERVER, IID_ITaskbarList3_,
+            &taskbar))) {
+        vt<ITaskbarList3Vtbl>(taskbar)->HrInit(taskbar);
+        mTaskbar = taskbar;
+        std::printf("[media] taskbar progress ready\n");
+    }
+
+    // ---- SMTC -------------------------------------------------------------
+    if (gRoGetActivationFactory == nullptr || mWindow == nullptr) {
+        std::printf("[media] SMTC unavailable (no WinRT or no window)\n");
+        return true;
+    }
+
+    void* factory = nullptr;
+    HString className(L"Windows.Media.SystemMediaTransportControls");
+    if (FAILED(gRoGetActivationFactory(className.handle, &IID_ISystemMediaTransportControlsInterop, &factory))
+        || factory == nullptr) {
+        std::printf("[media] SMTC: activation factory unavailable\n");
+        return true;
+    }
+
+    void* controls = nullptr;
+    const HRESULT hr = vt<IInteropVtbl>(factory)->GetForWindow(factory, static_cast<HWND>(mWindow),
+        &IID_ISystemMediaTransportControls, &controls);
+    safeRelease(factory);
+    if (FAILED(hr) || controls == nullptr) {
+        std::printf("[media] SMTC: GetForWindow failed (0x%08lX)\n", static_cast<unsigned long>(hr));
+        return true;
+    }
+    mSmtc = controls;
+
+    auto* v = vt<ISMTCVtbl>(mSmtc);
+    v->put_IsEnabled(mSmtc, 1);
+    v->put_IsPlayEnabled(mSmtc, 0);
+    v->put_IsPauseEnabled(mSmtc, 1);
+    v->put_IsStopEnabled(mSmtc, 0);
+    v->put_IsNextEnabled(mSmtc, 0);
+    v->put_IsPreviousEnabled(mSmtc, 0);
+    v->put_IsFastForwardEnabled(mSmtc, 0);
+    v->put_IsRewindEnabled(mSmtc, 0);
+
+    // Read-back sanity check: if the round trip works, the control object is
+    // live and the system media flyout will pick the session up.
+    unsigned char enabled = 0;
+    v->get_IsEnabled(mSmtc, &enabled);
+    std::printf("[media] SMTC ready (IsEnabled readback = %d)\n", static_cast<int>(enabled));
+#else
+    (void)window;
+#endif
+    return true;
+}
+
+void SystemMedia::shutdown()
+{
+#ifdef _WIN32
+    if (mSmtc != nullptr) {
+        safeRelease(mSmtc);
+        mSmtc = nullptr;
+    }
+    if (mTaskbar != nullptr) {
+        vt<ITaskbarList3Vtbl>(mTaskbar)->Release(mTaskbar);
+        mTaskbar = nullptr;
+    }
+    if (mComInitialized) {
+        CoUninitialize();
+        mComInitialized = false;
+    }
+    mWindow = nullptr;
+#endif
+}
+
+void SystemMedia::setTrack(const std::string& title, const std::string& artist, double durationSec)
+{
+#ifdef _WIN32
+    if (mSmtc == nullptr) {
+        return;
+    }
+    mTrackTitle = title;
+    mTrackArtist = artist;
+    mLastDurationSec = durationSec;
+
+    void* updater = nullptr;
+    if (FAILED(vt<ISMTCVtbl>(mSmtc)->get_DisplayUpdater(mSmtc, &updater)) || updater == nullptr) {
+        return;
+    }
+    vt<IDisplayUpdaterVtbl>(updater)->put_Type(updater, PlaybackTypeMusic);
+
+    void* props = nullptr;
+    if (SUCCEEDED(vt<IDisplayUpdaterVtbl>(updater)->get_MusicProperties(updater, &props)) && props != nullptr) {
+        HString titleStr(title.empty() ? std::string("CppSekai") : title);
+        HString artistStr(artist.empty() ? std::string("CppSekai") : artist);
+        if (titleStr.valid()) {
+            vt<IMusicPropertiesVtbl>(props)->put_Title(props, titleStr.handle);
+        }
+        if (artistStr.valid()) {
+            vt<IMusicPropertiesVtbl>(props)->put_Artist(props, artistStr.handle);
+        }
+        safeRelease(props);
+    }
+    vt<IDisplayUpdaterVtbl>(updater)->Update(updater);
+    safeRelease(updater);
+
+    mLastPositionSec = -1.0e9; // force a timeline push on the next update
+    mLastStatus = -1;
+#else
+    (void)title;
+    (void)artist;
+    (void)durationSec;
+#endif
+}
+
+void SystemMedia::updatePlayback(bool playing, bool paused, double positionSec, double durationSec)
+{
+#ifdef _WIN32
+    if (durationSec > 0.0) {
+        mLastDurationSec = durationSec;
+    }
+    const int status = paused ? StatusPaused : (playing ? StatusPlaying : StatusStopped);
+    if (mSmtc == nullptr) {
+        return;
+    }
+    if (status == mLastStatus && std::fabs(positionSec - mLastPositionSec) < 0.4) {
+        return;
+    }
+    mLastStatus = status;
+    mLastPositionSec = positionSec;
+
+    vt<ISMTCVtbl>(mSmtc)->put_PlaybackStatus(mSmtc, status);
+
+    if (gRoActivateInstance == nullptr || gRoGetActivationFactory == nullptr) {
+        return;
+    }
+
+    // TimelineProperties is a fresh object each time; SMTC copies the values.
+    void* timeline = nullptr;
+    HString timelineClass(L"Windows.Media.SystemMediaTransportControlsTimelineProperties");
+    if (FAILED(gRoActivateInstance(timelineClass.handle, &timeline)) || timeline == nullptr) {
+        return;
+    }
+    void* typed = nullptr;
+    vt<ITimelineVtbl>(timeline)->QueryInterface(timeline, &IID_ITimelineProperties, &typed);
+    if (typed == nullptr) {
+        safeRelease(timeline);
+        return;
+    }
+
+    void* statics = nullptr;
+    HString propertyClass(L"Windows.Foundation.PropertyValue");
+    gRoGetActivationFactory(propertyClass.handle, &IID_IPropertyValueStatics, &statics);
+
+    auto* tv = vt<ITimelineVtbl>(typed);
+    if (statics != nullptr && mLastDurationSec > 0.0) {
+        void* start = createTimeSpan(statics, 0);
+        tv->put_StartTime(typed, start);
+        safeRelease(start);
+
+        void* end = createTimeSpan(statics,
+            static_cast<long long>(mLastDurationSec * static_cast<double>(kTicksPerSec)));
+        tv->put_EndTime(typed, end);
+        safeRelease(end);
+
+        void* pos = createTimeSpan(statics,
+            static_cast<long long>(std::max(0.0, positionSec) * static_cast<double>(kTicksPerSec)));
+        tv->put_Position(typed, pos);
+        safeRelease(pos);
+
+        safeRelease(statics);
+    }
+    vt<ISMTCVtbl>(mSmtc)->UpdateTimelineProperties(mSmtc, typed);
+    safeRelease(typed);
+    safeRelease(timeline);
+#else
+    (void)playing;
+    (void)paused;
+    (void)positionSec;
+    (void)durationSec;
+#endif
+}
+
+void SystemMedia::setTaskbarProgress(double ratio01, bool paused, bool indeterminate)
+{
+#ifdef _WIN32
+    if (mTaskbar == nullptr || mWindow == nullptr) {
+        return;
+    }
+    auto* taskbar = vt<ITaskbarList3Vtbl>(mTaskbar);
+    const HWND hwnd = static_cast<HWND>(mWindow);
+
+    int state = 2; // TBPF_NORMAL
+    if (ratio01 < 0.0) {
+        state = 0; // TBPF_NOPROGRESS
+    } else if (indeterminate) {
+        state = 1; // TBPF_INDETERMINATE
+    } else if (paused) {
+        state = 8; // TBPF_PAUSED
+    }
+
+    // Only touch COM when something visible changed (1% steps).
+    const double quantized = ratio01 < 0.0 ? -1.0 : std::floor(ratio01 * 100.0) / 100.0;
+    if (state == mLastTaskbarState && quantized == mLastTaskbarRatio) {
+        return;
+    }
+    mLastTaskbarState = state;
+    mLastTaskbarRatio = quantized;
+
+    taskbar->SetProgressState(mTaskbar, hwnd, state);
+    if (state == 2 || state == 8) {
+        taskbar->SetProgressValue(mTaskbar, hwnd,
+            static_cast<unsigned long long>(std::clamp(ratio01, 0.0, 1.0) * 10000.0), 10000ULL);
+    }
+#else
+    (void)ratio01;
+    (void)paused;
+    (void)indeterminate;
+#endif
+}
+
+} // namespace platform

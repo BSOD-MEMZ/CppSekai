@@ -33,8 +33,10 @@ SOURCES=(
     platform/CoreApi.cpp
     platform/Renderer.cpp
     platform/Audio.cpp
+    platform/SystemMedia.cpp
     game/Judgement.cpp
     game/Hud.cpp
+    game/Ui.cpp
     game/Intro.cpp
     game/SongSelect.cpp
     core/native/src/mmw_preview.cpp
@@ -59,7 +61,7 @@ SOURCES=(
 mkdir -p build
 "$ZIG" c++ "${CXXFLAGS[@]}" "${SOURCES[@]}" \
     "$SDL/lib/libSDL2.dll.a" \
-    -limm32 -lsetupapi -lversion -lole32 -loleaut32 -lwinmm -lgdi32 -luser32 -ladvapi32 -lshell32 \
+    -limm32 -lsetupapi -lversion -lole32 -loleaut32 -lwinmm -lgdi32 -luser32 -ladvapi32     -lshell32 \
     -lopengl32 \
     -o build/cppsekai.exe "$@"
 

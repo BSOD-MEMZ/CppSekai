@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 
 namespace platform
 {
@@ -96,6 +97,71 @@ void AudioEngine::start(double leadInSec)
     }
 }
 
+double AudioEngine::musicDurationSec() const
+{
+    if (!mMusicLoaded) {
+        return 0.0;
+    }
+    ma_uint64 length = 0;
+    if (ma_sound_get_length_in_pcm_frames(const_cast<ma_sound*>(&mMusic), &length) != MA_SUCCESS || length == 0) {
+        return 0.0;
+    }
+    return static_cast<double>(length) / sampleRate();
+}
+
+double AudioEngine::detectLeadingSilence(const std::string& path, double maxScanSec)
+{
+    if (path.empty() || maxScanSec <= 0.0) {
+        return 0.0;
+    }
+    ma_decoder decoder;
+    ma_decoder_config config = ma_decoder_config_init(ma_format_s16, 1, 44100);
+    if (ma_decoder_init_file(path.c_str(), &config, &decoder) != MA_SUCCESS) {
+        return 0.0;
+    }
+
+    constexpr ma_uint64 kBlockFrames = 1024;
+    constexpr double kSampleRate = 44100.0;
+    // -45 dBFS: well above the noise floor of a silent mp3, well below any
+    // real musical content.
+    constexpr ma_int16 kThreshold = 184;
+
+    const ma_uint64 maxFrames = static_cast<ma_uint64>(maxScanSec * kSampleRate);
+    std::vector<ma_int16> buffer(kBlockFrames);
+    ma_uint64 consumed = 0;
+    double firstLoudSec = -1.0;
+
+    while (consumed < maxFrames) {
+        ma_uint64 framesRead = 0;
+        if (ma_decoder_read_pcm_frames(&decoder, buffer.data(), kBlockFrames, &framesRead) != MA_SUCCESS
+            || framesRead == 0) {
+            break;
+        }
+        ma_int16 peak = 0;
+        ma_uint64 peakIndex = 0;
+        for (ma_uint64 i = 0; i < framesRead; ++i) {
+            const ma_int16 value = static_cast<ma_int16>(std::abs(static_cast<int>(buffer[static_cast<size_t>(i)])));
+            if (value > peak) {
+                peak = value;
+                peakIndex = i;
+            }
+        }
+        if (peak > kThreshold) {
+            firstLoudSec = (static_cast<double>(consumed) + static_cast<double>(peakIndex)) / kSampleRate;
+            break;
+        }
+        consumed += framesRead;
+    }
+
+    ma_decoder_uninit(&decoder);
+
+    // Anything shorter than this is just an encoder gap, not a filler.
+    if (firstLoudSec < 0.3) {
+        return 0.0;
+    }
+    return firstLoudSec;
+}
+
 void AudioEngine::stopMusic()
 {
     if (mMusicStarted) {
@@ -110,10 +176,13 @@ void AudioEngine::update()
     if (!mStarted || mMusicStarted || mPaused || !mMusicLoaded) {
         return;
     }
-    if (songTime() >= mMusicDelaySec) {
-        ma_sound_set_start_time_in_pcm_frames(&mMusic, 0);
+    // Chart time 0 == the first audible sample of the song, which lives at
+    // (startPos + userOffset) inside the file.
+    if (songTime() >= 0.0) {
+        const double filePos = std::max(0.0, mMusicStartPosSec + mUserOffsetSec);
+        ma_sound_seek_to_pcm_frame(&mMusic, static_cast<ma_uint64>(filePos * sampleRate()));
         ma_sound_start(&mMusic);
-        mMusicStartFrames = mAnchorFrames + static_cast<std::uint64_t>((mLeadInSec + mMusicDelaySec) * sampleRate());
+        mMusicStartFrames = ma_engine_get_time_in_pcm_frames(&mEngine);
         mMusicStarted = true;
     }
 }
@@ -136,7 +205,7 @@ double AudioEngine::songTime() const
         // Lead-in: start at -leadInSec and climb toward zero.
         return -mLeadInSec + static_cast<double>(now - mAnchorFrames) / sampleRate();
     }
-    return static_cast<double>(now - mMusicStartFrames) / sampleRate() + mMusicDelaySec;
+    return static_cast<double>(now - mMusicStartFrames) / sampleRate();
 }
 
 void AudioEngine::pause()
@@ -156,16 +225,19 @@ void AudioEngine::resume()
     if (!mPaused) {
         return;
     }
+    const double filePos = mPauseSongTime + mMusicStartPosSec + mUserOffsetSec;
     if (mMusicStarted) {
-        // Re-anchor: restore the music at the paused audio position.
-        const double musicPos = mPauseSongTime - mMusicDelaySec;
-        ma_sound_seek_to_pcm_frame(&mMusic, static_cast<ma_uint64>(std::max(0.0, musicPos) * sampleRate()));
+        // Re-anchor: put the music back at the position the clock expects.
+        const double seekPos = std::max(0.0, filePos);
+        ma_sound_seek_to_pcm_frame(&mMusic, static_cast<ma_uint64>(seekPos * sampleRate()));
         ma_sound_start(&mMusic);
-        mMusicStartFrames = ma_engine_get_time_in_pcm_frames(&mEngine) - static_cast<std::uint64_t>(std::max(0.0, musicPos) * sampleRate());
+        mMusicStartFrames =
+            ma_engine_get_time_in_pcm_frames(&mEngine) - static_cast<std::uint64_t>(mPauseSongTime * sampleRate());
+        mMusicStarted = true;
     } else {
-        // Still in lead-in: re-anchor the lead-in clock.
-        const double remaining = -mPauseSongTime;
-        mAnchorFrames = ma_engine_get_time_in_pcm_frames(&mEngine) - static_cast<std::uint64_t>(remaining * sampleRate());
+        // Still in the lead-in: re-anchor the lead-in clock.
+        mAnchorFrames = ma_engine_get_time_in_pcm_frames(&mEngine)
+            - static_cast<std::uint64_t>((mLeadInSec + mPauseSongTime) * sampleRate());
     }
     mPaused = false;
 }

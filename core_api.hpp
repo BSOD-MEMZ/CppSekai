@@ -49,6 +49,9 @@ const char* getMetadataTitle();
 const char* getMetadataArtist();
 const char* getMetadataDesigner();
 
+// Total length of the loaded chart in seconds (0 when nothing is loaded).
+double getChartEndTimeSec();
+
 // Extracts #WAVEOFFSET (seconds) from raw SUS text. Returns 0 if absent.
 double readWaveOffset(const std::string& susText);
 

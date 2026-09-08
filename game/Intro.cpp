@@ -13,6 +13,13 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <string>
+#include <vector>
+
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#endif
 
 namespace game
 {
@@ -172,9 +179,242 @@ namespace
     }
 } // namespace
 
-void loadIntroFonts(const std::string& fontDir)
+#ifdef _WIN32
+    std::string wideToUtf8(const std::wstring& value)
+    {
+        if (value.empty()) {
+            return {};
+        }
+        const int bytes = WideCharToMultiByte(CP_UTF8, 0, value.c_str(), -1, nullptr, 0, nullptr, nullptr);
+        std::string utf8(static_cast<size_t>(bytes > 1 ? bytes - 1 : 0), '\0');
+        WideCharToMultiByte(CP_UTF8, 0, value.c_str(), -1, utf8.data(), bytes, nullptr, nullptr);
+        return utf8;
+    }
+
+    std::wstring trimWide(std::wstring value)
+    {
+        while (!value.empty() && (value.front() == L' ' || value.front() == L'\t')) {
+            value.erase(value.begin());
+        }
+        while (!value.empty() && (value.back() == L' ' || value.back() == L'\t')) {
+            value.pop_back();
+        }
+        return value;
+    }
+
+    // Looks a face name up in the Fonts registry key and returns the full path
+    // of the file that provides it. Registry keys group several faces with
+    // " & " ("Yu Gothic Medium & Yu Gothic UI Regular (TrueType)") and append a
+    // technology suffix, so the names are matched part-by-part.
+    std::string findFontFile(const std::wstring& face, int matchMode)
+    {
+        HKEY key = nullptr;
+        if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Fonts",
+                0, KEY_READ, &key)
+            != ERROR_SUCCESS) {
+            return {};
+        }
+        std::string result;
+        for (DWORD index = 0; result.empty(); ++index) {
+            wchar_t name[512]{};
+            wchar_t data[512]{};
+            DWORD nameSize = 512;
+            DWORD dataSize = sizeof(data);
+            DWORD type = 0;
+            if (RegEnumValueW(key, index, name, &nameSize, nullptr, &type,
+                    reinterpret_cast<LPBYTE>(data), &dataSize)
+                != ERROR_SUCCESS) {
+                break;
+            }
+            if (type != REG_SZ) {
+                continue;
+            }
+            std::wstring keyName(name);
+            const size_t paren = keyName.find(L" (");
+            if (paren != std::wstring::npos) {
+                keyName = keyName.substr(0, paren);
+            }
+            size_t start = 0;
+            bool matched = false;
+            while (!matched && start <= keyName.size()) {
+                const size_t amp = keyName.find(L'&', start);
+                const std::wstring part =
+                    trimWide(keyName.substr(start, amp == std::wstring::npos ? std::wstring::npos : amp - start));
+                if (!part.empty()) {
+                    if (matchMode == 0) {
+                        matched = part == face;
+                    } else if (matchMode == 1) {
+                        matched = part == face + L" Regular";
+                    } else {
+                        matched = part.rfind(face + L" ", 0) == 0;
+                    }
+                }
+                if (amp == std::wstring::npos) {
+                    break;
+                }
+                start = amp + 1;
+            }
+            if (!matched) {
+                continue;
+            }
+            std::wstring file(data);
+            const size_t nul = file.find(L'\0');
+            if (nul != std::wstring::npos) {
+                file = file.substr(0, nul);
+            }
+            if (file.empty()) {
+                continue;
+            }
+            wchar_t windowsDir[MAX_PATH]{};
+            GetWindowsDirectoryW(windowsDir, MAX_PATH);
+            result = wideToUtf8(windowsDir) + "\\Fonts\\" + wideToUtf8(file);
+        }
+        RegCloseKey(key);
+        return result;
+    }
+
+    std::string resolveFontFile(const std::wstring& face)
+    {
+        // Prefer an exact face, then "<face> Regular", then any style of the
+        // face ("Yu Gothic UI Regular" is fine for "Yu Gothic UI").
+        for (int mode = 0; mode < 3; ++mode) {
+            const std::string path = findFontFile(face, mode);
+            if (!path.empty()) {
+                return path;
+            }
+        }
+        return {};
+    }
+
+    struct SystemFontCandidate
+    {
+        std::string path;
+        std::string face;
+    };
+
+    // The face Windows itself uses for UI text first (so the game follows the
+    // system), then the common CJK faces as a safety net: a latin-only UI font
+    // such as Segoe UI would render every song title as tofu.
+    std::vector<SystemFontCandidate> systemFontCandidates()
+    {
+        std::vector<SystemFontCandidate> candidates;
+        NONCLIENTMETRICSW metrics{};
+        metrics.cbSize = sizeof(metrics);
+        std::wstring faceName;
+        if (SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(metrics), &metrics, 0) != 0) {
+            faceName = metrics.lfMessageFont.lfFaceName;
+        }
+        if (!faceName.empty()) {
+            const std::string path = resolveFontFile(faceName);
+            if (!path.empty()) {
+                candidates.push_back({path, wideToUtf8(faceName)});
+            }
+        }
+        for (const wchar_t* fallback : {L"Microsoft YaHei UI", L"Yu Gothic UI", L"Meiryo UI",
+                                          L"MS UI Gothic", L"Noto Sans SC", L"Noto Sans JP"}) {
+            const std::string path = resolveFontFile(fallback);
+            if (!path.empty()) {
+                candidates.push_back({path, wideToUtf8(fallback)});
+            }
+        }
+        return candidates;
+    }
+#endif
+
+void loadIntroFonts(const std::string& fontDir, bool preferSystemFont)
 {
     ImGuiIO& io = ImGui::GetIO();
+
+    // Japanese ranges plus the simplified-Chinese characters the built-in UI
+    // (dialogs / settings panel) renders. The stock Japanese ranges miss
+    // glyphs like 设/闭/试, which would render as "?" boxes.
+    static const std::vector<ImWchar> kGlyphRanges = [] {
+        const ImWchar* jp = ImGui::GetIO().Fonts->GetGlyphRangesJapanese();
+        std::vector<ImWchar> ranges;
+        for (const ImWchar* p = jp; p[0] != 0; p += 2) {
+            ranges.push_back(p[0]);
+            ranges.push_back(p[1]);
+        }
+        // 设 置 关 闭 是 否 继 续 演 出 重 试 放 弃 暂 停 跳 过 确 认 取 消
+        for (ImWchar c : {0x8BBE, 0x7F6E, 0x5173, 0x95ED, 0x662F, 0x5426, 0x7EE7, 0x7EED, 0x6F14,
+                 0x51FA, 0x91CD, 0x8BD5, 0x653E, 0x5F03, 0x6682, 0x505C, 0x8DF3, 0x8FC7, 0x786E,
+                 0x8BA4, 0x53D6, 0x6D88}) {
+            ranges.push_back(c);
+            ranges.push_back(c);
+        }
+        ranges.push_back(0);
+        return ranges;
+    }();
+    // Only the extra simplified-Chinese codepoints, used to merge the Noto
+    // face into the Rodin body font (Rodin is Japanese-only; without the
+    // merge, 设置/关闭/重试 etc. render as "?").
+    static const std::vector<ImWchar> kSimplifiedRanges = [] {
+        std::vector<ImWchar> ranges;
+        for (ImWchar c : {0x8BBE, 0x7F6E, 0x5173, 0x95ED, 0x662F, 0x5426, 0x7EE7, 0x7EED, 0x6F14,
+                 0x51FA, 0x91CD, 0x8BD5, 0x653E, 0x5F03, 0x6682, 0x505C, 0x8DF3, 0x8FC7, 0x786E,
+                 0x8BA4, 0x53D6, 0x6D88}) {
+            ranges.push_back(c);
+            ranges.push_back(c);
+        }
+        ranges.push_back(0);
+        return ranges;
+    }();
+
+#ifdef _WIN32
+    // Default: draw with the font the OS uses for its own UI, so the game
+    // follows the system. A candidate is only accepted once it proves it can
+    // actually render CJK - a latin-only face (Segoe UI on a Japanese or
+    // Chinese desktop, for instance) would turn every title into tofu.
+    if (preferSystemFont) {
+        auto hasCjkGlyphs = [](ImFont* font, float size) {
+            ImFontBaked* baked = font->GetFontBaked(size);
+            if (baked == nullptr) {
+                return false;
+            }
+            // 初 ミ 詞 设
+            for (const ImWchar c : {ImWchar(0x521D), ImWchar(0x30DF), ImWchar(0x8A5E), ImWchar(0x8BBE)}) {
+                if (baked->FindGlyphNoFallback(c) == nullptr) {
+                    return false;
+                }
+            }
+            return true;
+        };
+
+        for (const auto& candidate : systemFontCandidates()) {
+            ImFontConfig config;
+            config.OversampleH = 2;
+            config.OversampleV = 2;
+            std::snprintf(config.Name, sizeof(config.Name), "%s", candidate.face.c_str());
+            // Japanese first: it carries all the kanji song titles need.
+            ImFont* font = io.Fonts->AddFontFromFileTTF(candidate.path.c_str(), 42.0f, &config,
+                io.Fonts->GetGlyphRangesJapanese());
+            if (font == nullptr) {
+                std::printf("[intro] system font %s rejected by the rasterizer\n", candidate.path.c_str());
+                continue;
+            }
+            if (!hasCjkGlyphs(font, 42.0f)) {
+                std::printf("[intro] system font %s has no CJK glyphs, trying the next one\n",
+                    candidate.face.c_str());
+                continue;
+            }
+            // Merge the simplified-Chinese set the built-in UI draws.
+            ImFontConfig merge;
+            merge.MergeMode = true;
+            merge.OversampleH = 2;
+            merge.OversampleV = 2;
+            io.Fonts->AddFontFromFileTTF(candidate.path.c_str(), 42.0f, &merge,
+                io.Fonts->GetGlyphRangesChineseSimplifiedCommon());
+            gBodyFont = font;
+            gTitleFont = font;
+            gDiffFont = font;
+            io.Fonts->Build();
+            std::printf("[intro] system font %s @42px loaded (%s)\n", candidate.face.c_str(),
+                candidate.path.c_str());
+            return;
+        }
+        std::printf("[intro] no usable system font, falling back to the bundled faces\n");
+    }
+#endif
 
     // Same candidate order as upstream loadIntroFonts(). The Rodin EB face is
     // CFF-based and stb_truetype cannot rasterize it, so the loader silently
@@ -193,7 +433,7 @@ void loadIntroFonts(const std::string& fontDir)
             config.RasterizerMultiply = 1.0f;
             std::snprintf(config.Name, sizeof(config.Name), "%s", name.c_str());
             ImFont* font = io.Fonts->AddFontFromFileTTF(path.c_str(), size, &config,
-                io.Fonts->GetGlyphRangesJapanese());
+                kGlyphRanges.data());
             if (font != nullptr) {
                 // ロ ミ 初 音 作 詞 - report which of these actually rasterized.
                 const ImWchar probes[] = {0x30ED, 0x30DF, 0x521D, 0x97F3, 0x4F5C, 0x8A5E};
@@ -216,6 +456,20 @@ void loadIntroFonts(const std::string& fontDir)
     };
 
     gBodyFont = addFont({"FOT-RodinNTLGPro-DB.ttf"}, 42.0f);
+    if (gBodyFont != nullptr) {
+        // Merge the Noto CJK face for the simplified-Chinese UI glyphs.
+        const std::string notoPath = fontDir + "/NotoSansCJKSC-Black.ttf";
+        std::FILE* probe = std::fopen(notoPath.c_str(), "rb");
+        if (probe != nullptr) {
+            std::fclose(probe);
+            ImFontConfig config;
+            config.MergeMode = true;
+            config.OversampleH = 2;
+            config.OversampleV = 2;
+            std::snprintf(config.Name, sizeof(config.Name), "NotoSansCJKSC-Black.ttf");
+            io.Fonts->AddFontFromFileTTF(notoPath.c_str(), 42.0f, &config, kSimplifiedRanges.data());
+        }
+    }
     gTitleFont = addFont({"FOT-RodinNTLG Pro EB.otf", "FOT-RodinNTLGPro-EB.ttf", "NotoSansCJKSC-Black.ttf"}, 38.0f);
     gDiffFont = addFont({"FOT-RodinNTLG Pro EB.otf", "FOT-RodinNTLGPro-EB.ttf", "NotoSansCJKSC-Black.ttf"}, 20.0f);
 

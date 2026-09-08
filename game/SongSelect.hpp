@@ -25,6 +25,11 @@ struct ChartEntry
     std::string difficulty;       // EASY..MASTER / APPEND / ETERNAL
     std::string level;
     std::string displayName; // fallback label when the chart has no #TITLE
+
+    // Seconds of silence at the head of the BGM (pjsk's fillerSec). Chart time
+    // 0 sits after it, so playback starts from this position in the file.
+    // Set from the sidecar JSON ("fillerSec" / "offset"), otherwise detected.
+    double audioStartSec = 0.0;
 };
 
 // Recursively collects *.sus under dir (bounded depth). Entries are sorted

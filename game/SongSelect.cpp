@@ -113,6 +113,14 @@ namespace
                     out[key] = doc[key].get<std::string>();
                 }
             }
+            // Leading silence of the BGM. "fillerSec" matches the name in the
+            // game's musics.json; "offset" (ms) is what the upstream web
+            // preview uses. Either one wins over the automatic detection.
+            if (doc.contains("fillerSec") && doc["fillerSec"].is_number()) {
+                out["fillerSec"] = std::to_string(doc["fillerSec"].get<double>());
+            } else if (doc.contains("offset") && doc["offset"].is_number()) {
+                out["fillerSec"] = std::to_string(doc["offset"].get<double>() / 1000.0);
+            }
         } catch (...) {
             // malformed sidecar: ignore, fall back to file-name metadata
         }
@@ -260,6 +268,9 @@ void resolveSidecars(ChartEntry& entry)
     if (entry.bgmPath.empty()) {
         entry.bgmPath = findSidecar(path, {".mp3", ".wav", ".ogg", ".flac", ".m4a"}, {});
     }
+    if (entry.audioStartSec <= 0.0) {
+        entry.audioStartSec = std::atof(sideField("fillerSec").c_str());
+    }
 }
 
 std::vector<ChartEntry> scanChartFolder(const std::string& dir)
@@ -325,6 +336,7 @@ std::vector<ChartEntry> scanChartFolder(const std::string& dir)
 
         item.coverPath = findSidecar(path, imageExt, {"jacket", "cover"});
         item.bgmPath = findSidecar(path, audioExt, {});
+        item.audioStartSec = std::atof(sideField("fillerSec").c_str());
 
         entries.push_back(item);
     }
@@ -495,6 +507,10 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         ImGui::TextColored(ImVec4(0.45f, 0.5f, 0.62f, 1.0f), "%s", item.susPath.c_str());
         ImGui::TextColored(ImVec4(item.bgmPath.empty() ? 0.75f : 0.5f, item.bgmPath.empty() ? 0.45f : 0.8f, 0.5f, 1.0f),
             "%s", item.bgmPath.empty() ? "BGM: 未找到（将使用静音计时）" : "BGM: 已找到");
+        if (!item.bgmPath.empty() && item.audioStartSec > 0.0) {
+            ImGui::TextColored(ImVec4(0.55f, 0.6f, 0.75f, 1.0f), "BGM 开头静音: %.2fs（谱面从其后开始）",
+                item.audioStartSec);
+        }
     }
     ImGui::PopTextWrapPos();
 

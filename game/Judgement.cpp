@@ -49,11 +49,14 @@ void JudgementEngine::reset()
     mStats = JudgementStats{};
 }
 
-void JudgementEngine::registerMiss()
+void JudgementEngine::registerMiss(float songTimeSec)
 {
     mStats.miss += 1;
     mStats.combo = 0;
     mStats.lastJudge = Judge::Miss;
+    // Record the time, otherwise the HUD never sees the judge change and the
+    // MISS sprite is never shown.
+    mStats.lastJudgeTimeSec = songTimeSec;
 }
 
 Judge JudgementEngine::registerJudge(Judge judge, bool critical, float volume)
@@ -208,7 +211,7 @@ void JudgementEngine::update(float songTimeSec)
 
         if (note.timeSec < songTimeSec - missSec) {
             note.state = 1;
-            registerMiss();
+            registerMiss(songTimeSec);
             continue;
         }
         (void)goodSec;
