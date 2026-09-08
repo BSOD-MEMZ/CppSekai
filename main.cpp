@@ -785,6 +785,7 @@ int main(int argc, char** argv)
             } else if (state == AppState::Play && susPath.empty()) {
                 // back to the song list
                 audio.stopMusic();
+                audio.setHoldLoop(false, false, 0.0f);
                 touches.clear();
                 std::fill(std::begin(keyHeld), std::end(keyHeld), false);
                 lanePress.fill(0.0f);
@@ -871,6 +872,14 @@ int main(int argc, char** argv)
             }
             judgement.setHoldLanes(holdLanes);
             judgement.update(static_cast<float>(songTime));
+
+            // Hold loop SE: loop while a hold is being tracked (anyActiveHold
+            // goes false as soon as the hold ends or the lane is released).
+            {
+                bool holdCritical = false;
+                const bool holding = !paused && judgement.anyActiveHold(&holdCritical);
+                audio.setHoldLoop(holding, holdCritical, seVolume * 0.9f);
+            }
 
             // ----------------------------------------------------------
             // Lane highlight: hover (mouse) + press (keys / touches)
@@ -982,8 +991,8 @@ int main(int argc, char** argv)
                     showDebug = false;
                 }
                 ImGui::SetCursorScreenPos(
-                    ImVec2(cardCenter.x - cardSize.x * 0.5f + 40.0f * s, cardCenter.y - cardSize.y * 0.5f + 46.0f * s));
-                ui::caption("设置", 34.0f * s, ui::kTitleText, cardSize.x - 80.0f * s);
+                    ImVec2(cardCenter.x - cardSize.x * 0.5f + 40.0f * s, cardCenter.y - cardSize.y * 0.5f + 40.0f * s));
+                ui::cardTitle("设置", cardSize.x - 80.0f * s);
 
                 ImGui::PushStyleColor(ImGuiCol_Text, ui::kBodyText);
                 ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(224, 224, 235, 255));
@@ -1034,6 +1043,15 @@ int main(int argc, char** argv)
                 if (ImGui::SliderFloat("speed", &speed, 1.0f, 12.0f, "%.1f")) {
                     noteSpeed = speed;
                     core_api::setPreviewConfig(0, 1, 1, 1, 0, 0, noteSpeed, 1.0f, 0.6f, 0.0f, 1.0f, 0.85f);
+                }
+                // pjsk style stepper: -1 / -0.1 / -0.01 / value / +0.01 / +0.1 / +1.
+                {
+                    float stepped = noteSpeed;
+                    if (ui::stepper("speed-stepper", &stepped, {-1.0f, -0.1f, -0.01f, 0.01f, 0.1f, 1.0f},
+                            "%.2f", cardSize.x - 80.0f * s)) {
+                        noteSpeed = std::clamp(stepped, 1.0f, 12.0f);
+                        core_api::setPreviewConfig(0, 1, 1, 1, 0, 0, noteSpeed, 1.0f, 0.6f, 0.0f, 1.0f, 0.85f);
+                    }
                 }
                 static float perfect = 40.0f;
                 static float great = 90.0f;
@@ -1088,6 +1106,7 @@ int main(int argc, char** argv)
                     // Give up: back to the song list.
                     pauseDialogOpen = false;
                     audio.stopMusic();
+                    audio.setHoldLoop(false, false, 0.0f);
                     touches.clear();
                     std::fill(std::begin(keyHeld), std::end(keyHeld), false);
                     lanePress.fill(0.0f);
@@ -1106,6 +1125,13 @@ int main(int argc, char** argv)
             if (!screenshotPath.empty() && songTime >= screenshotTimeSec) {
                 wantScreenshot = true;
             }
+        }
+
+        // Paused frames (pause dialog) skip the playing branch above; let the
+        // headless screenshot still fire using the wall clock.
+        if (!screenshotPath.empty() && !wantScreenshot && state == AppState::Play && paused
+            && (wallSongTime() - leadInSec) >= screenshotTimeSec) {
+            wantScreenshot = true;
         }
 
         ImGui::Render();

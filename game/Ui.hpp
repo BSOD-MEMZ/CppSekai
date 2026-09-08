@@ -32,6 +32,10 @@ constexpr ImU32 kPrimaryPress = IM_COL32(92, 214, 192, 255);
 constexpr ImU32 kWhiteBtn = IM_COL32(255, 255, 255, 255);   // white capsule
 constexpr ImU32 kWhiteHover = IM_COL32(243, 243, 249, 255);
 constexpr ImU32 kWhitePress = IM_COL32(232, 232, 240, 255);
+constexpr ImU32 kDivider = IM_COL32(206, 206, 218, 255);    // thin rule under titles
+constexpr ImU32 kNotePink = IM_COL32(255, 82, 141, 255);    // pink hint / warning text
+constexpr ImU32 kCheckPink = IM_COL32(255, 102, 158, 255);  // pink checkbox fill
+constexpr ImU32 kPillBg = IM_COL32(199, 199, 212, 255);     // gray value pill (stepper)
 
 // UI scale factor relative to the 720p design resolution.
 float scale();
@@ -55,6 +59,20 @@ bool capsuleButton(const char* label, const ImVec2& size, bool primary);
 // remaining width at the cursor (pass the card interior width to center
 // inside a card).
 void caption(const char* text, float sizePx = 0.0f, ImU32 color = kTitleText, float rowWidth = 0.0f);
+
+// Left-aligned card title with the thin divider rule underneath (the classic
+// pjsk dialog header). interiorWidth is the usable card width for centering.
+void cardTitle(const char* text, float interiorWidth, float sizePx = 34.0f);
+
+// Pink rounded checkbox with a white check + label, the whole group centered
+// in rowWidth. Toggles *value on click; returns the new value.
+bool checkBox(const char* label, bool* value, float rowWidth = 0.0f);
+
+// pjsk number stepper: a row of small white capsules with the +/- deltas
+// around a gray pill showing the current value, all centered in rowWidth.
+// Applies the pressed delta to *value and returns true when it changed.
+bool stepper(const char* id, float* value, const std::vector<float>& deltas,
+    const char* fmt = "%.2f", float rowWidth = 0.0f);
 
 // Complete dialog: centered card, close X, centered gray title, and a row of
 // capsule buttons (primary flags select the mint ones). Returns the pressed

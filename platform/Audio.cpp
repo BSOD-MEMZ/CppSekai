@@ -256,4 +256,42 @@ void AudioEngine::playSe(SeKind kind, float volume)
     ma_sound_start(&sound);
 }
 
+void AudioEngine::setHoldLoop(bool active, bool critical, float volume)
+{
+    if (!mSe.loaded) {
+        return;
+    }
+    const int kind = critical ? SeHoldLoopCritical : SeHoldLoop;
+    // Reserve the last pool voice of each hold-loop kind for the loop so the
+    // one-shot rotation never steals it.
+    ma_sound& loop = mSe.sounds[kind][SE_POOL - 1];
+
+    if (active) {
+        if (mHoldLoopPlaying && mHoldLoopKind != kind) {
+            // Variant switched (critical flag changed): stop the old one.
+            ma_sound& old = mSe.sounds[mHoldLoopKind][SE_POOL - 1];
+            ma_sound_set_looping(&old, MA_FALSE);
+            ma_sound_stop(&old);
+            mHoldLoopPlaying = false;
+        }
+        if (!mHoldLoopPlaying) {
+            ma_sound_stop(&loop);
+            ma_sound_seek_to_pcm_frame(&loop, 0);
+            ma_sound_set_looping(&loop, MA_TRUE);
+            ma_sound_set_volume(&loop, std::max(0.0f, volume));
+            ma_sound_start(&loop);
+            mHoldLoopPlaying = true;
+            mHoldLoopKind = kind;
+        } else {
+            ma_sound_set_volume(&loop, std::max(0.0f, volume));
+        }
+    } else if (mHoldLoopPlaying) {
+        ma_sound& playing = mSe.sounds[mHoldLoopKind][SE_POOL - 1];
+        ma_sound_set_looping(&playing, MA_FALSE);
+        ma_sound_stop(&playing);
+        mHoldLoopPlaying = false;
+        mHoldLoopKind = -1;
+    }
+}
+
 } // namespace platform

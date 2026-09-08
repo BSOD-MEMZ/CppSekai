@@ -89,6 +89,12 @@ class AudioEngine
 
     void playSe(SeKind kind, float volume);
 
+    // Hold loop SE: starts a looping voice while a hold is active, stops it
+    // (with a short fade handled by calling code each frame) when not. Uses
+    // the last pooled voice of the two hold-loop kinds, so one-shots are
+    // unaffected. Safe to call every frame.
+    void setHoldLoop(bool active, bool critical, float volume);
+
     bool hasMusic() const { return mMusicLoaded; }
 
   private:
@@ -98,6 +104,8 @@ class AudioEngine
     ma_sound mMusic{};
 
     SeBank mSe{};
+    bool mHoldLoopPlaying = false;
+    int mHoldLoopKind = -1;
 
     bool mStarted = false;
     bool mMusicStarted = false;

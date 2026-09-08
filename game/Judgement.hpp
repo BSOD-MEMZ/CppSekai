@@ -88,6 +88,11 @@ class JudgementEngine
     // held lane positions; touches count as holds while the finger is down.
     void setHoldLanes(const std::vector<float>& lanes) { mHoldLanes = lanes; }
 
+    // True while at least one hold is being tracked (started and not yet
+    // finished/broken). criticalOut receives whether it is a critical hold -
+    // used to pick the hold loop SE variant.
+    [[nodiscard]] bool anyActiveHold(bool* criticalOut = nullptr) const;
+
     [[nodiscard]] const JudgementStats& stats() const { return mStats; }
     [[nodiscard]] const JudgementWindows& windows() const { return mWindows; }
     void setWindows(const JudgementWindows& windows) { mWindows = windows; }

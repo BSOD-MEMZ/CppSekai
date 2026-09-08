@@ -287,4 +287,21 @@ void JudgementEngine::update(float songTimeSec)
         mActiveHolds.end());
 }
 
+bool JudgementEngine::anyActiveHold(bool* criticalOut) const
+{
+    if (criticalOut != nullptr) {
+        *criticalOut = false;
+    }
+    for (const ActiveHold& hold : mActiveHolds) {
+        if (hold.broken) {
+            continue;
+        }
+        if (criticalOut != nullptr && hold.noteIndex < mNotes.size()) {
+            *criticalOut = mNotes[hold.noteIndex].flags != 0.0f;
+        }
+        return true;
+    }
+    return false;
+}
+
 } // namespace game
