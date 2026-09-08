@@ -1,8 +1,10 @@
 #include "Renderer.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 #include <GL/gl.h>
@@ -351,15 +353,39 @@ Renderer::Texture Renderer::loadTextureFromFile(const std::string& path, std::st
     return texture;
 }
 
+bool Renderer::loadSplash(const std::string& assetDir, std::string& outError)
+{
+    // Only what drawStaticScene() needs for the very first frame.
+    if (mBackground.id == 0) {
+        mBackground = loadTextureFromFile(assetDir + "/background_overlay.png", outError);
+        if (mBackground.id == 0) {
+            return false;
+        }
+    }
+    if (mStage.id == 0) {
+        mStage = loadTextureFromFile(assetDir + "/stage.png", outError);
+        if (mStage.id == 0) {
+            return false;
+        }
+    }
+    buildStaticVertices();
+    outError.clear();
+    return true;
+}
+
 bool Renderer::loadAssets(const std::string& assetDir, std::string& outError)
 {
-    mBackground = loadTextureFromFile(assetDir + "/background_overlay.png", outError);
     if (mBackground.id == 0) {
-        return false;
+        mBackground = loadTextureFromFile(assetDir + "/background_overlay.png", outError);
+        if (mBackground.id == 0) {
+            return false;
+        }
     }
-    mStage = loadTextureFromFile(assetDir + "/stage.png", outError);
     if (mStage.id == 0) {
-        return false;
+        mStage = loadTextureFromFile(assetDir + "/stage.png", outError);
+        if (mStage.id == 0) {
+            return false;
+        }
     }
     mNotes = loadTextureFromFile(assetDir + "/notes_01.png", outError);
     if (mNotes.id == 0) {
@@ -397,8 +423,31 @@ const Renderer::HudSprite* Renderer::hud(const std::string& name) const
 
 bool Renderer::loadHud(const std::string& overlayDir, std::string& outError)
 {
+    // Prefer the pre-shrunk copies (generated offline by
+    // .workbuddy/tools/shrink_hud.cpp into "<overlay>_opt") when they exist;
+    // fall back to the originals so a missing _opt folder still works.
+    const std::string optDir = overlayDir + "_opt";
+    auto fileExists = [](const std::string& path) {
+        std::FILE* probe = std::fopen(path.c_str(), "rb");
+        if (probe == nullptr) {
+            return false;
+        }
+        std::fclose(probe);
+        return true;
+    };
     auto add = [&](const std::string& key, const std::string& relativePath) {
-        const Texture texture = loadTextureFromFile(overlayDir + "/" + relativePath, outError);
+        std::string path = optDir + "/" + relativePath;
+        if (!fileExists(path)) {
+            path = overlayDir + "/" + relativePath;
+        }
+        const auto t0 = std::chrono::steady_clock::now();
+        const Texture texture = loadTextureFromFile(path, outError);
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        static const bool traceTextures = std::getenv("CPSEKAI_ASSET_TIMING") != nullptr;
+        if (traceTextures && ms > 15.0) {
+            std::printf("[hud] %-28s %6.1f ms (%dx%d)\n", relativePath.c_str(), ms,
+                texture.width, texture.height);
+        }
         if (texture.id == 0) {
             return false;
         }

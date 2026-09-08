@@ -26,6 +26,11 @@ class Renderer
 
     bool loadAssets(const std::string& assetDir, std::string& outError);
 
+    // Loads only the background + stage so a frame can be drawn before the
+    // rest of the startup (HUD sprites, CJK font atlas) finishes. Textures
+    // already present are kept, so loadAssets() afterwards is cheap for them.
+    bool loadSplash(const std::string& assetDir, std::string& outError);
+
     // HUD sprites (pjsk overlay textures) drawn with ImGui on top of the field.
     struct HudSprite
     {

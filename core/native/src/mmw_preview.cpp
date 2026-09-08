@@ -1099,7 +1099,13 @@ namespace mmw_preview
                 continue;
             }
 
+            // CppSekai: extended flags layout (upstream stores only bit0 =
+            // critical). Bits 1-2 carry the flick direction (FlickType:
+            // 1=up/default 2=left 3=right) so the judgement engine can do
+            // strict swipe-direction validation. Marked here because this is
+            // a local deviation from upstream sekai-mmw-preview-web.
             float flags = note.critical ? 1.0f : 0.0f;
+            flags += static_cast<float>(static_cast<int>(note.flick)) * 2.0f;
             float endTimeSec = -1.0f;
             const float volume = getSEVolumeAtTick(note.tick, gRuntime.score);
             gRuntime.hitEvents.push_back(HitEvent{

@@ -8,7 +8,7 @@
 //   [2] width     note width in lane units
 //   [3] kind      0=tap 1=critical tap 2=flick 3=trace(friction)
 //                 4=hold tick(auto) 5=hold start (endTimeSec valid)
-//   [4] flags     bit0 = critical
+//   [4] flags     bit0 = critical, bits 1-2 = flick direction (FlickDir)
 //   [5] endTimeSec  hold end time (-1 for non-holds)
 //   [6] volume    SE volume at this note
 #pragma once
@@ -19,6 +19,15 @@
 
 namespace game
 {
+
+// Flick direction, mirroring the core's FlickType (None/Default/Left/Right).
+enum FlickDir : std::uint8_t
+{
+    FlickNone = 0,
+    FlickUp = 1,
+    FlickLeft = 2,
+    FlickRight = 3,
+};
 
 enum class Judge : std::uint8_t
 {

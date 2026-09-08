@@ -115,6 +115,9 @@ namespace
             "       values (e.g. 30/60) reduce GPU/CPU load and power draw.\n"
             "Keyboard: Z S X D C V G B H N J M = 12 lanes\n"
             "          SPACE = pause, F = fullscreen, H = debug panel, ESC = back/quit\n"
+            "Mouse   : left/right button = tap a lane (hold = long note),\n"
+            "          drag up = flick. Right button gives a second pointer.\n"
+            "          Clicks on the HUD / panels never count as a hit.\n"
             "Touch   : multi-touch lanes, swipe up for flicks\n");
     }
 
@@ -383,11 +386,23 @@ int main(int argc, char** argv)
     // ------------------------------------------------------------------
     // SDL + OpenGL
     // ------------------------------------------------------------------
+    // Boot timing: nothing is drawn (so the window stays black) until the
+    // first frame, and the stages below are the ones that cost time.
+    const Uint64 bootCounter = SDL_GetPerformanceCounter();
+    const double bootFreq = static_cast<double>(SDL_GetPerformanceFrequency());
+    auto bootMs = [&]() {
+        return static_cast<double>(SDL_GetPerformanceCounter() - bootCounter) * 1000.0 / bootFreq;
+    };
+    auto bootLog = [&](const char* stage) {
+        std::printf("[boot] %-22s %7.1f ms\n", stage, bootMs());
+    };
+
     SDL_SetMainReady();
     if (SDL_Init(SDL_INIT_VIDEO) != 0) {
         std::fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
         return 1;
     }
+    bootLog("sdl init");
     SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0");
     SDL_SetHint(SDL_HINT_MOUSE_TOUCH_EVENTS, "0");
 
@@ -416,6 +431,7 @@ int main(int argc, char** argv)
     }
     std::printf("[window] %dx%d mode=%s\n", windowW, windowH,
         windowMode == 0 ? "borderless" : windowMode == 1 ? "windowed" : "fullscreen");
+    bootLog("window created");
     SDL_GLContext glContext = SDL_GL_CreateContext(window);
     if (glContext == nullptr) {
         std::fprintf(stderr, "OpenGL 3.3 core unavailable: %s\n", SDL_GetError());
@@ -423,6 +439,14 @@ int main(int argc, char** argv)
     }
     SDL_GL_MakeCurrent(window, glContext);
     SDL_GL_SetSwapInterval(1);
+    bootLog("gl context");
+    // Paint the very first frame (a plain dark clear) before any asset is
+    // loaded. Without it Windows shows an unpainted window - and after a
+    // swap the compositor has something to display even if the load below
+    // takes a while.
+    glClearColor(0.03f, 0.03f, 0.05f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    SDL_GL_SwapWindow(window);
 
     std::string error;
     platform::Renderer renderer;
@@ -455,10 +479,23 @@ int main(int argc, char** argv)
         std::fprintf(stderr, "renderer init failed: %s\n", error.c_str());
         return 1;
     }
+    bootLog("renderer init");
+    // Load just the stage first and show it: from here on the window shows
+    // the pjsk background instead of a black rectangle while the rest of the
+    // textures and the CJK font atlas are being built.
+    if (renderer.loadSplash(assetDir, error)) {
+        renderer.renderFrame(nullptr, 0, 0.85f, 0.85f);
+        SDL_GL_SwapWindow(window);
+        bootLog("first frame");
+    } else {
+        std::fprintf(stderr, "warning: splash load failed: %s\n", error.c_str());
+        error.clear();
+    }
     if (!renderer.loadAssets(assetDir, error)) {
         std::fprintf(stderr, "asset load failed: %s\n", error.c_str());
         return 1;
     }
+    bootLog("assets");
     // Autoplay keeps the core's own note-hit effect timeline; player mode
     // uses judgement-driven effects instead.
     renderer.setDrawCoreEffects(autoPlay);
@@ -467,6 +504,7 @@ int main(int argc, char** argv)
         std::fprintf(stderr, "warning: HUD load failed: %s\n", error.c_str());
         error.clear();
     }
+    bootLog("hud textures");
     // Dialog close X (dark cross on transparent, assets/mmw/ui/close.png).
     if (const platform::Renderer::HudSprite* closeSprite = renderer.hud("ui_close"); closeSprite != nullptr && closeSprite->id != 0) {
         ui::setCloseTexture(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(closeSprite->id)));
@@ -477,6 +515,7 @@ int main(int argc, char** argv)
     // ------------------------------------------------------------------
     core_api::init();
     core_api::resize(windowW, windowH, 1.0f);
+    bootLog("chart core");
 
     // ------------------------------------------------------------------
     // Audio
@@ -486,10 +525,12 @@ int main(int argc, char** argv)
         std::fprintf(stderr, "audio init failed: %s\n", error.c_str());
         return 1;
     }
+    bootLog("audio device");
     if (!audio.loadSe(seDir, error)) {
         std::fprintf(stderr, "warning: SE load failed: %s\n", error.c_str());
         error.clear();
     }
+    bootLog("audio");
 
     // ------------------------------------------------------------------
     // Judgement
@@ -504,7 +545,9 @@ int main(int argc, char** argv)
     ImGui::StyleColorsDark();
     ImGui_ImplSDL2_InitForOpenGL(window, glContext);
     ImGui_ImplOpenGL3_Init("#version 330 core");
+    bootLog("imgui");
     game::loadIntroFonts(fontDir, useSystemFont);
+    bootLog("fonts");
 
     // ------------------------------------------------------------------
     // Windows system media integration (SMTC + taskbar progress)
@@ -527,6 +570,7 @@ int main(int argc, char** argv)
     if (chartsDir.empty()) {
         chartsDir = chartCandidates.front();
     }
+    bootLog("chart scan");
     std::printf("[select] %d chart(s) under %s\n", static_cast<int>(entries.size()), chartsDir.c_str());
     if (entries.empty()) {
         std::printf("[select] no .sus found. Looked in:\n");
@@ -574,6 +618,7 @@ int main(int argc, char** argv)
         announceTrack();
         beginSessionClockPending = true;
     }
+    bootLog("ready (first frame up)");
 
     // ------------------------------------------------------------------
     // Main loop
@@ -614,6 +659,101 @@ int main(int argc, char** argv)
     std::vector<game::HitFx> hitEffects;
     float lastSeenJudgeTime = -100.0f;
     bool wantScreenshot = false;
+    // Set by the mouse handler when the HUD pause button was clicked, so the
+    // same click is not also treated as a lane hit.
+    bool pauseClickRequested = false;
+
+    // ------------------------------------------------------------------
+    // Pointer input: touch fingers and mouse buttons share one code path.
+    // Mouse pointers get negative ids so they never collide with SDL fingers.
+    // ------------------------------------------------------------------
+    auto pointerIdForButton = [](Uint8 button) -> SDL_FingerID {
+        return button == SDL_BUTTON_RIGHT ? -2 : -1;
+    };
+
+    // Window pixel -> 1920x1080 virtual HUD space (letterboxed, like the HUD).
+    auto hudPoint = [&](int x, int y, float& outVx, float& outVy) {
+        const float hudScale = std::min(static_cast<float>(windowW) / 1920.0f,
+            static_cast<float>(windowH) / 1080.0f);
+        const float hudOffX = (static_cast<float>(windowW) - 1920.0f * hudScale) * 0.5f;
+        const float hudOffY = (static_cast<float>(windowH) - 1080.0f * hudScale) * 0.5f;
+        outVx = (static_cast<float>(x) - hudOffX) / hudScale;
+        outVy = (static_cast<float>(y) - hudOffY) / hudScale;
+    };
+
+    auto isPauseButton = [&](int x, int y) {
+        float vx = 0.0f;
+        float vy = 0.0f;
+        hudPoint(x, y, vx, vy);
+        const game::HudRect rect = game::lifePauseRect();
+        return vx >= rect.x && vx <= rect.x + rect.w && vy >= rect.y && vy <= rect.y + rect.h;
+    };
+
+    // Starts a tap at a window position. Returns false when the press is
+    // outside the playfield (e.g. on the sky above the horizon), where the
+    // inverse perspective would map it to a bogus lane.
+    auto beginPointer = [&](SDL_FingerID id, int x, int y) {
+        const float clipX = (static_cast<float>(x) / static_cast<float>(windowW)) * 2.0f - 1.0f;
+        const float clipY = 1.0f - (static_cast<float>(y) / static_cast<float>(windowH)) * 2.0f;
+        const float worldY = renderer.clipToWorldY(clipY);
+        if (worldY < 0.06f || worldY > 1.6f) {
+            return false;
+        }
+        // Undo the fake perspective: screen x = laneX * worldY.
+        const float lanePos = std::abs(worldY) > 0.08f
+            ? renderer.clipToWorldX(clipX) / worldY
+            : renderer.clipToWorldX(clipX);
+        if (lanePos < -6.5f || lanePos > 6.5f) {
+            return false;
+        }
+
+        TouchTrack track;
+        track.fingerId = id;
+        track.lanePos = lanePos;
+        track.laneIndex = laneIndexFromPos(lanePos);
+        track.lastWorldY = worldY;
+        track.lastMoveTimeSec = SDL_GetTicks() / 1000.0;
+        touches.push_back(track);
+        lanePress[static_cast<size_t>(track.laneIndex)] = 1.0f;
+        hitEffects.push_back(game::HitFx{lanePos, 0.0f, 0.4f});
+        const double songTime = audio.hasMusic() ? audio.songTime() : wallSongTime();
+        const game::Judge result = judgement.tap(track.lanePos, static_cast<float>(songTime), false, 0.8f);
+        if (result != game::Judge::None) {
+            playHitSe(audio, judgement, seVolume);
+        }
+        return true;
+    };
+
+    // Tracks vertical movement; a fast upward drag is a flick.
+    auto movePointer = [&](SDL_FingerID id, int x, int y) {
+        const float clipY = 1.0f - (static_cast<float>(y) / static_cast<float>(windowH)) * 2.0f;
+        const double now = SDL_GetTicks() / 1000.0;
+        const float worldY = renderer.clipToWorldY(clipY);
+        for (auto& track : touches) {
+            if (track.fingerId != id) {
+                continue;
+            }
+            const float delta = worldY - track.lastWorldY;
+            const double dt = now - track.lastMoveTimeSec;
+            // Upward swipe in screen space = world y increasing.
+            if (dt > 0.001 && delta / dt > 1.0 && !track.flicked) {
+                track.flicked = true;
+                const double songTime = audio.hasMusic() ? audio.songTime() : wallSongTime();
+                const game::Judge result = judgement.flick(track.lanePos, static_cast<float>(songTime), 0.8f);
+                if (result != game::Judge::None) {
+                    playHitSe(audio, judgement, seVolume);
+                }
+            }
+            track.lastWorldY = worldY;
+            track.lastMoveTimeSec = now;
+        }
+    };
+
+    auto endPointer = [&](SDL_FingerID id) {
+        touches.erase(std::remove_if(touches.begin(), touches.end(),
+                          [&](const TouchTrack& track) { return track.fingerId == id; }),
+            touches.end());
+    };
 
     while (running) {
         const Uint64 nowCounter = SDL_GetPerformanceCounter();
@@ -660,6 +800,13 @@ int main(int argc, char** argv)
                         windowH = event.window.data2;
                         renderer.resize(windowW, windowH);
                         core_api::resize(windowW, windowH, 1.0f);
+                    } else if (event.window.event == SDL_WINDOWEVENT_FOCUS_LOST
+                        || event.window.event == SDL_WINDOWEVENT_LEAVE) {
+                        // A mouse button released outside the window would
+                        // otherwise stay "held" forever (fingers get their
+                        // own up event, the mouse may not).
+                        endPointer(pointerIdForButton(SDL_BUTTON_LEFT));
+                        endPointer(pointerIdForButton(SDL_BUTTON_RIGHT));
                     }
                     break;
                 case SDL_KEYDOWN: {
@@ -714,62 +861,66 @@ int main(int argc, char** argv)
                     if (autoPlay || paused || state != AppState::Play) {
                         break;
                     }
-                    TouchTrack track;
-                    track.fingerId = event.tfinger.fingerId;
-                    const float clipX = (event.tfinger.x * 2.0f) - 1.0f;
-                    const float clipY = 1.0f - (event.tfinger.y * 2.0f);
-                    const float worldY = renderer.clipToWorldY(clipY);
-                    // Undo the fake perspective: screen x = laneX * worldY.
-                    const float lanePos = std::abs(worldY) > 0.08f
-                        ? renderer.clipToWorldX(clipX) / worldY
-                        : renderer.clipToWorldX(clipX);
-                    track.lanePos = lanePos;
-                    track.laneIndex = laneIndexFromPos(lanePos);
-                    track.lastWorldY = worldY;
-                    track.lastMoveTimeSec = SDL_GetTicks() / 1000.0;
-                    touches.push_back(track);
-                    lanePress[static_cast<size_t>(track.laneIndex)] = 1.0f;
-                    hitEffects.push_back(game::HitFx{lanePos, 0.0f, 0.4f});
-                    const double songTime = audio.hasMusic() ? audio.songTime() : wallSongTime();
-                    const game::Judge result = judgement.tap(track.lanePos, static_cast<float>(songTime), false, 0.8f);
-                    if (result != game::Judge::None) {
-                        playHitSe(audio, judgement, seVolume);
-                    }
+                    beginPointer(event.tfinger.fingerId,
+                        static_cast<int>(event.tfinger.x * static_cast<float>(windowW)),
+                        static_cast<int>(event.tfinger.y * static_cast<float>(windowH)));
                     break;
                 }
                 case SDL_FINGERMOTION: {
                     if (autoPlay || paused || state != AppState::Play) {
                         break;
                     }
-                    const float clipY = 1.0f - (event.tfinger.y * 2.0f);
-                    const double now = SDL_GetTicks() / 1000.0;
-                    const float worldY = renderer.clipToWorldY(clipY);
-                    for (auto& track : touches) {
-                        if (track.fingerId != event.tfinger.fingerId) {
-                            continue;
-                        }
-                        const float delta = worldY - track.lastWorldY;
-                        const double dt = now - track.lastMoveTimeSec;
-                        // Upward swipe in screen space = world y increasing.
-                        if (dt > 0.001 && delta / dt > 1.0 && !track.flicked) {
-                            track.flicked = true;
-                            const double songTime = audio.hasMusic() ? audio.songTime() : wallSongTime();
-                            const game::Judge result = judgement.flick(track.lanePos, static_cast<float>(songTime), 0.8f);
-                            if (result != game::Judge::None) {
-                                playHitSe(audio, judgement, seVolume);
-                            }
-                        }
-                        track.lastWorldY = worldY;
-                        track.lastMoveTimeSec = now;
-                    }
+                    movePointer(event.tfinger.fingerId,
+                        static_cast<int>(event.tfinger.x * static_cast<float>(windowW)),
+                        static_cast<int>(event.tfinger.y * static_cast<float>(windowH)));
                     break;
                 }
                 case SDL_FINGERUP: {
-                    touches.erase(std::remove_if(touches.begin(), touches.end(),
-                                      [&](const TouchTrack& track) {
-                                          return track.fingerId == event.tfinger.fingerId;
-                                      }),
-                        touches.end());
+                    endPointer(event.tfinger.fingerId);
+                    break;
+                }
+                // ------------------------------------------------------
+                // Mouse: same as a finger, but the press is ignored when
+                // ImGui owns the pointer (settings card, pause dialog) or
+                // when it lands on the HUD pause button.
+                // ------------------------------------------------------
+                case SDL_MOUSEBUTTONDOWN: {
+                    if (autoPlay || paused || state != AppState::Play) {
+                        break;
+                    }
+                    if (event.button.button != SDL_BUTTON_LEFT && event.button.button != SDL_BUTTON_RIGHT) {
+                        break;
+                    }
+                    if (ImGui::GetIO().WantCaptureMouse) {
+                        break;
+                    }
+                    const double songTime = audio.hasMusic() ? audio.songTime() : wallSongTime();
+                    const float visibility = game::openingPlayfieldVisibility(
+                        static_cast<float>(songTime + leadInSec), session.intro.hasContent);
+                    if (visibility > 0.0f && isPauseButton(event.button.x, event.button.y)) {
+                        pauseClickRequested = true;
+                        break;
+                    }
+                    beginPointer(pointerIdForButton(event.button.button), event.button.x, event.button.y);
+                    break;
+                }
+                case SDL_MOUSEMOTION: {
+                    if (autoPlay || paused || state != AppState::Play) {
+                        break;
+                    }
+                    if ((event.motion.state & SDL_BUTTON_LMASK) != 0) {
+                        movePointer(pointerIdForButton(SDL_BUTTON_LEFT), event.motion.x, event.motion.y);
+                    }
+                    if ((event.motion.state & SDL_BUTTON_RMASK) != 0) {
+                        movePointer(pointerIdForButton(SDL_BUTTON_RIGHT), event.motion.x, event.motion.y);
+                    }
+                    break;
+                }
+                case SDL_MOUSEBUTTONUP: {
+                    if (event.button.button != SDL_BUTTON_LEFT && event.button.button != SDL_BUTTON_RIGHT) {
+                        break;
+                    }
+                    endPointer(pointerIdForButton(event.button.button));
                     break;
                 }
                 default:
@@ -962,17 +1113,11 @@ int main(int argc, char** argv)
             // ----------------------------------------------------------
             // Pause button zone (right end of the life bar).
             // ----------------------------------------------------------
-            if (!autoPlay && !pauseDialogOpen && visibility > 0.0f && ImGui::IsMouseClicked(0)) {
-                const ImGuiIO& io = ImGui::GetIO();
-                const float hudScale = std::min(static_cast<float>(windowW) / 1920.0f,
-                    static_cast<float>(windowH) / 1080.0f);
-                const float hudOffX = (static_cast<float>(windowW) - 1920.0f * hudScale) * 0.5f;
-                const float hudOffY = (static_cast<float>(windowH) - 1080.0f * hudScale) * 0.5f;
-                const float vx = (io.MousePos.x - hudOffX) / hudScale;
-                const float vy = (io.MousePos.y - hudOffY) / hudScale;
-                const game::HudRect pauseRect = game::lifePauseRect();
-                if (vx >= pauseRect.x && vx <= pauseRect.x + pauseRect.w && vy >= pauseRect.y
-                    && vy <= pauseRect.y + pauseRect.h) {
+            // The press was already hit-tested in the event handler; act on it
+            // here so the same click never also counts as a lane hit.
+            if (pauseClickRequested) {
+                pauseClickRequested = false;
+                if (!autoPlay && !pauseDialogOpen) {
                     paused = true;
                     audio.pause();
                     pauseDialogOpen = true;
