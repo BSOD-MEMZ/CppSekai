@@ -102,12 +102,17 @@ namespace
             "                [--se-volume <0-1>] [--lead-in <sec>] [--cover <image>]\n"
             "                [--screenshot <png>] [--pjsk-font]\n"
             "                [--title <text>] [--lyricist <text>] [--composer <text>]\n"
-            "                [--arranger <text>] [--vocal <text>] [--difficulty <text>]\n\n"
+            "                [--arranger <text>] [--vocal <text>] [--difficulty <text>]\n"
+            "                [--width <px>] [--height <px>] [--window <mode>] [--fps <n>]\n\n"
             "No --sus: opens the song select screen (scans --charts, then charts/ next\n"
             "to the exe, then the charts/ of the parent folder).\n"
             "--filler: seconds of silence at the head of the BGM (auto-detected when\n"
             "          omitted). --offset: manual fine tune in seconds.\n"
             "--pjsk-font: use the bundled pjsk fonts instead of the system UI font.\n"
+            "--window: borderless (default) | windowed | fullscreen. --width/--height:\n"
+            "          window size (default 1280x720).\n"
+            "--fps: cap the frame rate in addition to vsync (0 = vsync only). Lower\n"
+            "       values (e.g. 30/60) reduce GPU/CPU load and power draw.\n"
             "Keyboard: Z S X D C V G B H N J M = 12 lanes\n"
             "          SPACE = pause, F = fullscreen, H = debug panel, ESC = back/quit\n"
             "Touch   : multi-touch lanes, swipe up for flicks\n");
@@ -291,6 +296,10 @@ int main(int argc, char** argv)
     double leadIn = 6.0; // intro card (4s) + playfield fade-in, then the music
     bool dumpJudgeSheet = false;
     bool showPauseDialogShot = false; // headless check: force the pause dialog open
+    int winWidth = 1280;
+    int winHeight = 720;
+    int windowMode = 0; // 0=borderless 1=windowed 2=fullscreen(desktop)
+    int fpsLimit = 0;   // extra frame cap on top of vsync; 0 = vsync only
 
     for (int i = 1; i < utf8Argc; ++i) {
         const std::string arg = utf8Argv[i];
@@ -307,6 +316,21 @@ int main(int argc, char** argv)
             offsetGiven = true;
         } else if (arg == "--filler" && i + 1 < utf8Argc) {
             gFillerSec = std::atof(utf8Argv[++i]);
+        } else if (arg == "--width" && i + 1 < utf8Argc) {
+            winWidth = std::atoi(utf8Argv[++i]);
+        } else if (arg == "--height" && i + 1 < utf8Argc) {
+            winHeight = std::atoi(utf8Argv[++i]);
+        } else if (arg == "--window" && i + 1 < utf8Argc) {
+            const std::string mode = utf8Argv[++i];
+            if (mode == "windowed") {
+                windowMode = 1;
+            } else if (mode == "fullscreen") {
+                windowMode = 2;
+            } else {
+                windowMode = 0; // borderless
+            }
+        } else if (arg == "--fps" && i + 1 < utf8Argc) {
+            fpsLimit = std::atoi(utf8Argv[++i]);
         } else if (arg == "--pjsk-font") {
             useSystemFont = false;
         } else if (arg == "--auto") {
@@ -372,17 +396,26 @@ int main(int argc, char** argv)
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
 
-    int windowW = 1280;
-    int windowH = 720;
+    int windowW = std::max(320, winWidth);
+    int windowH = std::max(240, winHeight);
+    Uint32 windowFlags = SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI;
+    if (windowMode != 1) {
+        windowFlags |= SDL_WINDOW_BORDERLESS; // borderless windowed + fullscreen(desktop) both hide the frame
+    }
     SDL_Window* window = SDL_CreateWindow(
         "CppSekai",
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
         windowW, windowH,
-        SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_BORDERLESS);
+        windowFlags);
     if (window == nullptr) {
         std::fprintf(stderr, "SDL_CreateWindow failed: %s\n", SDL_GetError());
         return 1;
     }
+    if (windowMode == 2) {
+        SDL_SetWindowFullscreen(window, SDL_WINDOW_FULLSCREEN_DESKTOP);
+    }
+    std::printf("[window] %dx%d mode=%s\n", windowW, windowH,
+        windowMode == 0 ? "borderless" : windowMode == 1 ? "windowed" : "fullscreen");
     SDL_GLContext glContext = SDL_GL_CreateContext(window);
     if (glContext == nullptr) {
         std::fprintf(stderr, "OpenGL 3.3 core unavailable: %s\n", SDL_GetError());
@@ -573,6 +606,8 @@ int main(int argc, char** argv)
     Uint64 lastFrameCounter = SDL_GetPerformanceCounter();
     SDL_Event event;
     double uiClock = 0.0;
+    int fpsLimitLive = fpsLimit; // adjustable from the debug panel
+    const double perfFreqD = static_cast<double>(perfFreq);
 
     // HUD / hit feedback state (shared with the input handlers below).
     game::HudState hudState;
@@ -636,6 +671,10 @@ int main(int argc, char** argv)
                     } else if (event.key.keysym.sym == SDLK_f) {
                         fullscreen = !fullscreen;
                         SDL_SetWindowFullscreen(window, fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
+                        if (!fullscreen) {
+                            // Restore whatever chrome the current window mode uses.
+                            SDL_SetWindowBordered(window, windowMode == 1 ? SDL_TRUE : SDL_FALSE);
+                        }
                     } else if (event.key.keysym.sym == SDLK_h) {
                         showDebug = !showDebug;
                     } else if (state == AppState::Play && event.key.keysym.sym == SDLK_SPACE && !autoPlay) {
@@ -976,6 +1015,21 @@ int main(int argc, char** argv)
                 if (ImGui::SliderFloat("audio offset ms", &offsetMs, -2000.0f, 2000.0f, "%.0f")) {
                     audio.setUserOffset(static_cast<double>(offsetMs) / 1000.0);
                 }
+                // Window mode: borderless hides the frame, windowed shows the
+                // title bar, fullscreen grabs the whole desktop.
+                static int winMode = windowMode;
+                if (ImGui::Combo("window mode", &winMode, "borderless\0windowed\0fullscreen\0")) {
+                    windowMode = winMode;
+                    if (winMode == 2) {
+                        SDL_SetWindowFullscreen(window, SDL_WINDOW_FULLSCREEN_DESKTOP);
+                    } else {
+                        SDL_SetWindowFullscreen(window, 0);
+                        SDL_SetWindowBordered(window, winMode == 1 ? SDL_TRUE : SDL_FALSE);
+                    }
+                }
+                ImGui::SliderInt("fps limit", &fpsLimitLive, 0, 240,
+                    fpsLimitLive == 0 ? "vsync only" : "%d");
+                ImGui::Text("fps: %.1f", 1.0 / std::max(1e-6, lastFrameDeltaSec));
                 float speed = noteSpeed;
                 if (ImGui::SliderFloat("speed", &speed, 1.0f, 12.0f, "%.1f")) {
                     noteSpeed = speed;
@@ -1066,6 +1120,24 @@ int main(int argc, char** argv)
         }
 
         SDL_GL_SwapWindow(window);
+
+        // Optional frame cap on top of vsync: sleep in coarse chunks, then
+        // busy-wait the last millisecond for accuracy. Keeps the GPU idle
+        // between frames (less power/heat) when the monitor is 120 Hz+.
+        if (fpsLimitLive > 0) {
+            const double minFrameSec = 1.0 / static_cast<double>(fpsLimitLive);
+            const double elapsed = static_cast<double>(SDL_GetPerformanceCounter() - lastFrameCounter) / perfFreqD;
+            double remaining = minFrameSec - elapsed;
+            while (remaining > 0.002) {
+                SDL_Delay(static_cast<Uint32>(remaining * 1000.0) - 1);
+                remaining = minFrameSec
+                    - static_cast<double>(SDL_GetPerformanceCounter() - lastFrameCounter) / perfFreqD;
+            }
+            while (remaining > 0.0) {
+                remaining = minFrameSec
+                    - static_cast<double>(SDL_GetPerformanceCounter() - lastFrameCounter) / perfFreqD;
+            }
+        }
     }
 
     audio.shutdown();

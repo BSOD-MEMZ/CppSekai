@@ -16,9 +16,13 @@ core/native/src/mmw_preview.cpp   # 谱面核心（上游代码，勿改结构�
 core/native/mmw_port/             # MikuMikuWorld 移植层（上游代码）
 platform/                         # 平台层（本项目新增）
   Renderer.cpp  # OpenGL 3.3 core，消费核心输出的 packed quad（25 float/quad）
-  Audio.cpp     # miniaudio；音频时钟 = 全局主时钟；musicDelaySec 实现 offset
+  Audio.cpp     # miniaudio；音频时钟 = 全局主时钟；音乐文件位置 = songTime + startPos + userOffset；
+                # 自动检测 BGM 开头静音填充（官服 mp3 有 ~9s，musics.json 的 fillerSec）
+  SystemMedia.* # SMTC（系统媒体传输控件，手写 WinRT vtable）+ ITaskbarList3 任务栏进度条
   CoreApi.cpp   # core_api.hpp 的 C++ 包装 + #WAVEOFFSET 文本扫描
 game/Judgement.*  # 判定引擎（本项目新增，判定逻辑都在这）
+game/Intro.*      # ImGui 卡片/UI；字体跟随系统（注册表找字体文件 + CJK 字形探测，Yu Gothic UI
+                  # 是 CFF 轮廓 stb_truetype 渲染不了，会自动落到 Microsoft YaHei UI；--pjsk-font 回退）
 main.cpp          # SDL2 窗口、事件循环、输入映射、ImGui HUD、截图模式
 ```
 
@@ -49,8 +53,16 @@ bash build.sh          # 仅需 Git Bash；产物 build/cppsekai.exe + SDL2.dll 
 ## 约定与坑
 
 - `core/native/` 下的文件是上游代码：能不改就不改；确需改时在注释里标注原因，便于同步上游。
-- 资源按 exe 所在目录解析（`SDL_GetBasePath()`），不按 CWD。
-- SUS 的 `#WAVEOFFSET` 单位是秒；核心 API 的 offset 参数是毫秒且只进 metadata，实际延迟由 AudioEngine 的 musicDelaySec 实现。
+- 资源按 exe 所在目录解析（`SDL_GetBasePath()`），不按 CWD。charts/ 目录会依次尝试
+  `--charts` → `exe\charts` → `exe\..\charts` → `./charts`，取第一个有谱面的。
+- 音频对齐：官服 mp3 开头有静音填充（fillerSec≈9s），谱面 tick0 在静音之后。优先级：
+  sidecar json `fillerSec`/`offset`(ms) > 自动静音检测 > 0；`--filler`/`--offset` 可覆盖。
+- SUS 的 `#WAVEOFFSET` 单位是秒；核心 API 的 offset 参数是毫秒且只进 metadata，实际延迟由 AudioEngine 实现。
+- SMTC/ITaskbarList3 是手写 WinRT/COM vtable（工具链无 Windows SDK）：IID 与方法顺序来自解析
+  `C:\Windows\System32\WinMetadata\Windows.Media.winmd`，解析脚本在 `.workbuddy/tools/`；
+  combase.dll 相关函数全部 LoadLibrary 动态加载，无需导入库。改接口调用前先跑脚本核对槽位。
+- 窗口/帧率：`--width/--height`（默认 1280x720）、`--window borderless|windowed|fullscreen`、
+  `--fps <n>`（vsync 之外的软上限，0=仅垂直同步）；调试面板（H）里可实时切换窗口模式和帧率上限。
 - 触摸输入走 SDL_Finger* 事件，屏幕坐标 → 裁剪空间 → 世界轨道坐标的逆变换在 `Renderer::clipToWorldX/Y`。
 - 判定窗口默认 perfect 40ms / great 90ms / good 140ms（非官方数值，做成可调的）。
 - 游戏资源（assets/、charts/）来自公开渠道，仅限本地游玩，不要提交或分发。
@@ -65,6 +77,14 @@ cd build
 成功时会生成截图并写 `cppsekai.log` 后退出；失败原因也在 log 里。截图应看到
 pjsk 舞台、透视轨道和下落中的 note 贴图。charts/ 里有联网下载的谱面可直接用，
 BGM URL 规律：`https://assets.unipjsk.com/ondemand/music/long/se_<id>_01/se_<id>_01.mp3`（不是每首都有）。
+
+## 系统要求
+
+- Windows 7 SP1 及以上（miniaudio / SDL2 兼容底线）。OpenGL 3.3 core（约 2008 年后的 GPU 均可）。
+- SMTC（媒体浮层/任务栏媒体控件）与任务栏进度条：SMTC 走 `RoGetActivationFactory`，**实际只在
+  Windows 10+ 生效**（Win7/8 上 combase 的激活会失败，代码里已容错，只是不显示）；任务栏进度条
+  ITaskbarList3 在 Win7+ 均可用。
+- 不依赖任何运行库安装（zig c++ 静态链接 CRT + 自带 SDL2.dll）。
 
 ## 待办（按优先级）
 
