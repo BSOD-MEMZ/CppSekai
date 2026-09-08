@@ -21,6 +21,9 @@ platform/                         # 平台层（本项目新增）
   SystemMedia.* # SMTC（系统媒体传输控件，手写 WinRT vtable）+ ITaskbarList3 任务栏进度条
   CoreApi.cpp   # core_api.hpp 的 C++ 包装 + #WAVEOFFSET 文本扫描
 game/Judgement.*  # 判定引擎（本项目新增，判定逻辑都在这）
+game/Ui.*         # pjsk 风格弹窗组件库：beginCard（缩放入/出场动画 + 标题栏拖动）、
+                  # tabBar、slider（深色±按钮+薄荷轨道）、infoRows、capsuleButton、
+                  # cardTitle、checkBox、stepper、messageDialog（-3=动画中 -2=关闭完成）
 game/Intro.*      # ImGui 卡片/UI；字体跟随系统（注册表找字体文件 + CJK 字形探测，Yu Gothic UI
                   # 是 CFF 轮廓 stb_truetype 渲染不了，会自动落到 Microsoft YaHei UI；--pjsk-font 回退）
 main.cpp          # SDL2 窗口、事件循环、输入映射、ImGui HUD、截图模式
@@ -65,6 +68,9 @@ bash build.sh          # 仅需 Git Bash；产物 build/cppsekai.exe + SDL2.dll 
   `--fps <n>`（vsync 之外的软上限，0=仅垂直同步）；调试面板（H）里可实时切换窗口模式和帧率上限。
 - 触摸输入走 SDL_Finger* 事件，屏幕坐标 → 裁剪空间 → 世界轨道坐标的逆变换在 `Renderer::clipToWorldX/Y`。
 - 判定窗口默认 perfect 40ms / great 90ms / good 140ms（非官方数值，做成可调的）。
+- UI 组件坑：ImGui::Text 新行会把光标 x 归零（窗口 padding=0），绝对定位内容每行前要
+  SetCursorScreenPos；卡片/组件内部不要用 Dummy 预留后重置光标到 (0,0)；零 item 的
+  BeginGroup/EndGroup 会触发 ImGui 断言。
 - 游戏资源（assets/、charts/）来自公开渠道，仅限本地游玩，不要提交或分发。
 
 ## 验证（不开窗口的自动检查）

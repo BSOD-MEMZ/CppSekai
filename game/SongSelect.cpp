@@ -2,6 +2,7 @@
 #include "SongSelect.hpp"
 
 #include "Intro.hpp"
+#include "Ui.hpp"
 
 #include "imgui.h"
 
@@ -519,7 +520,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     if (!canStart) {
         ImGui::BeginDisabled();
     }
-    if (ImGui::Button("START  (Enter)", ImVec2(240.0f, 56.0f))) {
+    if (ui::capsuleButton("START  (Enter)", ImVec2(240.0f, 56.0f), true)) {
         action = selected;
     }
     if (!canStart) {
@@ -527,7 +528,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     }
     ImGui::SameLine();
     bool rescan = false;
-    if (ImGui::Button("刷新 (F5)", ImVec2(140.0f, 56.0f))) {
+    if (ui::capsuleButton("刷新 (F5)", ImVec2(150.0f, 56.0f), false)) {
         rescan = true;
     }
     ImGui::EndGroup();

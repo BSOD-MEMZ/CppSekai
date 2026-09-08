@@ -1,8 +1,8 @@
 // CppSekai - pjsk style UI component library (see Ui.hpp).
 // Draws everything on ImGui windows with rounded cards + capsule buttons,
 // matching the in-game pjsk dialog look (light card, dark backdrop, mint
-// primary buttons, dark close X). Text uses the bundled Rodin fonts from
-// game/Intro.cpp so CJK renders correctly.
+// primary buttons, dark close X). Cards scale in/out and can be dragged by
+// their header strip.
 #include "Ui.hpp"
 
 #include "Intro.hpp"
@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <unordered_map>
 
 namespace ui
 {
@@ -26,6 +27,28 @@ namespace
     constexpr float kCardRadius = 28.0f;
     constexpr float kCapsuleH = 78.0f;
     constexpr float kCloseSize = 52.0f;
+    constexpr float kAnimSec = 0.16f; // card scale in/out duration
+    constexpr float kHeaderH = 64.0f; // draggable strip height
+
+    float easeInOut(float t)
+    {
+        return t * t * (3.0f - 2.0f * t);
+    }
+
+    struct CardState
+    {
+        float t = 0.0f;            // 0 = hidden, 1 = fully shown
+        bool open = false;         // target state
+        bool wasOpen = false;      // for reopening (reset drag)
+        bool ended = false;        // close anim finished; next call reopens
+        ImVec2 drag{0.0f, 0.0f};   // accumulated header-drag offset
+    };
+
+    CardState& cardState(const char* id)
+    {
+        static std::unordered_map<ImGuiID, CardState> states;
+        return states[ImGui::GetID(id)];
+    }
 } // namespace
 
 float scale()
@@ -34,13 +57,24 @@ float scale()
     return std::clamp(display.y / 720.0f, 0.5f, 3.0f);
 }
 
-bool beginCard(const char* id, const ImVec2& center, const ImVec2& size, bool showClose, bool dimBackdrop,
-    bool* closeClicked)
+bool beginCard(const char* id, ImVec2* center, ImVec2* size, bool showClose, bool dimBackdrop,
+    bool* closeClicked, bool open)
 {
-    float s = scale();
+    const float s = scale();
     if (closeClicked != nullptr) {
         *closeClicked = false;
     }
+    CardState& st = cardState(id);
+
+    // Reopening after a finished close animation: start a fresh entrance.
+    if (st.ended && open) {
+        st.ended = false;
+        st.t = 0.0f;
+        st.drag = ImVec2(0.0f, 0.0f);
+    }
+    st.open = open;
+    st.t = std::clamp(st.t + (open ? 1.0f : -1.0f) * ImGui::GetIO().DeltaTime / kAnimSec, 0.0f, 1.0f);
+    const float k = easeInOut(st.t);
 
     ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
     ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
@@ -54,16 +88,49 @@ bool beginCard(const char* id, const ImVec2& center, const ImVec2& size, bool sh
     ImGui::PopStyleVar(2);
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    const ImVec2 lo = ImVec2(center.x - size.x * 0.5f, center.y - size.y * 0.5f);
-    const ImVec2 hi = ImVec2(center.x + size.x * 0.5f, center.y + size.y * 0.5f);
+
+    if (st.t <= 0.0f && !open) {
+        // Fully closed: draw the (invisible) backdrop only and report done.
+        if (dimBackdrop && k > 0.0f) {
+            dl->AddRectFilled(ImVec2(0.0f, 0.0f), ImGui::GetIO().DisplaySize, withAlpha(kBackdrop, k));
+        }
+        ImGui::Dummy(ImVec2(1.0f, 1.0f)); // keep ImGui happy: submit an item
+        ImGui::End();
+        st.ended = true;
+        return false;
+    }
+
+    // Animated geometry around the (dragged) center.
+    const ImVec2 animCenter = ImVec2(center->x + st.drag.x, center->y + st.drag.y);
+    const ImVec2 animSize = ImVec2(size->x * (0.92f + 0.08f * k), size->y * (0.92f + 0.08f * k));
+    *center = animCenter;
+    *size = animSize;
+    const ImVec2 lo = ImVec2(animCenter.x - animSize.x * 0.5f, animCenter.y - animSize.y * 0.5f);
+    const ImVec2 hi = ImVec2(animCenter.x + animSize.x * 0.5f, animCenter.y + animSize.y * 0.5f);
 
     if (dimBackdrop) {
-        dl->AddRectFilled(ImVec2(0.0f, 0.0f), ImGui::GetIO().DisplaySize, kBackdrop);
+        dl->AddRectFilled(ImVec2(0.0f, 0.0f), ImGui::GetIO().DisplaySize, withAlpha(kBackdrop, k));
     }
     // Card + a faint drop shadow like the real dialog.
     dl->AddRectFilled(ImVec2(lo.x + 6.0f * s, lo.y + 10.0f * s), ImVec2(hi.x + 6.0f * s, hi.y + 10.0f * s),
-        IM_COL32(40, 40, 60, 40), kCardRadius * s);
-    dl->AddRectFilled(lo, hi, kCardBg, kCardRadius * s);
+        withAlpha(IM_COL32(40, 40, 60, 40), k), kCardRadius * s);
+    dl->AddRectFilled(lo, hi, withAlpha(kCardBg, k), kCardRadius * s);
+
+    // Header strip: drag the card around. The close X below wins in its own
+    // rectangle because it is submitted later.
+    const ImVec2 headerLo = lo;
+    const ImVec2 headerHi = ImVec2(hi.x, lo.y + kHeaderH * s);
+    ImGui::SetCursorScreenPos(headerLo);
+    ImGui::PushID(id);
+    ImGui::InvisibleButton("##drag", ImVec2(headerHi.x - headerLo.x, headerHi.y - headerLo.y));
+    if (ImGui::IsItemActive()) {
+        const ImVec2 delta = ImGui::GetIO().MouseDelta;
+        st.drag.x += delta.x;
+        st.drag.y += delta.y;
+        *center = ImVec2(animCenter.x + delta.x, animCenter.y + delta.y);
+    }
+    ImGui::PopID();
+    ImGui::SetCursorScreenPos(ImVec2(lo.x, lo.y + kHeaderH * s));
 
     if (showClose) {
         const ImVec2 closeLo = ImVec2(hi.x - (kCloseSize + 18.0f) * s, lo.y + 18.0f * s);
@@ -74,20 +141,190 @@ bool beginCard(const char* id, const ImVec2& center, const ImVec2& size, bool sh
         const bool clicked = ImGui::IsItemClicked();
         const bool hovered = ImGui::IsItemHovered();
         ImGui::PopID();
-        ImGui::SetCursorScreenPos(ImVec2(0.0f, 0.0f));
         // The texture is a dark X on transparent; dim it slightly on hover.
         dl->AddImage(closeTexture(), closeLo, closeHi, ImVec2(0, 0), ImVec2(1, 1),
-            withAlpha(IM_COL32(255, 255, 255, 255), hovered ? 0.55f : 1.0f));
+            withAlpha(IM_COL32(255, 255, 255, 255), (hovered ? 0.55f : 1.0f) * k));
         if (closeClicked != nullptr) {
             *closeClicked = clicked;
         }
     }
+    // Content is positioned absolutely; still submit an item so the window
+    // layout is valid (ImGui asserts on cursor moves without items).
+    ImGui::Dummy(ImVec2(1.0f, 1.0f));
     return true;
 }
 
 void endCard()
 {
     ImGui::End();
+}
+
+int tabBar(const char* id, const std::vector<std::string>& tabs, int* active, float rowWidth)
+{
+    const float s = scale();
+    if (tabs.empty() || active == nullptr) {
+        return -1;
+    }
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImFont* font = game::bodyFont();
+    const float fontSize = 28.0f * s;
+    const float tabH = 58.0f * s;
+    const float radius = 16.0f * s;
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+    const float rowW = rowWidth > 0.0f ? rowWidth : ImGui::GetContentRegionAvail().x;
+    const float tabW = rowW / static_cast<float>(tabs.size());
+
+    int result = *active;
+    ImGui::PushID(id);
+    for (size_t i = 0; i < tabs.size(); ++i) {
+        const bool isActive = static_cast<int>(i) == *active;
+        const float x0 = pos.x + static_cast<float>(i) * tabW;
+        // Inactive tabs sit a bit lower and are shorter (bottom aligned).
+        const float y0 = isActive ? pos.y : pos.y + 8.0f * s;
+        const ImVec2 lo(x0 + 4.0f * s, y0);
+        const ImVec2 hi(x0 + tabW - 4.0f * s, pos.y + tabH);
+
+        ImGui::SetCursorScreenPos(lo);
+        ImGui::InvisibleButton(tabs[i].c_str(), ImVec2(hi.x - lo.x, hi.y - lo.y));
+        if (ImGui::IsItemClicked()) {
+            result = static_cast<int>(i);
+            *active = result;
+        }
+        ImGui::SetCursorScreenPos(ImVec2(0.0f, 0.0f));
+
+        const ImU32 fill = isActive ? kCardBg : kTabIdle;
+        const ImU32 textColor = isActive ? kTitleText : IM_COL32(125, 125, 148, 255);
+        dl->AddRectFilled(lo, hi, fill, radius, ImDrawFlags_RoundCornersTop);
+        const ImVec2 ts = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, tabs[i].c_str());
+        dl->AddText(font, fontSize,
+            ImVec2((lo.x + hi.x - ts.x) * 0.5f, (lo.y + hi.y - ts.y) * 0.5f), textColor, tabs[i].c_str());
+    }
+    ImGui::PopID();
+    ImGui::SetCursorScreenPos(ImVec2(pos.x, pos.y + tabH + 4.0f * s));
+    return result;
+}
+
+bool slider(const char* id, float* value, float minV, float maxV, float step, const char* fmt,
+    float width)
+{
+    if (value == nullptr) {
+        return false;
+    }
+    const float s = scale();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImFont* font = game::bodyFont();
+    const float fontSize = 30.0f * s;
+    const float btnSize = 52.0f * s;
+    const float btnRadius = 14.0f * s;
+    const float trackH = 8.0f * s;
+    const float thumbR = 15.0f * s;
+    const float rowH = 96.0f * s; // value text + track row
+
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+    const float rowW = width > 0.0f ? width : ImGui::GetContentRegionAvail().x;
+    ImGui::Dummy(ImVec2(rowW, rowH)); // reserve the block
+    ImGui::PushID(id);
+
+    const float trackY = pos.y + rowH * 0.68f;
+    const float trackX0 = pos.x + btnSize + 26.0f * s;
+    const float trackX1 = pos.x + rowW - btnSize - 26.0f * s;
+    bool changed = false;
+
+    // Value above the track, centered, in pink.
+    char valueText[32];
+    std::snprintf(valueText, sizeof(valueText), fmt, *value);
+    const ImVec2 ts = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, valueText);
+    dl->AddText(font, fontSize,
+        ImVec2(pos.x + (rowW - ts.x) * 0.5f, trackY - thumbR - ts.y - 8.0f * s), kNotePink, valueText);
+
+    // Track + thumb.
+    const float frac = std::clamp((*value - minV) / std::max(1e-6f, maxV - minV), 0.0f, 1.0f);
+    const float thumbX = trackX0 + (trackX1 - trackX0) * frac;
+    dl->AddRectFilled(ImVec2(trackX0, trackY - trackH * 0.5f), ImVec2(trackX1, trackY + trackH * 0.5f),
+        kPrimary, trackH * 0.5f);
+    dl->AddCircleFilled(ImVec2(thumbX, trackY), thumbR + 2.0f * s, IM_COL32(150, 150, 170, 60));
+    dl->AddCircleFilled(ImVec2(thumbX, trackY), thumbR, kWhiteBtn);
+
+    // Drag the thumb.
+    ImGui::SetCursorScreenPos(ImVec2(trackX0 - thumbR, trackY - thumbR * 2.0f));
+    ImGui::InvisibleButton("##track", ImVec2(trackX1 - trackX0 + thumbR * 2.0f, thumbR * 4.0f));
+    if (ImGui::IsItemActive()) {
+        const float mx = ImGui::GetIO().MousePos.x;
+        const float t = std::clamp((mx - trackX0) / std::max(1.0f, trackX1 - trackX0), 0.0f, 1.0f);
+        const float v = minV + (maxV - minV) * t;
+        if (v != *value) {
+            *value = v;
+            changed = true;
+        }
+    }
+
+    // Dark -/+ buttons.
+    auto darkButton = [&](const char* label, float cx) {
+        const ImVec2 lo(cx, trackY - btnSize * 0.5f);
+        const ImVec2 hi(cx + btnSize, trackY + btnSize * 0.5f);
+        ImGui::SetCursorScreenPos(lo);
+        ImGui::InvisibleButton(label, ImVec2(btnSize, btnSize));
+        const bool clicked = ImGui::IsItemClicked();
+        const bool held = ImGui::IsItemActive();
+        ImGui::SetCursorScreenPos(ImVec2(0.0f, 0.0f));
+        ImU32 fill = kDarkBtn;
+        if (held) {
+            fill = IM_COL32(72, 72, 86, 255);
+        }
+        dl->AddRectFilled(lo, hi, fill, btnRadius);
+        // White glyph.
+        const float c = btnSize * 0.5f;
+        const float m = btnSize * 0.28f;
+        const ImVec2 mid(lo.x + c, lo.y + c);
+        dl->AddRectFilled(ImVec2(mid.x - m, mid.y - 2.5f * s), ImVec2(mid.x + m, mid.y + 2.5f * s),
+            IM_COL32(255, 255, 255, 255), 2.0f * s);
+        if (label[0] == '+') {
+            dl->AddRectFilled(ImVec2(mid.x - 2.5f * s, mid.y - m), ImVec2(mid.x + 2.5f * s, mid.y + m),
+                IM_COL32(255, 255, 255, 255), 2.0f * s);
+        }
+        return clicked;
+    };
+    if (darkButton("-", pos.x)) {
+        *value = std::max(minV, *value - step);
+        changed = true;
+    }
+    if (darkButton("+", trackX1 + 26.0f * s)) {
+        *value = std::min(maxV, *value + step);
+        changed = true;
+    }
+    ImGui::PopID();
+    ImGui::SetCursorScreenPos(ImVec2(pos.x, pos.y + rowH));
+    return changed;
+}
+
+void infoRows(const std::vector<std::pair<std::string, std::string>>& rows, float rowWidth)
+{
+    const float s = scale();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImFont* font = game::bodyFont();
+    const float fontSize = 28.0f * s;
+    const float rowH = 46.0f * s;
+    const float pad = 12.0f * s;
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+    const float rowW = rowWidth > 0.0f ? rowWidth : ImGui::GetContentRegionAvail().x;
+    const float boxH = static_cast<float>(rows.size()) * rowH + pad * 2.0f;
+    ImGui::Dummy(ImVec2(rowW, boxH + 6.0f * s));
+
+    dl->AddRectFilled(pos, ImVec2(pos.x + rowW, pos.y + boxH), kRowsBg, 14.0f * s);
+    const float splitX = pos.x + rowW * 0.52f;
+    float y = pos.y + pad;
+    for (const auto& row : rows) {
+        // Thin divider for this row (not drawn past the text block edges).
+        dl->AddRectFilled(ImVec2(splitX, y + 6.0f * s), ImVec2(splitX + 2.0f * s, y + rowH - 6.0f * s),
+            kDivider, 1.0f * s);
+        const ImVec2 tls = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, row.first.c_str());
+        dl->AddText(font, fontSize, ImVec2(pos.x + 30.0f * s, y + (rowH - tls.y) * 0.5f), kBodyText,
+            row.first.c_str());
+        const ImVec2 tvs = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, row.second.c_str());
+        dl->AddText(font, fontSize, ImVec2(splitX + 24.0f * s, y + (rowH - tvs.y) * 0.5f), kNotePink,
+            row.second.c_str());
+        y += rowH;
+    }
 }
 
 bool capsuleButton(const char* label, const ImVec2& size, bool primary)
@@ -98,7 +335,6 @@ bool capsuleButton(const char* label, const ImVec2& size, bool primary)
     if (size.x <= 0.0f || size.y <= 0.0f) {
         return false;
     }
-    const ImGuiID btnId = ImGui::GetID(label);
     ImGui::InvisibleButton(label, size);
     const bool clicked = ImGui::IsItemClicked();
     const bool hovered = ImGui::IsItemHovered();
@@ -121,7 +357,6 @@ bool capsuleButton(const char* label, const ImVec2& size, bool primary)
     const ImVec2 textSize = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, label);
     dl->AddText(font, fontSize,
         ImVec2((lo.x + hi.x - textSize.x) * 0.5f, (lo.y + hi.y - textSize.y) * 0.5f), kBtnText, label);
-    (void)btnId;
     return clicked;
 }
 
@@ -149,7 +384,7 @@ void cardTitle(const char* text, float interiorWidth, float sizePx)
     // Thin rule spanning the interior, a little below the baseline.
     const float ruleY = pos.y + textSize.y + 14.0f * s;
     dl->AddRectFilled(ImVec2(pos.x, ruleY), ImVec2(pos.x + interiorWidth, ruleY + 2.0f * s), kDivider, 1.0f * s);
-    ImGui::Dummy(ImVec2(interiorWidth, ruleY - pos.y + 26.0f * s));
+    ImGui::SetCursorScreenPos(ImVec2(pos.x, ruleY + 26.0f * s));
 }
 
 bool checkBox(const char* label, bool* value, float rowWidth)
@@ -169,12 +404,10 @@ bool checkBox(const char* label, bool* value, float rowWidth)
     const ImVec2 boxHi = ImVec2(boxLo.x + boxSize, boxLo.y + boxSize);
     ImGui::Dummy(ImVec2(rowW, boxSize + 8.0f * s)); // reserve the row
 
-    const ImGuiID cbId = ImGui::GetID(label);
     ImGui::SetCursorScreenPos(boxLo);
     ImGui::InvisibleButton(label, ImVec2(groupW, boxSize));
     const bool clicked = ImGui::IsItemClicked();
     const bool hovered = ImGui::IsItemHovered();
-    ImGui::SetCursorScreenPos(ImVec2(0.0f, 0.0f));
     if (clicked && value != nullptr) {
         *value = !*value;
     }
@@ -199,6 +432,7 @@ bool checkBox(const char* label, bool* value, float rowWidth)
         dl->AddRect(boxLo, boxHi, kDivider, radius, 0, 2.0f * s);
     }
     dl->AddText(font, fontSize, ImVec2(boxHi.x + gap, boxLo.y + (boxSize - textSize.y) * 0.5f), kBodyText, label);
+    ImGui::SetCursorScreenPos(ImVec2(pos.x, pos.y + boxSize + 8.0f * s));
     return checked;
 }
 
@@ -215,11 +449,9 @@ bool stepper(const char* id, float* value, const std::vector<float>& deltas, con
     const float btnH = 62.0f * s;
     const float pillW = 132.0f * s;
     const float gap = 14.0f * s;
-    const float totalW = pillW + static_cast<float>(deltas.size()) * (btnW + gap) + gap;
 
     const ImVec2 pos = ImGui::GetCursorScreenPos();
     const float rowW = rowWidth > 0.0f ? rowWidth : ImGui::GetContentRegionAvail().x;
-    float x = pos.x + std::max(0.0f, (rowW - totalW) * 0.5f);
     const float y = pos.y;
     ImGui::Dummy(ImVec2(rowW, btnH + 8.0f * s)); // reserve the row
     ImGui::PushID(id);
@@ -233,7 +465,6 @@ bool stepper(const char* id, float* value, const std::vector<float>& deltas, con
         const bool clicked = ImGui::IsItemClicked();
         const bool hovered = ImGui::IsItemHovered();
         const bool held = ImGui::IsItemActive();
-        ImGui::SetCursorScreenPos(ImVec2(0.0f, 0.0f));
         ImU32 f = fill;
         if (held) {
             f = IM_COL32(214, 214, 228, 255);
@@ -255,11 +486,11 @@ bool stepper(const char* id, float* value, const std::vector<float>& deltas, con
     for (float d : deltas) {
         (d < 0.0f ? neg : posD).push_back(d);
     }
-    std::sort(neg.begin(), neg.end());                 // -1, -0.1, -0.01
+    std::sort(neg.begin(), neg.end());                          // -1, -0.1, -0.01
     std::sort(posD.begin(), posD.end(), std::greater<float>()); // +1, +0.1, +0.01
 
     const float blockW = pillW + static_cast<float>(neg.size() + posD.size()) * (btnW + gap);
-    float cx = x + std::max(0.0f, (rowW - blockW) * 0.5f);
+    float cx = pos.x + std::max(0.0f, (rowW - blockW) * 0.5f);
     for (float d : neg) {
         char label[16];
         std::snprintf(label, sizeof(label), "%+g", d);
@@ -292,6 +523,7 @@ bool stepper(const char* id, float* value, const std::vector<float>& deltas, con
         cx += btnW + gap;
     }
     ImGui::PopID();
+    ImGui::SetCursorScreenPos(ImVec2(pos.x, pos.y + btnH + 8.0f * s));
     return changed;
 }
 
@@ -300,40 +532,52 @@ int messageDialog(platform::Renderer& renderer, const char* id, const char* titl
 {
     const float s = scale();
     const ImVec2 display = ImGui::GetIO().DisplaySize;
-    const float cardW = 900.0f * s;
-    const float cardH = 400.0f * s;
-    const ImVec2 center = ImVec2(display.x * 0.5f, display.y * 0.5f);
+    const float cardW = 700.0f * s;
+    const float cardH = 300.0f * s;
+    ImVec2 center = ImVec2(display.x * 0.5f, display.y * 0.5f);
+    ImVec2 size = ImVec2(cardW, cardH);
 
+    CardState& st = cardState(id);
+    if (st.ended) {
+        // Previous run finished closing: start a fresh entrance.
+        st.ended = false;
+        st.t = 0.0f;
+        st.drag = ImVec2(0.0f, 0.0f);
+        st.open = true;
+    } else if (!st.open && st.t <= 0.0f) {
+        st.open = true; // fresh dialog
+    }
     bool closeClicked = false;
-    beginCard(id, center, ImVec2(cardW, cardH), true, true, &closeClicked);
+    if (!beginCard(id, &center, &size, true, true, &closeClicked, st.open)) {
+        return -2; // close animation finished
+    }
     int result = -1;
+    if (closeClicked) {
+        st.open = false; // animate out; caller sees -2 when done
+    }
 
-    ImGui::SetCursorScreenPos(ImVec2(center.x - cardW * 0.5f + 48.0f * s, center.y - cardH * 0.5f + 52.0f * s));
-    ImGui::BeginGroup();
-    cardTitle(title, cardW - 96.0f * s);
-    ImGui::EndGroup();
+    ImGui::SetCursorScreenPos(ImVec2(center.x - size.x * 0.5f + 48.0f * s, center.y - size.y * 0.5f + 44.0f * s));
+    cardTitle(title, size.x - 96.0f * s);
 
     // Capsule row, centered, laid out bottom.
-    const float btnH = kCapsuleH * s * 0.86f;
-    const float btnW = 250.0f * s;
-    const float gap = 36.0f * s;
+    const float btnH = kCapsuleH * s * 0.78f;
+    const float btnW = 210.0f * s;
+    const float gap = 32.0f * s;
     const float totalW = static_cast<float>(buttons.size()) * btnW + (static_cast<float>(buttons.size()) - 1) * gap;
     float x = center.x - totalW * 0.5f;
-    const float y = center.y + cardH * 0.5f - btnH - 56.0f * s;
+    const float y = center.y + size.y * 0.5f - btnH - 44.0f * s;
     for (size_t i = 0; i < buttons.size(); ++i) {
         const bool isPrimary = i < primary.size() && primary[i];
         ImGui::SetCursorScreenPos(ImVec2(x, y));
         if (capsuleButton(buttons[i].c_str(), ImVec2(btnW, btnH), isPrimary)) {
             result = static_cast<int>(i);
+            st.open = false; // button dismisses the dialog
         }
         x += btnW + gap;
     }
-    if (closeClicked) {
-        result = -2; // X button
-    }
     endCard();
     (void)renderer;
-    return result;
+    return result >= 0 ? result : -3;
 }
 
 void setCloseTexture(ImTextureID texture)

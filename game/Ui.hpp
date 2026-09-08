@@ -1,16 +1,22 @@
 // CppSekai - pjsk style UI component library.
 // Reusable building blocks for in-game dialogs and panels:
-//   beginCard / endCard     - rounded light card + dark backdrop + close X
+//   beginCard / endCard     - rounded light card + dark backdrop + close X,
+//                             scale-in/out animation, draggable header
+//   tabBar                  - rounded-top tabs (active = card color)
+//   slider                  - pjsk slider: dark -/+ buttons + teal track
+//   infoRows                - gray box of label | pink value rows
 //   capsuleButton           - pjsk capsule (pill) button, white or mint
-//   caption                 - centered gray title text
-//   messageDialog           - one-shot dialog: title + capsule row + X
-// Everything is immediate-mode on top of ImGui and safe to call every frame;
-// functions return what was pressed this frame (-1 = nothing).
+//   cardTitle / caption     - left title with rule / centered text
+//   checkBox                - pink rounded checkbox
+//   stepper                 - -1/-0.1/-0.01 value +0.01/+0.1/+1 capsule row
+//   messageDialog           - one-shot dialog with in/out animation
+// Everything is immediate-mode on top of ImGui and safe to call every frame.
 #pragma once
 
 #include "imgui.h"
 
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace platform
@@ -33,9 +39,12 @@ constexpr ImU32 kWhiteBtn = IM_COL32(255, 255, 255, 255);   // white capsule
 constexpr ImU32 kWhiteHover = IM_COL32(243, 243, 249, 255);
 constexpr ImU32 kWhitePress = IM_COL32(232, 232, 240, 255);
 constexpr ImU32 kDivider = IM_COL32(206, 206, 218, 255);    // thin rule under titles
-constexpr ImU32 kNotePink = IM_COL32(255, 82, 141, 255);    // pink hint / warning text
+constexpr ImU32 kNotePink = IM_COL32(255, 82, 141, 255);    // pink hint / value text
 constexpr ImU32 kCheckPink = IM_COL32(255, 102, 158, 255);  // pink checkbox fill
 constexpr ImU32 kPillBg = IM_COL32(199, 199, 212, 255);     // gray value pill (stepper)
+constexpr ImU32 kTabIdle = IM_COL32(203, 204, 222, 255);    // inactive tab fill
+constexpr ImU32 kDarkBtn = IM_COL32(96, 96, 110, 255);      // dark -/+ slider buttons
+constexpr ImU32 kRowsBg = IM_COL32(222, 222, 232, 255);     // infoRows box
 
 // UI scale factor relative to the 720p design resolution.
 float scale();
@@ -45,12 +54,33 @@ float scale();
 void setCloseTexture(ImTextureID texture);
 ImTextureID& closeTexture();
 
-// Card scaffold. Draws a fullscreen dim + rounded card centered at `center`.
-// With showClose, an X button sits in the top-right corner; the caller learns
-// about presses through *closeClicked. Call endCard() after adding content.
-bool beginCard(const char* id, const ImVec2& center, const ImVec2& size, bool showClose, bool dimBackdrop,
-    bool* closeClicked = nullptr);
+// Card scaffold: fullscreen dim + rounded card. The card scales in when it
+// appears, scales out when `open` turns false, and can be dragged by its
+// header strip. On return `center`/`size` hold the *animated* geometry -
+// lay the content out relative to them.
+//
+// Returns true while drawing: add the content, then call endCard().
+// Returns false once the close animation finished (the internal window is
+// already ended - do NOT call endCard, and stop calling until reopened).
+// *closeClicked is set on the frame the X is pressed (react by setting
+// open=false).
+bool beginCard(const char* id, ImVec2* center, ImVec2* size, bool showClose, bool dimBackdrop,
+    bool* closeClicked, bool open = true);
 void endCard();
+
+// Rounded-top tab row. The active tab is card-colored and taller, inactive
+// ones lavender. Clicking updates *active. Returns *active.
+int tabBar(const char* id, const std::vector<std::string>& tabs, int* active, float rowWidth);
+
+// pjsk slider: dark rounded -/+ buttons flanking a teal track with a white
+// round thumb; the value is drawn above the track in pink. `step` is applied
+// per button click, dragging is free. Returns true when *value changed.
+bool slider(const char* id, float* value, float minV, float maxV, float step, const char* fmt,
+    float width);
+
+// Gray rounded box of "label | value" rows, the value in pink, each row with
+// its own thin vertical divider. rowWidth <= 0 uses the remaining width.
+void infoRows(const std::vector<std::pair<std::string, std::string>>& rows, float rowWidth = 0.0f);
 
 // Pill button drawn at the current cursor position. primary = mint.
 bool capsuleButton(const char* label, const ImVec2& size, bool primary);
@@ -74,9 +104,13 @@ bool checkBox(const char* label, bool* value, float rowWidth = 0.0f);
 bool stepper(const char* id, float* value, const std::vector<float>& deltas,
     const char* fmt = "%.2f", float rowWidth = 0.0f);
 
-// Complete dialog: centered card, close X, centered gray title, and a row of
-// capsule buttons (primary flags select the mint ones). Returns the pressed
-// button index, -2 if the X was pressed, -1 when nothing was pressed.
+// Complete dialog: centered card, close X, left title + rule, and a row of
+// capsule buttons (primary flags select the mint ones). Animates in/out.
+// Returns:
+//   >= 0  pressed button index (the dialog starts closing; keep calling)
+//   -2    close animation just finished - stop calling (X = dismiss)
+//   -3    close animation still running - keep calling
+//   -1    nothing new
 int messageDialog(platform::Renderer& renderer, const char* id, const char* title,
     const std::vector<std::string>& buttons, const std::vector<bool>& primary);
 
