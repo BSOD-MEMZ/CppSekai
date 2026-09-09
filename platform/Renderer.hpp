@@ -85,6 +85,10 @@ class Renderer
     int width() const { return mWidth; }
     int height() const { return mHeight; }
 
+    // Loads an arbitrary image for UI use (song list thumbnails). Returns the
+    // GL texture id, 0 on failure. Not cached - the caller owns caching.
+    GLuint loadUiTexture(const std::string& path, std::string& outError);
+
     Renderer(const Renderer&) = delete;
     Renderer& operator=(const Renderer&) = delete;
 

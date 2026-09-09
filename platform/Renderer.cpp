@@ -507,6 +507,12 @@ bool Renderer::loadCover(const std::string& path, std::string& outError)
     return true;
 }
 
+GLuint Renderer::loadUiTexture(const std::string& path, std::string& outError)
+{
+    const Texture texture = loadTextureFromFile(path, outError);
+    return texture.id;
+}
+
 void Renderer::clearCover()
 {
     if (mCover.id != 0) {

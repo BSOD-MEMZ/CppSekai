@@ -89,10 +89,13 @@ void drawHud(platform::Renderer& renderer, const HudState& state, float songTime
         // height y is drawn at world (x * y, y); y = 1 is the judge line.
         renderer.worldToScreen((fx.center - 1.1f * grow) * JUDGE_LINE_Y, JUDGE_LINE_Y, sx, sy);
         renderer.worldToScreen((fx.center + 1.1f * grow) * JUDGE_LINE_Y, JUDGE_LINE_Y, sx2, sy2);
+        // Center the effect on the judge line; both corners above share the
+        // same world y, so the square height is derived from the width.
+        const float halfH = (sx2 - sx) * 0.5f;
         const ImU32 tint = IM_COL32(255, 255, 255, static_cast<int>(alpha * 255.0f));
         drawList->AddImage(
             reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(sprite->id)),
-            ImVec2(sx, sy), ImVec2(sx2, sy2),
+            ImVec2(sx, sy - halfH), ImVec2(sx2, sy + halfH),
             ImVec2(0, 0), ImVec2(1, 1), tint);
     }
 

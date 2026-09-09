@@ -103,7 +103,11 @@ bool beginCard(const char* id, ImVec2* center, ImVec2* size, bool showClose, boo
             animCenter.y - animSize.y * 0.5f - margin.y));
         ImGui::SetNextWindowSize(ImVec2(animSize.x + margin.x * 2.0f, animSize.y + margin.y * 2.0f));
     }
-    ImGui::SetNextWindowFocus();
+    // Don't steal focus while a popup (e.g. Combo dropdown) is open: the
+    // dropdown is its own window and would end up behind the card otherwise.
+    if (!ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId)) {
+        ImGui::SetNextWindowFocus();
+    }
     const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
         ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar |
         ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoBringToFrontOnFocus * 0;

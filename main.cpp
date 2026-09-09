@@ -20,6 +20,8 @@
 #include "game/SongSelect.hpp"
 #include "game/Ui.hpp"
 
+#include <map>
+
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "third_party/stb_image_write.h"
 
@@ -173,6 +175,7 @@ namespace
         game::IntroInfo intro;
         double waveOffsetSec = 0.0;
         Uint64 startCounter = 0;
+        bool scoreRecorded = false; // set once the song is played to the end
     };
 
     bool startSession(Session& session, const game::ChartEntry& entry, platform::Renderer& renderer,
@@ -254,6 +257,7 @@ namespace
         session.entry = entry;
         session.waveOffsetSec = waveOffset;
         session.active = true;
+        session.scoreRecorded = false;
 
         for (int i = 0; i < count && i < 8; ++i) {
             const int off = i * 7;
@@ -467,6 +471,7 @@ int main(int argc, char** argv)
     const std::string overlayDir = baseDir + "assets\\mmw\\overlay";
     const std::string fontDir = baseDir + "assets\\mmw\\font";
     const std::string seDir = baseDir + "assets\\se";
+    const std::string scoresPath = baseDir + "scores.json";
     // Where the charts live: next to the exe when packaged, otherwise the
     // project's charts/ one level up (the usual build/ layout).
     std::vector<std::string> chartCandidates;
@@ -540,6 +545,10 @@ int main(int argc, char** argv)
     // ------------------------------------------------------------------
     game::JudgementEngine judgement;
 
+    // Play results (cleared / full combo) + song select UI assets.
+    game::setSelectAssetDir(baseDir);
+    std::map<std::string, game::ScoreRecord> scores = game::loadScores(scoresPath);
+
     // ------------------------------------------------------------------
     // ImGui
     // ------------------------------------------------------------------
@@ -581,6 +590,7 @@ int main(int argc, char** argv)
             std::printf("[select]   %s\n", candidate.c_str());
         }
     }
+    game::applyScores(entries, scores);
     int selected = entries.empty() ? -1 : 0;
     std::string loadedCoverPath;
 
@@ -633,7 +643,7 @@ int main(int argc, char** argv)
     bool pauseDialogOpen = false; // pjsk style pause dialog (重试/放弃/继续演出)
     bool running = true;
     bool fullscreen = false;
-    bool showDebug = true;
+    bool showDebug = false; // toggled by H or the musicsetting button on the song select
     Uint64 perfFreq = SDL_GetPerformanceFrequency();
     Uint64 perfStart = SDL_GetPerformanceCounter();
 
@@ -665,6 +675,138 @@ int main(int argc, char** argv)
     // Set by the mouse handler when the HUD pause button was clicked, so the
     // same click is not also treated as a lane hit.
     bool pauseClickRequested = false;
+
+    // ------------------------------------------------------------------
+    // Settings card ("debug panel"), shared by the song select and the
+    // play states. Opened with H or the musicsetting button; alive flag
+    // keeps it on screen while the close animation plays out.
+    // ------------------------------------------------------------------
+    auto drawSettingsCard = [&]() {
+        static bool settingsAlive = false;
+        if (showDebug) {
+            settingsAlive = true;
+        }
+        if (!settingsAlive) {
+            return;
+        }
+        // pjsk style settings panel (tabbed card, pjsk sliders).
+        const float s = ui::scale();
+        const ImVec2 display = ImGui::GetIO().DisplaySize;
+        ImVec2 cardSize = ImVec2(400.0f * s, 560.0f * s);
+        ImVec2 cardCenter = ImVec2(18.0f * s + cardSize.x * 0.5f, 18.0f * s + cardSize.y * 0.5f);
+        const float interior = cardSize.x - 64.0f * s;
+        const float padX = 32.0f * s;
+        bool closeClicked = false;
+        if (ui::beginCard("##settings", &cardCenter, &cardSize, true, false, &closeClicked, showDebug)) {
+            if (closeClicked) {
+                showDebug = false;
+            }
+            ImGui::SetCursorScreenPos(ImVec2(cardCenter.x - cardSize.x * 0.5f + padX,
+                cardCenter.y - cardSize.y * 0.5f + 26.0f * s));
+            ui::cardTitle("设置", interior);
+
+            static int tab = 0;
+            ui::tabBar("settings-tabs",
+                {std::string("演奏"), std::string("画面"), std::string("判定")}, &tab, interior);
+
+            // ImGui::Text starts each line at the window's left edge
+            // (padding is 0); pin content lines to the card interior.
+            const auto contentLeft = [&]() {
+                ImGui::SetCursorScreenPos(ImVec2(cardCenter.x - cardSize.x * 0.5f + padX,
+                    ImGui::GetCursorScreenPos().y));
+            };
+
+            ImGui::PushStyleColor(ImGuiCol_Text, ui::kBodyText);
+            ImGui::PushStyleColor(ImGuiCol_PopupBg, IM_COL32(250, 250, 253, 255));
+            ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(224, 224, 235, 255));
+            ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, IM_COL32(214, 214, 228, 255));
+            ImGui::PushStyleColor(ImGuiCol_FrameBgActive, IM_COL32(205, 205, 222, 255));
+            ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 12.0f * s);
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10.0f * s, 6.0f * s));
+            ImGui::PushFont(game::bodyFont(), 23.0f * s);
+            ImGui::PushItemWidth(interior);
+
+            if (tab == 0) {
+                // 演奏: audio offset + note speed.
+                contentLeft();
+                ImGui::Text("音频偏移");
+                static float offsetMs = static_cast<float>(gUserOffsetSec * 1000.0);
+                contentLeft();
+                if (ui::slider("offset", &offsetMs, -2000.0f, 2000.0f, 5.0f, "%+.0f ms", interior)) {
+                    audio.setUserOffset(static_cast<double>(offsetMs) / 1000.0);
+                }
+                contentLeft();
+                ImGui::Text("音符速度");
+                float speed = noteSpeed;
+                contentLeft();
+                if (ui::slider("speed", &speed, 1.0f, 12.0f, 0.1f, "%.1f", interior)) {
+                    noteSpeed = speed;
+                    core_api::setPreviewConfig(0, 1, 1, 1, 0, 0, noteSpeed, 1.0f, 0.6f, 0.0f, 1.0f, 0.85f);
+                }
+            } else if (tab == 1) {
+                // 画面: window mode + frame rate.
+                contentLeft();
+                ImGui::Text("窗口模式");
+                static int winMode = windowMode;
+                contentLeft();
+                ImGui::SetNextItemWidth(interior);
+                if (ImGui::Combo("##window-mode", &winMode, "borderless\0windowed\0fullscreen\0")) {
+                    windowMode = winMode;
+                    if (winMode == 2) {
+                        SDL_SetWindowFullscreen(window, SDL_WINDOW_FULLSCREEN_DESKTOP);
+                    } else {
+                        SDL_SetWindowFullscreen(window, 0);
+                        SDL_SetWindowBordered(window, winMode == 1 ? SDL_TRUE : SDL_FALSE);
+                    }
+                }
+                contentLeft();
+                ImGui::Text("帧率上限 (0 = 仅垂直同步)");
+                static float fpsLimitF = static_cast<float>(fpsLimit);
+                contentLeft();
+                if (ui::slider("fps", &fpsLimitF, 0.0f, 240.0f, 5.0f, "%.0f fps", interior)) {
+                    fpsLimitLive = static_cast<int>(fpsLimitF);
+                }
+                contentLeft();
+                ImGui::Text("实测: %.1f fps", 1.0 / std::max(1e-6, lastFrameDeltaSec));
+            } else {
+                // 判定: judgement windows.
+                contentLeft();
+                ImGui::Text("判定窗口 (ms)");
+                static float perfect = 40.0f;
+                static float great = 90.0f;
+                static float good = 140.0f;
+                bool windowsChanged = false;
+                contentLeft();
+                windowsChanged |= ui::slider("perfect", &perfect, 10.0f, 100.0f, 1.0f, "Perfect %.0f", interior);
+                contentLeft();
+                windowsChanged |= ui::slider("great", &great, 20.0f, 160.0f, 1.0f, "Great %.0f", interior);
+                contentLeft();
+                windowsChanged |= ui::slider("goodw", &good, 30.0f, 220.0f, 1.0f, "Good %.0f", interior);
+                static bool strictFlick = true;
+                ui::checkBox("严格 Flick 方向", &strictFlick, interior);
+                judgement.setStrictFlick(strictFlick);
+                if (windowsChanged) {
+                    game::JudgementWindows windows;
+                    windows.perfectMs = perfect;
+                    windows.greatMs = std::max(great, perfect + 10.0f);
+                    windows.goodMs = std::max(good, great + 10.0f);
+                    windows.missAfterMs = good + 60.0f;
+                    judgement.setWindows(windows);
+                }
+            }
+            ImGui::PopFont();
+            ImGui::PopStyleVar(2);
+            ImGui::PopStyleColor(5);
+            ImGui::SetCursorScreenPos(ImVec2(cardCenter.x - cardSize.x * 0.5f + padX,
+                cardCenter.y + cardSize.y * 0.5f - 68.0f * s));
+            if (ui::capsuleButton("关闭", ImVec2(150.0f * s, 54.0f * s), false)) {
+                showDebug = false;
+            }
+            ui::endCard();
+        } else {
+            settingsAlive = false;
+        }
+    };
 
     // ------------------------------------------------------------------
     // Pointer input: touch fingers and mouse buttons share one code path.
@@ -1021,12 +1163,18 @@ int main(int argc, char** argv)
                     std::fprintf(stderr, "%s\n", error.c_str());
                     error.clear();
                 }
+            } else if (action == game::SelectSettings) {
+                showDebug = true;
             } else if (action == game::SelectRescan) {
                 entries = game::scanChartFolder(chartsDir);
                 selected = entries.empty() ? -1 : 0;
+                game::applyScores(entries, scores);
                 loadedCoverPath.clear();
                 std::printf("[select] %d chart(s)\n", static_cast<int>(entries.size()));
             }
+
+            // Settings card, opened from the musicsetting button (or H).
+            drawSettingsCard();
 
             // Headless check: dump the song list shortly after startup.
             if (!screenshotPath.empty() && uiClock > 1.2) {
@@ -1056,6 +1204,18 @@ int main(int argc, char** argv)
             }
             judgement.setHoldLanes(holdLanes);
             judgement.update(static_cast<float>(songTime));
+
+            // Record CLEAR / FULL COMBO once the song is played to the end.
+            if (!session.scoreRecorded && trackDurationSec > 1.0 && songTime >= trackDurationSec - 0.25) {
+                session.scoreRecorded = true;
+                const auto& st = judgement.stats();
+                const bool fullCombo = st.miss == 0;
+                const std::string key = game::scoreKey(session.entry);
+                scores[key] = game::mergeScore(scores[key], true, fullCombo);
+                game::applyScores(entries, scores);
+                game::saveScores(scoresPath, scores);
+                std::printf("[score] %s cleared%s\n", key.c_str(), fullCombo ? " (full combo)" : "");
+            }
 
             // Hold loop SE: loop while a hold is being tracked (anyActiveHold
             // goes false as soon as the hold ends or the lane is released).
@@ -1157,132 +1317,8 @@ int main(int argc, char** argv)
                 }
             }
 
-            // Alive flag keeps the settings card on screen while its close
-            // animation plays out.
-            static bool settingsAlive = false;
-            if (showDebug) {
-                settingsAlive = true;
-            }
-            if (settingsAlive) {
-                // pjsk style settings panel (tabbed card, pjsk sliders).
-                const float s = ui::scale();
-                const ImVec2 display = ImGui::GetIO().DisplaySize;
-                ImVec2 cardSize = ImVec2(400.0f * s, 560.0f * s);
-                ImVec2 cardCenter = ImVec2(18.0f * s + cardSize.x * 0.5f, 18.0f * s + cardSize.y * 0.5f);
-                const float interior = cardSize.x - 64.0f * s;
-                const float padX = 32.0f * s;
-                bool closeClicked = false;
-                if (ui::beginCard("##settings", &cardCenter, &cardSize, true, false, &closeClicked, showDebug)) {
-                    if (closeClicked) {
-                        showDebug = false;
-                    }
-                    ImGui::SetCursorScreenPos(ImVec2(cardCenter.x - cardSize.x * 0.5f + padX,
-                        cardCenter.y - cardSize.y * 0.5f + 26.0f * s));
-                    ui::cardTitle("设置", interior);
-
-                    static int tab = 0;
-                    ui::tabBar("settings-tabs",
-                        {std::string("演奏"), std::string("画面"), std::string("判定")}, &tab, interior);
-
-                    // ImGui::Text starts each line at the window's left edge
-                    // (padding is 0); pin content lines to the card interior.
-                    const auto contentLeft = [&]() {
-                        ImGui::SetCursorScreenPos(ImVec2(cardCenter.x - cardSize.x * 0.5f + padX,
-                            ImGui::GetCursorScreenPos().y));
-                    };
-
-                    ImGui::PushStyleColor(ImGuiCol_Text, ui::kBodyText);
-                    ImGui::PushStyleColor(ImGuiCol_PopupBg, IM_COL32(250, 250, 253, 255));
-                    ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(224, 224, 235, 255));
-                    ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, IM_COL32(214, 214, 228, 255));
-                    ImGui::PushStyleColor(ImGuiCol_FrameBgActive, IM_COL32(205, 205, 222, 255));
-                    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 12.0f * s);
-                    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10.0f * s, 6.0f * s));
-                    ImGui::PushFont(game::bodyFont(), 23.0f * s);
-                    ImGui::PushItemWidth(interior);
-
-                    if (tab == 0) {
-                        // 演奏: audio offset + note speed.
-                        contentLeft();
-                        ImGui::Text("音频偏移");
-                        static float offsetMs = static_cast<float>(gUserOffsetSec * 1000.0);
-                        contentLeft();
-                        if (ui::slider("offset", &offsetMs, -2000.0f, 2000.0f, 5.0f, "%+.0f ms", interior)) {
-                            audio.setUserOffset(static_cast<double>(offsetMs) / 1000.0);
-                        }
-                        contentLeft();
-                        ImGui::Text("音符速度");
-                        float speed = noteSpeed;
-                        contentLeft();
-                        if (ui::slider("speed", &speed, 1.0f, 12.0f, 0.1f, "%.1f", interior)) {
-                            noteSpeed = speed;
-                            core_api::setPreviewConfig(0, 1, 1, 1, 0, 0, noteSpeed, 1.0f, 0.6f, 0.0f, 1.0f, 0.85f);
-                        }
-                    } else if (tab == 1) {
-                        // 画面: window mode + frame rate.
-                        contentLeft();
-                        ImGui::Text("窗口模式");
-                        static int winMode = windowMode;
-                        contentLeft();
-                        ImGui::SetNextItemWidth(interior);
-                        if (ImGui::Combo("##window-mode", &winMode, "borderless\0windowed\0fullscreen\0")) {
-                            windowMode = winMode;
-                            if (winMode == 2) {
-                                SDL_SetWindowFullscreen(window, SDL_WINDOW_FULLSCREEN_DESKTOP);
-                            } else {
-                                SDL_SetWindowFullscreen(window, 0);
-                                SDL_SetWindowBordered(window, winMode == 1 ? SDL_TRUE : SDL_FALSE);
-                            }
-                        }
-                        contentLeft();
-                        ImGui::Text("帧率上限 (0 = 仅垂直同步)");
-                        static float fpsLimitF = static_cast<float>(fpsLimit);
-                        contentLeft();
-                        if (ui::slider("fps", &fpsLimitF, 0.0f, 240.0f, 5.0f, "%.0f fps", interior)) {
-                            fpsLimitLive = static_cast<int>(fpsLimitF);
-                        }
-                        contentLeft();
-                        ImGui::Text("实测: %.1f fps", 1.0 / std::max(1e-6, lastFrameDeltaSec));
-                    } else {
-                        // 判定: judgement windows.
-                        contentLeft();
-                        ImGui::Text("判定窗口 (ms)");
-                        static float perfect = 40.0f;
-                        static float great = 90.0f;
-                        static float good = 140.0f;
-                        bool windowsChanged = false;
-                        contentLeft();
-                        windowsChanged |= ui::slider("perfect", &perfect, 10.0f, 100.0f, 1.0f, "Perfect %.0f", interior);
-                        contentLeft();
-                        windowsChanged |= ui::slider("great", &great, 20.0f, 160.0f, 1.0f, "Great %.0f", interior);
-                        contentLeft();
-                        windowsChanged |= ui::slider("goodw", &good, 30.0f, 220.0f, 1.0f, "Good %.0f", interior);
-                        contentLeft();
-                        static bool strictFlick = true;
-                        ui::checkBox("严格 Flick 方向", &strictFlick, interior);
-                        judgement.setStrictFlick(strictFlick);
-                        if (windowsChanged) {
-                            game::JudgementWindows windows;
-                            windows.perfectMs = perfect;
-                            windows.greatMs = std::max(great, perfect + 10.0f);
-                            windows.goodMs = std::max(good, great + 10.0f);
-                            windows.missAfterMs = good + 60.0f;
-                            judgement.setWindows(windows);
-                        }
-                    }
-                    ImGui::PopFont();
-                    ImGui::PopStyleVar(2);
-                    ImGui::PopStyleColor(5);
-                    ImGui::SetCursorScreenPos(ImVec2(cardCenter.x - cardSize.x * 0.5f + padX,
-                        cardCenter.y + cardSize.y * 0.5f - 68.0f * s));
-                    if (ui::capsuleButton("关闭", ImVec2(150.0f * s, 54.0f * s), false)) {
-                        showDebug = false;
-                    }
-                    ui::endCard();
-                } else {
-                    settingsAlive = false;
-                }
-            }
+            // Settings card (H key), shared with the song select state.
+            drawSettingsCard();
 
             // ----------------------------------------------------------
             // Pause dialog: 重试 / 放弃 / 继续演出.
