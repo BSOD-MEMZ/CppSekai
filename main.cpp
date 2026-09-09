@@ -59,6 +59,7 @@ namespace
         float lanePos = 0.0f;
         int laneIndex = 0;
         float lastWorldY = 0.0f;
+        float lastLanePos = 0.0f;
         double lastMoveTimeSec = 0.0;
         bool flicked = false;
     };
@@ -116,7 +117,9 @@ namespace
             "Keyboard: Z S X D C V G B H N J M = 12 lanes\n"
             "          SPACE = pause, F = fullscreen, H = debug panel, ESC = back/quit\n"
             "Mouse   : left/right button = tap a lane (hold = long note),\n"
-            "          drag up = flick. Right button gives a second pointer.\n"
+            "          drag up/left/right = flick (direction must match the\n"
+            "          note arrow; see the strict-Flick setting). Right button\n"
+            "          gives a second pointer.\n"
             "          Clicks on the HUD / panels never count as a hit.\n"
             "Touch   : multi-touch lanes, swipe up for flicks\n");
     }
@@ -712,6 +715,7 @@ int main(int argc, char** argv)
         track.lanePos = lanePos;
         track.laneIndex = laneIndexFromPos(lanePos);
         track.lastWorldY = worldY;
+        track.lastLanePos = lanePos;
         track.lastMoveTimeSec = SDL_GetTicks() / 1000.0;
         touches.push_back(track);
         lanePress[static_cast<size_t>(track.laneIndex)] = 1.0f;
@@ -724,8 +728,11 @@ int main(int argc, char** argv)
         return true;
     };
 
-    // Tracks vertical movement; a fast upward drag is a flick.
+    // Tracks pointer movement; a fast swipe is a flick. The dominant axis in
+    // world/lane space picks the direction (up / left / right), which strict
+    // flick validation then compares against the note's arrow.
     auto movePointer = [&](SDL_FingerID id, int x, int y) {
+        const float clipX = (static_cast<float>(x) / static_cast<float>(windowW)) * 2.0f - 1.0f;
         const float clipY = 1.0f - (static_cast<float>(y) / static_cast<float>(windowH)) * 2.0f;
         const double now = SDL_GetTicks() / 1000.0;
         const float worldY = renderer.clipToWorldY(clipY);
@@ -733,18 +740,35 @@ int main(int argc, char** argv)
             if (track.fingerId != id) {
                 continue;
             }
-            const float delta = worldY - track.lastWorldY;
+            const float lanePos = std::abs(worldY) > 0.08f
+                ? renderer.clipToWorldX(clipX) / worldY
+                : renderer.clipToWorldX(clipX);
+            const float dy = worldY - track.lastWorldY;    // up in screen space
+            const float dx = lanePos - track.lastLanePos;  // lane units
             const double dt = now - track.lastMoveTimeSec;
-            // Upward swipe in screen space = world y increasing.
-            if (dt > 0.001 && delta / dt > 1.0 && !track.flicked) {
-                track.flicked = true;
-                const double songTime = audio.hasMusic() ? audio.songTime() : wallSongTime();
-                const game::Judge result = judgement.flick(track.lanePos, static_cast<float>(songTime), 0.8f);
-                if (result != game::Judge::None) {
-                    playHitSe(audio, judgement, seVolume);
+            if (dt > 0.001 && !track.flicked) {
+                const float upSpeed = dy / static_cast<float>(dt);
+                const float sideSpeed = dx / static_cast<float>(dt);
+                game::FlickDir dir = game::FlickNone;
+                if (upSpeed > 1.0f && std::abs(upSpeed) >= std::abs(sideSpeed) * 0.8f) {
+                    dir = game::FlickUp;
+                } else if (sideSpeed > 1.2f) {
+                    dir = game::FlickRight;
+                } else if (sideSpeed < -1.2f) {
+                    dir = game::FlickLeft;
+                }
+                if (dir != game::FlickNone) {
+                    track.flicked = true;
+                    const double songTime = audio.hasMusic() ? audio.songTime() : wallSongTime();
+                    const game::Judge result =
+                        judgement.flick(track.lanePos, static_cast<float>(songTime), dir, 0.8f);
+                    if (result != game::Judge::None) {
+                        playHitSe(audio, judgement, seVolume);
+                    }
                 }
             }
             track.lastWorldY = worldY;
+            track.lastLanePos = lanePos;
             track.lastMoveTimeSec = now;
         }
     };
@@ -839,8 +863,17 @@ int main(int argc, char** argv)
                                 lanePress[static_cast<size_t>(lane)] = 1.0f;
                                 // Feedback even when nothing is there to hit.
                                 hitEffects.push_back(game::HitFx{keyLanePos(lane), 0.0f, 0.4f});
-                                const game::Judge result = judgement.tap(keyLanePos(lane), static_cast<float>(songTime), false, 0.5f);
-                                if (result != game::Judge::None) {
+                                const game::Judge result =
+                                    judgement.tap(keyLanePos(lane), static_cast<float>(songTime), false, 0.5f);
+                                game::Judge flickResult = game::Judge::None;
+                                if (result == game::Judge::None) {
+                                    // Keyboard has no swipe direction; keys can
+                                    // still clear up/default flicks (left/right
+                                    // flicks need a real swipe).
+                                    flickResult = judgement.flick(
+                                        keyLanePos(lane), static_cast<float>(songTime), game::FlickUp, 0.5f);
+                                }
+                                if (result != game::Judge::None || flickResult != game::Judge::None) {
                                     playHitSe(audio, judgement, seVolume);
                                 }
                             }
@@ -1134,16 +1167,17 @@ int main(int argc, char** argv)
                 // pjsk style settings panel (tabbed card, pjsk sliders).
                 const float s = ui::scale();
                 const ImVec2 display = ImGui::GetIO().DisplaySize;
-                ImVec2 cardSize = ImVec2(470.0f * s, 540.0f * s);
-                ImVec2 cardCenter = ImVec2(20.0f * s + cardSize.x * 0.5f, 20.0f * s + cardSize.y * 0.5f);
-                const float interior = cardSize.x - 80.0f * s;
+                ImVec2 cardSize = ImVec2(400.0f * s, 560.0f * s);
+                ImVec2 cardCenter = ImVec2(18.0f * s + cardSize.x * 0.5f, 18.0f * s + cardSize.y * 0.5f);
+                const float interior = cardSize.x - 64.0f * s;
+                const float padX = 32.0f * s;
                 bool closeClicked = false;
                 if (ui::beginCard("##settings", &cardCenter, &cardSize, true, false, &closeClicked, showDebug)) {
                     if (closeClicked) {
                         showDebug = false;
                     }
-                    ImGui::SetCursorScreenPos(ImVec2(cardCenter.x - cardSize.x * 0.5f + 40.0f * s,
-                        cardCenter.y - cardSize.y * 0.5f + 30.0f * s));
+                    ImGui::SetCursorScreenPos(ImVec2(cardCenter.x - cardSize.x * 0.5f + padX,
+                        cardCenter.y - cardSize.y * 0.5f + 26.0f * s));
                     ui::cardTitle("设置", interior);
 
                     static int tab = 0;
@@ -1153,7 +1187,7 @@ int main(int argc, char** argv)
                     // ImGui::Text starts each line at the window's left edge
                     // (padding is 0); pin content lines to the card interior.
                     const auto contentLeft = [&]() {
-                        ImGui::SetCursorScreenPos(ImVec2(cardCenter.x - cardSize.x * 0.5f + 40.0f * s,
+                        ImGui::SetCursorScreenPos(ImVec2(cardCenter.x - cardSize.x * 0.5f + padX,
                             ImGui::GetCursorScreenPos().y));
                     };
 
@@ -1223,6 +1257,10 @@ int main(int argc, char** argv)
                         windowsChanged |= ui::slider("great", &great, 20.0f, 160.0f, 1.0f, "Great %.0f", interior);
                         contentLeft();
                         windowsChanged |= ui::slider("goodw", &good, 30.0f, 220.0f, 1.0f, "Good %.0f", interior);
+                        contentLeft();
+                        static bool strictFlick = true;
+                        ui::checkBox("严格 Flick 方向", &strictFlick, interior);
+                        judgement.setStrictFlick(strictFlick);
                         if (windowsChanged) {
                             game::JudgementWindows windows;
                             windows.perfectMs = perfect;
@@ -1235,9 +1273,9 @@ int main(int argc, char** argv)
                     ImGui::PopFont();
                     ImGui::PopStyleVar(2);
                     ImGui::PopStyleColor(5);
-                    ImGui::SetCursorScreenPos(ImVec2(cardCenter.x - cardSize.x * 0.5f + 40.0f * s,
-                        cardCenter.y + cardSize.y * 0.5f - 96.0f * s));
-                    if (ui::capsuleButton("关闭", ImVec2(180.0f * s, 64.0f * s), false)) {
+                    ImGui::SetCursorScreenPos(ImVec2(cardCenter.x - cardSize.x * 0.5f + padX,
+                        cardCenter.y + cardSize.y * 0.5f - 68.0f * s));
+                    if (ui::capsuleButton("关闭", ImVec2(150.0f * s, 54.0f * s), false)) {
                         showDebug = false;
                     }
                     ui::endCard();

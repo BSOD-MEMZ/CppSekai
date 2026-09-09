@@ -106,14 +106,16 @@ int main(int argc, char** argv)
                 double b = 0.0;
                 double a = 0.0;
                 for (int sy = 0; sy < factor; ++sy) {
-                    const stbi_uc* row = pixels + (static_cast<size_t>(y * factor + sy) * w + x * factor) * 4;
-                    for (int sx = 0; sx < factor; ++sx) {
-                        const double pa = row[sx * 4 + 3] / 255.0;
-                        r += row[sx * 4 + 0] * pa;
-                        g += row[sx * 4 + 1] * pa;
-                        b += row[sx * 4 + 2] * pa;
-                        a += row[sx * 4 + 3];
-                    }
+                        const stbi_uc* row = pixels + (static_cast<size_t>(y * factor + sy) * w + x * factor) * 4;
+                        for (int sx = 0; sx < factor; ++sx) {
+                            // Accumulate premultiplied by the RAW alpha so the
+                            // division below un-premultiplies exactly (using
+                            // alpha/255 here shrank RGB by ~255x -> black HUD).
+                            r += row[sx * 4 + 0] * row[sx * 4 + 3];
+                            g += row[sx * 4 + 1] * row[sx * 4 + 3];
+                            b += row[sx * 4 + 2] * row[sx * 4 + 3];
+                            a += row[sx * 4 + 3];
+                        }
                 }
                 stbi_uc* dst = outPixels.data() + (static_cast<size_t>(y) * ow + x) * 4;
                 const double block = static_cast<double>(factor * factor);

@@ -88,10 +88,12 @@ class JudgementEngine
 
     // Player input. lanePos is in lane coordinates (world x units);
     // a note matches when center - width/2 - margin <= lanePos <= center + width/2 + margin.
-    // isFlick: the gesture was an upward swipe (leniently accepted for tap input in this skeleton).
+    // Flick input carries the swipe direction; in strict mode (default) a
+    // flick note only clears when the direction matches (up flicks also
+    // accept the ambiguous FlickNone), and a plain tap never clears a flick.
     // Returns the judge result if a note was hit, Judge::None otherwise.
     Judge tap(float lanePos, float songTimeSec, bool critical, float margin = 0.5f);
-    Judge flick(float lanePos, float songTimeSec, float margin = 0.5f);
+    Judge flick(float lanePos, float songTimeSec, FlickDir dir, float margin = 0.5f);
 
     // Keyboard lane tracking for hold notes. heldLanes is a list of currently
     // held lane positions; touches count as holds while the finger is down.
@@ -105,6 +107,12 @@ class JudgementEngine
     [[nodiscard]] const JudgementStats& stats() const { return mStats; }
     [[nodiscard]] const JudgementWindows& windows() const { return mWindows; }
     void setWindows(const JudgementWindows& windows) { mWindows = windows; }
+
+    // Strict flick validation: on (default) a flick needs a matching swipe
+    // direction and taps never clear flicks; off restores the lenient
+    // skeleton behavior (any flick gesture / tap clears any flick note).
+    void setStrictFlick(bool strict) { mStrictFlick = strict; }
+    [[nodiscard]] bool strictFlick() const { return mStrictFlick; }
 
     [[nodiscard]] bool loaded() const { return mLoaded; }
     [[nodiscard]] int totalNotes() const { return mTotalScoreNotes; }
@@ -130,11 +138,19 @@ class JudgementEngine
 
     JudgementWindows mWindows;
     JudgementStats mStats;
+    bool mStrictFlick = true;
 
     Judge registerJudge(Judge judge, bool critical, float volume);
     void registerMiss(float songTimeSec);
-    HitNote* findCandidate(float lanePos, float songTimeSec, float margin, bool wantFlick);
+    HitNote* findCandidate(float lanePos, float songTimeSec, float margin, bool wantFlick,
+        FlickDir flickDir = FlickNone);
     bool laneCovers(const HitNote& note, float lanePos, float margin) const;
+
+    // flags packing (see mmw_preview.cpp): bit0 = critical, bits 1-2 = FlickDir.
+    static std::uint8_t noteFlickDir(const HitNote& note)
+    {
+        return static_cast<std::uint8_t>((static_cast<int>(note.flags) >> 1) & 3);
+    }
 };
 
 } // namespace game

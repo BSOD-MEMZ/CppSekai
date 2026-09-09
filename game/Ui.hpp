@@ -27,7 +27,9 @@ class Renderer;
 namespace ui
 {
 // pjsk palette.
-constexpr ImU32 kBackdrop = IM_COL32(10, 10, 20, 130);      // fullscreen dim
+// Fullscreen dim behind dialogs. Kept light (~33%) on purpose: the stage and
+// the notes stay readable while paused.
+constexpr ImU32 kBackdrop = IM_COL32(8, 8, 16, 84);
 constexpr ImU32 kCardBg = IM_COL32(242, 242, 247, 252);     // light gray card
 constexpr ImU32 kTitleText = IM_COL32(96, 96, 112, 255);    // gray title
 constexpr ImU32 kBodyText = IM_COL32(70, 70, 88, 255);      // dark body text
@@ -92,7 +94,7 @@ void caption(const char* text, float sizePx = 0.0f, ImU32 color = kTitleText, fl
 
 // Left-aligned card title with the thin divider rule underneath (the classic
 // pjsk dialog header). interiorWidth is the usable card width for centering.
-void cardTitle(const char* text, float interiorWidth, float sizePx = 34.0f);
+void cardTitle(const char* text, float interiorWidth, float sizePx = 30.0f);
 
 // Pink rounded checkbox with a white check + label, the whole group centered
 // in rowWidth. Toggles *value on click; returns the new value.

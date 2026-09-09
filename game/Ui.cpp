@@ -19,16 +19,19 @@ namespace
 {
     ImU32 withAlpha(ImU32 col, float alpha)
     {
-        const int a = static_cast<int>(std::clamp(alpha, 0.0f, 1.0f) * 255.0f);
-        return (col & ~IM_COL32_A_MASK) | IM_COL32(0, 0, 0, a);
+        // Scale the color's own alpha (replace used to turn any translucent
+        // color fully opaque at alpha == 1: kBackdrop's 84 became 255).
+        const int srcA = static_cast<int>((col & IM_COL32_A_MASK) >> IM_COL32_A_SHIFT);
+        const int a = static_cast<int>(srcA * std::clamp(alpha, 0.0f, 1.0f));
+        return (col & ~IM_COL32_A_MASK) | (a << IM_COL32_A_SHIFT);
     }
 
-    // Card geometry in "design pixels" (720p reference), scaled by scale().
-    constexpr float kCardRadius = 28.0f;
-    constexpr float kCapsuleH = 78.0f;
-    constexpr float kCloseSize = 52.0f;
+    // Card geometry in "design pixels" (860p reference), scaled by scale().
+    constexpr float kCardRadius = 24.0f;
+    constexpr float kCapsuleH = 66.0f;
+    constexpr float kCloseSize = 44.0f;
     constexpr float kAnimSec = 0.16f; // card scale in/out duration
-    constexpr float kHeaderH = 64.0f; // draggable strip height
+    constexpr float kHeaderH = 44.0f; // draggable strip height
 
     float easeInOut(float t)
     {
@@ -54,7 +57,8 @@ namespace
 float scale()
 {
     const ImVec2 display = ImGui::GetIO().DisplaySize;
-    return std::clamp(display.y / 720.0f, 0.5f, 3.0f);
+    // 860p reference: cards stay comfortably small (at 720p this is ~0.84).
+    return std::clamp(display.y / 860.0f, 0.55f, 2.0f);
 }
 
 bool beginCard(const char* id, ImVec2* center, ImVec2* size, bool showClose, bool dimBackdrop,
@@ -76,8 +80,29 @@ bool beginCard(const char* id, ImVec2* center, ImVec2* size, bool showClose, boo
     st.t = std::clamp(st.t + (open ? 1.0f : -1.0f) * ImGui::GetIO().DeltaTime / kAnimSec, 0.0f, 1.0f);
     const float k = easeInOut(st.t);
 
-    ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
-    ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
+    // Animated geometry around the (dragged) center. Computed up front so the
+    // hosting window can hug the card.
+    const ImVec2 animCenter = ImVec2(center->x + st.drag.x, center->y + st.drag.y);
+    const ImVec2 animSize = ImVec2(size->x * (0.92f + 0.08f * k), size->y * (0.92f + 0.08f * k));
+    *center = animCenter;
+    *size = animSize;
+
+    // Non-modal cards (dimBackdrop == false) must not block mouse input on the
+    // rest of the screen: a fullscreen invisible window makes
+    // io.WantCaptureMouse true everywhere, so lanes can never be hit while the
+    // settings card is open. Size the window to the card (+ margin) instead.
+    // Modal dialogs keep the fullscreen window (the dim backdrop is itself a
+    // click blocker).
+    constexpr float kWindowMargin = 48.0f;
+    if (dimBackdrop) {
+        ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
+        ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
+    } else {
+        const ImVec2 margin(kWindowMargin * s, kWindowMargin * s);
+        ImGui::SetNextWindowPos(ImVec2(animCenter.x - animSize.x * 0.5f - margin.x,
+            animCenter.y - animSize.y * 0.5f - margin.y));
+        ImGui::SetNextWindowSize(ImVec2(animSize.x + margin.x * 2.0f, animSize.y + margin.y * 2.0f));
+    }
     ImGui::SetNextWindowFocus();
     const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
         ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar |
@@ -100,11 +125,6 @@ bool beginCard(const char* id, ImVec2* center, ImVec2* size, bool showClose, boo
         return false;
     }
 
-    // Animated geometry around the (dragged) center.
-    const ImVec2 animCenter = ImVec2(center->x + st.drag.x, center->y + st.drag.y);
-    const ImVec2 animSize = ImVec2(size->x * (0.92f + 0.08f * k), size->y * (0.92f + 0.08f * k));
-    *center = animCenter;
-    *size = animSize;
     const ImVec2 lo = ImVec2(animCenter.x - animSize.x * 0.5f, animCenter.y - animSize.y * 0.5f);
     const ImVec2 hi = ImVec2(animCenter.x + animSize.x * 0.5f, animCenter.y + animSize.y * 0.5f);
 
@@ -133,8 +153,8 @@ bool beginCard(const char* id, ImVec2* center, ImVec2* size, bool showClose, boo
     ImGui::SetCursorScreenPos(ImVec2(lo.x, lo.y + kHeaderH * s));
 
     if (showClose) {
-        const ImVec2 closeLo = ImVec2(hi.x - (kCloseSize + 18.0f) * s, lo.y + 18.0f * s);
-        const ImVec2 closeHi = ImVec2(hi.x - 18.0f * s, lo.y + (18.0f + kCloseSize) * s);
+        const ImVec2 closeLo = ImVec2(hi.x - (kCloseSize + 14.0f) * s, lo.y + 14.0f * s);
+        const ImVec2 closeHi = ImVec2(hi.x - 14.0f * s, lo.y + (14.0f + kCloseSize) * s);
         ImGui::SetCursorScreenPos(closeLo);
         ImGui::PushID(id);
         ImGui::InvisibleButton("##close", ImVec2(closeHi.x - closeLo.x, closeHi.y - closeLo.y));
@@ -218,7 +238,7 @@ bool slider(const char* id, float* value, float minV, float maxV, float step, co
     const float btnRadius = 14.0f * s;
     const float trackH = 8.0f * s;
     const float thumbR = 15.0f * s;
-    const float rowH = 96.0f * s; // value text + track row
+    const float rowH = 80.0f * s; // value text + track row (was 96: card got too tall)
 
     const ImVec2 pos = ImGui::GetCursorScreenPos();
     const float rowW = width > 0.0f ? width : ImGui::GetContentRegionAvail().x;
@@ -382,9 +402,9 @@ void cardTitle(const char* text, float interiorWidth, float sizePx)
     const ImVec2 textSize = font->CalcTextSizeA(sizePx * s, FLT_MAX, 0.0f, text);
     dl->AddText(font, sizePx * s, pos, kTitleText, text);
     // Thin rule spanning the interior, a little below the baseline.
-    const float ruleY = pos.y + textSize.y + 14.0f * s;
+    const float ruleY = pos.y + textSize.y + 12.0f * s;
     dl->AddRectFilled(ImVec2(pos.x, ruleY), ImVec2(pos.x + interiorWidth, ruleY + 2.0f * s), kDivider, 1.0f * s);
-    ImGui::SetCursorScreenPos(ImVec2(pos.x, ruleY + 26.0f * s));
+    ImGui::SetCursorScreenPos(ImVec2(pos.x, ruleY + 20.0f * s));
 }
 
 bool checkBox(const char* label, bool* value, float rowWidth)
@@ -532,8 +552,8 @@ int messageDialog(platform::Renderer& renderer, const char* id, const char* titl
 {
     const float s = scale();
     const ImVec2 display = ImGui::GetIO().DisplaySize;
-    const float cardW = 700.0f * s;
-    const float cardH = 300.0f * s;
+    const float cardW = 600.0f * s;
+    const float cardH = 250.0f * s;
     ImVec2 center = ImVec2(display.x * 0.5f, display.y * 0.5f);
     ImVec2 size = ImVec2(cardW, cardH);
 
@@ -556,16 +576,16 @@ int messageDialog(platform::Renderer& renderer, const char* id, const char* titl
         st.open = false; // animate out; caller sees -2 when done
     }
 
-    ImGui::SetCursorScreenPos(ImVec2(center.x - size.x * 0.5f + 48.0f * s, center.y - size.y * 0.5f + 44.0f * s));
-    cardTitle(title, size.x - 96.0f * s);
+    ImGui::SetCursorScreenPos(ImVec2(center.x - size.x * 0.5f + 40.0f * s, center.y - size.y * 0.5f + 36.0f * s));
+    cardTitle(title, size.x - 80.0f * s);
 
     // Capsule row, centered, laid out bottom.
-    const float btnH = kCapsuleH * s * 0.78f;
-    const float btnW = 210.0f * s;
-    const float gap = 32.0f * s;
+    const float btnH = kCapsuleH * s * 0.80f;
+    const float btnW = 176.0f * s;
+    const float gap = 26.0f * s;
     const float totalW = static_cast<float>(buttons.size()) * btnW + (static_cast<float>(buttons.size()) - 1) * gap;
     float x = center.x - totalW * 0.5f;
-    const float y = center.y + size.y * 0.5f - btnH - 44.0f * s;
+    const float y = center.y + size.y * 0.5f - btnH - 34.0f * s;
     for (size_t i = 0; i < buttons.size(); ++i) {
         const bool isPrimary = i < primary.size() && primary[i];
         ImGui::SetCursorScreenPos(ImVec2(x, y));

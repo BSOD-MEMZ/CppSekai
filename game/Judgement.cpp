@@ -91,7 +91,8 @@ bool JudgementEngine::laneCovers(const HitNote& note, float lanePos, float margi
     return lanePos >= note.center - half - margin && lanePos <= note.center + half + margin;
 }
 
-HitNote* JudgementEngine::findCandidate(float lanePos, float songTimeSec, float margin, bool wantFlick)
+HitNote* JudgementEngine::findCandidate(float lanePos, float songTimeSec, float margin, bool wantFlick,
+    FlickDir flickDir)
 {
     HitNote* best = nullptr;
     float bestAbsDt = std::numeric_limits<float>::max();
@@ -114,9 +115,23 @@ HitNote* JudgementEngine::findCandidate(float lanePos, float songTimeSec, float 
         }
         const bool noteIsFlick = note.kind == 2.0f;
         if (wantFlick != noteIsFlick) {
-            // In this skeleton a plain tap also clears a flick note; the
-            // strict flick gesture check is a TODO.
-            continue;
+            if (mStrictFlick) {
+                // Strict: a plain tap never clears a flick note (and a swipe
+                // never clears a tap).
+                continue;
+            }
+            // Lenient skeleton mode: either gesture clears either kind.
+        }
+        if (wantFlick && mStrictFlick) {
+            const FlickDir noteDir = static_cast<FlickDir>(noteFlickDir(note));
+            // Up/default flicks (and legacy FlickNone) accept any upward
+            // swipe; left/right flicks require the matching horizontal swipe.
+            const bool dirOk = noteDir == FlickNone || noteDir == FlickUp
+                ? flickDir == FlickUp || flickDir == FlickNone
+                : flickDir == noteDir;
+            if (!dirOk) {
+                continue;
+            }
         }
         if (!laneCovers(note, lanePos, margin)) {
             continue;
@@ -141,7 +156,9 @@ HitNote* JudgementEngine::findCandidate(float lanePos, float songTimeSec, float 
         judge = Judge::Good;
     }
     best->state = 1;
-    const bool critical = best->flags != 0.0f;
+    // Critical is bit0 only - bits 1-2 carry the flick direction, so a
+    // directional flick note (flags >= 2) must not read as critical.
+    const bool critical = (static_cast<int>(best->flags) & 1) != 0;
     mStats.lastHitKind = best->kind;
     mStats.lastHitCenter = best->center;
     registerJudge(judge, critical, best->volume);
@@ -159,9 +176,9 @@ Judge JudgementEngine::tap(float lanePos, float songTimeSec, bool critical, floa
     return mStats.lastJudge;
 }
 
-Judge JudgementEngine::flick(float lanePos, float songTimeSec, float margin)
+Judge JudgementEngine::flick(float lanePos, float songTimeSec, FlickDir dir, float margin)
 {
-    HitNote* hit = findCandidate(lanePos, songTimeSec, margin, true);
+    HitNote* hit = findCandidate(lanePos, songTimeSec, margin, true, dir);
     if (hit == nullptr) {
         return Judge::None;
     }
@@ -198,7 +215,7 @@ void JudgementEngine::update(float songTimeSec)
             // Hold ticks auto-hit while a hold covering this lane is active
             // (skeleton: auto-hit unconditionally, matching no-fail preview).
             note.state = 1;
-            registerJudge(Judge::Perfect, note.flags != 0.0f, note.volume);
+            registerJudge(Judge::Perfect, (static_cast<int>(note.flags) & 1) != 0, note.volume);
             mStats.lastJudgeTimeSec = songTimeSec;
             continue;
         }
@@ -297,7 +314,7 @@ bool JudgementEngine::anyActiveHold(bool* criticalOut) const
             continue;
         }
         if (criticalOut != nullptr && hold.noteIndex < mNotes.size()) {
-            *criticalOut = mNotes[hold.noteIndex].flags != 0.0f;
+            *criticalOut = (static_cast<int>(mNotes[hold.noteIndex].flags) & 1) != 0;
         }
         return true;
     }
