@@ -81,6 +81,18 @@ bash build.sh          # 仅需 Git Bash；产物 build/cppsekai.exe + SDL2.dll 
   生成（整数倍 alpha 加权 box 缩小到 max dim 512；start_grad 是 1:1 全屏渐变，跳过）。
   这套把 HUD 加载从 ~1.0s 降到 ~0.3s。build.sh 会连 assets 一起拷到 build/。
 - 判定窗口默认 perfect 40ms / great 90ms / good 140ms（非官方数值，做成可调的）。
+- 判定特效**不在 HUD 里画**：命中时由 `core_api::triggerNoteEffect()` 交给谱面核心自己的
+  粒子系统（`assets/mmw/effect.png` + `generated_resources.h` 里的 pjsk 特效定义）播放，
+  和自动播放走的是同一条时间线，这是原作 1:1。`main.cpp` 里 `setEffectAutoplay(autoPlay)`：
+  自动播放用谱面时间线触发，玩家模式改由判定引擎触发。判定文字（PERFECT/GREAT/…）在
+  `game/Hud.cpp`，公式逐行对齐上游 `mmw_overlay_player.cpp`（310x81 基准、中心 960,667.5、
+  前 2 帧不可见、第 2~5 帧四次方缓出到 scale 1、0.24s 窗口）。
+- 难度定数：unipjsk 导出的 SUS 把 `#TITLE`/`#PLAYLEVEL` 清空了（`#DIFFICULTY 0`），所以定数
+  来自仓库根的 `music-levels.json`（`{"<musicId>":[easy,normal,hard,expert,master]}`，
+  `setup.sh` 可从官方 `musicDifficulties` 表重建）。曲目 id 从文件名取（`0075_master.sus` → 75），
+  `game/SongSelect.cpp` 按 id 分组，所以同一首歌的不同难度会并成一条、缺 sidecar 也不会散开。
+  谱面同级可放 `<musicId>.json`（如 `charts/0075.json`）作为全难度共用的元数据；`<难度>.json`
+  优先于它。
 - UI 缩放：`ui::scale()` 以 860p 为基准（720p 窗口下 ≈0.84）；titlebar 高 `kHeaderH=44` 设计像素。
   设置卡片 400x500、暂停弹窗 600x250（设计像素）；滑块行高 80。改卡片尺寸时先量内容高度
   （临时 printf `GetCursorScreenPos().y` 对比 cardBottom），别让底部按钮压住内容。
@@ -101,6 +113,18 @@ cd build
 pjsk 舞台、透视轨道和下落中的 note 贴图。charts/ 里有联网下载的谱面可直接用，
 BGM URL 规律：`https://assets.unipjsk.com/ondemand/music/long/se_<id>_01/se_<id>_01.mp3`（不是每首都有）。
 
+判定/特效的无头自检（都不需要真的操作）：
+
+```bash
+./cppsekai.exe --sus ../charts/0127_master.sus --bgm ../charts/0127.mp3 \
+    --test-hits --screenshot hit.png --screenshot-time 12.0   # 走判定引擎打谱面，看特效+判定文字
+./cppsekai.exe --sus ../charts/0127_master.sus --auto --screenshot auto.png --screenshot-time 12.0
+./cppsekai.exe --judge-frame 3 --screenshot f3.png --screenshot-time 8.0   # 冻结判定文字第 3 帧
+```
+
+`.workbuddy/tools/effect_sheet_usage.py` 会统计 `effect.png` 里哪些分块被内嵌粒子引用、
+多少不透明像素从没被采样过（`--dump` 出对比图）；改特效贴图或粒子数据后跑一下。
+
 ## 系统要求
 
 - Windows 7 SP1 及以上（miniaudio / SDL2 兼容底线）。OpenGL 3.3 core（约 2008 年后的 GPU 均可）。
@@ -114,5 +138,5 @@ BGM URL 规律：`https://assets.unipjsk.com/ondemand/music/long/se_<id>_01/se_<
 1. flick 严格方向校验（当前上滑/点按都算过）
 2. hold 音效循环（SeHoldLoop 未接）与 SE kind 区分（当前键盘全播一个音）
 3. 输入/音频延迟校准界面
-4. 结算画面、连击特效（judge v3 贴图已在 assets 里但未用）
+4. 结算画面、连击特效（judge v3 的 1~5 已用于判定文字，6=AUTO 仍未用）
 5. 键盘 12 键布局可能不顺手，考虑做成可配置

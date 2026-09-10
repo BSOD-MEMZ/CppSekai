@@ -90,15 +90,50 @@ namespace
         return fields;
     }
 
+    // "0075_master" -> 75. unipjsk names every score "<musicId>_<difficulty>",
+    // so the id is the only way back to the song's official metadata (the SUS
+    // files themselves ship with an empty #TITLE / #PLAYLEVEL). Requires at
+    // least three leading digits so a chart named after its title is not
+    // mistaken for an id.
+    int musicIdFromStem(const std::string& stem)
+    {
+        int value = 0;
+        int digits = 0;
+        for (const char ch : stem) {
+            if (ch < '0' || ch > '9') {
+                break;
+            }
+            value = value * 10 + (ch - '0');
+            ++digits;
+        }
+        return digits >= 3 ? value : 0;
+    }
+
     // Reads an optional <stem>.json sidecar: {"title", "lyricist", "composer",
     // "arranger", "vocal", ...}. SUS has no credit fields, so this is where
     // the intro card's 作詞/作曲/編曲/Vo. line comes from.
+    //
+    // Falls back to a song-level sidecar named after the music id
+    // ("0075.json"), which every difficulty of the same song shares - without
+    // it, "0075_easy.sus" would only find its own (usually absent) sidecar and
+    // show up as a second, untitled song next to "0075_master.sus".
     std::map<std::string, std::string> readSidecarMetadata(const fs::path& chartPath)
     {
         std::map<std::string, std::string> out;
         std::error_code ec;
         fs::path jsonPath = chartPath;
         jsonPath.replace_extension(".json");
+        if (!fs::exists(jsonPath, ec)) {
+            const int musicId = musicIdFromStem(chartPath.stem().string());
+            if (musicId > 0) {
+                char idName[16];
+                std::snprintf(idName, sizeof(idName), "%04d.json", musicId);
+                const fs::path shared = chartPath.parent_path() / idName;
+                if (fs::exists(shared, ec)) {
+                    jsonPath = shared;
+                }
+            }
+        }
         if (!fs::exists(jsonPath, ec)) {
             return out;
         }
@@ -305,6 +340,9 @@ void resolveSidecars(ChartEntry& entry)
 {
     const fs::path path(entry.susPath);
     const std::string stem = path.stem().string();
+    if (entry.musicId <= 0) {
+        entry.musicId = musicIdFromStem(stem);
+    }
     const std::map<std::string, std::string> sidecar = readSidecarMetadata(path);
     auto sideField = [&](const char* key) -> std::string {
         const auto it = sidecar.find(key);
@@ -368,6 +406,7 @@ std::vector<ChartEntry> scanChartFolder(const std::string& dir)
         ChartEntry item;
         item.susPath = path.string();
         const std::string stem = path.stem().string();
+        item.musicId = musicIdFromStem(stem);
 
         const std::map<std::string, std::string> header = readSusHeader(path);
         auto field = [&](const char* key) -> std::string {
@@ -465,24 +504,71 @@ namespace
         return -1;
     }
 
+    // -----------------------------------------------------------------
+    // Official per-difficulty levels (see game::loadMusicLevels). unipjsk
+    // charts ship with "#DIFFICULTY 0" and an empty "#PLAYLEVEL", so without
+    // this table the song select can only show "-" for every level.
+    // -----------------------------------------------------------------
+    std::map<int, std::array<int, kDiffCount>> gMusicLevels;
+
+    void storeLevel(int musicId, int diffIndex, int level)
+    {
+        if (musicId <= 0 || diffIndex < 0 || diffIndex >= kDiffCount || level <= 0) {
+            return;
+        }
+        gMusicLevels[musicId][static_cast<size_t>(diffIndex)] = level;
+    }
+
+    // "0075_master" -> 75 (see the file-scope musicIdFromStem).
+    int tableLevel(int musicId, int diffIndex)
+    {
+        const auto it = gMusicLevels.find(musicId);
+        if (it == gMusicLevels.end() || diffIndex < 0 || diffIndex >= kDiffCount) {
+            return 0;
+        }
+        return it->second[static_cast<size_t>(diffIndex)];
+    }
+
+    // The level of one chart: its own #PLAYLEVEL / sidecar first, then the
+    // official table for its difficulty. 0 = unknown.
+    int resolvedLevel(const ChartEntry& entry)
+    {
+        const int own = std::atoi(entry.level.c_str());
+        if (!entry.level.empty() && own > 0) {
+            return own;
+        }
+        return tableLevel(entry.musicId, diffIndexOf(entry.difficulty));
+    }
+
     std::vector<SongGroup> buildGroups(const std::vector<ChartEntry>& entries)
     {
         std::vector<SongGroup> groups;
-        std::map<std::string, int> byTitle;
+        std::map<std::string, int> byKey;
+        std::vector<bool> titleIsReal;
         for (int i = 0; i < static_cast<int>(entries.size()); ++i) {
             const ChartEntry& item = entries[static_cast<size_t>(i)];
-            const std::string key = item.title.empty() ? item.displayName : item.title;
-            auto it = byTitle.find(key);
-            if (it == byTitle.end()) {
-                it = byTitle.emplace(key, static_cast<int>(groups.size())).first;
+            const std::string title = item.title.empty() ? item.displayName : item.title;
+            // Group by music id when the file name carries one, so a difficulty
+            // whose sidecar is missing still joins its song instead of showing
+            // up as a separate "<id> <difficulty>" entry.
+            const std::string key = item.musicId > 0 ? ("#" + std::to_string(item.musicId)) : title;
+            auto it = byKey.find(key);
+            if (it == byKey.end()) {
+                it = byKey.emplace(key, static_cast<int>(groups.size())).first;
                 SongGroup group;
-                group.title = key;
+                group.title = title;
                 group.artist = item.artist;
                 group.vocal = item.vocal;
                 group.coverPath = item.coverPath;
                 groups.push_back(group);
+                titleIsReal.push_back(!item.title.empty());
             }
             SongGroup& group = groups[static_cast<size_t>(it->second)];
+            // A real chart title always beats the file-name fallback.
+            if (!item.title.empty() && !titleIsReal[static_cast<size_t>(it->second)]) {
+                group.title = item.title;
+                titleIsReal[static_cast<size_t>(it->second)] = true;
+            }
             if (group.artist.empty()) group.artist = item.artist;
             if (group.vocal.empty()) group.vocal = item.vocal;
             if (group.coverPath.empty()) group.coverPath = item.coverPath;
@@ -549,11 +635,12 @@ namespace
         return it->second;
     }
 
-    // Level text: charts without #PLAYLEVEL show "-" instead of 0.
+    // Level text: the chart's own #PLAYLEVEL / sidecar, else the official table
+    // for its difficulty. Charts with no data at all show "-" instead of 0.
     const char* levelText(const ChartEntry& entry, char* buf, size_t bufSize)
     {
-        const int lv = std::atoi(entry.level.c_str());
-        if (entry.level.empty() || lv <= 0) {
+        const int lv = resolvedLevel(entry);
+        if (lv <= 0) {
             return "-";
         }
         std::snprintf(buf, bufSize, "%d", lv);
@@ -577,6 +664,64 @@ namespace
         }
     }
 } // namespace
+
+void loadMusicLevels(const std::string& path)
+{
+    std::error_code ec;
+    if (path.empty() || !fs::exists(path, ec)) {
+        return;
+    }
+    std::ifstream file(path, std::ios::binary);
+    if (!file) {
+        return;
+    }
+    nlohmann::json doc;
+    try {
+        doc = nlohmann::json::parse(file);
+    } catch (...) {
+        return;
+    }
+
+    // Compact form: { "75": [6, 13, 17, 23, 28], ... } -> easy..master.
+    if (doc.is_object()) {
+        for (auto it = doc.begin(); it != doc.end(); ++it) {
+            const int musicId = std::atoi(it.key().c_str());
+            const nlohmann::json& levels = it.value();
+            if (musicId <= 0 || !levels.is_array()) {
+                continue;
+            }
+            for (size_t d = 0; d < levels.size() && d < static_cast<size_t>(kDiffCount); ++d) {
+                if (levels[d].is_number_integer()) {
+                    storeLevel(musicId, static_cast<int>(d), levels[d].get<int>());
+                }
+            }
+        }
+        return;
+    }
+
+    // Verbatim game data (musicDifficulties.json): one row per difficulty.
+    if (doc.is_array()) {
+        for (const auto& row : doc) {
+            if (!row.is_object()) {
+                continue;
+            }
+            const int musicId = row.value("musicId", 0);
+            const std::string name = toUpper(row.value("musicDifficulty", std::string{}));
+            const int level = row.value("playLevel", 0);
+            for (int d = 0; d < kDiffCount; ++d) {
+                if (name == kDiffNames[d]) {
+                    storeLevel(musicId, d, level);
+                    break;
+                }
+            }
+        }
+    }
+}
+
+int musicLevel(int musicId, const std::string& difficulty)
+{
+    return tableLevel(musicId, diffIndexOf(difficulty));
+}
 
 int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& entries, int& selected,
     int windowW, int windowH, float timeSec)

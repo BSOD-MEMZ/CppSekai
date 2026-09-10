@@ -476,6 +476,10 @@ namespace mmw_preview
         mmw::Renderer effectRenderer{};
         std::vector<mmw::EffectOutputQuad> effectQuads;
         float lastEffectTimeSec{-1000.0f};
+        // Autoplay: the note timeline itself fires the hit effects (preview
+        // behaviour). Off: the host drives them through triggerNoteEffect()
+        // as the player actually hits notes.
+        bool effectsAutoplay{true};
     };
 
     RuntimeState gRuntime{};
@@ -683,6 +687,18 @@ namespace mmw_preview
     [[nodiscard]] float getNoteCenter(const Note& note)
     {
         return laneToLeft(static_cast<float>(note.lane)) + static_cast<float>(note.width) / 2.0f;
+    }
+
+    // Mirrors Effect::getEffectNoteCenter (mmw_port/EffectView.cpp) so a
+    // hit-driven trigger can find its note by the lane coordinate the
+    // judgement engine reports.
+    [[nodiscard]] float getEffectNoteCenter(const mmw::Note& note, bool flip)
+    {
+        if (!flip) {
+            return laneToLeft(static_cast<float>(note.lane)) + static_cast<float>(note.width) / 2.0f;
+        }
+        const int lane = MAX_LANE - note.lane - note.width + 1;
+        return laneToLeft(static_cast<float>(lane)) + static_cast<float>(note.width) / 2.0f;
     }
 
     [[nodiscard]] float getNoteDuration(float noteSpeed)
@@ -1040,6 +1056,61 @@ namespace mmw_preview
                 zIndex,
             });
         }
+    }
+
+    // Host-driven hit effects: replays exactly what EffectView::update() would
+    // have played for the note at this lane position / time, but only when the
+    // player actually hits it (see setEffectAutoplay()).
+    void triggerNoteEffect(float center, float width, float noteTimeSec, int kind, int critical, int flickDir, int friction)
+    {
+        if (!gRuntime.loaded || !gRuntime.effectView.isInitialized() || gRuntime.score.tempoChanges.empty()) {
+            return;
+        }
+
+        // Hold / trace effects need the real note (hold spans, step bounds), so
+        // look it up by lane coordinate + time in the converted effect score.
+        // Plain taps fall back to a synthesized note when no exact match exists.
+        // A second, lane-agnostic pass catches hold steps whose lane moved
+        // since the hold started.
+        const mmw::Note* source = nullptr;
+        for (int pass = 0; pass < 2 && source == nullptr; ++pass) {
+            for (const auto& entry : gRuntime.effectContext.score.notes) {
+                const mmw::Note& candidate = entry.second;
+                if (std::abs(candidate.width - width) > 0.01f) {
+                    continue;
+                }
+                if (pass == 0 && std::abs(getEffectNoteCenter(candidate, gRuntime.config.mirror) - center) > 0.01f) {
+                    continue;
+                }
+                const float candidateTime = static_cast<float>(
+                    accumulateDuration(candidate.tick, TICKS_PER_BEAT, gRuntime.score.tempoChanges));
+                if (std::abs(candidateTime - noteTimeSec) > 0.06f) {
+                    continue;
+                }
+                source = &candidate;
+                break;
+            }
+        }
+
+        if (source == nullptr && (kind == 3 || kind == 4 || kind == 5)) {
+            return; // hold / trace feedback without a matching note
+        }
+
+        mmw::Note synthesized(mmw::NoteType::Tap);
+        if (source == nullptr) {
+            const int lane = static_cast<int>(std::lround(center + 6.0f - width / 2.0f));
+            synthesized.lane = std::clamp(lane, MIN_LANE, MAX_LANE);
+            synthesized.width = std::clamp(static_cast<int>(std::lround(width)), mmw::MIN_NOTE_WIDTH, mmw::MAX_NOTE_WIDTH);
+            synthesized.critical = critical != 0;
+            // FlickDir and mmw::FlickType share their numbering
+            // (0 none / 1 default / 2 left / 3 right).
+            synthesized.flick = static_cast<mmw::FlickType>(flickDir);
+            synthesized.friction = friction != 0;
+        }
+
+        const mmw::Note& note = source != nullptr ? *source : synthesized;
+        gRuntime.effectView.addNoteEffects(
+            note, gRuntime.effectContext, static_cast<float>(gRuntime.effectContext.getTimeAtCurrentTick()));
     }
 
     void pushSpriteQuad(const QuadPoints& positions, TextureId texture, const SpriteRect& sprite, float r, float g, float b, float a, int zIndex)
@@ -2695,7 +2766,9 @@ extern "C"
         }
         gRuntime.lastEffectTimeSec = chartTimeSec;
         gRuntime.effectContext.currentTick = currentTick;
-        gRuntime.effectView.update(gRuntime.effectContext);
+        if (gRuntime.effectsAutoplay) {
+            gRuntime.effectView.update(gRuntime.effectContext);
+        }
         gRuntime.effectView.updateEffects(gRuntime.effectContext, gRuntime.effectCamera, static_cast<float>(currentTime));
 
         gRuntime.renderQuads.clear();
@@ -2766,6 +2839,24 @@ extern "C"
     EMSCRIPTEN_KEEPALIVE int getHudEventCount()
     {
         return static_cast<int>(mmw_preview::gRuntime.hudEvents.size());
+    }
+
+    // Preview (autoplay) effects fire from the note timeline. Player mode turns
+    // this off and drives them through triggerNoteEffect() instead, so a burst
+    // only appears for notes the player actually hit.
+    EMSCRIPTEN_KEEPALIVE void setEffectAutoplay(int enabled)
+    {
+        mmw_preview::gRuntime.effectsAutoplay = enabled != 0;
+    }
+
+    // Plays the note-hit effect for the note at this lane position / time:
+    // center and width are lane coordinates (as reported by the HitEvent
+    // stream), kind is the HitEvent kind, critical / friction are flags and
+    // flickDir is 0 none, 1 default/up, 2 left, 3 right.
+    EMSCRIPTEN_KEEPALIVE void triggerNoteEffect(
+        float center, float width, float noteTimeSec, int kind, int critical, int flickDir, int friction)
+    {
+        mmw_preview::triggerNoteEffect(center, width, noteTimeSec, kind, critical, flickDir, friction);
     }
 
     EMSCRIPTEN_KEEPALIVE void dispose()

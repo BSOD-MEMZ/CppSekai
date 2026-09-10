@@ -74,6 +74,10 @@ struct JudgementStats
     bool lastJudgeCritical = false;
     float lastHitKind = -1.0f;   // HitEvent kind of the last successful player hit
     float lastHitCenter = 0.0f;  // lane coordinate of the last successful player hit
+    float lastHitWidth = 0.0f;   // lane width of the last successful player hit
+    float lastHitTimeSec = -1.0f; // the hit note's own time (HitEvent timeSec)
+    std::uint8_t lastHitFlickDir = 0; // the note's flick direction (FlickDir)
+    bool lastHitFriction = false;
 };
 
 class JudgementEngine

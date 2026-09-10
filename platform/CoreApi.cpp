@@ -17,6 +17,8 @@ extern "C"
     int getQuadCount(void);
     const float* getHitEventBufferPointer(void);
     int getHitEventCount(void);
+    void setEffectAutoplay(int);
+    void triggerNoteEffect(float, float, float, int, int, int, int);
     const char* getMetadataTitle(void);
     const char* getMetadataArtist(void);
     const char* getMetadataDesigner(void);
@@ -97,6 +99,17 @@ const float* getHitEventBuffer()
 int getHitEventCount()
 {
     return ::getHitEventCount();
+}
+
+void setEffectAutoplay(bool enabled)
+{
+    ::setEffectAutoplay(enabled ? 1 : 0);
+}
+
+void triggerNoteEffect(float center, float width, float noteTimeSec, int kind, bool critical, int flickDir,
+    bool friction)
+{
+    ::triggerNoteEffect(center, width, noteTimeSec, kind, critical ? 1 : 0, flickDir, friction ? 1 : 0);
 }
 
 const char* getMetadataTitle()

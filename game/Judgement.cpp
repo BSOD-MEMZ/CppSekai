@@ -161,6 +161,10 @@ HitNote* JudgementEngine::findCandidate(float lanePos, float songTimeSec, float 
     const bool critical = (static_cast<int>(best->flags) & 1) != 0;
     mStats.lastHitKind = best->kind;
     mStats.lastHitCenter = best->center;
+    mStats.lastHitWidth = best->width;
+    mStats.lastHitTimeSec = best->timeSec;
+    mStats.lastHitFlickDir = noteFlickDir(*best);
+    mStats.lastHitFriction = best->kind == 3.0f; // kind 3 = trace / friction
     registerJudge(judge, critical, best->volume);
     return best;
 }
@@ -217,6 +221,14 @@ void JudgementEngine::update(float songTimeSec)
             note.state = 1;
             registerJudge(Judge::Perfect, (static_cast<int>(note.flags) & 1) != 0, note.volume);
             mStats.lastJudgeTimeSec = songTimeSec;
+            // A tick is its own hit: report its own lane so the effect for the
+            // hold step plays there instead of re-using the previous hit.
+            mStats.lastHitKind = note.kind;
+            mStats.lastHitCenter = note.center;
+            mStats.lastHitWidth = note.width;
+            mStats.lastHitTimeSec = note.timeSec;
+            mStats.lastHitFlickDir = noteFlickDir(note);
+            mStats.lastHitFriction = false;
             continue;
         }
 

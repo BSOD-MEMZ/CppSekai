@@ -69,5 +69,7 @@ mkdir -p build
 cp -f "$SDL/bin/SDL2.dll" build/ 2>/dev/null || true
 rm -rf build/assets 2>/dev/null || true
 cp -r assets build/ 2>/dev/null || true
+# Official per-difficulty levels (song select pads; unipjsk charts ship without)
+cp -f music-levels.json build/ 2>/dev/null || true
 
 echo "build OK -> build/cppsekai.exe"

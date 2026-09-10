@@ -14,13 +14,6 @@
 namespace game
 {
 
-struct HitFx
-{
-    float center = 0.0f;   // lane coordinate of the hit
-    float age = 0.0f;      // seconds since the hit
-    float strength = 1.0f; // 1 = judged hit, <1 = plain lane press feedback
-};
-
 struct HudState
 {
     double score = 0.0;
@@ -31,7 +24,7 @@ struct HudState
 };
 
 void drawHud(platform::Renderer& renderer, const HudState& state, float songTimeSec, int windowW, int windowH,
-    const std::vector<HitFx>& hitEffects = {}, float leadInSec = 3.5f, bool dumpJudgeSheet = false);
+    float leadInSec = 3.5f, bool dumpJudgeSheet = false);
 
 // Pause button zone of the life bar, in 1920x1080 virtual HUD coordinates.
 // Clicking it opens the pause dialog.

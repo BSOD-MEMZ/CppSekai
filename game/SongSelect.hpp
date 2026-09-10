@@ -28,6 +28,10 @@ struct ChartEntry
     std::string mv;               // "2D" / "3D" MV tag from the sidecar (optional)
     std::string displayName; // fallback label when the chart has no #TITLE
 
+    // Music id parsed from the file name ("0075_master.sus" -> 75). unipjsk
+    // names every chart that way; 0 when the name has no leading number.
+    int musicId = 0;
+
     // Seconds of silence at the head of the BGM (pjsk's fillerSec). Chart time
     // 0 sits after it, so playback starts from this position in the file.
     // Set from the sidecar JSON ("fillerSec" / "offset"), otherwise detected.
@@ -64,6 +68,18 @@ void applyScores(std::vector<ChartEntry>& entries, const std::map<std::string, S
 // Directory that holds assets/select/*.png (the shuffle / settings buttons,
 // the phone frame and the clear indicators). Call once at startup.
 void setSelectAssetDir(const std::string& dir);
+
+// Official per-difficulty levels, keyed by song id. unipjsk exports have their
+// SUS header stripped (no #TITLE / #PLAYLEVEL, "#DIFFICULTY 0"), so the level
+// has to come from the game's own data. Two formats are accepted:
+//   { "75": [6, 13, 17, 23, 28], ... }   // easy, normal, hard, expert, master
+//   [ { "musicId": 75, "musicDifficulty": "master", "playLevel": 28 }, ... ]
+// The second is the game's own musicDifficulties.json verbatim, so it can be
+// dropped in unchanged. May be called more than once; later entries win.
+void loadMusicLevels(const std::string& path);
+
+// Level of `difficulty` ("EASY".."MASTER") for a song id, 0 when unknown.
+int musicLevel(int musicId, const std::string& difficulty);
 
 // Recursively collects *.sus under dir (bounded depth). Entries are sorted
 // by title then file name.

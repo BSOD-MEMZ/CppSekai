@@ -41,6 +41,17 @@ int render(float chartTimeSec);
 const float* getQuadBuffer();
 int getQuadCount();
 
+// Preview mode fires note-hit effects from the chart timeline (autoplay).
+// Player mode turns that off and calls triggerNoteEffect() per judged hit.
+void setEffectAutoplay(bool enabled);
+
+// Plays the core's note-hit effect (the game's own particle system) for the
+// note at this lane position: center / width are lane coordinates as reported
+// by the HitEvent stream, noteTimeSec is that event's time, kind is the
+// HitEvent kind, flickDir is 0 none / 1 up / 2 left / 3 right.
+void triggerNoteEffect(float center, float width, float noteTimeSec, int kind, bool critical, int flickDir,
+    bool friction);
+
 // Packed HitEvents (7 floats per event) for the judgement engine.
 const float* getHitEventBuffer();
 int getHitEventCount();

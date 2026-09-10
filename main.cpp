@@ -106,7 +106,8 @@ namespace
             "                [--screenshot <png>] [--pjsk-font]\n"
             "                [--title <text>] [--lyricist <text>] [--composer <text>]\n"
             "                [--arranger <text>] [--vocal <text>] [--difficulty <text>]\n"
-            "                [--width <px>] [--height <px>] [--window <mode>] [--fps <n>]\n\n"
+            "                [--width <px>] [--height <px>] [--window <mode>] [--fps <n>]\n"
+            "                [--judge-sheet] [--test-hits] [--show-pause-dialog]\n\n"
             "No --sus: opens the song select screen (scans --charts, then charts/ next\n"
             "to the exe, then the charts/ of the parent folder).\n"
             "--filler: seconds of silence at the head of the BGM (auto-detected when\n"
@@ -118,6 +119,8 @@ namespace
             "       values (e.g. 30/60) reduce GPU/CPU load and power draw.\n"
             "Keyboard: Z S X D C V G B H N J M = 12 lanes\n"
             "          SPACE = pause, F = fullscreen, H = debug panel, ESC = back/quit\n"
+            "--test-hits: fire the hit effects for upcoming notes without input (debug).\n"
+            "--judge-frame <n>: freeze the judge text on animation frame n (debug).\n"
             "Mouse   : left/right button = tap a lane (hold = long note),\n"
             "          drag up/left/right = flick (direction must match the\n"
             "          note arrow; see the strict-Flick setting). Right button\n"
@@ -305,6 +308,8 @@ int main(int argc, char** argv)
     double screenshotTimeSec = 4.0;
     double leadIn = 6.0; // intro card (4s) + playfield fade-in, then the music
     bool dumpJudgeSheet = false;
+    bool testHits = false; // debug: fire hit effects without player input
+    int judgeAnimFrame = -1; // debug: freeze the judge text on this animation frame
     bool showPauseDialogShot = false; // headless check: force the pause dialog open
     int winWidth = 1280;
     int winHeight = 720;
@@ -357,6 +362,10 @@ int main(int argc, char** argv)
             leadIn = std::atof(utf8Argv[++i]);
         } else if (arg == "--judge-sheet") {
             dumpJudgeSheet = true;
+        } else if (arg == "--test-hits") {
+            testHits = true;
+        } else if (arg == "--judge-frame" && i + 1 < utf8Argc) {
+            judgeAnimFrame = std::atoi(utf8Argv[++i]);
         } else if (arg == "--show-pause-dialog") {
             showPauseDialogShot = true;
         } else if (arg == "--title" && i + 1 < utf8Argc) {
@@ -504,9 +513,11 @@ int main(int argc, char** argv)
         return 1;
     }
     bootLog("assets");
-    // Autoplay keeps the core's own note-hit effect timeline; player mode
-    // uses judgement-driven effects instead.
-    renderer.setDrawCoreEffects(autoPlay);
+    // Both modes draw the core's own note-hit effects (assets/mmw/effect.png
+    // driven by the embedded pjsk effect definitions). Autoplay lets the chart
+    // timeline fire them; player mode turns that off and fires them from
+    // game/Judgement, so a burst only shows for notes that were actually hit.
+    renderer.setDrawCoreEffects(true);
 
     if (!renderer.loadHud(overlayDir, error)) {
         std::fprintf(stderr, "warning: HUD load failed: %s\n", error.c_str());
@@ -523,6 +534,9 @@ int main(int argc, char** argv)
     // ------------------------------------------------------------------
     core_api::init();
     core_api::resize(windowW, windowH, 1.0f);
+    // Player mode drives the core's hit effects from the judgement engine
+    // instead of letting the chart timeline fire them (autoplay).
+    core_api::setEffectAutoplay(autoPlay);
     bootLog("chart core");
 
     // ------------------------------------------------------------------
@@ -548,6 +562,20 @@ int main(int argc, char** argv)
     // Play results (cleared / full combo) + song select UI assets.
     game::setSelectAssetDir(baseDir);
     std::map<std::string, game::ScoreRecord> scores = game::loadScores(scoresPath);
+
+    // Official per-difficulty levels (see game::loadMusicLevels). unipjsk
+    // scores ship with an empty "#PLAYLEVEL", so without this the song select
+    // can only show "-" on every difficulty pad.
+    for (const std::string& candidate :
+        {baseDir + "music-levels.json", baseDir + "..\\music-levels.json",
+            std::string("music-levels.json")}) {
+        std::ifstream probe(candidate, std::ios::binary);
+        if (probe.good()) {
+            probe.close();
+            game::loadMusicLevels(candidate);
+            break;
+        }
+    }
 
     // ------------------------------------------------------------------
     // ImGui
@@ -669,7 +697,6 @@ int main(int argc, char** argv)
 
     // HUD / hit feedback state (shared with the input handlers below).
     game::HudState hudState;
-    std::vector<game::HitFx> hitEffects;
     float lastSeenJudgeTime = -100.0f;
     bool wantScreenshot = false;
     // Set by the mouse handler when the HUD pause button was clicked, so the
@@ -861,7 +888,6 @@ int main(int argc, char** argv)
         track.lastMoveTimeSec = SDL_GetTicks() / 1000.0;
         touches.push_back(track);
         lanePress[static_cast<size_t>(track.laneIndex)] = 1.0f;
-        hitEffects.push_back(game::HitFx{lanePos, 0.0f, 0.4f});
         const double songTime = audio.hasMusic() ? audio.songTime() : wallSongTime();
         const game::Judge result = judgement.tap(track.lanePos, static_cast<float>(songTime), false, 0.8f);
         if (result != game::Judge::None) {
@@ -1003,8 +1029,6 @@ int main(int argc, char** argv)
                             if (event.key.keysym.sym == kLaneKeys[lane]) {
                                 keyHeld[lane] = true;
                                 lanePress[static_cast<size_t>(lane)] = 1.0f;
-                                // Feedback even when nothing is there to hit.
-                                hitEffects.push_back(game::HitFx{keyLanePos(lane), 0.0f, 0.4f});
                                 const game::Judge result =
                                     judgement.tap(keyLanePos(lane), static_cast<float>(songTime), false, 0.5f);
                                 game::Judge flickResult = game::Judge::None;
@@ -1205,6 +1229,32 @@ int main(int argc, char** argv)
             judgement.setHoldLanes(holdLanes);
             judgement.update(static_cast<float>(songTime));
 
+            // Debug (`--test-hits`): tap every upcoming note through the normal
+            // judgement path, so the whole hit-effect chain can be checked in a
+            // headless screenshot (where no input can be injected).
+            if (testHits && !autoPlay) {
+                static int testCursor = 0;
+                static double testPrevTime = -100.0;
+                if (songTime + 0.3 < testPrevTime) {
+                    testCursor = 0; // seeked back / restarted
+                }
+                testPrevTime = songTime;
+                const float* events = core_api::getHitEventBuffer();
+                const int eventCount = core_api::getHitEventCount();
+                while (testCursor < eventCount && events[testCursor * 7] <= songTime + 0.02) {
+                    const float* event = events + testCursor * 7;
+                    const int kind = static_cast<int>(std::lround(event[3]));
+                    const int flickDir = (static_cast<int>(event[4]) >> 1) & 3;
+                    if (kind == 0 || kind == 1) {
+                        judgement.tap(event[1], static_cast<float>(songTime), false, 0.8f);
+                    } else if (kind == 2) {
+                        judgement.flick(event[1], static_cast<float>(songTime),
+                            flickDir == 0 ? game::FlickUp : static_cast<game::FlickDir>(flickDir), 0.8f);
+                    }
+                    ++testCursor;
+                }
+            }
+
             // Record CLEAR / FULL COMBO once the song is played to the end.
             if (!session.scoreRecorded && trackDurationSec > 1.0 && songTime >= trackDurationSec - 0.25) {
                 session.scoreRecorded = true;
@@ -1274,16 +1324,24 @@ int main(int argc, char** argv)
                 hudState.lastJudge = stats.lastJudge;
                 hudState.lastJudgeAtSec = stats.lastJudgeTimeSec;
                 if (stats.lastJudge != game::Judge::Miss && stats.lastJudge != game::Judge::None) {
-                    hitEffects.push_back(game::HitFx{stats.lastHitCenter, 0.0f, 1.0f});
+                    // Original hit effect: the chart core's own particle system,
+                    // played for the note that was just judged (same sprites and
+                    // timings the autoplay preview uses).
+                    core_api::triggerNoteEffect(stats.lastHitCenter, stats.lastHitWidth, stats.lastHitTimeSec,
+                        static_cast<int>(std::lround(stats.lastHitKind)), stats.lastJudgeCritical,
+                        static_cast<int>(stats.lastHitFlickDir), stats.lastHitFriction);
                 }
             }
-            for (auto& fx : hitEffects) {
-                fx.age += frameDelta;
-            }
-            hitEffects.erase(std::remove_if(hitEffects.begin(), hitEffects.end(),
-                                 [](const game::HitFx& fx) { return fx.age > 0.35f; }),
-                hitEffects.end());
             hudState.lifeRatio = 1.0f; // TODO: wire to real life calculation
+
+            // Debug (`--judge-frame N`): freeze the judge text on frame N of
+            // its 60fps pop-in so the animation can be checked from a headless
+            // screenshot, where no input can be injected.
+            if (judgeAnimFrame >= 0) {
+                hudState.lastJudge = game::Judge::Perfect;
+                hudState.lastJudgeAtSec =
+                    static_cast<float>(songTime) - static_cast<float>(judgeAnimFrame) / 60.0f;
+            }
 
             // ----------------------------------------------------------
             // Render
@@ -1298,7 +1356,7 @@ int main(int argc, char** argv)
             renderer.renderFrame(quads, quadCount, 0.85f, visibility);
 
             if (visibility > 0.0f) {
-                game::drawHud(renderer, hudState, static_cast<float>(songTime), windowW, windowH, hitEffects,
+                game::drawHud(renderer, hudState, static_cast<float>(songTime), windowW, windowH,
                     static_cast<float>(leadInSec), dumpJudgeSheet);
             }
             game::drawIntro(renderer, session.intro, outputTime, windowW, windowH);

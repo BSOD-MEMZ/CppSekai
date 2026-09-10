@@ -48,16 +48,45 @@ else
     echo "[setup] assets already present"
 fi
 
+# --- official per-difficulty levels (song select pads) ----------------------
+# unipjsk SUS exports strip #PLAYLEVEL, so the numbers come from the game's
+# own musicDifficulties table, compacted to {"<musicId>":[e,n,h,ex,m]}.
+if [ ! -f "music-levels.json" ]; then
+    echo "[setup] downloading official music levels..."
+    mkdir -p assets/music
+    curl -sL --max-time 300 -o assets/music/musicDifficulties.json \
+        "https://viewer-api.unipjsk.com/api/master/1/musicDifficulties"
+    python - <<'PY'
+import json, collections
+order = ["easy", "normal", "hard", "expert", "master"]
+rows = json.load(open("assets/music/musicDifficulties.json", encoding="utf-8"))
+out = collections.defaultdict(lambda: [0] * 5)
+for r in rows:
+    d = r.get("musicDifficulty")
+    if d in order:
+        out[int(r["musicId"])][order.index(d)] = int(r.get("playLevel", 0))
+body = ",\n".join('"%d":[%s]' % (k, ",".join(map(str, out[k]))) for k in sorted(out))
+open("music-levels.json", "w", encoding="utf-8", newline="\n").write("{\n" + body + "\n}\n")
+print("[setup] music-levels.json:", len(out), "songs")
+PY
+else
+    echo "[setup] music-levels.json already present"
+fi
+
 # --- optional: sample charts + BGM from unipjsk ------------------------------
 if [ "$1" == "--charts" ]; then
     mkdir -p charts
+    # Every difficulty, so the song select shows all five pads. The score files
+    # are small; the BGM/jacket are shared per song.
     for id in 0075 0127; do
-        [ -f "charts/${id}_master.sus" ] || curl -s --max-time 60 -o "charts/${id}_master.sus" \
-            "https://assets.unipjsk.com/startapp/music/music_score/${id}_01/master"
+        for diff in easy normal hard expert master; do
+            [ -f "charts/${id}_${diff}.sus" ] || curl -s --max-time 60 -o "charts/${id}_${diff}.sus" \
+                "https://assets.unipjsk.com/startapp/music/music_score/${id}_01/${diff}"
+        done
         [ -f "charts/${id}.mp3" ] || curl -s --max-time 300 -o "charts/${id}.mp3" \
             "https://assets.unipjsk.com/ondemand/music/long/se_${id}_01/se_${id}_01.mp3"
     done
-    echo "[setup] charts downloaded (0075 / 0127)"
+    echo "[setup] charts downloaded (0075 / 0127, all difficulties)"
 fi
 
 echo "[setup] done. Next: bash build.sh"

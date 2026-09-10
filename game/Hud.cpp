@@ -4,14 +4,12 @@
 
 #include <algorithm>
 #include <cmath>
-#include <vector>
 
 namespace game
 {
 namespace
 {
     constexpr float SCORE_ROOT_SCALE = 1.5f;
-    constexpr float JUDGE_LINE_Y = 1.0f; // fake-perspective height of the judge line
 
     constexpr float scoreX(float v) { return 36.0f + v * SCORE_ROOT_SCALE; }
     constexpr float scoreY(float v) { return -3.0f + v * SCORE_ROOT_SCALE; }
@@ -38,8 +36,9 @@ HudRect lifePauseRect()
 }
 
 void drawHud(platform::Renderer& renderer, const HudState& state, float songTimeSec, int windowW, int windowH,
-    const std::vector<HitFx>& hitEffects, float leadInSec, bool dumpJudgeSheet)
+    float leadInSec, bool dumpJudgeSheet)
 {
+    (void)leadInSec;
     // Background list: above the GL frame, but below pjsk dialog cards so
     // pause dialogs / panels can dim and cover the HUD.
     ImDrawList* drawList = ImGui::GetBackgroundDrawList();
@@ -73,31 +72,12 @@ void drawHud(platform::Renderer& renderer, const HudState& state, float songTime
     // ------------------------------------------------------------------
 
     // ------------------------------------------------------------------
-    // Judgement hit effects - spawned by real hits and by lane presses
-    // (a press without a note still flashes the judge line).
+    // Judgement hit effects are gone from the HUD: the chart core's own
+    // particle system (assets/mmw/effect.png + the embedded pjsk effect
+    // definitions) draws them now, triggered by game/Judgement through
+    // core_api::triggerNoteEffect(). That is the original effect 1:1 -
+    // same spritesheet frames, timings and additive passes.
     // ------------------------------------------------------------------
-    for (const HitFx& fx : hitEffects) {
-        const platform::Renderer::HudSprite* sprite = renderer.hud("effect_hit");
-        if (sprite == nullptr || sprite->id == 0) {
-            break;
-        }
-        const float t = std::clamp(fx.age / 0.35f, 0.0f, 1.0f);
-        const float alpha = (1.0f - t) * std::clamp(fx.strength, 0.0f, 1.0f);
-        const float grow = (1.0f + t * 0.6f) * (0.55f + 0.45f * std::clamp(fx.strength, 0.0f, 1.0f));
-        float sx = 0.0f, sy = 0.0f, sx2 = 0.0f, sy2 = 0.0f;
-        // The playfield is a fake perspective: a lane coordinate x at
-        // height y is drawn at world (x * y, y); y = 1 is the judge line.
-        renderer.worldToScreen((fx.center - 1.1f * grow) * JUDGE_LINE_Y, JUDGE_LINE_Y, sx, sy);
-        renderer.worldToScreen((fx.center + 1.1f * grow) * JUDGE_LINE_Y, JUDGE_LINE_Y, sx2, sy2);
-        // Center the effect on the judge line; both corners above share the
-        // same world y, so the square height is derived from the width.
-        const float halfH = (sx2 - sx) * 0.5f;
-        const ImU32 tint = IM_COL32(255, 255, 255, static_cast<int>(alpha * 255.0f));
-        drawList->AddImage(
-            reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(sprite->id)),
-            ImVec2(sx, sy - halfH), ImVec2(sx2, sy + halfH),
-            ImVec2(0, 0), ImVec2(1, 1), tint);
-    }
 
     // ------------------------------------------------------------------
     // Score panel (top-left)
@@ -214,7 +194,18 @@ void drawHud(platform::Renderer& renderer, const HudState& state, float songTime
     // ------------------------------------------------------------------
     // Judge text. Official sprites: 1=PERFECT 2=GREAT 3=GOOD 4=BAD
     // 5=MISS 6=AUTO. Only shown on an actual judge; miss uses sprite 5.
+    //
+    // 1:1 port of the upstream overlay (native/src/mmw_overlay_player.cpp):
+    // the text stays invisible until frame 2, pops in over frames 2..5 with a
+    // quartic ease (rawScale 0 -> 2/3) and then holds scale 1 (rawScale * 1.5)
+    // for the rest of the 0.24s judge window. Base size 310x81 centred at
+    // (960, 667.5) in the 1920x1080 HUD space.
     // ------------------------------------------------------------------
+    constexpr float kJudgeVisibleSec = 0.24f;
+    constexpr float kJudgeBaseH = 81.0f; // sprite height at scale 1 (PERFECT is 310x81)
+    constexpr float kJudgeCenterX = 960.0f;
+    constexpr float kJudgeCenterY = 667.5f;
+
     const float since = songTimeSec - state.lastJudgeAtSec;
     int judgeSprite = 0;
     if (state.lastJudge == game::Judge::Perfect) judgeSprite = 1;
@@ -222,16 +213,27 @@ void drawHud(platform::Renderer& renderer, const HudState& state, float songTime
     else if (state.lastJudge == game::Judge::Good) judgeSprite = 3;
     else if (state.lastJudge == game::Judge::Miss) judgeSprite = 5;
 
-    if (judgeSprite > 0 && since >= 0.0f && since < 0.5f) {
-        const std::string key = "judge_" + std::to_string(judgeSprite);
-        const platform::Renderer::HudSprite* sprite = renderer.hud(key);
-        if (sprite != nullptr && sprite->height > 0) {
-            const float h = 60.0f;
-            const float w = h * (static_cast<float>(sprite->width) / static_cast<float>(sprite->height));
-            const float alpha = since < 0.35f ? 1.0f : 1.0f - (since - 0.35f) / 0.15f;
-            const float pop = since < 0.08f ? 1.18f : 1.0f;
-            img(key, 960.0f - w * 0.5f * pop, 560.0f - h * 0.5f * pop, w * pop, h * pop, alpha);
+    if (judgeSprite > 0 && since >= 0.0f && since <= kJudgeVisibleSec) {
+        const float progressFrames = since * 60.0f;
+        float alpha = 1.0f;
+        float rawScale = 2.0f / 3.0f;
+        if (progressFrames < 2.0f) {
+            alpha = 0.0f;
+        } else if (progressFrames < 5.0f) {
+            const float t = -1.45f + progressFrames / 4.0f;
+            rawScale = (2.0f / 3.0f) - t * t * t * t * (2.0f / 3.0f);
         }
+        const float scale = std::max(0.01f, rawScale * 1.5f);
+        const std::string key = "judge_" + std::to_string(judgeSprite);
+        // The upstream constant is PERFECT's own size; every other judge sprite
+        // shares the height and keeps its own aspect.
+        const platform::Renderer::HudSprite* sprite = renderer.hud(key);
+        const float aspect = sprite != nullptr && sprite->height > 0
+            ? static_cast<float>(sprite->width) / static_cast<float>(sprite->height)
+            : 310.0f / 81.0f;
+        const float h = kJudgeBaseH * scale;
+        const float w = h * aspect;
+        img(key, kJudgeCenterX - w * 0.5f, kJudgeCenterY - h * 0.5f, w, h, alpha);
     }
 
     if (dumpJudgeSheet) {
