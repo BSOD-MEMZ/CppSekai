@@ -48,7 +48,12 @@ struct HitNote
     float endTimeSec = -1.0f;
     float volume = 1.0f;
 
-    std::uint8_t state = 0; // 0 pending, 1 judged
+    std::uint8_t state = 0; // 0 pending, 1 hit, 2 missed
+    // Set for the note the chart core emits at a hold's end time (SUS
+    // NoteType::HoldEnd). It looks like a plain tap in the HitEvent stream,
+    // but pjsk judges it by *releasing* the lane at the tail, so it must not
+    // go through the plain auto-miss path.
+    bool holdTail = false;
 };
 
 struct JudgementWindows
@@ -59,6 +64,20 @@ struct JudgementWindows
     float missAfterMs = 180.0f;
 };
 
+// Life pool. pjsk starts every live at 1000 life (skills can push it to
+// 2000, which we do not model). Judgement costs, from the official table:
+// MISS -80, a hold broken mid-way -40 (BAD -50 is unused - the engine has no
+// BAD judgement).
+constexpr float kMaxLife = 1000.0f;
+
+// Score constants ported from sekai-mmw-preview-web's overlay player
+// (native/src/mmw_overlay_player.cpp). The score of a note is
+//   (TEAM_POWER / weightedNoteCount) * 4 * noteWeight * levelFactor * comboFactor
+// scaled by the judgement multiplier (PERFECT 1.0 / GREAT 0.7 / GOOD 0.5),
+// with comboFactor growing by 0.01 per 100 combo up to 1.1.
+constexpr double kTeamPower = 250000.0;
+constexpr float kDefaultChartRating = 26.0f;
+
 struct JudgementStats
 {
     int perfect = 0;
@@ -68,6 +87,9 @@ struct JudgementStats
     int combo = 0;
     int maxCombo = 0;
     double score = 0.0;
+    float life = kMaxLife;
+    int holdTails = 0;  // hold tails judged by releasing / holding through
+    int holdBreaks = 0; // holds let go too early (mid-hold MISS)
 
     Judge lastJudge = Judge::None;
     float lastJudgeTimeSec = -100.0f;
@@ -112,6 +134,19 @@ class JudgementEngine
     [[nodiscard]] const JudgementWindows& windows() const { return mWindows; }
     void setWindows(const JudgementWindows& windows) { mWindows = windows; }
 
+    // Chart level, used by the score formula's levelFactor (the upstream
+    // overlay player hard-codes 26; we use the song's real difficulty level).
+    void setChartRating(float rating)
+    {
+        if (rating > 0.0f) {
+            mChartRating = rating;
+        }
+    }
+    [[nodiscard]] float chartRating() const { return mChartRating; }
+
+    // Life in 0..1, for the HUD's life bar.
+    [[nodiscard]] float lifeRatio() const { return mStats.life / kMaxLife; }
+
     // Strict flick validation: on (default) a flick needs a matching swipe
     // direction and taps never clear flicks; off restores the lenient
     // skeleton behavior (any flick gesture / tap clears any flick note).
@@ -126,11 +161,18 @@ class JudgementEngine
   private:
     struct ActiveHold
     {
-        std::size_t noteIndex = 0;
+        std::size_t noteIndex = 0;   // the kind 5 marker
+        std::size_t startIndex = static_cast<std::size_t>(-1); // the start tap
+        float startTimeSec = 0.0f;
         float endTimeSec = 0.0f;
         float center = 0.0f;
         float width = 1.0f;
         bool broken = false;
+        // Tail bookkeeping: kind 5 markers carry the hold's end time, while
+        // the *scoreable* end note sits at that same time as a 0/1/2/3 event.
+        std::size_t tailIndex = static_cast<std::size_t>(-1);
+        bool released = false;
+        float releaseTimeSec = -1.0f;
     };
 
     std::vector<HitNote> mNotes;
@@ -144,11 +186,41 @@ class JudgementEngine
     JudgementStats mStats;
     bool mStrictFlick = true;
 
-    Judge registerJudge(Judge judge, bool critical, float volume);
-    void registerMiss(float songTimeSec);
+    // Score model (see kTeamPower above).
+    float mChartRating = kDefaultChartRating;
+    double mWeightedNoteCount = 1.0;
+    double mComboFactor = 1.0;
+
+    Judge registerJudge(Judge judge, bool critical, float volume, float kind);
+    void registerMiss(float songTimeSec, float lifeCost);
+    double scoreDeltaFor(float kind, bool critical) const;
+    void judgeHoldTail(ActiveHold& hold, Judge judge, float songTimeSec);
     HitNote* findCandidate(float lanePos, float songTimeSec, float margin, bool wantFlick,
         FlickDir flickDir = FlickNone);
     bool laneCovers(const HitNote& note, float lanePos, float margin) const;
+    bool laneHeld(const ActiveHold& hold) const;
+
+    // The score weight of one note, mirroring the upstream getHudWeight().
+    static float hudWeight(float kind, bool critical)
+    {
+        switch (static_cast<int>(kind)) {
+            case 2: return critical ? 3.0f : 1.0f;  // flick
+            case 3: return critical ? 0.2f : 0.1f;  // trace
+            case 4: return critical ? 0.2f : 0.1f;  // hold tick
+            case 0: case 1: return critical ? 2.0f : 1.0f; // tap / critical tap
+            default: return 0.0f;                   // kind 5 = hold marker (not scored)
+        }
+    }
+
+    static double judgeMultiplier(Judge judge)
+    {
+        switch (judge) {
+            case Judge::Perfect: return 1.0;
+            case Judge::Great: return 0.7;
+            case Judge::Good: return 0.5;
+            default: return 0.0;
+        }
+    }
 
     // flags packing (see mmw_preview.cpp): bit0 = critical, bits 1-2 = FlickDir.
     static std::uint8_t noteFlickDir(const HitNote& note)

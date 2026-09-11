@@ -49,6 +49,16 @@ bool AudioEngine::loadMusic(const std::string& path, std::string& outError)
         outError = "audio engine not initialized";
         return false;
     }
+    // Release the previous track first. miniaudio zeroes the ma_sound inside
+    // ma_sound_init_from_file, so re-initialising a live sound (give up ->
+    // pick another song / retry) drops its resource-manager entry on the
+    // floor: the engine then walks a corrupt list and the process hangs.
+    if (mMusicLoaded) {
+        ma_sound_stop(&mMusic);
+        ma_sound_uninit(&mMusic);
+        mMusicLoaded = false;
+        mMusicStarted = false;
+    }
     const ma_result result = ma_sound_init_from_file(&mEngine, path.c_str(), MA_SOUND_FLAG_DECODE, nullptr, nullptr, &mMusic);
     if (result != MA_SUCCESS) {
         outError = std::string("failed to load music: ") + path;

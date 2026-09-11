@@ -647,20 +647,26 @@ namespace
         return buf;
     }
 
-    // One slot of the indicate_back 5-diamond strip, tinted per difficulty.
-    void addDiamondSlot(ImDrawList* dl, GLuint backTex, const ImVec2& center, float size, int diff,
-        bool present, ImU32 color)
+    // One slot of the 5-diamond difficulty strip: indicate_back_new.png with
+    // the clear / full-combo mark drawn on top of it (both badges are the same
+    // 38x38 diamond, so they cover the backing sprite exactly).
+    void addDiamondSlot(ImDrawList* dl, GLuint backTex, const ImVec2& center, float size, bool present,
+        GLuint badgeTex)
     {
         const ImVec2 p0(center.x - size * 0.5f, center.y - size * 0.5f);
         const ImVec2 p1(center.x + size * 0.5f, center.y + size * 0.5f);
         if (backTex != 0) {
-            const float u0 = (static_cast<float>(diff) + 0.06f) / 5.0f;
-            const float u1 = (static_cast<float>(diff) + 0.94f) / 5.0f;
-            const ImU32 tint = present ? color : IM_COL32(58, 58, 82, 255);
-            dl->AddImageRounded(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(backTex)),
-                p0, p1, ImVec2(u0, 0.08f), ImVec2(u1, 0.92f), tint, 0.0f);
+            // Available difficulties keep the sprite's own colours, the ones
+            // the song does not have are dimmed back.
+            const ImU32 tint = present ? IM_COL32(255, 255, 255, 255) : IM_COL32(255, 255, 255, 84);
+            dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(backTex)),
+                p0, p1, ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), tint);
         } else {
-            addDiamond(dl, center, size * 0.5f, present ? color : IM_COL32(58, 58, 82, 255));
+            addDiamond(dl, center, size * 0.5f, present ? IM_COL32(120, 126, 156, 255) : IM_COL32(58, 58, 82, 255));
+        }
+        if (badgeTex != 0 && present) {
+            dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(badgeTex)),
+                p0, p1, ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), IM_COL32(255, 255, 255, 255));
         }
     }
 } // namespace
@@ -867,13 +873,29 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         ImGui::PopFont();
     }
 
-    const GLuint backTex = selectTex(renderer, "indicate_back");
+    const GLuint backTex = selectTex(renderer, "indicate_back_new");
+    const GLuint clearTex = selectTex(renderer, "clear_indicate");
+    const GLuint fcTex = selectTex(renderer, "fullcombo_indicate");
 
     for (const int gi : visible) {
         const SongGroup& g = groups[static_cast<size_t>(gi)];
         const bool isSel = gi == groupIndex;
         const float rowH = (isSel ? 128.0f : 84.0f) * k;
         const float gap = 9.0f * k;
+        // The leading level indicator follows the selected difficulty instead
+        // of always being pink.
+        const ImU32 diffColor = kDiffColors[static_cast<size_t>(std::clamp(diffIndex, 0, kDiffCount - 1))];
+        // Clear / full-combo mark of one diamond slot (0 = nothing to draw).
+        const auto badgeFor = [&](int d) -> GLuint {
+            if (d < 0 || d >= kDiffCount || g.idx[d] < 0) {
+                return 0;
+            }
+            const ChartEntry& e = entries[static_cast<size_t>(g.idx[d])];
+            if (e.fullCombo) {
+                return fcTex;
+            }
+            return e.cleared ? clearTex : 0;
+        };
 
         ImGui::SetCursorScreenPos(ImVec2(rowX, rowY));
         ImGui::PushID(gi);
@@ -896,19 +918,21 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         const ChartEntry* rowEntry = rowIdx >= 0 ? &entries[static_cast<size_t>(rowIdx)] : nullptr;
 
         if (isSel) {
-            // Expanded white card with the level badge, credits and diamonds.
-            listDl->AddRectFilled(p0, p1, IM_COL32(250, 250, 253, 242), 10.0f * k);
-            listDl->AddRect(p0, p1, IM_COL32(120, 130, 180, 90), 10.0f * k, 0, 2.0f);
+            // Expanded card: a translucent white rounded rectangle over the
+            // list background, with the level badge, credits and diamonds.
+            listDl->AddRectFilled(p0, p1, IM_COL32(255, 255, 255, 190), 10.0f * k);
+            listDl->AddRect(p0, p1, IM_COL32(255, 255, 255, 120), 10.0f * k, 0, 2.0f);
 
-            // Pink level badge: "歌曲等级" tag + big number.
+            // Level badge: "歌曲等级" tag + big number, both in the colour of
+            // the currently selected difficulty.
             const float badgeL = p0.x + 14.0f * k;
             const float tagY = p0.y + 20.0f * k;
             listDl->AddRectFilled(ImVec2(badgeL, tagY), ImVec2(badgeL + 62.0f * k, tagY + 22.0f * k),
-                IM_COL32(255, 90, 141, 255), 4.0f * k);
+                diffColor, 4.0f * k);
             addTextCentered(listDl, body, 13.0f * k, ImVec2(badgeL + 31.0f * k, tagY + 11.0f * k), white, "歌曲等级");
             if (rowEntry != nullptr && title != nullptr) {
                 char levelBuf[16];
-                listDl->AddText(title, 34.0f * k, ImVec2(badgeL, tagY + 30.0f * k), IM_COL32(70, 70, 88, 255),
+                listDl->AddText(title, 34.0f * k, ImVec2(badgeL, tagY + 30.0f * k), diffColor,
                     levelText(*rowEntry, levelBuf, sizeof(levelBuf)));
             }
 
@@ -927,39 +951,21 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             float dx = textL + 4.0f * k;
             const float dy = p1.y - 18.0f * k;
             for (int d = 0; d < kDiffCount; ++d) {
-                addDiamondSlot(listDl, backTex, ImVec2(dx, dy), 20.0f * k, d, g.idx[d] >= 0, kDiffColors[d]);
+                addDiamondSlot(listDl, backTex, ImVec2(dx, dy), 20.0f * k, g.idx[d] >= 0, badgeFor(d));
                 dx += 20.0f * k;
             }
-            // Clear / Full Combo badges (right end of the card).
-            if (rowEntry != nullptr) {
-                const float ib = 34.0f * k;
-                float bx = p1.x - ib - 12.0f * k;
-                if (rowEntry->cleared) {
-                    const GLuint tex = selectTex(renderer, "clear_indicate");
-                    if (tex != 0) {
-                        listDl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(tex)),
-                            ImVec2(bx, dy - ib * 0.5f), ImVec2(bx + ib, dy + ib * 0.5f));
-                    }
-                    bx -= ib + 6.0f * k;
-                }
-                if (rowEntry->fullCombo) {
-                    const GLuint tex = selectTex(renderer, "fullcombo_indicate");
-                    if (tex != 0) {
-                        listDl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(tex)),
-                            ImVec2(bx, dy - ib * 0.5f), ImVec2(bx + ib, dy + ib * 0.5f));
-                    }
-                }
-            }
         } else {
-            // Compact dark row: pink level circle, jacket thumb, title, diamonds.
-            listDl->AddRectFilled(p0, p1, IM_COL32(20, 20, 44, 150), 8.0f * k);
+            // Compact row: no card fill - the entries are separated by a thin
+            // translucent rule, like the reference UI.
             if (ImGui::IsItemHovered()) {
-                listDl->AddRectFilled(p0, p1, IM_COL32(255, 255, 255, 16), 8.0f * k);
+                listDl->AddRectFilled(p0, p1, IM_COL32(255, 255, 255, 20), 8.0f * k);
             }
+            listDl->AddLine(ImVec2(p0.x, p1.y + gap * 0.5f), ImVec2(p1.x, p1.y + gap * 0.5f),
+                IM_COL32(255, 255, 255, 48), 1.0f * k);
 
             const float cy = (p0.y + p1.y) * 0.5f;
             char levelBuf[16];
-            listDl->AddCircleFilled(ImVec2(p0.x + 30.0f * k, cy), 24.0f * k, IM_COL32(255, 90, 141, 255));
+            listDl->AddCircleFilled(ImVec2(p0.x + 30.0f * k, cy), 24.0f * k, diffColor);
             addTextCentered(listDl, body, 20.0f * k, ImVec2(p0.x + 30.0f * k, cy - 1.0f * k), white,
                 rowEntry != nullptr ? levelText(*rowEntry, levelBuf, sizeof(levelBuf)) : "-");
 
@@ -972,29 +978,8 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             listDl->AddText(body, 20.0f * k, ImVec2(textL, cy - 26.0f * k), white, g.title.c_str());
             float dx = textL + 4.0f * k;
             for (int d = 0; d < kDiffCount; ++d) {
-                addDiamondSlot(listDl, backTex, ImVec2(dx, cy + 6.0f * k), 18.0f * k, d, g.idx[d] >= 0, kDiffColors[d]);
+                addDiamondSlot(listDl, backTex, ImVec2(dx, cy + 6.0f * k), 18.0f * k, g.idx[d] >= 0, badgeFor(d));
                 dx += 18.0f * k;
-            }
-
-            // Clear / Full Combo badges (right edge, vertically centered).
-            if (rowEntry != nullptr && (rowEntry->cleared || rowEntry->fullCombo)) {
-                const float ib = 30.0f * k;
-                float bx = p1.x - ib - 12.0f * k;
-                if (rowEntry->cleared) {
-                    const GLuint tex = selectTex(renderer, "clear_indicate");
-                    if (tex != 0) {
-                        listDl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(tex)),
-                            ImVec2(bx, cy - ib * 0.5f), ImVec2(bx + ib, cy + ib * 0.5f));
-                    }
-                    bx -= ib + 6.0f * k;
-                }
-                if (rowEntry->fullCombo) {
-                    const GLuint tex = selectTex(renderer, "fullcombo_indicate");
-                    if (tex != 0) {
-                        listDl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(tex)),
-                            ImVec2(bx, cy - ib * 0.5f), ImVec2(bx + ib, cy + ib * 0.5f));
-                    }
-                }
             }
 
             // Optional 2D / 3D MV tag from the sidecar.
@@ -1042,7 +1027,9 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
 
     // ------------------------------------------------------------------
     // Right: tilted-phone panel (img_smartphone.png) with the jacket, the
-    // difficulty buttons and 确定 / shuffle / settings.
+    // difficulty buttons and 确定 / shuffle / settings. The whole block is
+    // laid out flat and then rotated about the phone's centre, like the
+    // reference UI.
     // ------------------------------------------------------------------
     const float phoneAspect = 1034.0f / 1942.0f;
     float phoneH = h - 24.0f * k;
@@ -1053,6 +1040,27 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     }
     const float phoneX = w - phoneW - 30.0f * k;
     const float phoneY = (h - phoneH) * 0.5f;
+
+    // Tilt: -5 degrees, i.e. the right edge rides up (screen y grows down).
+    constexpr float kTiltDeg = -5.0f;
+    const float tiltRad = kTiltDeg * 3.14159265358979f / 180.0f;
+    const ImVec2 tiltPivot(phoneX + phoneW * 0.5f, phoneY + phoneH * 0.5f);
+    const float tiltCos = std::cos(tiltRad);
+    const float tiltSin = std::sin(tiltRad);
+    const auto tiltPoint = [&](const ImVec2& p) {
+        const float dx = p.x - tiltPivot.x;
+        const float dy = p.y - tiltPivot.y;
+        return ImVec2(tiltPivot.x + dx * tiltCos - dy * tiltSin, tiltPivot.y + dx * tiltSin + dy * tiltCos);
+    };
+    // Top-left corner for an InvisibleButton of `size` that should sit where a
+    // tilted item is drawn (hitboxes cannot rotate, so they follow the centre).
+    const auto tiltedItemPos = [&](const ImVec2& center, const ImVec2& size) {
+        const ImVec2 c = tiltPoint(center);
+        return ImVec2(c.x - size.x * 0.5f, c.y - size.y * 0.5f);
+    };
+    // Every vertex added from here on belongs to the phone; the pass at the
+    // bottom of this function tilts them all at once.
+    const int phoneVtxFirst = dl->VtxBuffer.Size;
 
     const GLuint phoneTex = selectTex(renderer, "img_smartphone");
     if (phoneTex != 0) {
@@ -1111,7 +1119,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             const bool active = d == diffIndex && avail;
             const ImVec2 c(dx, dcY);
 
-            ImGui::SetCursorScreenPos(ImVec2(dx - dcD * 0.5f, dcY - dcD * 0.5f));
+            ImGui::SetCursorScreenPos(tiltedItemPos(c, ImVec2(dcD, dcD)));
             ImGui::PushID(d);
             if (avail) {
                 ImGui::InvisibleButton("diff", ImVec2(dcD, dcD));
@@ -1142,11 +1150,20 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             dx += dcD + dcGap;
         }
 
-        // 确定 button
+        // 确定 button (mint capsule, drawn by hand so it tilts with the phone).
         const float okW = sw * 0.58f;
         const float okH = 56.0f * k;
-        ImGui::SetCursorScreenPos(ImVec2(cx - okW * 0.5f, scrY0 + phoneH * 0.560f));
-        if (ui::capsuleButton("确定", ImVec2(okW, okH), true)) {
+        const ImVec2 okA(cx - okW * 0.5f, scrY0 + phoneH * 0.560f);
+        const ImVec2 okB(okA.x + okW, okA.y + okH);
+        ImGui::SetCursorScreenPos(tiltedItemPos(ImVec2(cx, (okA.y + okB.y) * 0.5f), ImVec2(okW, okH)));
+        ImGui::PushID("ok");
+        ImGui::InvisibleButton("ok", ImVec2(okW, okH));
+        const bool okHovered = ImGui::IsItemHovered();
+        const bool okPressed = ImGui::IsItemClicked();
+        ImGui::PopID();
+        dl->AddRectFilled(okA, okB, okHovered ? ui::kPrimaryHover : ui::kPrimary, okH * 0.5f);
+        addTextCentered(dl, body, 22.0f * k, ImVec2(cx, (okA.y + okB.y) * 0.5f), ui::kBtnText, "确定");
+        if (okPressed) {
             action = selected;
         }
 
@@ -1156,7 +1173,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         const float ibGap = ibD * 1.7f;
         for (int i = 0; i < 2; ++i) {
             const ImVec2 c(cx + (i == 0 ? -ibGap * 0.5f : ibGap * 0.5f), ibY);
-            ImGui::SetCursorScreenPos(ImVec2(c.x - ibD * 0.5f, c.y - ibD * 0.5f));
+            ImGui::SetCursorScreenPos(tiltedItemPos(c, ImVec2(ibD, ibD)));
             ImGui::PushID(i);
             ImGui::InvisibleButton("iconbtn", ImVec2(ibD, ibD));
             const bool pressed = ImGui::IsItemClicked();
@@ -1191,6 +1208,15 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
                 }
             }
         }
+    }
+
+    // Tilt the phone: rotate every vertex the block above produced about the
+    // phone's centre. Text, images, rounded shapes - all rotate together.
+    for (int i = phoneVtxFirst; i < dl->VtxBuffer.Size; ++i) {
+        ImVec2& p = dl->VtxBuffer[i].pos;
+        const float dx = p.x - tiltPivot.x;
+        const float dy = p.y - tiltPivot.y;
+        p = ImVec2(tiltPivot.x + dx * tiltCos - dy * tiltSin, tiltPivot.y + dx * tiltSin + dy * tiltCos);
     }
 
     // F5 rescan is handled by main; Enter handled above. Left/right switch

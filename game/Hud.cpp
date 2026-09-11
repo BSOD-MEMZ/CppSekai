@@ -35,6 +35,49 @@ HudRect lifePauseRect()
         kLifeW * (600.0f / 2560.0f), kLifeH};
 }
 
+ScoreRank scoreRankAndBar(double score, float rating)
+{
+    // 1:1 port of the upstream overlay player (native/src/mmw_overlay_player.cpp:
+    // scoreRankAndBar). The thresholds scale with the chart's level.
+    const double r = static_cast<double>(rating > 0.0f ? rating : 26.0f);
+    const double rankBorder = 1200000.0 + (r - 5.0) * 4100.0;
+    const double rankS = 1040000.0 + (r - 5.0) * 5200.0;
+    const double rankA = 840000.0 + (r - 5.0) * 4200.0;
+    const double rankB = 400000.0 + (r - 5.0) * 2000.0;
+    const double rankC = 20000.0 + (r - 5.0) * 100.0;
+
+    constexpr float rankBorderPos = 1.0f;
+    constexpr float rankSPos = 1478.0f / 1650.0f;
+    constexpr float rankAPos = 1234.0f / 1650.0f;
+    constexpr float rankBPos = 990.0f / 1650.0f;
+    constexpr float rankCPos = 746.0f / 1650.0f;
+
+    const auto lerpRatio = [](double value, double start, double end, float startPos, float endPos) {
+        if (end <= start) {
+            return endPos;
+        }
+        return static_cast<float>(((value - start) / (end - start)) * (endPos - startPos) + startPos);
+    };
+    const auto clamp01 = [](float v) { return std::clamp(v, 0.0f, 1.0f); };
+
+    if (score >= rankBorder) {
+        return ScoreRank{'s', rankBorderPos};
+    }
+    if (score >= rankS) {
+        return ScoreRank{'s', clamp01(lerpRatio(score, rankS, rankBorder, rankSPos, rankBorderPos))};
+    }
+    if (score >= rankA) {
+        return ScoreRank{'a', clamp01(lerpRatio(score, rankA, rankS, rankAPos, rankSPos))};
+    }
+    if (score >= rankB) {
+        return ScoreRank{'b', clamp01(lerpRatio(score, rankB, rankA, rankBPos, rankAPos))};
+    }
+    if (score >= rankC) {
+        return ScoreRank{'c', clamp01(lerpRatio(score, rankC, rankB, rankCPos, rankBPos))};
+    }
+    return ScoreRank{'d', clamp01(static_cast<float>(score / std::max(rankC, 1.0)) * rankCPos)};
+}
+
 void drawHud(platform::Renderer& renderer, const HudState& state, float songTimeSec, int windowW, int windowH,
     float leadInSec, bool dumpJudgeSheet)
 {
@@ -83,26 +126,53 @@ void drawHud(platform::Renderer& renderer, const HudState& state, float songTime
     // Score panel (top-left)
     // ------------------------------------------------------------------
     img("score_bg", scoreX(0.0f), scoreY(0.0f), scoreS(444), scoreS(96));
-    img("score_bar", scoreX(79.0f), scoreY(37.0f), scoreS(354), scoreS(16), 1.0f, state.lifeRatio);
+    // The bar follows the score, not the life: upstream maps the score onto
+    // the bar through scoreRankAndBar() (see game/ScoreBar in main.cpp).
+    img("score_bar", scoreX(79.0f), scoreY(37.0f), scoreS(354), scoreS(16),
+        std::clamp(state.scoreBarRatio, 0.0f, 1.0f));
     img("score_fg", scoreX(0.0f), scoreY(0.0f), scoreS(444), scoreS(96));
 
-    const std::string scoreText = digitsOf(state.score, 7);
-    for (int i = 0; i < 7; ++i) {
-        const char ch = scoreText[static_cast<size_t>(i)];
-        const std::string key = std::string(1, ch);
+    // Rank letter + its label (upstream: 49x58 at scoreX(10)/scoreY(13) and a
+    // 60x8 label at scoreX(6)/scoreY(77), drawn between the frame and the
+    // digits).
+    {
+        const char rankChar = state.rank >= 'a' && state.rank <= 's' ? state.rank : 'd';
+        const std::string rankKey(1, rankChar);
+        img("rank_char_" + rankKey, scoreX(10.0f), scoreY(13.0f), scoreS(49.0f), scoreS(58.0f));
+        img("rank_txt_" + rankKey, scoreX(6.0f), scoreY(77.0f), scoreS(60.0f), scoreS(8.0f));
+    }
+
+    // Score text: no leading zeros - empty slots use the blank "n" sprite,
+    // exactly like the upstream overlay (scoreDigitsText).
+    std::string scoreText = digitsOf(state.score, 0);
+    while (scoreText.size() < 8) {
+        scoreText.insert(scoreText.begin(), 'n');
+    }
+    for (size_t i = 0; i < scoreText.size(); ++i) {
+        const std::string key(1, scoreText[i]);
         const float slotX = scoreX(82.0f + static_cast<float>(i) * 22.0f);
         const float slotY = scoreY(60.0f);
         const platform::Renderer::HudSprite* shadow = renderer.hud("digit_s" + key);
         const platform::Renderer::HudSprite* main = renderer.hud("digit_" + key);
-        const float shadowH = ps(scoreS(36.0f));
-        const float mainH = ps(scoreS(33.0f));
-        if (shadow != nullptr && shadow->height > 0) {
-            const float w = shadowH * (static_cast<float>(shadow->width) / static_cast<float>(shadow->height));
-            img("digit_s" + key, slotX - 22.0f * 0.5f - w * 0.5f / scale, slotY - 2.0f, w / scale, shadowH / scale);
+        // Upstream sizes: shadow 36px, glyph 29px, both centred on slotX + 11.
+        const float shadowH = scoreS(36.0f);
+        const float mainH = scoreS(29.0f);
+        const float shadowW = shadow != nullptr && shadow->height > 0
+            ? shadowH * (static_cast<float>(shadow->width) / static_cast<float>(shadow->height))
+            : shadowH;
+        const float mainW = main != nullptr && main->height > 0
+            ? mainH * (static_cast<float>(main->width) / static_cast<float>(main->height))
+            : mainH;
+        const float centerX = px(slotX + scoreS(11.0f));
+        if (shadow != nullptr && shadow->id != 0) {
+            drawList->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(shadow->id)),
+                ImVec2(centerX - shadowW * 0.5f, py(slotY - scoreS(4.0f))),
+                ImVec2(centerX + shadowW * 0.5f, py(slotY - scoreS(4.0f)) + shadowH));
         }
-        if (main != nullptr && main->height > 0) {
-            const float w = mainH * (static_cast<float>(main->width) / static_cast<float>(main->height));
-            img("digit_" + key, slotX - 22.0f * 0.5f - w * 0.5f / scale, slotY, w / scale, mainH / scale);
+        if (main != nullptr && main->id != 0) {
+            drawList->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(main->id)),
+                ImVec2(centerX - mainW * 0.5f, py(slotY)),
+                ImVec2(centerX + mainW * 0.5f, py(slotY) + mainH));
         }
     }
 

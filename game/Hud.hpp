@@ -18,6 +18,10 @@ struct HudState
 {
     double score = 0.0;
     int combo = 0;
+    // Rank letter ('d'..'s') and score-bar fill, both derived from the score
+    // with the upstream score formula (see game/Judgement.hpp).
+    char rank = 'd';
+    float scoreBarRatio = 0.0f;
     game::Judge lastJudge = game::Judge::None;
     float lastJudgeAtSec = -100.0f;
     float lifeRatio = 1.0f;
@@ -25,6 +29,16 @@ struct HudState
 
 void drawHud(platform::Renderer& renderer, const HudState& state, float songTimeSec, int windowW, int windowH,
     float leadInSec = 3.5f, bool dumpJudgeSheet = false);
+
+// Rank letter + score-bar fill for the score panel. 1:1 port of the upstream
+// overlay player's scoreRankAndBar(); `rating` is the chart level (the
+// upstream code hard-codes 26 as RATING).
+struct ScoreRank
+{
+    char rank = 'd';
+    float bar = 0.0f;
+};
+ScoreRank scoreRankAndBar(double score, float rating);
 
 // Pause button zone of the life bar, in 1920x1080 virtual HUD coordinates.
 // Clicking it opens the pause dialog.

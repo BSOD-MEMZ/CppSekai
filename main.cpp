@@ -107,7 +107,9 @@ namespace
             "                [--title <text>] [--lyricist <text>] [--composer <text>]\n"
             "                [--arranger <text>] [--vocal <text>] [--difficulty <text>]\n"
             "                [--width <px>] [--height <px>] [--window <mode>] [--fps <n>]\n"
-            "                [--judge-sheet] [--test-hits] [--show-pause-dialog]\n\n"
+            "                [--judge-sheet] [--test-hits] [--show-pause-dialog]\n"
+            "                [--test-restart] [--restart-at <sec>]\n\n"
+
             "No --sus: opens the song select screen (scans --charts, then charts/ next\n"
             "to the exe, then the charts/ of the parent folder).\n"
             "--filler: seconds of silence at the head of the BGM (auto-detected when\n"
@@ -203,6 +205,13 @@ namespace
         const float* events = core_api::getHitEventBuffer();
         const int count = core_api::getHitEventCount();
         judgement.load(events, count);
+        // Chart level drives the score formula's levelFactor (upstream
+        // hard-codes RATING = 26; the official level table is used here).
+        int chartLevel = game::musicLevel(entry.musicId, entry.difficulty);
+        if (chartLevel <= 0) {
+            chartLevel = std::atoi(entry.level.c_str());
+        }
+        judgement.setChartRating(chartLevel > 0 ? static_cast<float>(chartLevel) : 26.0f);
 
         if (!entry.bgmPath.empty()) {
             audio.loadMusic(entry.bgmPath, error);
@@ -311,6 +320,8 @@ int main(int argc, char** argv)
     bool testHits = false; // debug: fire hit effects without player input
     int judgeAnimFrame = -1; // debug: freeze the judge text on this animation frame
     bool showPauseDialogShot = false; // headless check: force the pause dialog open
+    bool testRestart = false; // debug: replay "give up -> pick another song"
+    double restartAtSec = 8.0;
     int winWidth = 1280;
     int winHeight = 720;
     int windowMode = 0; // 0=borderless 1=windowed 2=fullscreen(desktop)
@@ -368,6 +379,13 @@ int main(int argc, char** argv)
             judgeAnimFrame = std::atoi(utf8Argv[++i]);
         } else if (arg == "--show-pause-dialog") {
             showPauseDialogShot = true;
+        } else if (arg == "--test-restart") {
+            // Debug: at --restart-at seconds, give the running song up and
+            // start the next chart (the sequence that used to hang on the
+            // second audio load).
+            testRestart = true;
+        } else if (arg == "--restart-at" && i + 1 < utf8Argc) {
+            restartAtSec = std::atof(utf8Argv[++i]);
         } else if (arg == "--title" && i + 1 < utf8Argc) {
             gCardMetadata.title = utf8Argv[++i];
         } else if (arg == "--lyricist" && i + 1 < utf8Argc) {
@@ -421,6 +439,15 @@ int main(int argc, char** argv)
     bootLog("sdl init");
     SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0");
     SDL_SetHint(SDL_HINT_MOUSE_TOUCH_EVENTS, "0");
+    // Native IME UI (the candidate list) is OFF by default in SDL2, and the
+    // ImGui SDL2 backend only enables it in its own Init - which runs after
+    // SDL_CreateWindow, where the hint no longer reaches the main window.
+    // Set it here, before the window exists, so the search box's IME panel
+    // actually shows up (SDL_HINT_IME_SHOW_UI docs: "0" = not displayed).
+    SDL_SetHint(SDL_HINT_IME_SHOW_UI, "1");
+    // Let the IME send SDL_TEXTEDITING events (default) so ImGui can render
+    // the in-progress composition string inside the input box.
+    SDL_SetHint(SDL_HINT_IME_INTERNAL_EDITING, "0");
 
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
@@ -625,6 +652,8 @@ int main(int argc, char** argv)
     AppState state = susPath.empty() ? AppState::Select : AppState::Play;
     Session session;
     bool beginSessionClockPending = false;
+    bool restartDone = false; // --test-restart bookkeeping
+    int restartIndex = 0;
 
     // Reports the current song to Windows (SMTC) and sizes the taskbar bar.
     double trackDurationSec = 0.0;
@@ -1217,6 +1246,36 @@ int main(int argc, char** argv)
             systemMedia.setTaskbarProgress(
                 trackDurationSec > 1.0 ? songTime / trackDurationSec : -1.0, paused);
 
+            // Debug (`--test-restart`): replay "give up -> pick another song"
+            // in the middle of a run, i.e. a second loadMusic() on a live
+            // engine. This is the sequence that used to freeze the process.
+            if (testRestart && !restartDone && !entries.empty() && songTime >= restartAtSec) {
+                restartDone = true;
+                std::printf("[restart] give up at %.2fs, loading another chart\n", songTime);
+                std::fflush(stdout);
+                audio.stopMusic();
+                audio.setHoldLoop(false, false, 0.0f);
+                touches.clear();
+                std::fill(std::begin(keyHeld), std::end(keyHeld), false);
+                lanePress.fill(0.0f);
+                judgement.reset();
+                const int next = (restartIndex + 1) % static_cast<int>(entries.size());
+                if (startSession(session, entries[static_cast<size_t>(next)], renderer, audio, judgement,
+                        noteSpeed, error)) {
+                restartIndex = next;
+                announceTrack();
+                beginSessionClock();
+                lastSeenJudgeTime = -100.0f;
+                hudState = game::HudState{};
+                    std::printf("[restart] second session started ok (music=%s)\n",
+                        entries[static_cast<size_t>(next)].bgmPath.c_str());
+                    std::fflush(stdout);
+                } else {
+                    std::fprintf(stderr, "[restart] failed: %s\n", error.c_str());
+                    error.clear();
+                }
+            }
+
             std::vector<float> holdLanes;
             for (int lane = 0; lane < 12; ++lane) {
                 if (keyHeld[lane]) {
@@ -1225,6 +1284,39 @@ int main(int argc, char** argv)
             }
             for (const auto& track : touches) {
                 holdLanes.push_back(track.lanePos);
+            }
+            // Debug (`--test-hits`): hold every hold note's lane for its whole
+            // duration so the hold tail / break logic can be exercised
+            // headlessly (no input can be injected into the preview window).
+            static std::vector<std::pair<float, double>> simHolds; // lane, end time
+            if (testHits && !autoPlay) {
+                simHolds.erase(std::remove_if(simHolds.begin(), simHolds.end(),
+                                   [&](const std::pair<float, double>& hold) { return hold.second < songTime; }),
+                    simHolds.end());
+                const float* events = core_api::getHitEventBuffer();
+                const int eventCount = core_api::getHitEventCount();
+                for (int i = 0; i < eventCount; ++i) {
+                    const float* ev = events + i * 7;
+                    if (ev[0] > songTime + 0.05f) {
+                        break;
+                    }
+                    if (static_cast<int>(std::lround(ev[3])) != 5 || ev[5] < songTime) {
+                        continue;
+                    }
+                    bool known = false;
+                    for (const auto& hold : simHolds) {
+                        if (std::fabs(hold.first - ev[1]) < 0.01f && std::fabs(hold.second - ev[5]) < 0.01) {
+                            known = true;
+                            break;
+                        }
+                    }
+                    if (!known) {
+                        simHolds.emplace_back(ev[1], static_cast<double>(ev[5]));
+                    }
+                }
+                for (const auto& hold : simHolds) {
+                    holdLanes.push_back(hold.first);
+                }
             }
             judgement.setHoldLanes(holdLanes);
             judgement.update(static_cast<float>(songTime));
@@ -1319,6 +1411,9 @@ int main(int argc, char** argv)
             const auto& stats = judgement.stats();
             hudState.score = stats.score;
             hudState.combo = stats.combo;
+            const game::ScoreRank rank = game::scoreRankAndBar(stats.score, judgement.chartRating());
+            hudState.rank = rank.rank;
+            hudState.scoreBarRatio = rank.bar;
             if (stats.lastJudgeTimeSec != lastSeenJudgeTime) {
                 lastSeenJudgeTime = stats.lastJudgeTimeSec;
                 hudState.lastJudge = stats.lastJudge;
@@ -1332,7 +1427,7 @@ int main(int argc, char** argv)
                         static_cast<int>(stats.lastHitFlickDir), stats.lastHitFriction);
                 }
             }
-            hudState.lifeRatio = 1.0f; // TODO: wire to real life calculation
+            hudState.lifeRatio = judgement.lifeRatio();
 
             // Debug (`--judge-frame N`): freeze the judge text on frame N of
             // its 60fps pop-in so the animation can be checked from a headless
@@ -1409,6 +1504,9 @@ int main(int argc, char** argv)
                 } else if (action == 1) {
                     // Give up: back to the song list.
                     pauseDialogOpen = false;
+                    // Without this the dialog's alive flag stays set and the
+                    // next session redraws a half-closed dialog.
+                    pauseDialogAlive = false;
                     audio.stopMusic();
                     audio.setHoldLoop(false, false, 0.0f);
                     touches.clear();
@@ -1416,6 +1514,8 @@ int main(int argc, char** argv)
                     lanePress.fill(0.0f);
                     paused = false;
                     session.active = false;
+                    lastSeenJudgeTime = -100.0f;
+                    hudState = game::HudState{};
                     state = AppState::Select;
                     systemMedia.setTaskbarProgress(-1.0, false);
                 } else if (action == 2) {
@@ -1454,6 +1554,12 @@ int main(int argc, char** argv)
         // are part of the frame.
         if (wantScreenshot) {
             wantScreenshot = false;
+            {
+                const auto& st = judgement.stats();
+                std::printf("[stats] perfect=%d great=%d good=%d miss=%d combo=%d maxCombo=%d tails=%d breaks=%d score=%.0f life=%.0f (%.1f%%)\n",
+                    st.perfect, st.great, st.good, st.miss, st.combo, st.maxCombo, st.holdTails, st.holdBreaks,
+                    st.score, st.life, 100.0f * st.life / game::kMaxLife);
+            }
             saveScreenshot();
             running = false;
         }

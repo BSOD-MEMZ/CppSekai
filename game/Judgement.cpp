@@ -7,6 +7,22 @@
 namespace game
 {
 
+namespace
+{
+    // Life costs, from the official pjsk judgement table: a whole-note MISS
+    // costs 80, a hold broken mid-way costs 40 (a BAD would cost 50, but this
+    // engine has no BAD judgement).
+    constexpr float kLifeMiss = -80.0f;
+    constexpr float kLifeHoldBreak = -40.0f;
+
+    // Release grace: a hold whose lane is released inside this window before
+    // its end still gets a tail judgement instead of breaking.
+    constexpr float kHoldGraceSec = 0.18f;
+    // The lane may be grabbed a little after the hold start without counting
+    // as a break (mirrors the tap judgement window).
+    constexpr float kHoldStartGraceSec = 0.14f;
+} // namespace
+
 void JudgementEngine::load(const float* packed, int count)
 {
     mNotes.clear();
@@ -22,6 +38,7 @@ void JudgementEngine::load(const float* packed, int count)
         note.endTimeSec = packed[offset + 5];
         note.volume = packed[offset + 6];
         note.state = 0;
+        note.holdTail = false;
         mNotes.push_back(note);
     }
     mCursor = 0;
@@ -29,12 +46,46 @@ void JudgementEngine::load(const float* packed, int count)
     mStats = JudgementStats{};
     mLoaded = true;
 
-    // Score-able notes: taps, flicks, traces, hold starts. Hold ticks and
-    // hold-loop markers are auto-resolved.
+    // Score-able notes: taps, flicks, traces, hold starts and hold tails.
+    // Hold ticks and hold-loop markers are auto-resolved.
     mTotalScoreNotes = 0;
     for (const auto& note : mNotes) {
         if (note.kind == 0.0f || note.kind == 1.0f || note.kind == 2.0f || note.kind == 3.0f || note.kind == 5.0f) {
             ++mTotalScoreNotes;
+        }
+    }
+
+    // Score model (see kTeamPower): normalise by the summed weight of every
+    // scoreable event, exactly like the upstream overlay player does for its
+    // hud-event timeline.
+    mWeightedNoteCount = 0.0;
+    for (const auto& note : mNotes) {
+        mWeightedNoteCount += hudWeight(note.kind, (static_cast<int>(note.flags) & 1) != 0);
+    }
+    mWeightedNoteCount = std::max(mWeightedNoteCount, 1.0);
+    mComboFactor = 1.0;
+
+    // Flag hold tails. The core emits a kind 5 marker at the hold's start
+    // carrying endTimeSec, and a normal tap/flick/trace event at the end
+    // time; that end event is the tail the player releases on.
+    for (std::size_t i = 0; i < mNotes.size(); ++i) {
+        if (static_cast<int>(mNotes[i].kind) != 5) {
+            continue;
+        }
+        const float endTime = mNotes[i].endTimeSec;
+        for (std::size_t j = 0; j < mNotes.size(); ++j) {
+            HitNote& candidate = mNotes[j];
+            if (candidate.timeSec > endTime + 0.02f) {
+                break; // HitEvents are sorted by time
+            }
+            if (candidate.holdTail || static_cast<int>(candidate.kind) > 3) {
+                continue;
+            }
+            if (candidate.timeSec >= endTime - 0.02f
+                && std::fabs(candidate.center - mNotes[i].center) < 0.01f) {
+                candidate.holdTail = true;
+                break;
+            }
         }
     }
 }
@@ -47,39 +98,56 @@ void JudgementEngine::reset()
     mCursor = 0;
     mActiveHolds.clear();
     mStats = JudgementStats{};
+    mComboFactor = 1.0;
 }
 
-void JudgementEngine::registerMiss(float songTimeSec)
+void JudgementEngine::registerMiss(float songTimeSec, float lifeCost)
 {
     mStats.miss += 1;
     mStats.combo = 0;
+    // A combo break drops the score bonus back to its base level (pjsk pays
+    // the combo bonus again from scratch after a miss).
+    mComboFactor = 1.0;
+    mStats.life = std::clamp(mStats.life + lifeCost, 0.0f, kMaxLife);
     mStats.lastJudge = Judge::Miss;
     // Record the time, otherwise the HUD never sees the judge change and the
     // MISS sprite is never shown.
     mStats.lastJudgeTimeSec = songTimeSec;
 }
 
-Judge JudgementEngine::registerJudge(Judge judge, bool critical, float volume)
+double JudgementEngine::scoreDeltaFor(float kind, bool critical) const
+{
+    const float weight = hudWeight(kind, critical);
+    if (weight <= 0.0f) {
+        return 0.0;
+    }
+    const double levelFactor = static_cast<double>((mChartRating - 5.0f) * 0.005f + 1.0f);
+    return (kTeamPower / mWeightedNoteCount) * 4.0 * static_cast<double>(weight) * levelFactor * mComboFactor;
+}
+
+Judge JudgementEngine::registerJudge(Judge judge, bool critical, float volume, float kind)
 {
     (void)volume;
     switch (judge) {
         case Judge::Perfect:
             mStats.perfect += 1;
-            mStats.score += critical ? 1500.0 : 1000.0;
             break;
         case Judge::Great:
             mStats.great += 1;
-            mStats.score += 800.0;
             break;
         case Judge::Good:
             mStats.good += 1;
-            mStats.score += 500.0;
             break;
         default:
             break;
     }
     mStats.combo += 1;
     mStats.maxCombo = std::max(mStats.maxCombo, mStats.combo);
+    // Combo bonus: +1% every 100 combo, capped at +10% (upstream formula).
+    if (mStats.combo % 100 == 1 && mStats.combo > 1) {
+        mComboFactor = std::min(mComboFactor + 0.01, 1.1);
+    }
+    mStats.score += scoreDeltaFor(kind, critical) * judgeMultiplier(judge);
     mStats.lastJudge = judge;
     mStats.lastJudgeCritical = critical;
     return judge;
@@ -89,6 +157,17 @@ bool JudgementEngine::laneCovers(const HitNote& note, float lanePos, float margi
 {
     const float half = std::max(0.5f, note.width * 0.5f);
     return lanePos >= note.center - half - margin && lanePos <= note.center + half + margin;
+}
+
+bool JudgementEngine::laneHeld(const ActiveHold& hold) const
+{
+    const float half = std::max(0.5f, hold.width * 0.5f);
+    for (const float lane : mHoldLanes) {
+        if (lane >= hold.center - half - 0.5f && lane <= hold.center + half + 0.5f) {
+            return true;
+        }
+    }
+    return false;
 }
 
 HitNote* JudgementEngine::findCandidate(float lanePos, float songTimeSec, float margin, bool wantFlick,
@@ -109,8 +188,9 @@ HitNote* JudgementEngine::findCandidate(float lanePos, float songTimeSec, float 
             break;
         }
         // Flick notes (kind 2) and tap/trace notes are player-hit. Kind 4
-        // ticks are auto and kind 5 markers are hold bookkeeping.
-        if (note.kind == 4.0f || note.kind == 5.0f) {
+        // ticks are auto, kind 5 markers are hold bookkeeping and a hold tail
+        // is resolved by the hold tracker (releasing the lane), never here.
+        if (note.kind == 4.0f || note.kind == 5.0f || note.holdTail) {
             continue;
         }
         const bool noteIsFlick = note.kind == 2.0f;
@@ -165,7 +245,7 @@ HitNote* JudgementEngine::findCandidate(float lanePos, float songTimeSec, float 
     mStats.lastHitTimeSec = best->timeSec;
     mStats.lastHitFlickDir = noteFlickDir(*best);
     mStats.lastHitFriction = best->kind == 3.0f; // kind 3 = trace / friction
-    registerJudge(judge, critical, best->volume);
+    registerJudge(judge, critical, best->volume, best->kind);
     return best;
 }
 
@@ -190,6 +270,28 @@ Judge JudgementEngine::flick(float lanePos, float songTimeSec, FlickDir dir, flo
     return mStats.lastJudge;
 }
 
+void JudgementEngine::judgeHoldTail(ActiveHold& hold, Judge judge, float songTimeSec)
+{
+    if (hold.tailIndex >= mNotes.size()) {
+        return;
+    }
+    HitNote& tail = mNotes[hold.tailIndex];
+    if (tail.state != 0) {
+        return; // already resolved (e.g. the hold broke earlier)
+    }
+    tail.state = 1;
+    mStats.holdTails += 1;
+    const bool critical = (static_cast<int>(tail.flags) & 1) != 0;
+    mStats.lastHitKind = tail.kind;
+    mStats.lastHitCenter = tail.center;
+    mStats.lastHitWidth = tail.width;
+    mStats.lastHitTimeSec = tail.timeSec;
+    mStats.lastHitFlickDir = noteFlickDir(tail);
+    mStats.lastHitFriction = tail.kind == 3.0f;
+    registerJudge(judge, critical, tail.volume, tail.kind);
+    mStats.lastJudgeTimeSec = songTimeSec;
+}
+
 void JudgementEngine::update(float songTimeSec)
 {
     // Nothing can be judged during the lead-in (negative chart time).
@@ -197,12 +299,11 @@ void JudgementEngine::update(float songTimeSec)
         return;
     }
 
-    // Advance cursor past fully judged notes.
+    // Advance cursor past fully resolved notes.
     while (mCursor < mNotes.size() && mNotes[mCursor].state != 0) {
         ++mCursor;
     }
 
-    const float goodSec = mWindows.goodMs / 1000.0f;
     const float missSec = mWindows.missAfterMs / 1000.0f;
     const std::size_t scanEnd = std::min(mNotes.size(), mCursor + 256);
 
@@ -219,7 +320,7 @@ void JudgementEngine::update(float songTimeSec)
             // Hold ticks auto-hit while a hold covering this lane is active
             // (skeleton: auto-hit unconditionally, matching no-fail preview).
             note.state = 1;
-            registerJudge(Judge::Perfect, (static_cast<int>(note.flags) & 1) != 0, note.volume);
+            registerJudge(Judge::Perfect, (static_cast<int>(note.flags) & 1) != 0, note.volume, note.kind);
             mStats.lastJudgeTimeSec = songTimeSec;
             // A tick is its own hit: report its own lane so the effect for the
             // hold step plays there instead of re-using the previous hit.
@@ -238,44 +339,100 @@ void JudgementEngine::update(float songTimeSec)
             continue;
         }
 
-        if (note.timeSec < songTimeSec - missSec) {
-            note.state = 1;
-            registerMiss(songTimeSec);
+        if (note.holdTail) {
+            // A tail is resolved by its hold (release at the end). Only when
+            // it is still pending well after its time the hold never started
+            // at all - then it is a plain miss. This also guarantees the
+            // cursor keeps moving even if a hold is dropped.
+            if (note.timeSec < songTimeSec - missSec) {
+                note.state = 2;
+                registerMiss(songTimeSec, kLifeMiss);
+            }
             continue;
         }
-        (void)goodSec;
+
+        if (note.timeSec < songTimeSec - missSec) {
+            note.state = 2;
+            registerMiss(songTimeSec, kLifeMiss);
+            continue;
+        }
     }
 
-    // Hold tracking: break holds whose lane is no longer held.
-    const float holdGraceSec = 0.18f;
+    // Hold tracking: judge the tail on release, break the hold when the lane
+    // is let go too early.
     for (auto& hold : mActiveHolds) {
         if (hold.broken) {
             continue;
         }
-        if (songTimeSec >= hold.endTimeSec) {
+        const std::uint8_t startState = hold.startIndex < mNotes.size()
+            ? mNotes[hold.startIndex].state
+            : static_cast<std::uint8_t>(2);
+        // engaged = the hold's start tap was actually hit. While the start is
+        // still pending the player may simply be a little late, so nothing is
+        // decided yet: its own judgement (hit or auto-miss) settles it.
+        const bool engaged = startState == 1;
+
+        if (startState == 2) {
+            // Never grabbed: the start's own MISS already counted for the
+            // whole hold, so the tail is consumed silently.
             hold.broken = true;
+            if (hold.tailIndex < mNotes.size() && mNotes[hold.tailIndex].state == 0) {
+                mNotes[hold.tailIndex].state = 2;
+            }
             continue;
         }
-        bool held = false;
-        for (const float lane : mHoldLanes) {
-            const float half = std::max(0.5f, hold.width * 0.5f);
-            if (lane >= hold.center - half - 0.5f && lane <= hold.center + half + 0.5f) {
-                held = true;
-                break;
-            }
+
+        const bool held = laneHeld(hold);
+        if (held) {
+            hold.released = false;
+            hold.releaseTimeSec = -1.0f;
+        } else if (!hold.released) {
+            hold.released = true;
+            hold.releaseTimeSec = songTimeSec;
         }
-        if (!held && songTimeSec < hold.endTimeSec - holdGraceSec) {
+
+        if (!held && engaged && songTimeSec >= hold.startTimeSec + kHoldStartGraceSec
+            && songTimeSec < hold.endTimeSec - kHoldGraceSec) {
+            // Let go too early: the hold breaks (mid-hold miss, -40 life).
             hold.broken = true;
-            mStats.combo = 0;
-            mStats.lastJudge = Judge::Miss;
-            mStats.lastJudgeTimeSec = songTimeSec;
+            mStats.holdBreaks += 1;
+            if (hold.tailIndex < mNotes.size() && mNotes[hold.tailIndex].state == 0) {
+                mNotes[hold.tailIndex].state = 2;
+            }
+            registerMiss(songTimeSec, kLifeHoldBreak);
+            continue;
+        }
+
+        if (songTimeSec >= hold.endTimeSec) {
+            hold.broken = true;
+            if (!engaged) {
+                // The start never landed - one MISS for the whole hold, which
+                // the start note has already registered.
+                if (hold.tailIndex < mNotes.size() && mNotes[hold.tailIndex].state == 0) {
+                    mNotes[hold.tailIndex].state = 2;
+                }
+                continue;
+            }
+            // Tail judgement: releasing inside the window is graded by how far
+            // from the end the finger came off; holding through is a PERFECT.
+            Judge judge = Judge::Perfect;
+            if (hold.released && hold.releaseTimeSec >= 0.0f) {
+                const float dtMs = (hold.endTimeSec - hold.releaseTimeSec) * 1000.0f;
+                if (dtMs <= mWindows.perfectMs) {
+                    judge = Judge::Perfect;
+                } else if (dtMs <= mWindows.greatMs) {
+                    judge = Judge::Great;
+                } else {
+                    judge = Judge::Good;
+                }
+            }
+            judgeHoldTail(hold, judge, songTimeSec);
         }
     }
 
-    // Spawn hold tracking from hit hold-start notes (kind 5 markers preceded
-    // by a hit tap in the same lane at the same time). We detect kind 5
-    // markers directly: when the marker time arrives, check whether the
-    // corresponding tap (same timeSec, same lane) was hit.
+    // Spawn hold tracking from the kind 5 markers. The marker sits at the
+    // hold's start and carries its end time; the *scoreable* tail note is the
+    // tap/flick/trace event emitted at that end time.
     for (std::size_t i = mCursor; i < scanEnd; ++i) {
         HitNote& marker = mNotes[i];
         if (marker.state != 0 || marker.kind != 5.0f) {
@@ -285,27 +442,54 @@ void JudgementEngine::update(float songTimeSec)
             break;
         }
         marker.state = 1;
-        // Find sibling tap (same time & lane, kind 0/1) that was judged.
-        bool startHit = false;
+
+        ActiveHold hold;
+        hold.noteIndex = i;
+        hold.startTimeSec = marker.timeSec;
+        hold.endTimeSec = marker.endTimeSec;
+        hold.center = marker.center;
+        hold.width = marker.width;
+
+        // Sibling tap (same time & lane, kind 0/1) - the hold's start note.
         for (std::size_t j = i; j-- > 0;) {
             const HitNote& candidate = mNotes[j];
             if (std::fabs(candidate.timeSec - marker.timeSec) > 0.05f) {
                 break;
             }
-            if ((candidate.kind == 0.0f || candidate.kind == 1.0f) && std::fabs(candidate.center - marker.center) < 0.01f && candidate.state == 1) {
-                startHit = true;
+            if ((candidate.kind == 0.0f || candidate.kind == 1.0f)
+                && std::fabs(candidate.center - marker.center) < 0.01f) {
+                hold.startIndex = j;
                 break;
             }
         }
-        if (startHit) {
-            mActiveHolds.push_back(ActiveHold{
-                i,
-                marker.endTimeSec,
-                marker.center,
-                marker.width,
-                false,
-            });
+        if (hold.startIndex > mNotes.size()) {
+            // No sibling tap in the stream: the marker itself is the start
+            // (it reads as hit below, so the hold is not treated as missed).
+            hold.startIndex = i;
         }
+
+        // The tail event: same lane, at the marker's end time.
+        for (std::size_t j = i; j < mNotes.size(); ++j) {
+            const HitNote& candidate = mNotes[j];
+            if (candidate.timeSec > marker.endTimeSec + 0.02f) {
+                break;
+            }
+            if (candidate.holdTail && candidate.timeSec >= marker.endTimeSec - 0.02f
+                && std::fabs(candidate.center - marker.center) < 0.01f) {
+                hold.tailIndex = j;
+                break;
+            }
+        }
+
+        const bool startMissed = hold.startIndex < mNotes.size() && mNotes[hold.startIndex].state == 2;
+        if (startMissed) {
+            // Never grabbed: the start's own miss is the whole hold's miss.
+            if (hold.tailIndex < mNotes.size()) {
+                mNotes[hold.tailIndex].state = 2;
+            }
+            continue;
+        }
+        mActiveHolds.push_back(hold);
     }
 
     // Retire finished holds.

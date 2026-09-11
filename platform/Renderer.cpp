@@ -471,6 +471,7 @@ bool Renderer::loadHud(const std::string& overlayDir, std::string& outError)
     }
     for (const char* rank : {"d", "c", "b", "a", "s"}) {
         add(std::string("rank_char_") + rank, std::string("score/rank/chr/") + rank + ".png");
+        add(std::string("rank_txt_") + rank, std::string("score/rank/txt/en/") + rank + ".png");
     }
 
     // Score digits: "0-9", "n"(?) and plus sign come in normal + shadow sets.
@@ -484,6 +485,9 @@ bool Renderer::loadHud(const std::string& overlayDir, std::string& outError)
     }
     add("digit_plus", "score/digit/plus.png");
     add("digit_splus", "score/digit/splus.png");
+    // "n" is the empty digit slot: scores print without leading zeros.
+    add("digit_n", "score/digit/n.png");
+    add("digit_sn", "score/digit/sn.png");
 
     add("effect_hit", "../effect.png");
     add("start_grad", "start_grad.png");
