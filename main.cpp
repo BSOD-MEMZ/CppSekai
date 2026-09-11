@@ -542,6 +542,62 @@ int main(int argc, char** argv)
     std::string error;
     platform::Renderer renderer;
 
+    // ImGui is created before the asset loads so the splash screen can draw a
+    // frame between each loading stage. Init itself costs ~1 ms and nothing
+    // else touches ImGui until the UI fonts are loaded below.
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGui::StyleColorsDark();
+    ImGui_ImplSDL2_InitForOpenGL(window, glContext);
+    ImGui_ImplOpenGL3_Init("#version 330 core");
+    bootLog("imgui");
+    // Splash frames are few and each one only costs a GPU submission - but
+    // with vsync on every SDL_GL_SwapWindow would still block for a full
+    // vblank, so run them unsynced and restore vsync once loading is done.
+    SDL_GL_SetSwapInterval(0);
+
+    // Draws one splash frame between loading stages: dark background, title,
+    // the stage label and a thin progress bar. Uses ImGui's default font
+    // (ASCII only - the CJK UI atlas is built later by loadIntroFonts()).
+    bool splashShown = false;
+    auto drawSplash = [&](float progress, const char* label) {
+        splashShown = true;
+        ImGui_ImplSDL2_NewFrame();
+        ImGui_ImplOpenGL3_NewFrame();
+        ImGui::NewFrame();
+        ImGuiIO& io = ImGui::GetIO();
+        ImDrawList* dl = ImGui::GetBackgroundDrawList();
+        dl->AddRectFilled(ImVec2(0.0f, 0.0f), io.DisplaySize, IM_COL32(11, 12, 17, 255));
+        const ImVec2 center(0.5f * io.DisplaySize.x, 0.44f * io.DisplaySize.y);
+        ImFont* font = ImGui::GetFont();
+        const char* title = "CppSekai";
+        const float titleSize = 34.0f;
+        const ImVec2 ts = font->CalcTextSizeA(titleSize, 4096.0f, 0.0f, title);
+        dl->AddText(font, titleSize, ImVec2(center.x - 0.5f * ts.x, center.y - 0.5f * ts.y),
+            IM_COL32(235, 238, 245, 255), title);
+        const float labelSize = 14.0f;
+        const ImVec2 ls = font->CalcTextSizeA(labelSize, 4096.0f, 0.0f, label);
+        dl->AddText(font, labelSize, ImVec2(center.x - 0.5f * ls.x, center.y + 0.5f * ts.y + 18.0f),
+            IM_COL32(150, 155, 170, 255), label);
+        const float barW = std::min(420.0f, 0.5f * io.DisplaySize.x);
+        const float barH = 6.0f;
+        const ImVec2 b0(center.x - 0.5f * barW, center.y + 0.5f * ts.y + 46.0f);
+        const ImVec2 b1(b0.x + barW, b0.y + barH);
+        dl->AddRectFilled(b0, b1, IM_COL32(255, 255, 255, 26), 3.0f);
+        const float fill = barW * progress;
+        if (fill >= 1.0f) {
+            dl->AddRectFilled(b0, ImVec2(b0.x + fill, b1.y), IM_COL32(64, 224, 188, 255), 3.0f);
+        }
+        ImGui::Render();
+        int drawableW = 0, drawableH = 0;
+        SDL_GL_GetDrawableSize(window, &drawableW, &drawableH);
+        glViewport(0, 0, drawableW, drawableH);
+        glClear(GL_COLOR_BUFFER_BIT);
+        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+        SDL_GL_SwapWindow(window);
+    };
+    drawSplash(0.05f, "initializing");
+
     // Resolve bundled assets relative to the executable, not the CWD.
     const std::string assetDir = baseDir + "assets\\mmw";
     const std::string overlayDir = baseDir + "assets\\mmw\\overlay";
@@ -567,9 +623,10 @@ int main(int argc, char** argv)
     // the pjsk background instead of a black rectangle while the rest of the
     // textures and the CJK font atlas are being built.
     if (renderer.loadSplash(assetDir, error)) {
-        renderer.renderFrame(nullptr, 0, 0.85f, 0.85f);
-        SDL_GL_SwapWindow(window);
-        bootLog("first frame");
+        // The splash covers the whole load; the stage only becomes visible
+        // when the main loop starts drawing.
+        drawSplash(0.30f, "loading stage");
+        bootLog("stage textures");
     } else {
         std::fprintf(stderr, "warning: splash load failed: %s\n", error.c_str());
         error.clear();
@@ -579,6 +636,7 @@ int main(int argc, char** argv)
         return 1;
     }
     bootLog("assets");
+    drawSplash(0.60f, "loading textures");
     // Both modes draw the core's own note-hit effects (assets/mmw/effect.png
     // driven by the embedded pjsk effect definitions). Autoplay lets the chart
     // timeline fire them; player mode turns that off and fires them from
@@ -590,6 +648,7 @@ int main(int argc, char** argv)
         error.clear();
     }
     bootLog("hud textures");
+    drawSplash(0.75f, "loading hud");
     // Dialog close X (dark cross on transparent, assets/mmw/ui/close.png).
     if (const platform::Renderer::HudSprite* closeSprite = renderer.hud("ui_close"); closeSprite != nullptr && closeSprite->id != 0) {
         ui::setCloseTexture(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(closeSprite->id)));
@@ -604,6 +663,7 @@ int main(int argc, char** argv)
     // instead of letting the chart timeline fire them (autoplay).
     core_api::setEffectAutoplay(autoPlay);
     bootLog("chart core");
+    drawSplash(0.85f, "preparing");
 
     // ------------------------------------------------------------------
     // Audio
@@ -619,6 +679,7 @@ int main(int argc, char** argv)
         error.clear();
     }
     bootLog("audio");
+    drawSplash(0.92f, "loading audio");
 
     // ------------------------------------------------------------------
     // Judgement
@@ -657,16 +718,19 @@ int main(int argc, char** argv)
     }
 
     // ------------------------------------------------------------------
-    // ImGui
+    // UI fonts
     // ------------------------------------------------------------------
-    IMGUI_CHECKVERSION();
-    ImGui::CreateContext();
-    ImGui::StyleColorsDark();
-    ImGui_ImplSDL2_InitForOpenGL(window, glContext);
-    ImGui_ImplOpenGL3_Init("#version 330 core");
-    bootLog("imgui");
     game::loadIntroFonts(fontDir, useSystemFont);
     bootLog("fonts");
+    // The splash frames rendered with the default font atlas, so the GL
+    // backend still owns that old font texture. Drop it - the next NewFrame
+    // rebuilds it from the real UI fonts (without this, glyph UVs sample the
+    // stale texture and every label garbles).
+    if (splashShown) {
+        ImGui_ImplOpenGL3_DestroyDeviceObjects();
+        SDL_GL_SetSwapInterval(1); // splash frames ran vsync-free; back to vsync
+        drawSplash(1.0f, "ready");
+    }
 
     // ------------------------------------------------------------------
     // Windows system media integration (SMTC + taskbar progress)
