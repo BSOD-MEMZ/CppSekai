@@ -292,39 +292,88 @@ void applyScores(std::vector<ChartEntry>& entries, const std::map<std::string, S
     }
 }
 
-std::map<std::string, ScoreRecord> loadScores(const std::string& path)
+std::string userDataPath(const std::string& exeDir)
 {
-    std::map<std::string, ScoreRecord> out;
+    std::error_code ec;
+    const fs::path parent = fs::path(exeDir) / "..";
+    if (fs::exists(parent / "charts", ec)) {
+        // build/ layout: keep the file next to charts/ so wiping build/ (or
+        // copying the folder to a new machine) does not lose it.
+        return (parent / "userdata.json").lexically_normal().string();
+    }
+    return (fs::path(exeDir) / "userdata.json").string();
+}
+
+void loadUserData(const std::string& path, UserSettings& settings,
+    std::map<std::string, ScoreRecord>& scores)
+{
     std::ifstream file(path, std::ios::binary);
     if (!file) {
-        return out;
+        return;
     }
     try {
         const nlohmann::json doc = nlohmann::json::parse(file);
         if (!doc.is_object()) {
-            return out;
+            return;
         }
-        for (auto it = doc.begin(); it != doc.end(); ++it) {
-            if (!it.value().is_object()) {
-                continue;
+        // Older files are a bare scores map; newer ones wrap {settings, scores}.
+        const bool wrapped = doc.contains("settings") || doc.contains("scores");
+        const nlohmann::json& scoreDoc = wrapped && doc.contains("scores") ? doc["scores"] : doc;
+        if (scoreDoc.is_object()) {
+            for (auto it = scoreDoc.begin(); it != scoreDoc.end(); ++it) {
+                if (!it.value().is_object()
+                    || (!it.value().contains("cleared") && !it.value().contains("fullCombo"))) {
+                    continue; // not a score record (e.g. the "settings" object)
+                }
+                ScoreRecord rec;
+                rec.cleared = it.value().value("cleared", false);
+                rec.fullCombo = it.value().value("fullCombo", false);
+                scores[it.key()] = rec;
             }
-            ScoreRecord rec;
-            rec.cleared = it.value().value("cleared", false);
-            rec.fullCombo = it.value().value("fullCombo", false);
-            out[it.key()] = rec;
+        }
+        if (wrapped && doc.contains("settings") && doc["settings"].is_object()) {
+            const nlohmann::json& s = doc["settings"];
+            settings.noteSpeed = s.value("noteSpeed", settings.noteSpeed);
+            settings.seVolume = s.value("seVolume", settings.seVolume);
+            settings.offsetSec = s.value("offsetSec", settings.offsetSec);
+            settings.leadInSec = s.value("leadInSec", settings.leadInSec);
+            settings.windowMode = s.value("windowMode", settings.windowMode);
+            settings.fpsLimit = s.value("fpsLimit", settings.fpsLimit);
+            settings.perfectMs = s.value("perfectMs", settings.perfectMs);
+            settings.greatMs = s.value("greatMs", settings.greatMs);
+            settings.goodMs = s.value("goodMs", settings.goodMs);
+            settings.strictFlick = s.value("strictFlick", settings.strictFlick);
         }
     } catch (...) {
-        // malformed scores file: start fresh
+        // malformed file: keep the defaults
     }
-    return out;
+    // Same ordering rules the settings UI enforces.
+    settings.perfectMs = std::clamp(settings.perfectMs, 10.0f, 100.0f);
+    settings.greatMs = std::max(settings.greatMs, settings.perfectMs + 10.0f);
+    settings.goodMs = std::max(settings.goodMs, settings.greatMs + 10.0f);
 }
 
-void saveScores(const std::string& path, const std::map<std::string, ScoreRecord>& scores)
+void saveUserData(const std::string& path, const UserSettings& settings,
+    const std::map<std::string, ScoreRecord>& scores)
 {
-    nlohmann::json doc = nlohmann::json::object();
+    nlohmann::json scoreDoc = nlohmann::json::object();
     for (const auto& [name, rec] : scores) {
-        doc[name] = {{"cleared", rec.cleared}, {"fullCombo", rec.fullCombo}};
+        scoreDoc[name] = {{"cleared", rec.cleared}, {"fullCombo", rec.fullCombo}};
     }
+    nlohmann::json doc;
+    doc["settings"] = {
+        {"noteSpeed", settings.noteSpeed},
+        {"seVolume", settings.seVolume},
+        {"offsetSec", settings.offsetSec},
+        {"leadInSec", settings.leadInSec},
+        {"windowMode", settings.windowMode},
+        {"fpsLimit", settings.fpsLimit},
+        {"perfectMs", settings.perfectMs},
+        {"greatMs", settings.greatMs},
+        {"goodMs", settings.goodMs},
+        {"strictFlick", settings.strictFlick},
+    };
+    doc["scores"] = scoreDoc;
     std::ofstream file(path, std::ios::binary);
     if (file) {
         file << doc.dump(2) << std::endl;

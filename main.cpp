@@ -328,6 +328,16 @@ int main(int argc, char** argv)
     int windowMode = 0; // 0=borderless 1=windowed 2=fullscreen(desktop)
     int fpsLimit = 0;   // extra frame cap on top of vsync; 0 = vsync only
 
+    // Settings that also live in userdata.json (loaded below). Flags present on
+    // the command line win over the saved values; these record which were given.
+    bool speedGiven = false;
+    bool seGiven = false;
+    bool leadInGiven = false;
+    bool windowGiven = false;
+    bool fpsGiven = false;
+    game::UserSettings userSettings;
+    std::map<std::string, game::ScoreRecord> scores;
+
     for (int i = 1; i < utf8Argc; ++i) {
         const std::string arg = utf8Argv[i];
         if (arg == "--sus" && i + 1 < utf8Argc) {
@@ -349,6 +359,7 @@ int main(int argc, char** argv)
             winHeight = std::atoi(utf8Argv[++i]);
         } else if (arg == "--window" && i + 1 < utf8Argc) {
             const std::string mode = utf8Argv[++i];
+            windowGiven = true;
             if (mode == "windowed") {
                 windowMode = 1;
             } else if (mode == "fullscreen") {
@@ -358,20 +369,24 @@ int main(int argc, char** argv)
             }
         } else if (arg == "--fps" && i + 1 < utf8Argc) {
             fpsLimit = std::atoi(utf8Argv[++i]);
+            fpsGiven = true;
         } else if (arg == "--pjsk-font") {
             useSystemFont = false;
         } else if (arg == "--auto") {
             autoPlay = true;
         } else if (arg == "--speed" && i + 1 < utf8Argc) {
             noteSpeed = static_cast<float>(std::atof(utf8Argv[++i]));
+            speedGiven = true;
         } else if (arg == "--se-volume" && i + 1 < utf8Argc) {
             seVolume = static_cast<float>(std::atof(utf8Argv[++i]));
+            seGiven = true;
         } else if (arg == "--screenshot" && i + 1 < utf8Argc) {
             screenshotPath = utf8Argv[++i];
         } else if (arg == "--screenshot-time" && i + 1 < utf8Argc) {
             screenshotTimeSec = std::atof(utf8Argv[++i]);
         } else if (arg == "--lead-in" && i + 1 < utf8Argc) {
             leadIn = std::atof(utf8Argv[++i]);
+            leadInGiven = true;
         } else if (arg == "--judge-sheet") {
             dumpJudgeSheet = true;
         } else if (arg == "--test-hits") {
@@ -455,6 +470,38 @@ int main(int argc, char** argv)
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
 
+    // Resolve the executable directory and load the persisted player data
+    // (settings + play results) up front, so a saved window mode applies to the
+    // window we are about to create. Command-line flags win over saved values.
+    std::string baseDir;
+    {
+        char* basePath = SDL_GetBasePath();
+        if (basePath != nullptr) {
+            baseDir = basePath;
+            SDL_free(basePath);
+        }
+    }
+    const std::string userDataFile = game::userDataPath(baseDir);
+    game::loadUserData(userDataFile, userSettings, scores);
+    if (!speedGiven) {
+        noteSpeed = userSettings.noteSpeed;
+    }
+    if (!seGiven) {
+        seVolume = userSettings.seVolume;
+    }
+    if (!leadInGiven) {
+        leadIn = userSettings.leadInSec;
+    }
+    if (!windowGiven) {
+        windowMode = userSettings.windowMode;
+    }
+    if (!fpsGiven) {
+        fpsLimit = userSettings.fpsLimit;
+    }
+    if (!offsetGiven) {
+        gUserOffsetSec = userSettings.offsetSec;
+    }
+
     int windowW = std::max(320, winWidth);
     int windowH = std::max(240, winHeight);
     Uint32 windowFlags = SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI;
@@ -496,19 +543,10 @@ int main(int argc, char** argv)
     platform::Renderer renderer;
 
     // Resolve bundled assets relative to the executable, not the CWD.
-    std::string baseDir;
-    {
-        char* basePath = SDL_GetBasePath();
-        if (basePath != nullptr) {
-            baseDir = basePath;
-            SDL_free(basePath);
-        }
-    }
     const std::string assetDir = baseDir + "assets\\mmw";
     const std::string overlayDir = baseDir + "assets\\mmw\\overlay";
     const std::string fontDir = baseDir + "assets\\mmw\\font";
     const std::string seDir = baseDir + "assets\\se";
-    const std::string scoresPath = baseDir + "scores.json";
     // Where the charts live: next to the exe when packaged, otherwise the
     // project's charts/ one level up (the usual build/ layout).
     std::vector<std::string> chartCandidates;
@@ -587,10 +625,22 @@ int main(int argc, char** argv)
     // ------------------------------------------------------------------
     game::JudgementEngine judgement;
 
+    // Apply the persisted judgement settings before anything is judged.
+    {
+        game::JudgementWindows windows;
+        windows.perfectMs = userSettings.perfectMs;
+        windows.greatMs = userSettings.greatMs;
+        windows.goodMs = userSettings.goodMs;
+        windows.missAfterMs = userSettings.goodMs + 60.0f;
+        windows.badMs = windows.missAfterMs; // BAD closes exactly where the auto-miss starts
+        judgement.setWindows(windows);
+        judgement.setStrictFlick(userSettings.strictFlick);
+    }
+
     // Play results (cleared / full combo) + song select UI assets.
     // setSelectAssetDir expects the assets root; SongSelect appends "select\\".
+    // `scores` was already loaded from userdata.json near the top of main().
     game::setSelectAssetDir(baseDir + "assets");
-    std::map<std::string, game::ScoreRecord> scores = game::loadScores(scoresPath);
 
     // Official per-difficulty levels (see game::loadMusicLevels). unipjsk
     // scores ship with an empty "#PLAYLEVEL", so without this the song select
@@ -726,6 +776,25 @@ int main(int argc, char** argv)
     int fpsLimitLive = fpsLimit; // adjustable from the debug panel
     const double perfFreqD = static_cast<double>(perfFreq);
 
+    // Snapshot everything userdata.json stores and write it out. Called right
+    // after a result is recorded and once on exit, so settings and play results
+    // survive a restart. Scores are keyed by chart file name, so copying this
+    // one file next to a re-downloaded charts/ restores the records.
+    auto persistUserData = [&]() {
+        userSettings.noteSpeed = noteSpeed;
+        userSettings.seVolume = seVolume;
+        userSettings.leadInSec = leadIn;
+        userSettings.windowMode = windowMode;
+        userSettings.fpsLimit = fpsLimitLive;
+        userSettings.offsetSec = gUserOffsetSec;
+        const game::JudgementWindows& w = judgement.windows();
+        userSettings.perfectMs = w.perfectMs;
+        userSettings.greatMs = w.greatMs;
+        userSettings.goodMs = w.goodMs;
+        userSettings.strictFlick = judgement.strictFlick();
+        game::saveUserData(userDataFile, userSettings, scores);
+    };
+
     // HUD / hit feedback state (shared with the input handlers below).
     game::HudState hudState;
     float lastSeenJudgeTime = -100.0f;
@@ -830,9 +899,9 @@ int main(int argc, char** argv)
                 // 判定: judgement windows.
                 contentLeft();
                 ImGui::Text("判定窗口 (ms)");
-                static float perfect = 40.0f;
-                static float great = 90.0f;
-                static float good = 140.0f;
+                static float perfect = judgement.windows().perfectMs;
+                static float great = judgement.windows().greatMs;
+                static float good = judgement.windows().goodMs;
                 bool windowsChanged = false;
                 contentLeft();
                 windowsChanged |= ui::slider("perfect", &perfect, 10.0f, 100.0f, 1.0f, "Perfect %.0f", interior);
@@ -840,7 +909,7 @@ int main(int argc, char** argv)
                 windowsChanged |= ui::slider("great", &great, 20.0f, 160.0f, 1.0f, "Great %.0f", interior);
                 contentLeft();
                 windowsChanged |= ui::slider("goodw", &good, 30.0f, 220.0f, 1.0f, "Good %.0f", interior);
-                static bool strictFlick = true;
+                static bool strictFlick = judgement.strictFlick();
                 ui::checkBox("严格 Flick 方向", &strictFlick, interior);
                 judgement.setStrictFlick(strictFlick);
                 if (windowsChanged) {
@@ -849,6 +918,9 @@ int main(int argc, char** argv)
                     windows.greatMs = std::max(great, perfect + 10.0f);
                     windows.goodMs = std::max(good, great + 10.0f);
                     windows.missAfterMs = good + 60.0f;
+                    // Keep BAD closing exactly where the auto-miss window starts,
+                    // otherwise the extra tier silently disappears.
+                    windows.badMs = windows.missAfterMs;
                     judgement.setWindows(windows);
                 }
             }
@@ -1373,8 +1445,9 @@ int main(int argc, char** argv)
                 const std::string key = game::scoreKey(session.entry);
                 scores[key] = game::mergeScore(scores[key], true, fullCombo);
                 game::applyScores(entries, scores);
-                game::saveScores(scoresPath, scores);
-                std::printf("[score] %s cleared%s\n", key.c_str(), fullCombo ? " (full combo)" : "");
+                persistUserData();
+                std::printf("[score] %s cleared%s (%s)\n", key.c_str(),
+                    fullCombo ? " (full combo)" : "", userDataFile.c_str());
             }
 
             // Hold loop SE: loop while a hold is being tracked (anyActiveHold
@@ -1601,6 +1674,11 @@ int main(int argc, char** argv)
                     - static_cast<double>(SDL_GetPerformanceCounter() - lastFrameCounter) / perfFreqD;
             }
         }
+    }
+
+    // Headless checks (--screenshot) must not touch the player's data file.
+    if (screenshotPath.empty()) {
+        persistUserData();
     }
 
     audio.shutdown();

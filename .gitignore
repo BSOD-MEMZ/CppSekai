@@ -16,6 +16,11 @@ assets/*
 # Downloaded charts & audio (official game data; personal use only)
 charts/
 
+# Player data: settings + play results (written next to charts/). Ignored on
+# purpose - it is per-player state, not source. Copy this file to a new machine
+# together with charts/ to keep the records (scores are keyed by chart name).
+userdata.json
+
 # Local runtime artifacts
 *.log
 *.pdb

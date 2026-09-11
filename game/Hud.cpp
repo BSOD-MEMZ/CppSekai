@@ -155,8 +155,11 @@ void drawHud(platform::Renderer& renderer, const HudState& state, float songTime
         const platform::Renderer::HudSprite* shadow = renderer.hud("digit_s" + key);
         const platform::Renderer::HudSprite* main = renderer.hud("digit_" + key);
         // Upstream sizes: shadow 36px, glyph 29px, both centred on slotX + 11.
-        const float shadowH = scoreS(36.0f);
-        const float mainH = scoreS(29.0f);
+        // The sizes go through ps() as well - they are pixel-space, like the
+        // px()/py() positions below. Without it the glyphs are drawn 1.5x
+        // (SCORE_ROOT_SCALE) too wide for the 22u slot advance and overlap.
+        const float shadowH = ps(scoreS(36.0f));
+        const float mainH = ps(scoreS(29.0f));
         const float shadowW = shadow != nullptr && shadow->height > 0
             ? shadowH * (static_cast<float>(shadow->width) / static_cast<float>(shadow->height))
             : shadowH;

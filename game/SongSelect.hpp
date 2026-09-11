@@ -51,9 +51,40 @@ struct ScoreRecord
     bool fullCombo = false;
 };
 
-// scores.json lives next to the exe (pass baseDir + "scores.json").
-std::map<std::string, ScoreRecord> loadScores(const std::string& path);
-void saveScores(const std::string& path, const std::map<std::string, ScoreRecord>& scores);
+// Settings + play results are persisted together in one userdata.json; see
+// UserSettings / loadUserData below.
+
+// Everything the player keeps between sessions. Written next to the charts so
+// it survives a rebuilt build/ directory and travels with them: the score keys
+// are chart *file names*, so the same charts re-downloaded anywhere match.
+struct UserSettings
+{
+    float noteSpeed = 8.0f;
+    float seVolume = 0.8f;
+    double offsetSec = 0.0; // audio offset; the UI shows it in ms
+    double leadInSec = 6.0;
+    int windowMode = 0; // 0=borderless 1=windowed 2=fullscreen
+    int fpsLimit = 0;   // 0 = vsync only
+    float perfectMs = 40.0f;
+    float greatMs = 90.0f;
+    float goodMs = 140.0f;
+    bool strictFlick = true;
+};
+
+// Path of userdata.json: <exeDir>\.. \userdata.json when a charts\ folder sits
+// there (the usual build/ layout - so the file lands next to charts/ and
+// survives wiping build/), otherwise <exeDir>\userdata.json for a packaged
+// build. exeDir must end with a path separator.
+std::string userDataPath(const std::string& exeDir);
+
+// Reads settings + scores. A legacy flat scores.json (a bare map, no
+// "settings"/"scores" wrapper) is still accepted, so an old file migrates.
+// Missing keys keep the defaults already in `settings`.
+void loadUserData(const std::string& path, UserSettings& settings,
+    std::map<std::string, ScoreRecord>& scores);
+
+void saveUserData(const std::string& path, const UserSettings& settings,
+    const std::map<std::string, ScoreRecord>& scores);
 
 // Records the result of one chart (merges with the existing record) and
 // returns the merged record.

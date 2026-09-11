@@ -184,6 +184,14 @@ BGM URL 规律：`https://assets.unipjsk.com/ondemand/music/long/se_<id>_01/se_<
   Windows 10+ 生效**（Win7/8 上 combase 的激活会失败，代码里已容错，只是不显示）；任务栏进度条
   ITaskbarList3 在 Win7+ 均可用。
 - 不依赖任何运行库安装（zig c++ 静态链接 CRT + 自带 SDL2.dll）。
+- **玩家数据只有一个文件 `userdata.json`**（`game::userDataPath()`）：优先放
+  `<exe>\..\userdata.json`——也就是有 `charts\` 的那一层（build/ 布局下 = 仓库根），
+  这样 `rm -rf build` 不会丢、换机器把这份文件拷到 `charts/` 旁边成绩就回来了；
+  没找到 `charts\` 才落到 `<exe>\userdata.json`。内容 `{settings, scores}`：
+  settings 是 noteSpeed/seVolume/offsetSec/leadInSec/windowMode/fpsLimit/判定三窗/strictFlick，
+  scores 按**谱面文件名**做 key（与绝对路径无关，所以重下同样的谱成绩能对上）。
+  命令行参数 > userdata.json > 内置默认（`*Given` 标志记录哪些来自命令行）。
+  **它被 .gitignore 忽略**（个人成绩，不是源码）。`--screenshot` 模式不会写这个文件。
 
 ## 待办（按优先级）
 

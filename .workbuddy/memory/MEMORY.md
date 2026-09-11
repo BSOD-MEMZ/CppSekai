@@ -44,6 +44,23 @@
   hold tick critical 权重 0.2（官方 Hold Sustain 是 0.1）；官方 AUTO = GREAT(70%)、血尽得分 ×0.1 未建模。
 - 详见当日日志 2026-09-11.md。
 
+## 玩家数据（`userdata.json`）
+- 一个文件装**设置 + 成绩**：`{ "settings": {...}, "scores": {...} }`，由 `game::userDataPath()` 定位 ——
+  有 `<exe>\..\charts` 就用**那一层**（build/ 布局 = 仓库根，和 charts/ 并排 → `rm -rf build` 不丢、
+  拷到新机器 charts/ 旁边成绩就回来），否则 `<exe>\userdata.json`。
+- 成绩 key = **谱面文件名**（与绝对路径无关，所以重下同样的谱能对上）。
+- 优先级：**命令行 > userdata.json > 内置默认**（靠 `*Given` 标志）。
+- `.gitignore` 里有 `userdata.json`；`--screenshot` 模式**不写**这个文件。
+
+## HUD 缩放陷阱（`platform::Renderer` / `game/Hud.cpp`）
+- `px()/py()` 是虚拟坐标→像素，`ps()` 是尺寸→像素。**位置用了 px/py，尺寸就必须用 ps()**。
+  踩过：分数数字写成 `shadowH = scoreS(36.0f)`（漏 `ps()`）→ 画大 1.5 倍（`SCORE_ROOT_SCALE`）→ 数字重叠。
+- 走 `img()` 辅助函数的天然安全（内部会 `ps()`）；**直接调 `AddImage` 的地方要自己记得是像素空间**。
+- 对齐 UI 时直接看上游 `D:\Dev\sekai-mmw-preview-web\native\src\mmw_overlay_player.cpp`（CppSekai 的移植源）。
+
+## 协作约定
+- **改完 + 验证过就 commit**（用户明确要求），别攒着。
+
 ## 构建
 - `bash build.sh`（仅 Git Bash）。自带 zig **0.14.1**（`toolchain/`）+ SDL2 2.32.10，零系统依赖。
 - **别用 zig 0.16**（c++ 驱动会吞 `-I`）；zig 缓存必须放 C 盘（build.sh 已设 `ZIG_GLOBAL_CACHE_DIR`）。
