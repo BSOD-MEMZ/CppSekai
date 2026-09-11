@@ -85,9 +85,12 @@ bash build.sh          # 仅需 Git Bash；产物 build/cppsekai.exe + SDL2.dll 
   `Renderer::clipToWorldX/Y`。鼠标按下前要排除 ImGui 占用（`io.WantCaptureMouse`，设置面板/暂停
   弹窗）和 HUD 暂停按钮（`game::lifePauseRect()` 在 1920x1080 虚拟坐标做命中测试，事件层命中后
   置 `pauseClickRequested`，渲染层统一处理），否则点 UI 会被当成击打。
-- 启动顺序（黑屏优化）：窗口 + GL 上下文就绪后先 `glClear` 换一帧，`Renderer::loadSplash()` 只加载
-  background/stage 再画一帧（约 0.6s 出画面），之后才加载 HUD 贴图和 CJK 字体图集，整备完成约 1.3s。
-  各阶段耗时用 `[boot]` 日志查看；贴图级耗时设 `CPSEKAI_ASSET_TIMING=1`。
+- 启动顺序（黑屏优化）：窗口 + GL 上下文就绪后先 `glClear` 换一帧；**ImGui 在这里就初始化**，
+  加载的各阶段之间由 `drawSplash()` 画一帧 splash（暗底 + 标题 + 进度条，ImGui 默认字体仅 ASCII，
+  期间垂直同步临时关闭）。`Renderer::loadSplash()` 只加载 background/stage（约 0.6s），之后才加载
+  HUD 贴图和 CJK 字体图集。**`loadIntroFonts()` 之后必须 `ImGui_ImplOpenGL3_DestroyDeviceObjects()`**，
+  否则 GL 后端还持有 splash 用的默认字体纹理，字形 UV 错位、全部 UI 文字花屏。各阶段耗时用
+  `[boot]` 日志查看；贴图级耗时设 `CPSEKAI_ASSET_TIMING=1`。
 - HUD 预缩图：`loadHud()` 优先读 `assets/mmw/overlay_opt/`（存在则用，否则回退原图，删掉该目录即恢复）。
   原图很多是超大的（life 数字 1000x1333，实际只画 ~50px），解码很慢。用
   `zig c++ -O2 -Ithird_party -Ithird_party/mmw_preview/vendor .workbuddy/tools/shrink_hud.cpp -o build/shrink_hud.exe`
