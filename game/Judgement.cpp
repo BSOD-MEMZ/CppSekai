@@ -10,9 +10,9 @@ namespace game
 namespace
 {
     // Life costs, from the official pjsk judgement table: a whole-note MISS
-    // costs 80, a hold broken mid-way costs 40 (a BAD would cost 50, but this
-    // engine has no BAD judgement).
+    // costs 80, a BAD costs 50, and a hold broken mid-way costs 40.
     constexpr float kLifeMiss = -80.0f;
+    constexpr float kLifeBad = -50.0f;
     constexpr float kLifeHoldBreak = -40.0f;
 
     // Release grace: a hold whose lane is released inside this window before
@@ -138,15 +138,32 @@ Judge JudgementEngine::registerJudge(Judge judge, bool critical, float volume, f
         case Judge::Good:
             mStats.good += 1;
             break;
+        case Judge::Bad:
+            mStats.bad += 1;
+            break;
         default:
             break;
     }
-    mStats.combo += 1;
-    mStats.maxCombo = std::max(mStats.maxCombo, mStats.combo);
-    // Combo bonus: +1% every 100 combo, capped at +10% (upstream formula).
-    if (mStats.combo % 100 == 1 && mStats.combo > 1) {
-        mComboFactor = std::min(mComboFactor + 0.01, 1.1);
+
+    // Combos: only PERFECT and GREAT keep the chain alive. pjsk breaks the
+    // combo on GOOD and BAD just like on MISS (the combo bonus then restarts).
+    if (judge == Judge::Good || judge == Judge::Bad) {
+        mStats.combo = 0;
+        mComboFactor = 1.0;
+    } else {
+        mStats.combo += 1;
+        mStats.maxCombo = std::max(mStats.maxCombo, mStats.combo);
+        // Combo bonus: +1% every 100 combo, capped at +10% (upstream formula).
+        if (mStats.combo % 100 == 1 && mStats.combo > 1) {
+            mComboFactor = std::min(mComboFactor + 0.01, 1.1);
+        }
     }
+
+    // BAD still costs life (but not as much as a MISS).
+    if (judge == Judge::Bad) {
+        mStats.life = std::clamp(mStats.life + kLifeBad, 0.0f, kMaxLife);
+    }
+
     mStats.score += scoreDeltaFor(kind, critical) * judgeMultiplier(judge);
     mStats.lastJudge = judge;
     mStats.lastJudgeCritical = critical;
@@ -176,7 +193,7 @@ HitNote* JudgementEngine::findCandidate(float lanePos, float songTimeSec, float 
     HitNote* best = nullptr;
     float bestAbsDt = std::numeric_limits<float>::max();
 
-    const float goodSec = mWindows.goodMs / 1000.0f;
+    const float badSec = mWindows.badMs / 1000.0f;
     const std::size_t scanEnd = std::min(mNotes.size(), mCursor + 256);
 
     for (std::size_t i = mCursor; i < scanEnd; ++i) {
@@ -184,7 +201,7 @@ HitNote* JudgementEngine::findCandidate(float lanePos, float songTimeSec, float 
         if (note.state != 0) {
             continue;
         }
-        if (note.timeSec > songTimeSec + goodSec) {
+        if (note.timeSec > songTimeSec + badSec) {
             break;
         }
         // Flick notes (kind 2) and tap/trace notes are player-hit. Kind 4
@@ -217,7 +234,7 @@ HitNote* JudgementEngine::findCandidate(float lanePos, float songTimeSec, float 
             continue;
         }
         const float dt = std::fabs(note.timeSec - songTimeSec);
-        if (dt <= goodSec && dt < bestAbsDt) {
+        if (dt <= badSec && dt < bestAbsDt) {
             bestAbsDt = dt;
             best = &note;
         }
@@ -232,8 +249,10 @@ HitNote* JudgementEngine::findCandidate(float lanePos, float songTimeSec, float 
         judge = Judge::Perfect;
     } else if (dtMs <= mWindows.greatMs) {
         judge = Judge::Great;
-    } else {
+    } else if (dtMs <= mWindows.goodMs) {
         judge = Judge::Good;
+    } else {
+        judge = Judge::Bad;
     }
     best->state = 1;
     // Critical is bit0 only - bits 1-2 carry the flick direction, so a
@@ -440,8 +459,10 @@ void JudgementEngine::update(float songTimeSec)
                     judge = Judge::Perfect;
                 } else if (dtMs <= mWindows.greatMs) {
                     judge = Judge::Great;
-                } else {
+                } else if (dtMs <= mWindows.goodMs) {
                     judge = Judge::Good;
+                } else {
+                    judge = Judge::Bad;
                 }
             }
             judgeHoldTail(hold, judge, songTimeSec);

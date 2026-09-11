@@ -192,6 +192,18 @@ BGM URL 规律：`https://assets.unipjsk.com/ondemand/music/long/se_<id>_01/se_<
 3. 结算画面、连击特效（judge v3 的 1~5 已用于判定文字，6=AUTO 仍未用）
 4. 键盘 12 键布局可能不顺手，考虑做成可配置；键盘也打不了 left/right flick（只能发 FlickUp），
    要么给按键加"按住+方向键"的组合，要么引导玩家用鼠标/触摸
+5. 【暂缓·长期，想清楚再做】歌手 / 音源版本选择。同一首歌的 `SEKAI ver.` / `VIRTUAL SINGER ver.` /
+   `アナザーボーカル` **共用同一份谱面**，差别只在音源（以及 Vo. 署名、可能的头部静音）——
+   所以**绝不复制 SUS**，只把「音源」做成可选列表：
+   - `ChartEntry.bgmPath` → `std::vector<AudioVariant>{ label, path, vocal, fillerSec }` + `audioIndex`
+   - 版本列表优先读 `<id4>.json` 的 `"audio": [...]`（对齐官方 `musicVocals` 表：每版本自带
+     label + vocal，甚至各自的 fillerSec）；没写就扫文件名 `<id4>__<tag>.<ext>` 兜底（**双下划线**，
+     跟难度用的单下划线 `_master` 区分），label 用 tag 美化；一个版本都没有时行为同现在（不显示选择器）
+   - UI：右侧手机面板在难度条下方加 `‹ label ›` 左右切换器，仅当版本数 > 1 时绘制
+   - 播放：`main.cpp` 用选中版本的 `path` / `fillerSec` 喂 `loadMusic` 和 `audioStartSec`，
+     intro 卡的 Vo. 行也要跟着版本走（现在取的是 `entry.vocal`）
+   - 动到的文件：`SongSelect.hpp` / `SongSelect.cpp`（scan + resolveSidecars + 选择器）/ `main.cpp` /
+     `CHARTS.md`（sidecar 字段表补 `audio`）
 
 > 已实现的旧待办：flick 严格方向校验（见「约定与坑」里的说明）、hold 尾判（松手判定）、
 > HUD 真实分数与血量、放弃后重选曲卡死。

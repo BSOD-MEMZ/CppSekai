@@ -33,6 +33,12 @@ namespace
     // {99FA3FF4-1742-42A6-902E-087D41F965EC}
     const GUID IID_ISystemMediaTransportControls = {
         0x99FA3FF4, 0x1742, 0x42A6, {0x90, 0x2E, 0x08, 0x7D, 0x41, 0xF9, 0x65, 0xEC}};
+    // {EA98D2F6-7F3C-4AF2-A586-72889808EFB1}
+    // The versioned interface (winmd: Windows.Media.ISystemMediaTransportControls2).
+    // UpdateTimelineProperties and the AutoRepeatMode / ShuffleEnabled /
+    // PlaybackRate accessors live HERE, not on the base interface above.
+    const GUID IID_ISystemMediaTransportControls2 = {
+        0xEA98D2F6, 0x7F3C, 0x4AF2, {0xA5, 0x86, 0x72, 0x88, 0x98, 0x08, 0xEF, 0xB1}};
     // {8ABBC53E-FA55-4ECF-AD8E-C984E5DD1550}
     const GUID IID_IDisplayUpdater = {
         0x8ABBC53E, 0xFA55, 0x4ECF, {0xAD, 0x8E, 0xC9, 0x84, 0xE5, 0xDD, 0x15, 0x50}};
@@ -104,6 +110,26 @@ namespace
         HRESULT (STDMETHODCALLTYPE* remove_ButtonPressed)(void*, long long);
         HRESULT (STDMETHODCALLTYPE* add_PropertyChanged)(void*, void*, long long*);
         HRESULT (STDMETHODCALLTYPE* remove_PropertyChanged)(void*, long long);
+        // The base interface ENDS here - 30 methods after the six IInspectable
+        // slots. AutoRepeatMode / ShuffleEnabled / PlaybackRate /
+        // UpdateTimelineProperties are NOT part of it; they live on
+        // ISystemMediaTransportControls2 (below). Appending them here makes the
+        // call read past the end of this vtable and jump to whatever garbage
+        // sits there - that segfaulted the moment a song started.
+    };
+
+    // ISystemMediaTransportControls2 - obtained with QueryInterface. Only the
+    // last slot (index 6) is used; the leading members must match metadata
+    // order so the offset is right.
+    struct ISMTC2Vtbl
+    {
+        HRESULT (STDMETHODCALLTYPE* QueryInterface)(void*, const GUID*, void**);
+        ULONG (STDMETHODCALLTYPE* AddRef)(void*);
+        ULONG (STDMETHODCALLTYPE* Release)(void*);
+        HRESULT (STDMETHODCALLTYPE* GetIids)(void*, ULONG*, GUID**);
+        HRESULT (STDMETHODCALLTYPE* GetRuntimeClassName)(void*, void**);
+        HRESULT (STDMETHODCALLTYPE* GetTrustLevel)(void*, int*);
+        // 6
         HRESULT (STDMETHODCALLTYPE* get_AutoRepeatMode)(void*, int*);
         HRESULT (STDMETHODCALLTYPE* put_AutoRepeatMode)(void*, int);
         HRESULT (STDMETHODCALLTYPE* get_ShuffleEnabled)(void*, unsigned char*);
@@ -522,7 +548,15 @@ void SystemMedia::updatePlayback(bool playing, bool paused, double positionSec, 
 
         safeRelease(statics);
     }
-    vt<ISMTCVtbl>(mSmtc)->UpdateTimelineProperties(mSmtc, typed);
+    // UpdateTimelineProperties lives on ISystemMediaTransportControls2, NOT on
+    // the base interface - query for it (and skip the position update when the
+    // object does not expose it, e.g. a very old Windows build).
+    void* smtc2 = nullptr;
+    if (SUCCEEDED(vt<ISMTCVtbl>(mSmtc)->QueryInterface(mSmtc, &IID_ISystemMediaTransportControls2, &smtc2))
+        && smtc2 != nullptr) {
+        vt<ISMTC2Vtbl>(smtc2)->UpdateTimelineProperties(smtc2, typed);
+        safeRelease(smtc2);
+    }
     safeRelease(typed);
     safeRelease(timeline);
 #else

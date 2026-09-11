@@ -927,8 +927,9 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             listDl->AddRect(p0, p1, IM_COL32(255, 255, 255, 120), 10.0f * k, 0, 2.0f);
 
             // Level badge: the "歌曲等级" caption plate from assets/select
-            // (128x48) and the big number underneath, the number in the colour
-            // of the currently selected difficulty.
+            // (128x48), with the level number in a filled circle underneath.
+            // The circle matches the leading indicator of the compact rows and
+            // takes the colour of the currently selected difficulty.
             const float badgeL = p0.x + 14.0f * k;
             const float tagY = p0.y + 20.0f * k;
             const float tagW = 62.0f * k;
@@ -944,9 +945,12 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
                 addTextCentered(listDl, body, 13.0f * k, ImVec2(badgeL + tagW * 0.5f, tagY + 11.0f * k),
                     white, "歌曲等级");
             }
-            if (rowEntry != nullptr && title != nullptr) {
+            if (rowEntry != nullptr) {
                 char levelBuf[16];
-                listDl->AddText(title, 34.0f * k, ImVec2(badgeL, tagY + 30.0f * k), diffColor,
+                const float ccx = badgeL + tagW * 0.5f;
+                const float ccy = tagY + tagH + 27.0f * k;
+                listDl->AddCircleFilled(ImVec2(ccx, ccy), 27.0f * k, diffColor);
+                addTextCentered(listDl, title, 28.0f * k, ImVec2(ccx, ccy - 1.0f * k), white,
                     levelText(*rowEntry, levelBuf, sizeof(levelBuf)));
             }
 

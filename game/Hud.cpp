@@ -281,6 +281,7 @@ void drawHud(platform::Renderer& renderer, const HudState& state, float songTime
     if (state.lastJudge == game::Judge::Perfect) judgeSprite = 1;
     else if (state.lastJudge == game::Judge::Great) judgeSprite = 2;
     else if (state.lastJudge == game::Judge::Good) judgeSprite = 3;
+    else if (state.lastJudge == game::Judge::Bad) judgeSprite = 4;
     else if (state.lastJudge == game::Judge::Miss) judgeSprite = 5;
 
     if (judgeSprite > 0 && since >= 0.0f && since <= kJudgeVisibleSec) {

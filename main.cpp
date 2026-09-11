@@ -158,7 +158,8 @@ namespace
         if (stats.lastJudge == game::Judge::None) {
             return;
         }
-        audio.playSe(seForKind(stats.lastHitKind, stats.lastJudgeCritical), seVolume * (stats.lastJudge == game::Judge::Good ? 0.5f : 1.0f));
+        const bool quieter = stats.lastJudge == game::Judge::Good || stats.lastJudge == game::Judge::Bad;
+        audio.playSe(seForKind(stats.lastHitKind, stats.lastJudgeCritical), seVolume * (quieter ? 0.5f : 1.0f));
     }
 
     enum class AppState
@@ -587,7 +588,8 @@ int main(int argc, char** argv)
     game::JudgementEngine judgement;
 
     // Play results (cleared / full combo) + song select UI assets.
-    game::setSelectAssetDir(baseDir);
+    // setSelectAssetDir expects the assets root; SongSelect appends "select\\".
+    game::setSelectAssetDir(baseDir + "assets");
     std::map<std::string, game::ScoreRecord> scores = game::loadScores(scoresPath);
 
     // Official per-difficulty levels (see game::loadMusicLevels). unipjsk
@@ -1572,8 +1574,8 @@ int main(int argc, char** argv)
             wantScreenshot = false;
             {
                 const auto& st = judgement.stats();
-                std::printf("[stats] perfect=%d great=%d good=%d miss=%d combo=%d maxCombo=%d tails=%d breaks=%d score=%.0f life=%.0f (%.1f%%)\n",
-                    st.perfect, st.great, st.good, st.miss, st.combo, st.maxCombo, st.holdTails, st.holdBreaks,
+                std::printf("[stats] perfect=%d great=%d good=%d bad=%d miss=%d combo=%d maxCombo=%d tails=%d breaks=%d score=%.0f life=%.0f (%.1f%%)\n",
+                    st.perfect, st.great, st.good, st.bad, st.miss, st.combo, st.maxCombo, st.holdTails, st.holdBreaks,
                     st.score, st.life, 100.0f * st.life / game::kMaxLife);
             }
             saveScreenshot();

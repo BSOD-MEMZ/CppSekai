@@ -34,6 +34,7 @@ enum class Judge : std::uint8_t
     Perfect,
     Great,
     Good,
+    Bad,
     Miss,
     None,
 };
@@ -61,13 +62,17 @@ struct JudgementWindows
     float perfectMs = 40.0f;
     float greatMs = 90.0f;
     float goodMs = 140.0f;
+    // BAD window end. The official table puts BAD at 108.3..125 ms with MISS
+    // past that; this engine's windows are wider, so BAD fills the gap between
+    // goodMs and the auto-miss window (missAfterMs). Keep badMs == missAfterMs:
+    // the moment the BAD window closes is the moment the note auto-misses.
+    float badMs = 180.0f;
     float missAfterMs = 180.0f;
 };
 
 // Life pool. pjsk starts every live at 1000 life (skills can push it to
 // 2000, which we do not model). Judgement costs, from the official table:
-// MISS -80, a hold broken mid-way -40 (BAD -50 is unused - the engine has no
-// BAD judgement).
+// MISS -80, BAD -50, a hold broken mid-way -40.
 constexpr float kMaxLife = 1000.0f;
 
 // Score constants ported from sekai-mmw-preview-web's overlay player
@@ -83,6 +88,7 @@ struct JudgementStats
     int perfect = 0;
     int great = 0;
     int good = 0;
+    int bad = 0;
     int miss = 0;
     int combo = 0;
     int maxCombo = 0;
@@ -230,6 +236,7 @@ class JudgementEngine
             case Judge::Perfect: return 1.0;
             case Judge::Great: return 0.7;
             case Judge::Good: return 0.5;
+            case Judge::Bad: return 0.0; // no score, breaks the combo, -50 life
             default: return 0.0;
         }
     }

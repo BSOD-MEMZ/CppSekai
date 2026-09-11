@@ -65,8 +65,10 @@ std::string scoreKey(const ChartEntry& entry);
 // Copies cleared / fullCombo from the map into the entries.
 void applyScores(std::vector<ChartEntry>& entries, const std::map<std::string, ScoreRecord>& scores);
 
-// Directory that holds assets/select/*.png (the shuffle / settings buttons,
-// the phone frame and the clear indicators). Call once at startup.
+// Assets root (the directory that contains the "select" subfolder, i.e.
+// <exeDir>\assets). The select UI PNGs (shuffle / settings buttons, the phone
+// frame and the clear indicators) load from <dir>\select\<name>.png.
+// Call once at startup.
 void setSelectAssetDir(const std::string& dir);
 
 // Official per-difficulty levels, keyed by song id. unipjsk exports have their
