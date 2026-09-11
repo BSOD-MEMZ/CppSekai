@@ -361,9 +361,24 @@ void JudgementEngine::update(float songTimeSec)
     // Hold tracking: judge the tail on release, break the hold when the lane
     // is let go too early.
     for (auto& hold : mActiveHolds) {
-        if (hold.broken) {
+        if (hold.finished) {
             continue;
         }
+
+        const bool held = laneHeld(hold);
+
+        if (hold.broken) {
+            // Already missed. Only the look is still live: pjsk washes the
+            // remaining body out while the lane is up and puts it back to
+            // normal as soon as the player presses again. The MISS stands -
+            // nothing is re-judged here.
+            hold.dimmed = !held;
+            if (songTimeSec >= hold.endTimeSec) {
+                hold.finished = true;
+            }
+            continue;
+        }
+
         const std::uint8_t startState = hold.startIndex < mNotes.size()
             ? mNotes[hold.startIndex].state
             : static_cast<std::uint8_t>(2);
@@ -374,15 +389,16 @@ void JudgementEngine::update(float songTimeSec)
 
         if (startState == 2) {
             // Never grabbed: the start's own MISS already counted for the
-            // whole hold, so the tail is consumed silently.
+            // whole hold, so the tail is consumed silently. Nothing to dim
+            // either - the hold never activated.
             hold.broken = true;
+            hold.finished = true;
             if (hold.tailIndex < mNotes.size() && mNotes[hold.tailIndex].state == 0) {
                 mNotes[hold.tailIndex].state = 2;
             }
             continue;
         }
 
-        const bool held = laneHeld(hold);
         if (held) {
             hold.released = false;
             hold.releaseTimeSec = -1.0f;
@@ -393,8 +409,10 @@ void JudgementEngine::update(float songTimeSec)
 
         if (!held && engaged && songTimeSec >= hold.startTimeSec + kHoldStartGraceSec
             && songTimeSec < hold.endTimeSec - kHoldGraceSec) {
-            // Let go too early: the hold breaks (mid-hold miss, -40 life).
+            // Let go too early: the hold breaks (mid-hold miss, -40 life) and
+            // is drawn washed out from here on until the lane is held again.
             hold.broken = true;
+            hold.dimmed = true;
             mStats.holdBreaks += 1;
             if (hold.tailIndex < mNotes.size() && mNotes[hold.tailIndex].state == 0) {
                 mNotes[hold.tailIndex].state = 2;
@@ -404,7 +422,7 @@ void JudgementEngine::update(float songTimeSec)
         }
 
         if (songTimeSec >= hold.endTimeSec) {
-            hold.broken = true;
+            hold.finished = true;
             if (!engaged) {
                 // The start never landed - one MISS for the whole hold, which
                 // the start note has already registered.
@@ -492,12 +510,25 @@ void JudgementEngine::update(float songTimeSec)
         mActiveHolds.push_back(hold);
     }
 
-    // Retire finished holds.
+    // Retire finished holds. A broken hold deliberately lingers until its end
+    // time: it is no longer judged, but the renderer still needs to know the
+    // player let go of it so the remaining body stays washed out.
     mActiveHolds.erase(std::remove_if(mActiveHolds.begin(), mActiveHolds.end(),
                           [](const ActiveHold& hold) {
-                              return hold.broken;
+                              return hold.finished;
                           }),
         mActiveHolds.end());
+}
+
+void JudgementEngine::appendDimmedHoldKeys(std::vector<float>& out) const
+{
+    for (const ActiveHold& hold : mActiveHolds) {
+        if (!hold.dimmed) {
+            continue;
+        }
+        out.push_back(hold.center);
+        out.push_back(hold.startTimeSec);
+    }
 }
 
 bool JudgementEngine::anyActiveHold(bool* criticalOut) const
@@ -506,7 +537,9 @@ bool JudgementEngine::anyActiveHold(bool* criticalOut) const
         *criticalOut = false;
     }
     for (const ActiveHold& hold : mActiveHolds) {
-        if (hold.broken) {
+        // A broken hold is still tracked (for the washed-out look) but it is no
+        // longer "active": the hold loop SE must have stopped.
+        if (hold.finished || hold.broken) {
             continue;
         }
         if (criticalOut != nullptr && hold.noteIndex < mNotes.size()) {

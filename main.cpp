@@ -1009,6 +1009,7 @@ int main(int argc, char** argv)
     };
 
     bool escapePressed = false;
+    bool rescanRequested = false; // F5 in the song list: re-read charts/
         while (SDL_PollEvent(&event) != 0) {
             ImGui_ImplSDL2_ProcessEvent(&event);
             switch (event.type) {
@@ -1045,6 +1046,11 @@ int main(int argc, char** argv)
                         }
                     } else if (event.key.keysym.sym == SDLK_h) {
                         showDebug = !showDebug;
+                    } else if (event.key.keysym.sym == SDLK_F5 && state == AppState::Select) {
+                        // The chart folder is scanned once at startup; this lets
+                        // the player drop a new .sus in and pick it up without
+                        // restarting (the empty-state hint promises F5).
+                        rescanRequested = true;
                     } else if (state == AppState::Play && event.key.keysym.sym == SDLK_SPACE && !autoPlay) {
                         // Space opens the pause dialog (same as the HUD button).
                         if (!pauseDialogOpen) {
@@ -1202,6 +1208,9 @@ int main(int argc, char** argv)
 
             const int action = game::drawSongSelect(renderer, entries, selected, windowW, windowH,
                 static_cast<float>(uiClock));
+            // Consume the F5 request here so it cannot leak into a later frame.
+            const bool wantRescan = rescanRequested || action == game::SelectRescan;
+            rescanRequested = false;
             if (action >= 0 && action < static_cast<int>(entries.size())) {
                 if (startSession(session, entries[static_cast<size_t>(action)], renderer, audio, judgement, noteSpeed, error)) {
                     loadedCoverPath = session.entry.coverPath;
@@ -1218,7 +1227,7 @@ int main(int argc, char** argv)
                 }
             } else if (action == game::SelectSettings) {
                 showDebug = true;
-            } else if (action == game::SelectRescan) {
+            } else if (wantRescan) {
                 entries = game::scanChartFolder(chartsDir);
                 selected = entries.empty() ? -1 : 0;
                 game::applyScores(entries, scores);
@@ -1320,6 +1329,13 @@ int main(int argc, char** argv)
             }
             judgement.setHoldLanes(holdLanes);
             judgement.update(static_cast<float>(songTime));
+
+            // Long notes the player let go of too early keep scrolling but are
+            // drawn washed out by the core until the lane is held again (pjsk).
+            // Cheap: at most a handful of holds, republished every frame.
+            std::vector<float> dimmedHoldKeys;
+            judgement.appendDimmedHoldKeys(dimmedHoldKeys);
+            core_api::setDimmedHolds(dimmedHoldKeys);
 
             // Debug (`--test-hits`): tap every upcoming note through the normal
             // judgement path, so the whole hit-effect chain can be checked in a

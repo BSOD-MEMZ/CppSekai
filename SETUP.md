@@ -13,6 +13,9 @@ bash build.sh          # 编译，产物在 build/
 bash setup.sh --charts # 额外下载 0075 / 0127 两张谱 + BGM 到 charts/
 ```
 
+想下别的歌 / 自己塞谱面进 `charts/`，看 **[CHARTS.md](CHARTS.md)**（命名规则、下载地址、
+元数据 sidecar、常见问题）。
+
 ## 为什么仓库里没有 toolchain 和 assets
 
 | 目录 | 内容 | 大小 | 为什么不入库 |

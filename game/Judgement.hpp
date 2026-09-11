@@ -147,6 +147,12 @@ class JudgementEngine
     // Life in 0..1, for the HUD's life bar.
     [[nodiscard]] float lifeRatio() const { return mStats.life / kMaxLife; }
 
+    // Long notes the player let go of too early, appended to `out` as flat
+    // (center, hold start time seconds) pairs - the same key the chart core's
+    // kind 5 HitEvent uses, so the renderer can dim the right hold. Call every
+    // frame and hand the result to core_api::setDimmedHolds().
+    void appendDimmedHoldKeys(std::vector<float>& out) const;
+
     // Strict flick validation: on (default) a flick needs a matching swipe
     // direction and taps never clear flicks; off restores the lenient
     // skeleton behavior (any flick gesture / tap clears any flick note).
@@ -168,6 +174,12 @@ class JudgementEngine
         float center = 0.0f;
         float width = 1.0f;
         bool broken = false;
+        // Look-only state published to the renderer: a broken hold is washed
+        // out while the lane is up and goes back to normal once it is held
+        // again (pjsk behaviour). Judging is already over at that point.
+        bool dimmed = false;
+        // Set once the hold is fully resolved so the loop can skip it.
+        bool finished = false;
         // Tail bookkeeping: kind 5 markers carry the hold's end time, while
         // the *scoreable* end note sits at that same time as a 0/1/2/3 event.
         std::size_t tailIndex = static_cast<std::size_t>(-1);

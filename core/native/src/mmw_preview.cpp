@@ -480,6 +480,11 @@ namespace mmw_preview
         // behaviour). Off: the host drives them through triggerNoteEffect()
         // as the player actually hits notes.
         bool effectsAutoplay{true};
+        // CppSekai: long notes the player let go of early are drawn translucent
+        // (pjsk behaviour). Flat (center, hold start time seconds) pairs, using
+        // exactly the values the kind 5 HitEvent reports for a normal hold, so
+        // setDimmedHolds() can match a drawing segment against them.
+        std::vector<float> dimmedHoldKeys;
     };
 
     RuntimeState gRuntime{};
@@ -2337,7 +2342,10 @@ namespace mmw_preview
         }
     }
 
-    void drawNoteBase(const Note& note, float noteLeft, float noteRight, float y, float zScalar = 1.0f)
+    // `alpha` is a CppSekai addition (upstream always draws at full opacity) so
+    // a broken long note's head can fade together with its body.
+    void drawNoteBase(const Note& note, float noteLeft, float noteRight, float y, float zScalar = 1.0f,
+        float alpha = 1.0f)
     {
         const auto& sprite = kNoteSprites[getNoteSpriteIndex(note)];
         const float noteHeight = getNoteHeight();
@@ -2350,13 +2358,13 @@ namespace mmw_preview
         const int zIndex = getZIndex(!note.friction ? SpriteLayer::BASE_NOTE : SpriteLayer::TICK_NOTE, noteLeft + (noteRight - noteLeft) / 2.0f, y * zScalar);
 
         auto middle = scaleQuad(applyTransform(TransformNoteMiddle, perspectiveQuadvPos(noteLeft + 0.25f, noteRight - 0.3f, noteTop, noteBottom)), y);
-        pushQuad(middle, makeUvRect(sprite.x1 + NOTE_SIDE_WIDTH, sprite.x2 - NOTE_SIDE_WIDTH, sprite.y1, sprite.y2), TextureId::Notes, 1.0f, 1.0f, 1.0f, 1.0f, zIndex);
+        pushQuad(middle, makeUvRect(sprite.x1 + NOTE_SIDE_WIDTH, sprite.x2 - NOTE_SIDE_WIDTH, sprite.y1, sprite.y2), TextureId::Notes, 1.0f, 1.0f, 1.0f, alpha, zIndex);
 
         auto left = scaleQuad(applyTransform(TransformNoteLeft, perspectiveQuadvPos(noteLeft, noteLeft + 0.25f, noteTop, noteBottom)), y);
-        pushQuad(left, makeUvRect(sprite.x1 + NOTE_SIDE_PAD, sprite.x1 + NOTE_SIDE_WIDTH, sprite.y1, sprite.y2), TextureId::Notes, 1.0f, 1.0f, 1.0f, 1.0f, zIndex);
+        pushQuad(left, makeUvRect(sprite.x1 + NOTE_SIDE_PAD, sprite.x1 + NOTE_SIDE_WIDTH, sprite.y1, sprite.y2), TextureId::Notes, 1.0f, 1.0f, 1.0f, alpha, zIndex);
 
         auto right = scaleQuad(applyTransform(TransformNoteRight, perspectiveQuadvPos(noteRight - 0.3f, noteRight, noteTop, noteBottom)), y);
-        pushQuad(right, makeUvRect(sprite.x2 - NOTE_SIDE_WIDTH, sprite.x2 - NOTE_SIDE_PAD, sprite.y1, sprite.y2), TextureId::Notes, 1.0f, 1.0f, 1.0f, 1.0f, zIndex);
+        pushQuad(right, makeUvRect(sprite.x2 - NOTE_SIDE_WIDTH, sprite.x2 - NOTE_SIDE_PAD, sprite.y1, sprite.y2), TextureId::Notes, 1.0f, 1.0f, 1.0f, alpha, zIndex);
     }
 
     void drawTraceDiamond(const Note& note, float noteLeft, float noteRight, float y)
@@ -2463,6 +2471,23 @@ namespace mmw_preview
         }
     }
 
+    // CppSekai: how much alpha a long note keeps once the player let go of it
+    // early. pjsk keeps the body scrolling but washes it out until the lane is
+    // held again; the host publishes those holds through setDimmedHolds().
+    constexpr float DIMMED_HOLD_ALPHA = 0.35f;
+
+    bool isHoldDimmed(float center, double activeTime)
+    {
+        const std::vector<float>& keys = gRuntime.dimmedHoldKeys;
+        for (std::size_t i = 0; i + 1 < keys.size(); i += 2) {
+            if (std::fabs(keys[i] - center) < 0.01f
+                && std::fabs(static_cast<double>(keys[i + 1]) - activeTime) < 0.02) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     void drawHoldCurves(double currentTime, double currentScaledTime)
     {
         const float totalTime = std::max(accumulateDuration(gRuntime.drawData.maxTicks, TICKS_PER_BEAT, gRuntime.score.tempoChanges), 0.0001f);
@@ -2479,6 +2504,9 @@ namespace mmw_preview
             const float holdStartCenter = getNoteCenter(holdStart) * mirror;
             const bool holdActivated = currentTime >= segment.activeTime;
             const bool segmentActivated = currentTime >= segment.startTime;
+            // CppSekai: was this long note let go of early? Matched against the
+            // host's list, which is keyed on the *unmirrored* lane center.
+            const bool dimmed = !segment.isGuide && isHoldDimmed(getNoteCenter(holdStart), segment.activeTime);
 
             const bool critical = segment.critical;
             const TextureId texture = segment.isGuide ? TextureId::TouchLine : TextureId::LongNoteLine;
@@ -2515,7 +2543,8 @@ namespace mmw_preview
             if (segmentActivated && gRuntime.score.holdNotes.at(holdStart.ID).startType == HoldNoteType::Normal) {
                 const float l = ease(startLeft, endLeft, static_cast<float>(segmentStartProgress));
                 const float r = ease(startRight, endRight, static_cast<float>(segmentStartProgress));
-                drawNoteBase(holdStart, l, r, 1.0f, static_cast<float>(segment.activeTime / totalTime));
+                drawNoteBase(holdStart, l, r, 1.0f, static_cast<float>(segment.activeTime / totalTime),
+                    dimmed ? DIMMED_HOLD_ALPHA : 1.0f);
                 if (holdStart.friction) {
                     drawTraceDiamond(holdStart, l, r, 1.0f);
                 }
@@ -2545,7 +2574,8 @@ namespace mmw_preview
             double stepStartScaled = segmentStartScaled;
             double stepTop = approach(stepStartScaled - segment.visibleDuration, stepStartScaled, currentScaledTime);
             double stepStartProgress = segmentStartProgress;
-            const float alpha = segment.isGuide ? gRuntime.config.guideAlpha : gRuntime.config.holdAlpha;
+            const float alpha = (segment.isGuide ? gRuntime.config.guideAlpha : gRuntime.config.holdAlpha)
+                * (dimmed ? DIMMED_HOLD_ALPHA : 1.0f);
             const int zIndex = getZIndex(segment.isGuide ? SpriteLayer::GUIDE_PATH : SpriteLayer::HOLD_PATH, holdStartCenter, static_cast<float>(segment.activeTime / totalTime));
             for (int i = 0; i < steps; ++i) {
                 const double toPercentage = static_cast<double>(i + 1) / steps;
@@ -2847,6 +2877,22 @@ extern "C"
     EMSCRIPTEN_KEEPALIVE void setEffectAutoplay(int enabled)
     {
         mmw_preview::gRuntime.effectsAutoplay = enabled != 0;
+    }
+
+    // CppSekai addition (no upstream equivalent): tells the renderer which long
+    // notes the player let go of early, so their remaining body is drawn
+    // translucent like pjsk does. `keys` is a flat array of (lane center, hold
+    // start time seconds) pairs - the same values the kind 5 HitEvent reports
+    // for a normal hold - and `count` is the number of *pairs*. The host
+    // republishes the whole list every frame, so an empty list clears it.
+    EMSCRIPTEN_KEEPALIVE void setDimmedHolds(const float* keys, int count)
+    {
+        std::vector<float>& out = mmw_preview::gRuntime.dimmedHoldKeys;
+        out.clear();
+        if (keys == nullptr || count <= 0) {
+            return;
+        }
+        out.assign(keys, keys + static_cast<std::size_t>(count) * 2);
     }
 
     // Plays the note-hit effect for the note at this lane position / time:

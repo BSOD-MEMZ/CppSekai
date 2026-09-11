@@ -869,13 +869,16 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     if (visible.empty()) {
         ImGui::SetCursorScreenPos(ImVec2(rowX, rowY + 20.0f * k));
         ImGui::PushFont(body);
-        ImGui::TextColored(ImVec4(0.75f, 0.75f, 0.82f, 1.0f), "没有找到谱面。把 .sus 放到 charts/ 目录下再按 F5 刷新。");
+        ImGui::TextColored(ImVec4(0.75f, 0.75f, 0.82f, 1.0f),
+            "没有找到谱面。把 .sus 放到 charts/ 目录下，再按 F5 重新扫描（命名规则见 CHARTS.md）。");
         ImGui::PopFont();
     }
 
     const GLuint backTex = selectTex(renderer, "indicate_back_new");
     const GLuint clearTex = selectTex(renderer, "clear_indicate");
     const GLuint fcTex = selectTex(renderer, "fullcombo_indicate");
+    // "歌曲等级" caption plate (128x48 sprite from assets/select).
+    const GLuint levelTex = selectTex(renderer, "songlevel");
 
     for (const int gi : visible) {
         const SongGroup& g = groups[static_cast<size_t>(gi)];
@@ -923,13 +926,24 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             listDl->AddRectFilled(p0, p1, IM_COL32(255, 255, 255, 190), 10.0f * k);
             listDl->AddRect(p0, p1, IM_COL32(255, 255, 255, 120), 10.0f * k, 0, 2.0f);
 
-            // Level badge: "歌曲等级" tag + big number, both in the colour of
-            // the currently selected difficulty.
+            // Level badge: the "歌曲等级" caption plate from assets/select
+            // (128x48) and the big number underneath, the number in the colour
+            // of the currently selected difficulty.
             const float badgeL = p0.x + 14.0f * k;
             const float tagY = p0.y + 20.0f * k;
-            listDl->AddRectFilled(ImVec2(badgeL, tagY), ImVec2(badgeL + 62.0f * k, tagY + 22.0f * k),
-                diffColor, 4.0f * k);
-            addTextCentered(listDl, body, 13.0f * k, ImVec2(badgeL + 31.0f * k, tagY + 11.0f * k), white, "歌曲等级");
+            const float tagW = 62.0f * k;
+            const float tagH = tagW * 48.0f / 128.0f;
+            if (levelTex != 0) {
+                listDl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(levelTex)),
+                    ImVec2(badgeL, tagY), ImVec2(badgeL + tagW, tagY + tagH),
+                    ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), IM_COL32(255, 255, 255, 255));
+            } else {
+                // Fallback when the sprite is missing: the old drawn plate.
+                listDl->AddRectFilled(ImVec2(badgeL, tagY), ImVec2(badgeL + tagW, tagY + 22.0f * k),
+                    diffColor, 4.0f * k);
+                addTextCentered(listDl, body, 13.0f * k, ImVec2(badgeL + tagW * 0.5f, tagY + 11.0f * k),
+                    white, "歌曲等级");
+            }
             if (rowEntry != nullptr && title != nullptr) {
                 char levelBuf[16];
                 listDl->AddText(title, 34.0f * k, ImVec2(badgeL, tagY + 30.0f * k), diffColor,

@@ -3,6 +3,8 @@
 // as C++ and adds the #WAVEOFFSET text scan.
 #include "core_api.hpp"
 
+#include <vector>
+
 extern "C"
 {
     int init(int);
@@ -18,6 +20,7 @@ extern "C"
     const float* getHitEventBufferPointer(void);
     int getHitEventCount(void);
     void setEffectAutoplay(int);
+    void setDimmedHolds(const float*, int);
     void triggerNoteEffect(float, float, float, int, int, int, int);
     const char* getMetadataTitle(void);
     const char* getMetadataArtist(void);
@@ -104,6 +107,12 @@ int getHitEventCount()
 void setEffectAutoplay(bool enabled)
 {
     ::setEffectAutoplay(enabled ? 1 : 0);
+}
+
+void setDimmedHolds(const std::vector<float>& keys)
+{
+    // keys is a flat list of (center, hold start time seconds) pairs.
+    ::setDimmedHolds(keys.empty() ? nullptr : keys.data(), static_cast<int>(keys.size() / 2));
 }
 
 void triggerNoteEffect(float center, float width, float noteTimeSec, int kind, bool critical, int flickDir,

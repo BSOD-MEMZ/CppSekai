@@ -4,6 +4,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 namespace core_api
 {
@@ -44,6 +45,13 @@ int getQuadCount();
 // Preview mode fires note-hit effects from the chart timeline (autoplay).
 // Player mode turns that off and calls triggerNoteEffect() per judged hit.
 void setEffectAutoplay(bool enabled);
+
+// CppSekai addition: long notes the player let go of early are drawn
+// translucent until the lane is held again (pjsk behaviour). Republish the
+// whole list every frame; an empty list clears it. Keys are flat
+// (lane center, hold start time seconds) pairs - the same values the kind 5
+// HitEvent reports for a normal hold.
+void setDimmedHolds(const std::vector<float>& keys);
 
 // Plays the core's note-hit effect (the game's own particle system) for the
 // note at this lane position: center / width are lane coordinates as reported

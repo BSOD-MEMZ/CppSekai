@@ -95,6 +95,14 @@ bash build.sh          # 仅需 Git Bash；产物 build/cppsekai.exe + SDL2.dll 
   生成（整数倍 alpha 加权 box 缩小到 max dim 512；start_grad 是 1:1 全屏渐变，跳过）。
   这套把 HUD 加载从 ~1.0s 降到 ~0.3s。build.sh 会连 assets 一起拷到 build/。
 - 判定窗口默认 perfect 40ms / great 90ms / good 140ms（非官方数值，做成可调的）。
+- **flick 严格方向校验已实现并默认开启**（`JudgementEngine::mStrictFlick = true`，设置面板里
+  是「严格 Flick 方向」复选框）。规则：严格模式下**点按永远清不掉 flick，滑动也永远清不掉 tap**；
+  up/default（以及 SUS 没给方向的 legacy `FlickNone`）接受「上滑」或「无方向」，left/right
+  必须给对对应方向（`findCandidate` 里比对 `noteFlickDir(note)` 与手势方向）。
+  flick 方向来自 SUS 的 `#xxx15` 通道（`type` 1=Default/上、3=Left、4=Right），核心把它写进
+  HitEvent 的 `flags` bits 1-2，`flags` bit0 才是 critical。
+  注意：**键盘没有滑动方向**（`main.cpp` 的按键路径只发 `FlickUp` 兜底），所以 left/right flick
+  只能用鼠标拖拽或触摸打；关掉严格模式会退回「任何手势都能清任何东西」的骨架行为。
 - 判定特效**不在 HUD 里画**：命中时由 `core_api::triggerNoteEffect()` 交给谱面核心自己的
   粒子系统（`assets/mmw/effect.png` + `generated_resources.h` 里的 pjsk 特效定义）播放，
   和自动播放走的是同一条时间线，这是原作 1:1。`main.cpp` 里 `setEffectAutoplay(autoPlay)`：
@@ -179,8 +187,11 @@ BGM URL 规律：`https://assets.unipjsk.com/ondemand/music/long/se_<id>_01/se_<
 
 ## 待办（按优先级）
 
-1. flick 严格方向校验（当前上滑/点按都算过）
-2. hold 音效循环（SeHoldLoop 未接）与 SE kind 区分（当前键盘全播一个音）
-3. 输入/音频延迟校准界面
-4. 结算画面、连击特效（judge v3 的 1~5 已用于判定文字，6=AUTO 仍未用）
-5. 键盘 12 键布局可能不顺手，考虑做成可配置
+1. hold 音效循环（SeHoldLoop 未接）与 SE kind 区分（当前键盘全播一个音）
+2. 输入/音频延迟校准界面
+3. 结算画面、连击特效（judge v3 的 1~5 已用于判定文字，6=AUTO 仍未用）
+4. 键盘 12 键布局可能不顺手，考虑做成可配置；键盘也打不了 left/right flick（只能发 FlickUp），
+   要么给按键加"按住+方向键"的组合，要么引导玩家用鼠标/触摸
+
+> 已实现的旧待办：flick 严格方向校验（见「约定与坑」里的说明）、hold 尾判（松手判定）、
+> HUD 真实分数与血量、放弃后重选曲卡死。
