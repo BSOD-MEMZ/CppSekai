@@ -28,10 +28,12 @@ namespace
 
 HudRect lifePauseRect()
 {
-    // Right 600/2560 of the 640x150 virtual life panel.
-    constexpr float kLifeW = 640.0f;
-    constexpr float kLifeH = 150.0f;
-    return HudRect{1920.0f - kLifeW + kLifeW * (1960.0f / 2560.0f), 0.0f,
+    // Right 600x600 of the 2560x600 life sheet, drawn at (1442, 11) 444x104.
+    constexpr float kLifeW = 444.0f;
+    constexpr float kLifeH = 104.0f;
+    constexpr float kLifeX = 1442.0f;
+    constexpr float kLifeY = 11.0f;
+    return HudRect{kLifeX + kLifeW * (1960.0f / 2560.0f), kLifeY,
         kLifeW * (600.0f / 2560.0f), kLifeH};
 }
 
@@ -180,88 +182,147 @@ void drawHud(platform::Renderer& renderer, const HudState& state, float songTime
     }
 
     // ------------------------------------------------------------------
-    // Life panel (top-right), pjsk life v3 sheet (2560x600, right 600x600
-    // is the pause button zone). Drawn 640x150 in virtual space.
+    // Life panel (top-right). The life v3 sheets are 2560x600 and the upstream
+    // overlay draws the whole sheet at 444x104, positioned at (1442, 11) -
+    // right 600x600 of the sheet is the pause button zone.
     // ------------------------------------------------------------------
-    constexpr float kLifeW = 640.0f;
-    constexpr float kLifeH = 150.0f;
-    const float lifeX = 1920.0f - kLifeW;
-    const float lifeY = 0.0f;
-    img("life_bg", lifeX, lifeY, kLifeW, kLifeH);
+    constexpr float kLifeW = 444.0f;
+    constexpr float kLifeH = 104.0f;
+    constexpr float kLifeX = 1442.0f;
+    constexpr float kLifeY = 11.0f;
+    img("life_bg", kLifeX, kLifeY, kLifeW, kLifeH);
 
-    // The fill capsule lives at u in [0.148, 0.793], v in [0.40, 0.60] of the
-    // sheet; it drains from the right end (next to the pause button) back
-    // toward the heart as life is lost. Below 30% the red danger sheet is used.
+    // life_fill / life_danger / life_overflow are the same 2560x600 sheets with
+    // only the green capsule drawn. Measured off the png, the capsule occupies
+    // u [0.1531, 0.7414] / v [0.4617, 0.6083]. Draw its left `ratio` fraction:
+    // the bar drains from the right end (next to the pause button) back toward
+    // the heart. The UV *must* start at fillU0 - sampling from 0 picks up the
+    // transparent left margin and the fill lands in the wrong place.
     const float ratio = std::clamp(state.lifeRatio, 0.0f, 1.0f);
     if (ratio > 0.0f) {
-        const float fillU0 = 0.1484f;
-        const float fillU1 = 0.7930f;
-        const float fillV0 = 0.40f;
-        const float fillV1 = 0.60f;
+        constexpr float fillU0 = 0.1531f;
+        constexpr float fillU1 = 0.7414f;
+        constexpr float fillV0 = 0.4617f;
+        constexpr float fillV1 = 0.6083f;
         const char* fillKey = ratio <= 0.30f ? "life_danger" : "life_fill";
         const platform::Renderer::HudSprite* fill = renderer.hud(fillKey);
         if (fill != nullptr && fill->id != 0) {
+            const float fillUEnd = fillU0 + (fillU1 - fillU0) * ratio;
             drawList->AddImage(
                 reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(fill->id)),
-                ImVec2(px(lifeX + fillU0 * kLifeW), py(lifeY + fillV0 * kLifeH)),
-                ImVec2(px(lifeX + (fillU0 + (fillU1 - fillU0) * ratio) * kLifeW),
-                    py(lifeY + fillV1 * kLifeH)),
-                ImVec2(0.0f, fillV0),
-                ImVec2((fillU1 - fillU0) * ratio, fillV1),
+                ImVec2(px(kLifeX + fillU0 * kLifeW), py(kLifeY + fillV0 * kLifeH)),
+                ImVec2(px(kLifeX + fillUEnd * kLifeW), py(kLifeY + fillV1 * kLifeH)),
+                ImVec2(fillU0, fillV0),
+                ImVec2(fillUEnd, fillV1),
                 IM_COL32(255, 255, 255, 255));
         }
     }
 
-    // Life value digits, right-aligned left of the pause zone.
+    // Life value digits, right-aligned in the empty top-right of the pill
+    // (upstream: slotX = 1442+319 - i*22, slotY = 11+10, shadow 37 / glyph 34).
     {
         const int lifeValue = std::max(0, static_cast<int>(std::lround(1000.0f * ratio)));
         const std::string lifeText = std::to_string(lifeValue);
-        const float rightEdge = lifeX + 470.0f;
-        const float centerY = lifeY + 62.0f;
-        float digitRight = rightEdge;
         for (size_t i = 0; i < lifeText.size(); ++i) {
             const std::string key(1, lifeText[lifeText.size() - 1 - i]);
-            const platform::Renderer::HudSprite* main = renderer.hud("life_digit_" + key);
+            const float slotX = kLifeX + 319.0f - static_cast<float>(i) * 22.0f;
+            const float slotY = kLifeY + 10.0f;
             const platform::Renderer::HudSprite* shadow = renderer.hud("life_digit_s" + key);
-            const float mainH = 52.0f;
-            const float shadowH = 57.0f;
-            const float w = main != nullptr && main->height > 0
-                ? mainH * (static_cast<float>(main->width) / static_cast<float>(main->height))
-                : mainH * 0.75f;
-            const float sw = shadow != nullptr && shadow->height > 0
+            const platform::Renderer::HudSprite* main = renderer.hud("life_digit_" + key);
+            const float shadowH = 37.0f;
+            const float mainH = 34.0f;
+            const float shadowW = shadow != nullptr && shadow->height > 0
                 ? shadowH * (static_cast<float>(shadow->width) / static_cast<float>(shadow->height))
                 : 0.0f;
-            const float x = digitRight - w;
-            img("life_digit_s" + key, x + (w - sw) * 0.5f, centerY - shadowH * 0.5f - 3.0f, sw, shadowH);
-            img("life_digit_" + key, x, centerY - mainH * 0.5f, w, mainH);
-            digitRight = x - 2.0f;
+            const float mainW = main != nullptr && main->height > 0
+                ? mainH * (static_cast<float>(main->width) / static_cast<float>(main->height))
+                : mainH * 0.75f;
+            const float centerX = slotX + 13.0f;
+            img("life_digit_s" + key, centerX - shadowW * 0.5f, slotY - 2.0f, shadowW, shadowH);
+            img("life_digit_" + key, centerX - mainW * 0.5f, slotY, mainW, mainH);
         }
     }
 
     // ------------------------------------------------------------------
-    // Combo (right side)
+    // Combo (right side). 1:1 port of the upstream overlay: digits + tag form
+    // one group scaled about (1634, 478); each hit pops the digits and fires a
+    // short glow burst, and the glow breathes with the AP pulse.
     // ------------------------------------------------------------------
-    if (state.combo >= 2) {
+    if (state.combo > 0) {
+        constexpr float COMBO_BASE_SCALE = 0.85f;
+        constexpr float COMBO_DIGIT_STEP = 92.0f;
+        constexpr float COMBO_GROUP_SCALE = 1.25f;
+        constexpr float COMBO_GROUP_OFFSET_Y = -12.0f;
+        constexpr float COMBO_GROUP_CENTER_X = 1634.0f;
+        constexpr float COMBO_GROUP_CENTER_Y = 478.0f;
+        auto comboGroupX = [&](float x) {
+            return COMBO_GROUP_CENTER_X + (x - COMBO_GROUP_CENTER_X) * COMBO_GROUP_SCALE;
+        };
+        auto comboGroupY = [&](float y) {
+            return COMBO_GROUP_CENTER_Y + (y - COMBO_GROUP_CENTER_Y) * COMBO_GROUP_SCALE
+                + COMBO_GROUP_OFFSET_Y;
+        };
+        auto comboGroupS = [&](float v) { return v * COMBO_GROUP_SCALE; };
+
+        constexpr float kApPulseAngular = 3.14159265359f * (4.0f / 3.0f);
+        const float apAlpha = std::clamp((std::sin(songTimeSec * kApPulseAngular) + 1.0f) * 0.5f, 0.0f, 1.0f);
+
+        constexpr float kTagGlowW = 197.0f * 0.67f;
+        constexpr float kTagGlowH = 79.0f * 0.67f;
+        img("combo_tag_glow", comboGroupX(1634.0f - kTagGlowW * 0.5f),
+            comboGroupY((478.0f - 70.0f) - kTagGlowH * 0.5f), comboGroupS(kTagGlowW),
+            comboGroupS(kTagGlowH), apAlpha);
+        constexpr float kTagW = 127.0f;
+        constexpr float kTagH = 42.0f;
+        img("combo_tag", comboGroupX(1634.0f - kTagW * 0.5f),
+            comboGroupY(478.0f - 67.0f - kTagH * 0.5f), comboGroupS(kTagW), comboGroupS(kTagH));
+
+        // Pop scale: within 8 frames of the last combo increment the digits
+        // shrink back to base, and the glow bursts over the first 14 frames.
+        // (lastJudgeAtSec is the last combo-positive judge, so combo > 0 means
+        // it is also the last time the counter went up.)
+        const float progress = (songTimeSec - state.lastJudgeAtSec) * 60.0f;
+        float comboScale = COMBO_BASE_SCALE;
+        if (progress >= 0.0f && progress < 1000.0f) {
+            const float shiftScale = std::min(1.0f, std::max(0.5f, (progress / 8.0f) * 0.5f + 0.5f));
+            comboScale = COMBO_BASE_SCALE * shiftScale;
+        }
+        const float burstAlpha =
+            (progress >= 0.0f && progress < 14.0f) ? std::max(0.0f, 1.0f - progress / 14.0f) : 0.0f;
+
         const std::string comboText = std::to_string(state.combo);
-        float totalW = 0.0f;
-        for (const char ch : comboText) {
-            const platform::Renderer::HudSprite* sprite = renderer.hud(std::string("combo_digit_n_") + ch);
-            if (sprite != nullptr && sprite->height > 0) {
-                totalW += 34.0f * (static_cast<float>(sprite->width) / static_cast<float>(sprite->height));
+        const float mid = static_cast<float>(comboText.size()) / 2.0f;
+        constexpr float comboCenterYOffset = 18.0f;
+        for (size_t i = 0; i < comboText.size(); ++i) {
+            const char ch = comboText[i];
+            const float left = (static_cast<float>(i) - mid + 0.5f) * COMBO_DIGIT_STEP * comboScale;
+            const float centerX = comboGroupX(1634.0f + left);
+            const std::string key(1, ch);
+            const platform::Renderer::HudSprite* glow = renderer.hud("combo_digit_b_" + key);
+            const platform::Renderer::HudSprite* main = renderer.hud("combo_digit_n_" + key);
+            const float mainH = comboGroupS(134.0f * comboScale);
+            const float glowH = comboGroupS(150.0f * comboScale);
+            const float mainW = main != nullptr && main->height > 0
+                ? mainH * (static_cast<float>(main->width) / static_cast<float>(main->height))
+                : mainH;
+            const float glowW = glow != nullptr && glow->height > 0
+                ? glowH * (static_cast<float>(glow->width) / static_cast<float>(glow->height))
+                : glowH;
+            const float centerY = comboGroupY(478.0f + comboCenterYOffset * comboScale);
+            const float digitGlowAlpha = std::min(1.0f, 0.18f + apAlpha * 0.82f);
+            // NOTE the sprite keys carry a trailing underscore
+            // ("combo_digit_b_0"), unlike the life/score ones.
+            img("combo_digit_b_" + key, centerX - glowW * 0.5f, centerY - glowH * 0.5f, glowW, glowH,
+                digitGlowAlpha);
+            img("combo_digit_n_" + key, centerX - mainW * 0.5f, centerY - mainH * 0.5f, mainW, mainH);
+            if (burstAlpha > 0.0f) {
+                // Hit burst pass: intentionally larger than the base glow.
+                const float burstScaleMul = 1.28f + 0.22f * burstAlpha;
+                img("combo_digit_b_" + key, centerX - glowW * 0.5f * burstScaleMul,
+                    centerY - glowH * 0.5f * burstScaleMul, glowW * burstScaleMul,
+                    glowH * burstScaleMul, std::min(1.0f, (0.35f + apAlpha * 0.65f) * burstAlpha));
             }
         }
-        float cursorX = 1634.0f - totalW * 0.5f;
-        const float comboY = 420.0f;
-        for (const char ch : comboText) {
-            const std::string key(1, ch);
-            const platform::Renderer::HudSprite* sprite = renderer.hud("combo_digit_n_" + key);
-            const float h = 44.0f;
-            const float w = sprite && sprite->height > 0 ? h * (static_cast<float>(sprite->width) / static_cast<float>(sprite->height)) : h;
-            img("combo_digit_b" + key, cursorX, comboY + 3.0f, w, h * 1.08f, 0.85f);
-            img("combo_digit_n_" + key, cursorX, comboY, w, h);
-            cursorX += w;
-        }
-        img("combo_tag", 1634.0f - 63.5f, comboY + 50.0f, 127.0f, 42.0f);
     }
 
     // ------------------------------------------------------------------

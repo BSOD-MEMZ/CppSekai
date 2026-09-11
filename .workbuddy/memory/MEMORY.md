@@ -55,7 +55,15 @@
 ## HUD 缩放陷阱（`platform::Renderer` / `game/Hud.cpp`）
 - `px()/py()` 是虚拟坐标→像素，`ps()` 是尺寸→像素。**位置用了 px/py，尺寸就必须用 ps()**。
   踩过：分数数字写成 `shadowH = scoreS(36.0f)`（漏 `ps()`）→ 画大 1.5 倍（`SCORE_ROOT_SCALE`）→ 数字重叠。
-- 走 `img()` 辅助函数的天然安全（内部会 `ps()`）；**直接调 `AddImage` 的地方要自己记得是像素空间**。
+- 走 `img()` 辅助函数最安全（内部自动 `ps()`，虚拟坐标进出，且对缺失贴图安全）；
+  **直接调 `AddImage` 的地方要自己记得是像素空间**。
+- **贴图 key 的下划线**：combo 是 `combo_digit_b_0` / `combo_digit_n_0`（**带下划线**），
+  life/score 的 shadow 是 `life_digit_s0` / `digit_s0`（**不带**）。踩过：combo 辉光写成
+  `combo_digit_b0` 查不到 → 辉光从来没画出来。拿不准就对照 `Renderer::loadHud()` 的 `add(...)`。
+- **生命条**：2560×600 sheet 整张画在 `(1442, 11)`、`444×104`；填充胶囊实测
+  u [0.1531, 0.7414] / v [0.4617, 0.6083]，且 **UV 起点必须是 fillU0**（从 0 采样会取到透明区）；
+  数字 `slotX = 1442+319-i*22`、`slotY = 21`、37/34。`lifePauseRect()` 必须跟这套几何一致。
+  上游是 autoplay（血条永远满），所以它对"血量 <100%"的处理不可信，以我们的实测为准。
 - 对齐 UI 时直接看上游 `D:\Dev\sekai-mmw-preview-web\native\src\mmw_overlay_player.cpp`（CppSekai 的移植源）。
 
 ## 协作约定
