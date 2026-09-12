@@ -64,7 +64,7 @@ struct UserSettings
     double offsetSec = 0.0; // audio offset; the UI shows it in ms
     double leadInSec = 6.0;
     int windowMode = 0; // 0=borderless 1=windowed 2=fullscreen
-    int fpsLimit = 0;   // 0 = vsync only
+    int fpsLimit = 60;  // 0 = vsync only; >refresh rate auto-disables vsync
     float perfectMs = 40.0f;
     float greatMs = 90.0f;
     float goodMs = 140.0f;

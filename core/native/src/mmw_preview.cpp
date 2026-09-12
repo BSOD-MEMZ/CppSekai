@@ -1234,6 +1234,82 @@ namespace mmw_preview
             }
         }
 
+        // CppSekai: mirror the upstream half-beat hold combo events
+        // (calculateHudEvents' HoldHalfBeat pass) in the *judgement* event
+        // stream. pjsk accrues combo/score every half beat while a long note
+        // is held - not just at head and tail. unipjsk SUS exports carry
+        // almost no visible hold mids, so without these a whole hold only
+        // adds two combo. Same cadence as upstream: from the start tick
+        // rounded up to the next eighth, up to the end tick rounded up,
+        // exclusive.
+        constexpr int halfBeatTicks = TICKS_PER_BEAT / 2;
+        for (const auto& [holdId, hold] : gRuntime.score.holdNotes) {
+            if (hold.isGuide() || hold.startType != HoldNoteType::Normal) {
+                continue;
+            }
+            const Note& holdStart = gRuntime.score.notes.at(holdId);
+            const Note& holdEnd = gRuntime.score.notes.at(hold.end);
+            int eighthTick = holdStart.tick + halfBeatTicks;
+            if (eighthTick % halfBeatTicks) {
+                eighthTick -= eighthTick % halfBeatTicks;
+            }
+            if (eighthTick == holdStart.tick || eighthTick == holdEnd.tick) {
+                continue;
+            }
+            int endTick = holdEnd.tick;
+            if (endTick % halfBeatTicks) {
+                endTick += halfBeatTicks - (endTick % halfBeatTicks);
+            }
+            for (int tick = eighthTick; tick < endTick; tick += halfBeatTicks) {
+                gRuntime.hitEvents.push_back(HitEvent{
+                    accumulateDuration(tick, TICKS_PER_BEAT, gRuntime.score.tempoChanges),
+                    getNoteCenter(holdStart),
+                    static_cast<float>(holdStart.width),
+                    4.0f,
+                    holdStart.critical ? 1.0f : 0.0f,
+                    -1.0f,
+                    getSEVolumeAtTick(tick, gRuntime.score),
+                });
+                // HoldMid sprites are never drawn individually, so the ID is
+                // irrelevant beyond keeping the table index-aligned.
+                gRuntime.hitEventNoteIds.push_back(holdId);
+            }
+        }
+
+        // CppSekai: a hold with visible mid steps would now get both the real
+        // tick and the synthesized half-beat tick at the same moment - drop
+        // duplicate kind-4 events that share time AND lane (events are sorted,
+        // so duplicates are adjacent).
+        {
+            std::vector<HitEvent> deduped;
+            std::vector<int> dedupedIds;
+            deduped.reserve(gRuntime.hitEvents.size());
+            dedupedIds.reserve(gRuntime.hitEventNoteIds.size());
+            for (std::size_t i = 0; i < gRuntime.hitEvents.size(); ++i) {
+                const HitEvent& e = gRuntime.hitEvents[i];
+                bool duplicateTick = false;
+                if (static_cast<int>(std::lround(e.kind)) == 4) {
+                    for (std::size_t j = deduped.size(); j-- > 0;) {
+                        const HitEvent& p = deduped[j];
+                        if (p.timeSec != e.timeSec || p.center != e.center) {
+                            break; // end of the (time, lane) run
+                        }
+                        if (static_cast<int>(std::lround(p.kind)) == 4) {
+                            duplicateTick = true;
+                            break;
+                        }
+                    }
+                }
+                if (duplicateTick) {
+                    continue;
+                }
+                deduped.push_back(e);
+                dedupedIds.push_back(gRuntime.hitEventNoteIds[i]);
+            }
+            gRuntime.hitEvents = std::move(deduped);
+            gRuntime.hitEventNoteIds = std::move(dedupedIds);
+        }
+
         // CppSekai: sort the events together with their note IDs so the
         // packed stream and the ID table stay index-aligned.
         std::vector<std::pair<HitEvent, int>> combined;

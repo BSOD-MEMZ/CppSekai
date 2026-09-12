@@ -333,7 +333,7 @@ int main(int argc, char** argv)
     int winWidth = 1280;
     int winHeight = 720;
     int windowMode = 0; // 0=borderless 1=windowed 2=fullscreen(desktop)
-    int fpsLimit = 0;   // extra frame cap on top of vsync; 0 = vsync only
+    int fpsLimit = 60;  // extra frame cap on top of vsync; 0 = vsync only
 
     // Settings that also live in userdata.json (loaded below). Flags present on
     // the command line win over the saved values; these record which were given.
@@ -1219,6 +1219,9 @@ int main(int argc, char** argv)
                             && !paused && !pauseDialogOpen && screenshotPath.empty()) {
                             paused = true;
                             pauseDialogOpen = true;
+                            // Same as ESC: freeze the music clock, otherwise
+                            // the song keeps running behind the dialog.
+                            audio.pause();
                         }
                     }
                     break;
@@ -1666,10 +1669,15 @@ int main(int argc, char** argv)
                 lastSeenJudgeTime = stats.lastJudgeTimeSec;
                 hudState.lastJudge = stats.lastJudge;
                 hudState.lastJudgeAtSec = stats.lastJudgeTimeSec;
-                // In autoplay the core's own timeline fires the effects
-                // (setEffectAutoplay above) - triggering them here as well
-                // would double every burst.
-                if (!autoPlay && stats.lastJudge != game::Judge::Miss && stats.lastJudge != game::Judge::None) {
+                if (autoPlay) {
+                    // Autoplay: burst effects come from the core's own
+                    // timeline, but nothing else plays the hit SE (the input
+                    // paths never fire). Ticks stay silent - the hold loop SE
+                    // covers the sustain.
+                    if (static_cast<int>(std::lround(stats.lastHitKind)) <= 3) {
+                        playHitSe(audio, judgement, seVolume);
+                    }
+                } else if (stats.lastJudge != game::Judge::Miss && stats.lastJudge != game::Judge::None) {
                     // Original hit effect: the chart core's own particle system,
                     // played for the note that was just judged (same sprites and
                     // timings the autoplay preview uses).
