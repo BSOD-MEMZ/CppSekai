@@ -484,6 +484,40 @@ void JudgementEngine::update(float songTimeSec)
             continue;
         }
 
+        if (note.kind == 3.0f) {
+            // Trace notes (the green "bamboo" segments / slides): the official
+            // rule is COVERAGE, not timing. Keeping a finger on the lane while
+            // the segment passes is enough, there is no tail, and the head does
+            // not have to be re-tapped - which is why a player who holds
+            // through the whole bamboo should not lose a single note.
+            //
+            // A well timed press still goes through findCandidate() and keeps
+            // its graded judgement; this branch only catches the "already
+            // holding" case, which used to fall through to the auto-miss and
+            // made every trace in the chart unplayable on a hold-through.
+            bool covered = mAutoPlay;
+            for (const float lane : mHoldLanes) {
+                if (laneCovers(note, lane, 0.5f)) {
+                    covered = true;
+                    break;
+                }
+            }
+            if (covered) {
+                note.state = 1;
+                mHitEventIndices.push_back(static_cast<int>(i));
+                registerJudge(Judge::Perfect, (static_cast<int>(note.flags) & 1) != 0, note.volume, note.kind);
+                mStats.lastJudgeTimeSec = songTimeSec;
+                mStats.lastHitKind = note.kind;
+                mStats.lastHitCenter = note.center;
+                mStats.lastHitWidth = note.width;
+                mStats.lastHitTimeSec = note.timeSec;
+                mStats.lastHitFlickDir = noteFlickDir(note);
+                mStats.lastHitFriction = true;
+                continue;
+            }
+            // Not covered: fall through to the normal miss timing below.
+        }
+
         if (mAutoPlay) {
             // Autoplay preview: every note is a timed PERFECT, so the HUD /
             // score / combo machinery shows a flawless run without input.
@@ -606,6 +640,12 @@ void JudgementEngine::update(float songTimeSec)
             // auto-miss path grade a forgotten flick instead of gifting a
             // PERFECT for doing nothing.
             if (hold.tailIndex < mNotes.size() && mNotes[hold.tailIndex].kind == 2.0f) {
+                if (mAutoPlay) {
+                    // Nothing swipes in a preview run, so the flick tail would
+                    // sit pending and auto-miss - autoplay has to stay flawless
+                    // (its [stats] line is the headless baseline).
+                    judgeHoldTail(hold, Judge::Perfect, songTimeSec);
+                }
                 continue;
             }
             Judge judge = Judge::Perfect;
