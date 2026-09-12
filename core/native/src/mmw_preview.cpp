@@ -341,9 +341,11 @@ namespace mmw_preview
     {
         int refID{};
         Range visualTime{};
-        // CppSekai: the note's actual hit time (visualTime.max is extended
-        // past it so missed notes keep falling; see calculateDrawData).
-        double hitTime{};
+        // CppSekai: how long the note may keep being drawn. visualTime keeps
+        // the upstream anchors (they also drive the approach() position), the
+        // extended window only decides when the sprite is culled - a missed
+        // note falls past the judgement line until off screen.
+        double fallTime{};
     };
 
     struct DrawingLine
@@ -2340,16 +2342,17 @@ namespace mmw_preview
             const float center = getNoteCenter(note);
             const float speedRatio = getEffectiveSpeedRatio(note, score);
             const float visibleDuration = getNoteVisibleDuration(note, score, drawData.noteSpeed);
-            // CppSekai: the visible window is extended one approach duration
-            // past the hit time, so a note the player missed keeps falling
-            // past the judgement line until it is off screen (pjsk). Notes
-            // that were hit are removed by the host through markNoteHit()
-            // (see drawNotes); in autoplay nothing is published and the
-            // upstream "vanish at the line" look is kept via the
-            // effectsAutoplay check.
+            // CppSekai: visualTime keeps the upstream values (they anchor the
+            // approach() position mapping); fallTime extends the *culling*
+            // window one approach duration past the hit time, so a note the
+            // player missed keeps falling past the judgement line until it is
+            // off screen (pjsk). Notes that were hit are removed by the host
+            // through markNoteHit() (see drawNotes); in autoplay nothing is
+            // published and the upstream "vanish at the line" look is kept
+            // via the effectsAutoplay check.
             const Range visualTime = getNoteVisualTime(note, score, drawData.noteSpeed);
             drawData.drawingNotes.push_back(
-                {note.ID, {visualTime.min, visualTime.max + visibleDuration}, visualTime.max});
+                {note.ID, visualTime, visualTime.max + visibleDuration});
             auto [rangeIt, inserted] = simultaneousBuilder.try_emplace(note.tick, Range{center, center});
             auto [durationIt, durationInserted] = simultaneousDurations.try_emplace(note.tick, visibleDuration);
             if (!durationInserted) {
@@ -2538,10 +2541,10 @@ namespace mmw_preview
             // In autoplay (preview) nothing is published, so notes would fall
             // past the line forever - restore the upstream "vanish at the
             // line" look there.
-            if (gRuntime.effectsAutoplay && currentScaledTime > drawing.hitTime) {
+            if (gRuntime.effectsAutoplay && currentScaledTime > drawing.visualTime.max) {
                 continue;
             }
-            if (currentScaledTime < drawing.visualTime.min || currentScaledTime > drawing.visualTime.max) {
+            if (currentScaledTime < drawing.visualTime.min || currentScaledTime > drawing.fallTime) {
                 continue;
             }
 
