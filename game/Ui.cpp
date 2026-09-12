@@ -242,7 +242,7 @@ bool slider(const char* id, float* value, float minV, float maxV, float step, co
     const float btnRadius = 14.0f * s;
     const float trackH = 8.0f * s;
     const float thumbR = 15.0f * s;
-    const float rowH = 80.0f * s; // value text + track row (was 96: card got too tall)
+    const float rowH = 72.0f * s; // value text + track row (was 96, then 80: cards shrank)
 
     const ImVec2 pos = ImGui::GetCursorScreenPos();
     const float rowW = width > 0.0f ? width : ImGui::GetContentRegionAvail().x;
@@ -406,9 +406,9 @@ void cardTitle(const char* text, float interiorWidth, float sizePx)
     const ImVec2 textSize = font->CalcTextSizeA(sizePx * s, FLT_MAX, 0.0f, text);
     dl->AddText(font, sizePx * s, pos, kTitleText, text);
     // Thin rule spanning the interior, a little below the baseline.
-    const float ruleY = pos.y + textSize.y + 12.0f * s;
+    const float ruleY = pos.y + textSize.y + 8.0f * s;
     dl->AddRectFilled(ImVec2(pos.x, ruleY), ImVec2(pos.x + interiorWidth, ruleY + 2.0f * s), kDivider, 1.0f * s);
-    ImGui::SetCursorScreenPos(ImVec2(pos.x, ruleY + 20.0f * s));
+    ImGui::SetCursorScreenPos(ImVec2(pos.x, ruleY + 12.0f * s));
 }
 
 bool checkBox(const char* label, bool* value, float rowWidth)
@@ -556,8 +556,8 @@ int messageDialog(platform::Renderer& renderer, const char* id, const char* titl
 {
     const float s = scale();
     const ImVec2 display = ImGui::GetIO().DisplaySize;
-    const float cardW = 600.0f * s;
-    const float cardH = 250.0f * s;
+    const float cardW = 500.0f * s;
+    const float cardH = 200.0f * s;
     ImVec2 center = ImVec2(display.x * 0.5f, display.y * 0.5f);
     ImVec2 size = ImVec2(cardW, cardH);
 
@@ -580,16 +580,16 @@ int messageDialog(platform::Renderer& renderer, const char* id, const char* titl
         st.open = false; // animate out; caller sees -2 when done
     }
 
-    ImGui::SetCursorScreenPos(ImVec2(center.x - size.x * 0.5f + 40.0f * s, center.y - size.y * 0.5f + 36.0f * s));
-    cardTitle(title, size.x - 80.0f * s);
+    ImGui::SetCursorScreenPos(ImVec2(center.x - size.x * 0.5f + 30.0f * s, center.y - size.y * 0.5f + 20.0f * s));
+    cardTitle(title, size.x - 60.0f * s);
 
     // Capsule row, centered, laid out bottom.
-    const float btnH = kCapsuleH * s * 0.80f;
-    const float btnW = 176.0f * s;
-    const float gap = 26.0f * s;
+    const float btnH = kCapsuleH * s * 0.72f;
+    const float btnW = 160.0f * s;
+    const float gap = 22.0f * s;
     const float totalW = static_cast<float>(buttons.size()) * btnW + (static_cast<float>(buttons.size()) - 1) * gap;
     float x = center.x - totalW * 0.5f;
-    const float y = center.y + size.y * 0.5f - btnH - 34.0f * s;
+    const float y = center.y + size.y * 0.5f - btnH - 24.0f * s;
     for (size_t i = 0; i < buttons.size(); ++i) {
         const bool isPrimary = i < primary.size() && primary[i];
         ImGui::SetCursorScreenPos(ImVec2(x, y));

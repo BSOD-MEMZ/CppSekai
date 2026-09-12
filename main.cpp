@@ -919,17 +919,17 @@ int main(int argc, char** argv)
         // pjsk style settings panel (tabbed card, pjsk sliders).
         const float s = ui::scale();
         const ImVec2 display = ImGui::GetIO().DisplaySize;
-        ImVec2 cardSize = ImVec2(400.0f * s, 560.0f * s);
+        ImVec2 cardSize = ImVec2(360.0f * s, 520.0f * s);
         ImVec2 cardCenter = ImVec2(18.0f * s + cardSize.x * 0.5f, 18.0f * s + cardSize.y * 0.5f);
-        const float interior = cardSize.x - 64.0f * s;
-        const float padX = 32.0f * s;
+        const float interior = cardSize.x - 56.0f * s;
+        const float padX = 28.0f * s;
         bool closeClicked = false;
         if (ui::beginCard("##settings", &cardCenter, &cardSize, true, false, &closeClicked, showDebug)) {
             if (closeClicked) {
                 showDebug = false;
             }
             ImGui::SetCursorScreenPos(ImVec2(cardCenter.x - cardSize.x * 0.5f + padX,
-                cardCenter.y - cardSize.y * 0.5f + 26.0f * s));
+                cardCenter.y - cardSize.y * 0.5f + 16.0f * s));
             ui::cardTitle("设置", interior);
 
             static int tab = 0;
@@ -998,8 +998,11 @@ int main(int argc, char** argv)
                 contentLeft();
                 ImGui::Text("显示器刷新率 %d Hz；超过刷新率会自动关垂直同步", displayRefreshHz);
                 contentLeft();
+                // checkBox returns the *new* value, so gate on a real change -
+                // gating on the return value made the box impossible to untick.
                 bool autoPlayBox = autoPlay;
-                if (ui::checkBox("AUTOPLAY 谱面预览", &autoPlayBox, interior)) {
+                ui::checkBox("AUTOPLAY 谱面预览", &autoPlayBox, interior);
+                if (autoPlayBox != autoPlay) {
                     autoPlay = autoPlayBox;
                     userSettings.autoplay = autoPlayBox;
                     persistUserData();

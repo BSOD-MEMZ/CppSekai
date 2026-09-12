@@ -94,7 +94,7 @@ void caption(const char* text, float sizePx = 0.0f, ImU32 color = kTitleText, fl
 
 // Left-aligned card title with the thin divider rule underneath (the classic
 // pjsk dialog header). interiorWidth is the usable card width for centering.
-void cardTitle(const char* text, float interiorWidth, float sizePx = 30.0f);
+void cardTitle(const char* text, float interiorWidth, float sizePx = 24.0f);
 
 // Pink rounded checkbox with a white check + label, the whole group centered
 // in rowWidth. Toggles *value on click; returns the new value.
