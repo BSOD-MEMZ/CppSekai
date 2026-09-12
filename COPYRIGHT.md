@@ -30,7 +30,7 @@ CppSekai（本仓库）            AGPL-3.0-only
 ```
 
 - **AGPL 的义务只有三条**，对本项目来说全部容易满足：
-  1. 分发（包括发 exe）时**附上 LICENSE 文本和版权声明**——仓库根已有 `LICENSE`；
+  1. 分发（包括发 exe）时**附上许可证文本和版权声明**——AGPL-3.0 全文由仓库持有者在 GitHub 仓库页提供，发布二进制时记得带上；
   2. 以任何形式分发二进制时，**必须同时提供（或指明获取方式）对应完整源码**——把 GitHub 仓库链接写在 Release 说明里即可；
   3. AGPL 多一条「网络使用也要给源码」：即便只搭了个网页让别人在线玩（本项目的上游就是这么用的），同样要公开源码。本地 exe 不涉及这条。
 - **MIT 部分**（MikuMikuWorld、第三方库）：保留版权与许可声明即可，`third_party/` 里各库自带的头文件注释就是声明，别删。
@@ -74,7 +74,7 @@ CppSekai（本仓库）            AGPL-3.0-only
 
 ### 已经做对的（保持）
 
-- ✅ 代码 AGPL-3.0 + LICENSE 文件在仓库根
+- ✅ 代码 AGPL-3.0（许可证全文由仓库持有者在 GitHub 提供）
 - ✅ README / CHARTS 反复写明「素材仅限本地游玩、不再分发」
 - ✅ `charts/`、`assets/se|select|fx`、`toolchain/` 确实不在库里
 - ✅ UI 内有「与官方无关」声明（README §11）
@@ -96,6 +96,30 @@ CppSekai（本仓库）            AGPL-3.0-only
 - ❌ 收费 / 开赏 / 接广告
 - ❌ 把 exe 名字改成含 "Project SEKAI" 的字样
 - ❌ 在宣传里用官方截图以外的方式暗示官方背书
+
+### 社区先例：MajdataPlay 是怎么做的
+
+[MajdataPlay](https://github.com/LingFeng-bbben/MajdataPlay)（maimai 谱面模拟器，GPL-3.0）
+是同类项目里活得最健康的之一，它的三板斧：
+
+1. **仓库零官方素材**。UI 全部自己在 Unity 里重画，皮肤 / 音效 / 判定音 / 谱面 MV
+   全部让用户自己丢进 `StreamingAssets/`——"replace the files you want"。
+2. **免责 + 导流官方**："This software has no affair with the big S four letter
+   company, **please support the arcade whenever you can**"——README、Wiki、B站专栏三处都有。
+3. **定位克制**：只做自制谱（Simai）演奏器，不提供任何获取官方数据的功能。
+
+对照 CppSekai 的差异与启示：
+
+| 项目 | MajdataPlay | CppSekai 现状 |
+|---|---|---|
+| 代码来源 | 从零手搓 | 衍生自 AGPL 上游（合规，无问题） |
+| UI 素材 | 自绘 | **官方解包**（assets/mmw，经上游仓库） |
+| 数据获取 | 不提供 | CHARTS.md 给了 CDN 模板 |
+
+你判断"mmw 素材本来就是原游戏解包的、问题不大"——同意风险可控（上游公开托管多年，
+官方默许同人工具），这也是本文档给 assets/mmw 定 ★★★☆☆ 而非五星的原因。若想进一步
+靠拢 MajdataPlay 模式，中期可做的事：把 notes/长条/HUD 贴图换成自绘重制版（判定音效可
+用 CC0 音源替代），那样仓库就可以连图带 exe 随便发。
 
 ---
 

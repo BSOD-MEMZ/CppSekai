@@ -27,11 +27,12 @@ namespace
     }
 
     // Card geometry in "design pixels" (860p reference), scaled by scale().
-    constexpr float kCardRadius = 24.0f;
+    constexpr float kCardRadius = 14.0f;
     constexpr float kCapsuleH = 66.0f;
-    constexpr float kCloseSize = 44.0f;
-    constexpr float kAnimSec = 0.16f; // card scale in/out duration
-    constexpr float kHeaderH = 44.0f; // draggable strip height
+    constexpr float kCloseDraw = 26.0f; // drawn X size
+    constexpr float kCloseHit = 38.0f;  // hitbox (bigger than the drawing)
+    constexpr float kAnimSec = 0.16f;   // card scale in/out duration
+    constexpr float kHeaderH = 44.0f;   // draggable strip height
 
     float easeInOut(float t)
     {
@@ -140,10 +141,37 @@ bool beginCard(const char* id, ImVec2* center, ImVec2* size, bool showClose, boo
         withAlpha(IM_COL32(40, 40, 60, 40), k), kCardRadius * s);
     dl->AddRectFilled(lo, hi, withAlpha(kCardBg, k), kCardRadius * s);
 
-    // Header strip: drag the card around. The close X below wins in its own
-    // rectangle because it is submitted later.
+    // Close X: submitted BEFORE the header drag strip, and the strip below
+    // excludes the close corner - zero overlapping items, so the click always
+    // lands. (The old layout overlapped the full-width drag strip and hover
+    // resolution between the two items made the X feel dead.)
+    float headerRight = hi.x;
+    if (showClose) {
+        const float hit = kCloseHit * s;
+        const ImVec2 closeLo(hi.x - hit - 8.0f * s, lo.y + 8.0f * s);
+        const ImVec2 closeHi(closeLo.x + hit, closeLo.y + hit);
+        ImGui::SetCursorScreenPos(closeLo);
+        ImGui::PushID(id);
+        ImGui::InvisibleButton("##close", ImVec2(hit, hit));
+        const bool clicked = ImGui::IsItemClicked();
+        const bool hovered = ImGui::IsItemHovered();
+        ImGui::PopID();
+        // The texture is a dark X on transparent; dim it slightly on hover.
+        // Drawn smaller than its hitbox and centered in it.
+        const float draw = kCloseDraw * s;
+        const float inset = (hit - draw) * 0.5f;
+        dl->AddImage(closeTexture(), ImVec2(closeLo.x + inset, closeLo.y + inset),
+            ImVec2(closeHi.x - inset, closeHi.y - inset), ImVec2(0, 0), ImVec2(1, 1),
+            withAlpha(IM_COL32(255, 255, 255, 255), (hovered ? 0.55f : 1.0f) * k));
+        headerRight = closeLo.x - 2.0f * s;
+        if (closeClicked != nullptr) {
+            *closeClicked = clicked;
+        }
+    }
+
+    // Header strip: drag the card around.
     const ImVec2 headerLo = lo;
-    const ImVec2 headerHi = ImVec2(hi.x, lo.y + kHeaderH * s);
+    const ImVec2 headerHi = ImVec2(headerRight, lo.y + kHeaderH * s);
     ImGui::SetCursorScreenPos(headerLo);
     ImGui::PushID(id);
     ImGui::InvisibleButton("##drag", ImVec2(headerHi.x - headerLo.x, headerHi.y - headerLo.y));
@@ -155,23 +183,6 @@ bool beginCard(const char* id, ImVec2* center, ImVec2* size, bool showClose, boo
     }
     ImGui::PopID();
     ImGui::SetCursorScreenPos(ImVec2(lo.x, lo.y + kHeaderH * s));
-
-    if (showClose) {
-        const ImVec2 closeLo = ImVec2(hi.x - (kCloseSize + 14.0f) * s, lo.y + 14.0f * s);
-        const ImVec2 closeHi = ImVec2(hi.x - 14.0f * s, lo.y + (14.0f + kCloseSize) * s);
-        ImGui::SetCursorScreenPos(closeLo);
-        ImGui::PushID(id);
-        ImGui::InvisibleButton("##close", ImVec2(closeHi.x - closeLo.x, closeHi.y - closeLo.y));
-        const bool clicked = ImGui::IsItemClicked();
-        const bool hovered = ImGui::IsItemHovered();
-        ImGui::PopID();
-        // The texture is a dark X on transparent; dim it slightly on hover.
-        dl->AddImage(closeTexture(), closeLo, closeHi, ImVec2(0, 0), ImVec2(1, 1),
-            withAlpha(IM_COL32(255, 255, 255, 255), (hovered ? 0.55f : 1.0f) * k));
-        if (closeClicked != nullptr) {
-            *closeClicked = clicked;
-        }
-    }
     // Content is positioned absolutely; still submit an item so the window
     // layout is valid (ImGui asserts on cursor moves without items).
     ImGui::Dummy(ImVec2(1.0f, 1.0f));

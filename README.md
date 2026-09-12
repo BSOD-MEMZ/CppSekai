@@ -360,7 +360,6 @@ CppSekai/
   AGENTS.md           给 AI 助手的项目指南（改代码前先读）
   SETUP.md            环境配置
   CHARTS.md           怎么下载 / 整理谱面（给玩家看的）
-  LICENSE             AGPL-3.0 许可证全文
   COPYRIGHT.md        版权与合规说明：素材审计、风险矩阵、规避措施
 ```
 
@@ -381,7 +380,7 @@ CppSekai/
 
 ## 11. 授权与素材
 
-- 代码遵循 **AGPL-3.0-only**，仓库根有完整的 [`LICENSE`](LICENSE) 文件。任何分发（包括发 exe）都要求附上该许可并提供对应源码——指回本仓库链接即可。
+- 代码遵循 **AGPL-3.0-only**（许可证全文不随仓库分发，见 GitHub 仓库侧栏或 gnu.org；任何分发（包括发 exe）都要求附上该许可并提供对应源码——指回本仓库链接即可）。
   - 上游：[sekai-mmw-preview-web](https://github.com/watagashi-uni/sekai-mmw-preview-web)（AGPL-3.0）——谱面核心与渲染布局来自这里
   - 再上游：MikuMikuWorld（MIT）——`core/native/mmw_port/` 的移植来源
   - 第三方库（imgui / miniaudio / stb / nlohmann-json / DirectXMath）各自遵循 MIT 等宽松许可，声明保留在 `third_party/` 各源文件头部

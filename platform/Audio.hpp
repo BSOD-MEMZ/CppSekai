@@ -98,6 +98,17 @@ class AudioEngine
     // resume countdown. A missing file just disables it.
     void playCountdownSe(float volume);
 
+    // ---- Song-select music preview ---------------------------------------
+    // Plays a clip cut from partway into the track (like the official select
+    // screen, which never previews from the top) and loops it. startPreview
+    // is safe to call every frame with the same path - it only reloads when
+    // the path changes; an empty path just stops the preview.
+    bool startPreview(const std::string& path, std::string& outError);
+    // Call once per frame while the preview shows: loops the clip.
+    void updatePreview();
+    void stopPreview();
+    bool previewActive() const { return mPreviewActive; }
+
     // Hold loop SE: starts a looping voice while a hold is active, stops it
     // (with a short fade handled by calling code each frame) when not. Uses
     // the last pooled voice of the two hold-loop kinds, so one-shots are
@@ -118,6 +129,11 @@ class AudioEngine
 
     bool mCountdownSeLoaded = false;
     ma_sound mCountdownSe{};
+
+    bool mPreviewActive = false;
+    std::string mPreviewPath;
+    double mPreviewStartSec = 0.0;
+    double mPreviewEndSec = 0.0;
 
     bool mStarted = false;
     bool mMusicStarted = false;

@@ -205,6 +205,67 @@ void AudioEngine::stopMusic()
         mMusicStarted = false;
     }
     mStarted = false;
+    mPreviewActive = false;
+    mPreviewPath.clear();
+}
+
+bool AudioEngine::startPreview(const std::string& path, std::string& outError)
+{
+    if (mPreviewActive && mPreviewPath == path && mMusicLoaded) {
+        return true; // already playing exactly this clip
+    }
+    stopMusic();
+    if (path.empty()) {
+        return true; // no BGM for this chart: stay silent
+    }
+    if (!loadMusic(path, outError)) {
+        mPreviewPath.clear();
+        return false;
+    }
+    const double len = musicDurationSec();
+    if (len < 4.0) {
+        // Too short to cut a meaningful clip - treat as silence.
+        ma_sound_stop(&mMusic);
+        mMusicStarted = false;
+        mPreviewPath.clear();
+        return false;
+    }
+    // The official select-screen preview plays an excerpt from partway into
+    // the song, never the intro. Approximate it: clip starts at ~35% of the
+    // track and loops after 30 seconds.
+    mPreviewStartSec = std::min(len * 0.35, len - 10.0);
+    mPreviewEndSec = std::min(len, mPreviewStartSec + 30.0);
+    ma_sound_set_volume(&mMusic, 0.85f);
+    ma_sound_seek_to_pcm_frame(&mMusic, static_cast<ma_uint64>(mPreviewStartSec * sampleRate()));
+    ma_sound_start(&mMusic);
+    mMusicStarted = true;
+    mPreviewActive = true;
+    mPreviewPath = path;
+    return true;
+}
+
+void AudioEngine::updatePreview()
+{
+    if (!mPreviewActive || !mMusicLoaded || mPaused) {
+        return;
+    }
+    ma_uint64 cursor = 0;
+    if (ma_sound_get_cursor_in_pcm_frames(&mMusic, &cursor) == MA_SUCCESS) {
+        const double pos = static_cast<double>(cursor) / sampleRate();
+        if (pos >= mPreviewEndSec || pos < mPreviewStartSec - 0.5) {
+            ma_sound_seek_to_pcm_frame(&mMusic, static_cast<ma_uint64>(mPreviewStartSec * sampleRate()));
+        }
+    }
+}
+
+void AudioEngine::stopPreview()
+{
+    if (mPreviewActive) {
+        ma_sound_stop(&mMusic);
+        mMusicStarted = false;
+        mPreviewActive = false;
+        mPreviewPath.clear();
+    }
 }
 
 void AudioEngine::update()

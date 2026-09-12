@@ -110,6 +110,28 @@ void drawHud(platform::Renderer& renderer, const HudState& state, float songTime
             ImVec2(clipRatio, 1.0f),
             tint);
     };
+    // Upstream drawHudImageClipX: the quad is *cropped* to the ratio (width
+    // shrinks with the UVs), not stretched - the score bar uses this so the
+    // fill actually grows from the left instead of the texture being squeezed
+    // into the full-width slot.
+    auto imgClipX = [&](const std::string& name, float x, float y, float w, float h, float ratio, float alpha = 1.0f) {
+        const platform::Renderer::HudSprite* sprite = renderer.hud(name);
+        if (sprite == nullptr || sprite->id == 0) {
+            return;
+        }
+        const float clipped = std::clamp(ratio, 0.0f, 1.0f);
+        if (clipped <= 0.0f) {
+            return;
+        }
+        const ImU32 tint = IM_COL32(255, 255, 255, static_cast<int>(std::clamp(alpha, 0.0f, 1.0f) * 255.0f));
+        drawList->AddImage(
+            reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(sprite->id)),
+            ImVec2(px(x), py(y)),
+            ImVec2(px(x) + ps(w * clipped), py(y) + ps(h)),
+            ImVec2(0.0f, 0.0f),
+            ImVec2(clipped, 1.0f),
+            tint);
+    };
 
     // ------------------------------------------------------------------
     // Intro: main.cpp owns the opening card + the playfield fade (see
@@ -129,8 +151,9 @@ void drawHud(platform::Renderer& renderer, const HudState& state, float songTime
     // ------------------------------------------------------------------
     img("score_bg", scoreX(0.0f), scoreY(0.0f), scoreS(444), scoreS(96));
     // The bar follows the score, not the life: upstream maps the score onto
-    // the bar through scoreRankAndBar() (see game/ScoreBar in main.cpp).
-    img("score_bar", scoreX(79.0f), scoreY(37.0f), scoreS(354), scoreS(16),
+    // the bar through scoreRankAndBar() and draws it *cropped* (quad width
+    // shrinks with the UVs) - see imgClipX above.
+    imgClipX("score_bar", scoreX(79.0f), scoreY(37.0f), scoreS(354), scoreS(16),
         std::clamp(state.scoreBarRatio, 0.0f, 1.0f));
     img("score_fg", scoreX(0.0f), scoreY(0.0f), scoreS(444), scoreS(96));
 

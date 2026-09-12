@@ -330,9 +330,9 @@ int main(int argc, char** argv)
     bool showPauseDialogShot = false; // headless check: force the pause dialog open
     bool testRestart = false; // debug: replay "give up -> pick another song"
     double restartAtSec = 8.0;
-    int winWidth = 1280;
-    int winHeight = 720;
-    int windowMode = 0; // 0=borderless 1=windowed 2=fullscreen(desktop)
+    int winWidth = 1366;
+    int winHeight = 768;
+    int windowMode = 1; // 0=borderless 1=windowed 2=fullscreen(desktop)
     int fpsLimit = 60;  // extra frame cap on top of vsync; 0 = vsync only
     bool showProgressBar = true; // subtle top-edge playback bar (settings toggle)
 
@@ -1024,20 +1024,20 @@ int main(int argc, char** argv)
                 ImGui::Text("分辨率");
                 // Preset sizes; the live window resizes immediately when not
                 // in fullscreen (there the desktop size wins until exit).
-                static constexpr int kResW[4] = {1280, 1600, 1920, 2560};
-                static constexpr int kResH[4] = {720, 900, 1080, 1440};
+                static constexpr int kResW[5] = {1280, 1366, 1600, 1920, 2560};
+                static constexpr int kResH[5] = {720, 768, 900, 1080, 1440};
                 static int resIdx = [](int w, int h) {
-                    for (int i = 0; i < 4; ++i) {
+                    for (int i = 0; i < 5; ++i) {
                         if (kResW[i] == w && kResH[i] == h) {
                             return i;
                         }
                     }
-                    return 0;
+                    return 1;
                 }(resW, resH);
                 contentLeft();
                 ImGui::SetNextItemWidth(interior);
                 if (ImGui::Combo("##resolution", &resIdx,
-                        "1280 x 720\0" "1600 x 900\0" "1920 x 1080\0" "2560 x 1440\0")) {
+                        "1280 x 720\0" "1366 x 768\0" "1600 x 900\0" "1920 x 1080\0" "2560 x 1440\0")) {
                     resW = kResW[resIdx];
                     resH = kResH[resIdx];
                     if (windowMode != 2) {
@@ -1297,14 +1297,33 @@ int main(int argc, char** argv)
                         endPointer(pointerIdForButton(SDL_BUTTON_RIGHT));
                         // Auto-pause when the window loses keyboard focus while
                         // playing (LEAVE only fires for mouse leave, so gate on
-                        // the focus event itself).
+                        // the focus event itself). During the opening lead-in
+                        // (songTime < 0) a pause dialog could never be resumed
+                        // properly - just go back to the song list with the
+                        // sound off instead.
                         if (event.window.event == SDL_WINDOWEVENT_FOCUS_LOST && state == AppState::Play
                             && !paused && !pauseDialogOpen && screenshotPath.empty()) {
-                            paused = true;
-                            pauseDialogOpen = true;
-                            // Same as ESC: freeze the music clock, otherwise
-                            // the song keeps running behind the dialog.
-                            audio.pause();
+                            const double currentSongTime =
+                                audio.hasMusic() ? audio.songTime() : wallSongTime();
+                            if (currentSongTime < 0.0) {
+                                audio.stopMusic();
+                                audio.setHoldLoop(false, false, 0.0f);
+                                touches.clear();
+                                std::fill(std::begin(keyHeld), std::end(keyHeld), false);
+                                lanePress.fill(0.0f);
+                                paused = false;
+                                session.active = false;
+                                lastSeenJudgeTime = -100.0f;
+                                hudState = game::HudState{};
+                                state = AppState::Select;
+                                systemMedia.setTaskbarProgress(-1.0, false);
+                            } else {
+                                paused = true;
+                                pauseDialogOpen = true;
+                                // Same as ESC: freeze the music clock, otherwise
+                                // the song keeps running behind the dialog.
+                                audio.pause();
+                            }
                         }
                     }
                     break;
@@ -1525,6 +1544,17 @@ int main(int argc, char** argv)
             // ----------------------------------------------------------
             renderer.setLaneGlows({});
             renderer.renderFrame(nullptr, 0, 0.85f);
+
+            // Music preview: cut a clip from partway into the BGM and loop
+            // it, the way the official select screen never previews from the
+            // top. Reloads only when the selection changes.
+            if (selected >= 0 && selected < static_cast<int>(entries.size())) {
+                audio.startPreview(entries[static_cast<size_t>(selected)].bgmPath, error);
+                error.clear(); // a missing BGM just means silence
+            } else {
+                audio.stopPreview();
+            }
+            audio.updatePreview();
 
             if (selected >= 0 && selected < static_cast<int>(entries.size())) {
                 const std::string& cover = entries[static_cast<size_t>(selected)].coverPath;

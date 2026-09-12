@@ -63,10 +63,10 @@ struct UserSettings
     float seVolume = 0.8f;
     double offsetSec = 0.0; // audio offset; the UI shows it in ms
     double leadInSec = 6.0;
-    int windowMode = 0; // 0=borderless 1=windowed 2=fullscreen
+    int windowMode = 1; // 0=borderless 1=windowed 2=fullscreen
     // Windowed/borderless resolution (fullscreen always uses the desktop size).
-    int windowWidth = 1280;
-    int windowHeight = 720;
+    int windowWidth = 1366;
+    int windowHeight = 768;
     int fpsLimit = 60;  // 0 = vsync only; >refresh rate auto-disables vsync
     // Subtle playback progress bar along the top edge of the play screen.
     bool showProgressBar = true;
