@@ -347,6 +347,10 @@ void drawHud(platform::Renderer& renderer, const HudState& state, float songTime
     else if (state.lastJudge == game::Judge::Good) judgeSprite = 3;
     else if (state.lastJudge == game::Judge::Bad) judgeSprite = 4;
     else if (state.lastJudge == game::Judge::Miss) judgeSprite = 5;
+    // Autoplay preview shows AUTO (sprite 6) with the same pop-in animation.
+    if (state.autoJudge && judgeSprite > 0) {
+        judgeSprite = 6;
+    }
 
     if (judgeSprite > 0 && since >= 0.0f && since <= kJudgeVisibleSec) {
         const float progressFrames = since * 60.0f;

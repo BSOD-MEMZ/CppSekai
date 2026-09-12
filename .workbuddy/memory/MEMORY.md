@@ -1,5 +1,20 @@
 # CppSekai — 项目长期记忆
 
+## 判定↔渲染联动协议（2026-09-12 新增）
+- **宿主→核心的三个发布口**（都在 main.cpp 播放分支，仅 `!autoPlay`）：
+  `markNoteHit(HitEvent索引)`（增量，`s_hitPublishCursor` 在 startSession 重置）、
+  `setMissedHolds(键)`（每帧全量）、`setDimmedHolds(键)`（原有）。核心侧键表
+  `hitEventNoteIds` 与事件流同序（calculateHitEvents 里一起 stable_sort）。
+- **音符到线后的行为**：drawingNotes 用独立的 `fallTime` 字段延长**裁剪**窗口（miss 滑出屏幕）；
+  `visualTime` 保持上游值——它同时是 `approach()` 的**位置锚点**，动它全场音符错位
+  （2026-09-12 踩过，"音符全部散架"就是这个）。击中隐藏靠 hitNoteIds；autoplay 靠
+  `effectsAutoplay && t>visualTime.max` 保持上游到线即消失。过线后的下坠靠 approach() 外推。
+- **miss 的 hold**：主体继续下落（drawHoldCurves 的 missed 分支，`segmentStartScaled`
+  不再钳到当前时间），tick 同步延长窗口；判定侧静默（state=2 不记分）。
+- **tick→hold 匹配必须按时间窗**（hold 走位时 tick 中心≠起点中心），无 marker 的
+  guide tick 保持 always-auto-hit。tail 标记（load 里的 holdTail flagging）仍是按中心
+  匹配——走位 hold 的尾巴可能漏标，**未修**，疑似 tails 计数偏少的隐患。
+
 ## 资源与 git 的坑（务必记住）
 - `.gitignore` **忽略整个 `assets/`**（连同 `toolchain/`、`charts/`、`build/`）。
   - `assets/mmw/**` 在仓库里是因为**先 commit 后加规则**——已跟踪文件不受 gitignore 影响。

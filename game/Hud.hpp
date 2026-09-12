@@ -25,6 +25,9 @@ struct HudState
     game::Judge lastJudge = game::Judge::None;
     float lastJudgeAtSec = -100.0f;
     float lifeRatio = 1.0f;
+    // Autoplay preview: show the AUTO sprite (judge_6) instead of the judge
+    // word, timing/animation identical to the regular judgement text.
+    bool autoJudge = false;
 };
 
 void drawHud(platform::Renderer& renderer, const HudState& state, float songTimeSec, int windowW, int windowH,

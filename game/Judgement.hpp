@@ -184,6 +184,12 @@ class JudgementEngine
     void setStrictFlick(bool strict) { mStrictFlick = strict; }
     [[nodiscard]] bool strictFlick() const { return mStrictFlick; }
 
+    // CppSekai: autoplay (chart preview) mode - every scoreable note is
+    // resolved as a PERFECT exactly on its own time, holds never break and
+    // tails hold through. Feeds the HUD a full-combo run without any input.
+    void setAutoPlay(bool autoPlay) { mAutoPlay = autoPlay; }
+    [[nodiscard]] bool autoPlay() const { return mAutoPlay; }
+
     [[nodiscard]] bool loaded() const { return mLoaded; }
     [[nodiscard]] int totalNotes() const { return mTotalScoreNotes; }
 
@@ -224,6 +230,7 @@ class JudgementEngine
     JudgementWindows mWindows;
     JudgementStats mStats;
     bool mStrictFlick = true;
+    bool mAutoPlay = false;
 
     // Score model (see kTeamPower above).
     float mChartRating = kDefaultChartRating;

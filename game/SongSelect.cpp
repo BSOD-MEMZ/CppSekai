@@ -343,6 +343,7 @@ void loadUserData(const std::string& path, UserSettings& settings,
             settings.greatMs = s.value("greatMs", settings.greatMs);
             settings.goodMs = s.value("goodMs", settings.goodMs);
             settings.strictFlick = s.value("strictFlick", settings.strictFlick);
+            settings.autoplay = s.value("autoplay", settings.autoplay);
         }
     } catch (...) {
         // malformed file: keep the defaults
@@ -372,6 +373,7 @@ void saveUserData(const std::string& path, const UserSettings& settings,
         {"greatMs", settings.greatMs},
         {"goodMs", settings.goodMs},
         {"strictFlick", settings.strictFlick},
+        {"autoplay", settings.autoplay},
     };
     doc["scores"] = scoreDoc;
     std::ofstream file(path, std::ios::binary);

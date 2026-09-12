@@ -342,6 +342,7 @@ int main(int argc, char** argv)
     bool leadInGiven = false;
     bool windowGiven = false;
     bool fpsGiven = false;
+    bool autoplayGiven = false;
     game::UserSettings userSettings;
     std::map<std::string, game::ScoreRecord> scores;
 
@@ -381,6 +382,7 @@ int main(int argc, char** argv)
             useSystemFont = false;
         } else if (arg == "--auto") {
             autoPlay = true;
+            autoplayGiven = true;
         } else if (arg == "--speed" && i + 1 < utf8Argc) {
             noteSpeed = static_cast<float>(std::atof(utf8Argv[++i]));
             speedGiven = true;
@@ -507,6 +509,9 @@ int main(int argc, char** argv)
     }
     if (!offsetGiven) {
         gUserOffsetSec = userSettings.offsetSec;
+    }
+    if (!autoplayGiven) {
+        autoPlay = userSettings.autoplay;
     }
 
     int windowW = std::max(320, winWidth);
@@ -858,6 +863,17 @@ int main(int argc, char** argv)
     double uiClock = 0.0;
     int fpsLimitLive = fpsLimit; // adjustable from the debug panel
     const double perfFreqD = static_cast<double>(perfFreq);
+    // Refresh rate of the monitor the window is on: with vsync on, a frame
+    // cap above this is physically impossible (presentation quantizes to
+    // refresh intervals) - the fps slider disables vsync instead.
+    int displayRefreshHz = 60;
+    {
+        SDL_DisplayMode dm;
+        if (SDL_GetCurrentDisplayMode(SDL_GetWindowDisplayIndex(window), &dm) == 0 && dm.refresh_rate > 0) {
+            displayRefreshHz = dm.refresh_rate;
+        }
+    }
+    bool vsyncActive = true;
 
     // Snapshot everything userdata.json stores and write it out. Called right
     // after a result is recorded and once on exit, so settings and play results
@@ -870,6 +886,7 @@ int main(int argc, char** argv)
         userSettings.windowMode = windowMode;
         userSettings.fpsLimit = fpsLimitLive;
         userSettings.offsetSec = gUserOffsetSec;
+        userSettings.autoplay = autoPlay;
         const game::JudgementWindows& w = judgement.windows();
         userSettings.perfectMs = w.perfectMs;
         userSettings.greatMs = w.greatMs;
@@ -978,6 +995,15 @@ int main(int argc, char** argv)
                 }
                 contentLeft();
                 ImGui::Text("实测: %.1f fps", 1.0 / std::max(1e-6, lastFrameDeltaSec));
+                contentLeft();
+                ImGui::Text("显示器刷新率 %d Hz；超过刷新率会自动关垂直同步", displayRefreshHz);
+                contentLeft();
+                bool autoPlayBox = autoPlay;
+                if (ui::checkBox("AUTOPLAY 谱面预览", &autoPlayBox, interior)) {
+                    autoPlay = autoPlayBox;
+                    userSettings.autoplay = autoPlayBox;
+                    persistUserData();
+                }
             } else {
                 // 判定: judgement windows.
                 contentLeft();
@@ -1186,6 +1212,14 @@ int main(int argc, char** argv)
                         // own up event, the mouse may not).
                         endPointer(pointerIdForButton(SDL_BUTTON_LEFT));
                         endPointer(pointerIdForButton(SDL_BUTTON_RIGHT));
+                        // Auto-pause when the window loses keyboard focus while
+                        // playing (LEAVE only fires for mouse leave, so gate on
+                        // the focus event itself).
+                        if (event.window.event == SDL_WINDOWEVENT_FOCUS_LOST && state == AppState::Play
+                            && !paused && !pauseDialogOpen && screenshotPath.empty()) {
+                            paused = true;
+                            pauseDialogOpen = true;
+                        }
                     }
                     break;
                 case SDL_KEYDOWN: {
@@ -1504,6 +1538,10 @@ int main(int argc, char** argv)
                 }
             }
             judgement.setHoldLanes(holdLanes);
+            // Autoplay is runtime-switchable (settings card), so keep the
+            // judgement engine and the core's effect timeline in sync here.
+            judgement.setAutoPlay(autoPlay);
+            core_api::setEffectAutoplay(autoPlay);
             judgement.update(static_cast<float>(songTime));
 
             // Long notes the player let go of too early keep scrolling but are
@@ -1556,7 +1594,8 @@ int main(int argc, char** argv)
             }
 
             // Record CLEAR / FULL COMBO once the song is played to the end.
-            if (!session.scoreRecorded && trackDurationSec > 1.0 && songTime >= trackDurationSec - 0.25) {
+            // Autoplay previews must never touch the records.
+            if (!autoPlay && !session.scoreRecorded && trackDurationSec > 1.0 && songTime >= trackDurationSec - 0.25) {
                 session.scoreRecorded = true;
                 const auto& st = judgement.stats();
                 const bool fullCombo = st.miss == 0;
@@ -1627,7 +1666,10 @@ int main(int argc, char** argv)
                 lastSeenJudgeTime = stats.lastJudgeTimeSec;
                 hudState.lastJudge = stats.lastJudge;
                 hudState.lastJudgeAtSec = stats.lastJudgeTimeSec;
-                if (stats.lastJudge != game::Judge::Miss && stats.lastJudge != game::Judge::None) {
+                // In autoplay the core's own timeline fires the effects
+                // (setEffectAutoplay above) - triggering them here as well
+                // would double every burst.
+                if (!autoPlay && stats.lastJudge != game::Judge::Miss && stats.lastJudge != game::Judge::None) {
                     // Original hit effect: the chart core's own particle system,
                     // played for the note that was just judged (same sprites and
                     // timings the autoplay preview uses).
@@ -1637,6 +1679,7 @@ int main(int argc, char** argv)
                 }
             }
             hudState.lifeRatio = judgement.lifeRatio();
+            hudState.autoJudge = autoPlay;
 
             // Debug (`--judge-frame N`): freeze the judge text on frame N of
             // its 60fps pop-in so the animation can be checked from a headless
@@ -1777,6 +1820,15 @@ int main(int argc, char** argv)
             running = false;
         }
 
+        // Frame pacing: vsync quantizes presentation to refresh intervals, so
+        // on a 60 Hz panel any cap above 60 is physically impossible and the
+        // limiter's sleep just jitters around the vblank (fps "乱跳"). Past
+        // the refresh rate we drop vsync and pace purely with the limiter.
+        const bool wantVsync = !(fpsLimitLive > 0 && fpsLimitLive > displayRefreshHz);
+        if (wantVsync != vsyncActive) {
+            SDL_GL_SetSwapInterval(wantVsync ? 1 : 0);
+            vsyncActive = wantVsync;
+        }
         SDL_GL_SwapWindow(window);
 
         // Optional frame cap on top of vsync: sleep in coarse chunks, then

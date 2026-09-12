@@ -458,6 +458,22 @@ void JudgementEngine::update(float songTimeSec)
             continue;
         }
 
+        if (mAutoPlay) {
+            // Autoplay preview: every note is a timed PERFECT, so the HUD /
+            // score / combo machinery shows a flawless run without input.
+            // Effects come from the core's own timeline in this mode.
+            note.state = 1;
+            registerJudge(Judge::Perfect, (static_cast<int>(note.flags) & 1) != 0, note.volume, note.kind);
+            mStats.lastJudgeTimeSec = songTimeSec;
+            mStats.lastHitKind = note.kind;
+            mStats.lastHitCenter = note.center;
+            mStats.lastHitWidth = note.width;
+            mStats.lastHitTimeSec = note.timeSec;
+            mStats.lastHitFlickDir = noteFlickDir(note);
+            mStats.lastHitFriction = note.kind == 3.0f;
+            continue;
+        }
+
         if (note.timeSec < songTimeSec - missSec) {
             note.state = 2;
             registerMiss(songTimeSec, kLifeMiss);
@@ -472,7 +488,9 @@ void JudgementEngine::update(float songTimeSec)
             continue;
         }
 
-        const bool held = laneHeld(hold);
+        // In autoplay the lane is always considered held: holds never break
+        // and tails hold through for a PERFECT.
+        const bool held = mAutoPlay || laneHeld(hold);
 
         if (hold.broken) {
             // Already missed. Only the look is still live: pjsk washes the

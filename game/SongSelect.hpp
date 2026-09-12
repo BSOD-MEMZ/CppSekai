@@ -69,6 +69,8 @@ struct UserSettings
     float greatMs = 90.0f;
     float goodMs = 140.0f;
     bool strictFlick = true;
+    // Autoplay chart preview (all-PERFECT run, AUTO judge text, no records).
+    bool autoplay = false;
 };
 
 // Path of userdata.json: <exeDir>\.. \userdata.json when a charts\ folder sits
