@@ -48,9 +48,6 @@ namespace
     // {5125316A-C3A2-475B-8507-93534DC88F15}
     const GUID IID_ITimelineProperties = {
         0x5125316A, 0xC3A2, 0x475B, {0x85, 0x07, 0x93, 0x53, 0x4D, 0xC8, 0x8F, 0x15}};
-    // {629BDBC8-D932-4FF4-96B9-8D96C5C1E858}
-    const GUID IID_IPropertyValueStatics = {
-        0x629BDBC8, 0xD932, 0x4FF4, {0x96, 0xB9, 0x8D, 0x96, 0xC5, 0xC1, 0xE8, 0x58}};
     // {DDB0472D-C911-4A1F-86D9-DC3D71A95F5A} - also in MinGW's
     // systemmediatransportcontrolsinterop.h.
     const GUID IID_ISystemMediaTransportControlsInterop = {
@@ -187,46 +184,20 @@ namespace
         HRESULT (STDMETHODCALLTYPE* GetIids)(void*, ULONG*, GUID**);
         HRESULT (STDMETHODCALLTYPE* GetRuntimeClassName)(void*, void**);
         HRESULT (STDMETHODCALLTYPE* GetTrustLevel)(void*, int*);
-        // 6
-        HRESULT (STDMETHODCALLTYPE* get_StartTime)(void*, void**);
-        HRESULT (STDMETHODCALLTYPE* put_StartTime)(void*, void*);
-        HRESULT (STDMETHODCALLTYPE* get_EndTime)(void*, void**);
-        HRESULT (STDMETHODCALLTYPE* put_EndTime)(void*, void*);
-        HRESULT (STDMETHODCALLTYPE* get_MinSeekTime)(void*, void**);
-        HRESULT (STDMETHODCALLTYPE* put_MinSeekTime)(void*, void*);
-        HRESULT (STDMETHODCALLTYPE* get_MaxSeekTime)(void*, void**);
-        HRESULT (STDMETHODCALLTYPE* put_MaxSeekTime)(void*, void*);
-        HRESULT (STDMETHODCALLTYPE* get_Position)(void*, void**);
-        HRESULT (STDMETHODCALLTYPE* put_Position)(void*, void*);
-    };
-
-    // Windows.Foundation.IPropertyValueStatics - only CreateTimeSpan is used.
-    struct IPropertyValueStaticsVtbl
-    {
-        HRESULT (STDMETHODCALLTYPE* QueryInterface)(void*, const GUID*, void**);
-        ULONG (STDMETHODCALLTYPE* AddRef)(void*);
-        ULONG (STDMETHODCALLTYPE* Release)(void*);
-        HRESULT (STDMETHODCALLTYPE* GetIids)(void*, ULONG*, GUID**);
-        HRESULT (STDMETHODCALLTYPE* GetRuntimeClassName)(void*, void**);
-        HRESULT (STDMETHODCALLTYPE* GetTrustLevel)(void*, int*);
-        // 6
-        HRESULT (STDMETHODCALLTYPE* CreateEmpty)(void*, void**);
-        HRESULT (STDMETHODCALLTYPE* CreateUInt8)(void*, unsigned char, void**);
-        HRESULT (STDMETHODCALLTYPE* CreateInt16)(void*, short, void**);
-        HRESULT (STDMETHODCALLTYPE* CreateUInt16)(void*, unsigned short, void**);
-        HRESULT (STDMETHODCALLTYPE* CreateInt32)(void*, int, void**);
-        HRESULT (STDMETHODCALLTYPE* CreateUInt32)(void*, unsigned int, void**);
-        HRESULT (STDMETHODCALLTYPE* CreateInt64)(void*, long long, void**);
-        HRESULT (STDMETHODCALLTYPE* CreateUInt64)(void*, unsigned long long, void**);
-        HRESULT (STDMETHODCALLTYPE* CreateSingle)(void*, float, void**);
-        HRESULT (STDMETHODCALLTYPE* CreateDouble)(void*, double, void**);
-        HRESULT (STDMETHODCALLTYPE* CreateChar16)(void*, unsigned short, void**);
-        HRESULT (STDMETHODCALLTYPE* CreateBoolean)(void*, unsigned char, void**);
-        HRESULT (STDMETHODCALLTYPE* CreateString)(void*, void*, void**);
-        HRESULT (STDMETHODCALLTYPE* CreateInspectable)(void*, void*, void**);
-        HRESULT (STDMETHODCALLTYPE* CreateGuid)(void*, const GUID*, void**);
-        HRESULT (STDMETHODCALLTYPE* CreateDateTime)(void*, long long, void**);
-        HRESULT (STDMETHODCALLTYPE* CreateTimeSpan)(void*, long long, void**);
+        // 6. Windows.Foundation.TimeSpan is an 8-byte struct {INT64 Duration},
+        // which the x64 ABI passes BY VALUE - it is NOT an IPropertyValue
+        // pointer (passing a boxed pointer here made every timeline value a
+        // garbage tick count and SMTC never showed a sensible progress bar).
+        HRESULT (STDMETHODCALLTYPE* get_StartTime)(void*, long long*);
+        HRESULT (STDMETHODCALLTYPE* put_StartTime)(void*, long long);
+        HRESULT (STDMETHODCALLTYPE* get_EndTime)(void*, long long*);
+        HRESULT (STDMETHODCALLTYPE* put_EndTime)(void*, long long);
+        HRESULT (STDMETHODCALLTYPE* get_MinSeekTime)(void*, long long*);
+        HRESULT (STDMETHODCALLTYPE* put_MinSeekTime)(void*, long long);
+        HRESULT (STDMETHODCALLTYPE* get_MaxSeekTime)(void*, long long*);
+        HRESULT (STDMETHODCALLTYPE* put_MaxSeekTime)(void*, long long);
+        HRESULT (STDMETHODCALLTYPE* get_Position)(void*, long long*);
+        HRESULT (STDMETHODCALLTYPE* put_Position)(void*, long long);
     };
 
     struct IInteropVtbl
@@ -343,16 +314,6 @@ namespace
         HString& operator=(const HString&) = delete;
         bool valid() const { return handle != nullptr; }
     };
-
-    void* createTimeSpan(void* statics, long long ticks)
-    {
-        void* boxed = nullptr;
-        if (statics == nullptr) {
-            return nullptr;
-        }
-        vt<IPropertyValueStaticsVtbl>(statics)->CreateTimeSpan(statics, ticks, &boxed);
-        return boxed;
-    }
 
 #else  // !_WIN32
     void loadWinrt() {}
@@ -507,7 +468,19 @@ void SystemMedia::updatePlayback(bool playing, bool paused, double positionSec, 
     mLastStatus = status;
     mLastPositionSec = positionSec;
 
-    vt<ISMTCVtbl>(mSmtc)->put_PlaybackStatus(mSmtc, status);
+    // One-shot diagnostics: if the shell rejects our SMTC pushes this is the
+    // only place it shows (the overlay just silently keeps stale data).
+    static bool s_diagLogged = false;
+    const auto diag = [&](const char* what, HRESULT hr) {
+        if (!s_diagLogged) {
+            std::printf("[media] %s hr=0x%08lX (pos=%.2fs end=%.2fs status=%d)\n", what,
+                static_cast<unsigned long>(hr), positionSec, mLastDurationSec, status);
+            std::fflush(stdout);
+        }
+    };
+
+    const HRESULT statusHr = vt<ISMTCVtbl>(mSmtc)->put_PlaybackStatus(mSmtc, status);
+    diag("put_PlaybackStatus", statusHr);
 
     if (gRoActivateInstance == nullptr || gRoGetActivationFactory == nullptr) {
         return;
@@ -526,27 +499,15 @@ void SystemMedia::updatePlayback(bool playing, bool paused, double positionSec, 
         return;
     }
 
-    void* statics = nullptr;
-    HString propertyClass(L"Windows.Foundation.PropertyValue");
-    gRoGetActivationFactory(propertyClass.handle, &IID_IPropertyValueStatics, &statics);
-
     auto* tv = vt<ITimelineVtbl>(typed);
-    if (statics != nullptr && mLastDurationSec > 0.0) {
-        void* start = createTimeSpan(statics, 0);
-        tv->put_StartTime(typed, start);
-        safeRelease(start);
-
-        void* end = createTimeSpan(statics,
+    if (mLastDurationSec > 0.0) {
+        // TimeSpan values go straight in: 8-byte struct by value (see the
+        // vtable declaration), ticks = 100ns units.
+        tv->put_StartTime(typed, 0);
+        tv->put_EndTime(typed,
             static_cast<long long>(mLastDurationSec * static_cast<double>(kTicksPerSec)));
-        tv->put_EndTime(typed, end);
-        safeRelease(end);
-
-        void* pos = createTimeSpan(statics,
+        tv->put_Position(typed,
             static_cast<long long>(std::max(0.0, positionSec) * static_cast<double>(kTicksPerSec)));
-        tv->put_Position(typed, pos);
-        safeRelease(pos);
-
-        safeRelease(statics);
     }
     // UpdateTimelineProperties lives on ISystemMediaTransportControls2, NOT on
     // the base interface - query for it (and skip the position update when the
@@ -554,7 +515,9 @@ void SystemMedia::updatePlayback(bool playing, bool paused, double positionSec, 
     void* smtc2 = nullptr;
     if (SUCCEEDED(vt<ISMTCVtbl>(mSmtc)->QueryInterface(mSmtc, &IID_ISystemMediaTransportControls2, &smtc2))
         && smtc2 != nullptr) {
-        vt<ISMTC2Vtbl>(smtc2)->UpdateTimelineProperties(smtc2, typed);
+        const HRESULT timelineHr = vt<ISMTC2Vtbl>(smtc2)->UpdateTimelineProperties(smtc2, typed);
+        diag("UpdateTimelineProperties", timelineHr);
+        s_diagLogged = true; // the first put + the first timeline push are enough
         safeRelease(smtc2);
     }
     safeRelease(typed);
