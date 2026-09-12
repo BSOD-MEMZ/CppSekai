@@ -586,6 +586,7 @@ int main(int argc, char** argv)
     }
     showProgressBar = userSettings.showProgressBar;
     hideTouchFeedback = userSettings.hideTouchFeedback;
+    const int splashStyle = userSettings.splashStyle; // 0=image 1=classic
 
     int windowW = std::max(320, winWidth);
     int windowH = std::max(240, winHeight);
@@ -644,9 +645,30 @@ int main(int argc, char** argv)
     // vblank, so run them unsynced and restore vsync once loading is done.
     SDL_GL_SetSwapInterval(0);
 
-    // Draws one splash frame between loading stages: dark background, title,
-    // the stage label and a thin progress bar. Uses ImGui's default font
-    // (ASCII only - the CJK UI atlas is built later by loadIntroFonts()).
+    // Static-image splash (splashStyle 0): load assets\splashscreen.png now,
+    // while the GL context is live. Failure just falls back to the classic
+    // splash. Size is queried from the GL texture to keep the aspect ratio.
+    GLuint splashImg = 0;
+    int splashImgW = 0, splashImgH = 0;
+    if (splashStyle == 0) {
+        splashImg = renderer.loadUiTexture(baseDir + "assets\\splashscreen.png", error);
+        if (splashImg != 0) {
+            glBindTexture(GL_TEXTURE_2D, splashImg);
+            glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &splashImgW);
+            glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &splashImgH);
+            glBindTexture(GL_TEXTURE_2D, 0);
+        } else {
+            std::fprintf(stderr, "warning: splashscreen.png missing, using classic splash (%s)\n",
+                error.c_str());
+            error.clear();
+        }
+    }
+
+    // Draws one splash frame between loading stages. Classic style (1): dark
+    // background, title, the stage label and a thin progress bar. Image style
+    // (0): just splashscreen.png centered on the dark background. Both use
+    // ImGui's default font (ASCII only - the CJK UI atlas is built later by
+    // loadIntroFonts()).
     bool splashShown = false;
     auto drawSplash = [&](float progress, const char* label) {
         splashShown = true;
@@ -656,6 +678,13 @@ int main(int argc, char** argv)
         ImGuiIO& io = ImGui::GetIO();
         ImDrawList* dl = ImGui::GetBackgroundDrawList();
         dl->AddRectFilled(ImVec2(0.0f, 0.0f), io.DisplaySize, IM_COL32(11, 12, 17, 255));
+        if (splashImg != 0 && splashImgW > 0 && splashImgH > 0) {
+            const float scale = std::min(io.DisplaySize.x / splashImgW, io.DisplaySize.y / splashImgH);
+            const ImVec2 sz(splashImgW * scale, splashImgH * scale);
+            const ImVec2 p0(0.5f * (io.DisplaySize.x - sz.x), 0.5f * (io.DisplaySize.y - sz.y));
+            dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(splashImg)),
+                p0, ImVec2(p0.x + sz.x, p0.y + sz.y));
+        } else {
         const ImVec2 center(0.5f * io.DisplaySize.x, 0.44f * io.DisplaySize.y);
         ImFont* font = ImGui::GetFont();
         const char* title = "CppSekai";
@@ -676,6 +705,7 @@ int main(int argc, char** argv)
         if (fill >= 1.0f) {
             dl->AddRectFilled(b0, ImVec2(b0.x + fill, b1.y), IM_COL32(64, 224, 188, 255), 3.0f);
         }
+        } // classic splash branch
         ImGui::Render();
         int drawableW = 0, drawableH = 0;
         SDL_GL_GetDrawableSize(window, &drawableW, &drawableH);
@@ -1138,6 +1168,15 @@ int main(int argc, char** argv)
                 ui::checkBox("显示播放进度条", &showProgressBox, interior);
                 if (showProgressBox != showProgressBar) {
                     showProgressBar = showProgressBox;
+                    persistUserData();
+                }
+                contentLeft();
+                // Splash style: static image (0) vs classic progress bar (1).
+                // Only read at startup, so a change takes effect next launch.
+                bool classicSplashBox = userSettings.splashStyle != 0;
+                ui::checkBox("经典开屏 (标题+进度条)", &classicSplashBox, interior);
+                if (classicSplashBox != (userSettings.splashStyle != 0)) {
+                    userSettings.splashStyle = classicSplashBox ? 1 : 0;
                     persistUserData();
                 }
                 contentLeft();

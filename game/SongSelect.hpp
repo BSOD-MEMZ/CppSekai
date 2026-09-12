@@ -78,6 +78,9 @@ struct UserSettings
     bool strictFlick = true;
     // Autoplay chart preview (all-PERFECT run, AUTO judge text, no records).
     bool autoplay = false;
+    // Splash style: 0 = static centered image (assets\splashscreen.png,
+    // default), 1 = classic dark screen with title + progress bar.
+    int splashStyle = 0;
 };
 
 // Path of userdata.json: <exeDir>\.. \userdata.json when a charts\ folder sits
