@@ -591,8 +591,11 @@ int main(int argc, char** argv)
     int windowW = std::max(320, winWidth);
     int windowH = std::max(240, winHeight);
     Uint32 windowFlags = SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI;
-    if (windowMode != 1) {
-        windowFlags |= SDL_WINDOW_BORDERLESS; // borderless windowed + fullscreen(desktop) both hide the frame
+    // windowed keeps the frame; borderless/fullscreen hide it anyway. The
+    // image splash additionally forces frameless: a black title bar over the
+    // static picture looks broken - the frame comes back after loading.
+    if (windowMode != 1 || splashStyle == 0) {
+        windowFlags |= SDL_WINDOW_BORDERLESS;
     }
     SDL_Window* window = SDL_CreateWindow(
         "CppSekai",
@@ -868,6 +871,11 @@ int main(int argc, char** argv)
         ImGui_ImplOpenGL3_DestroyDeviceObjects();
         SDL_GL_SetSwapInterval(1); // splash frames ran vsync-free; back to vsync
         drawSplash(1.0f, "ready");
+        // The image splash forced the window frameless (see windowFlags);
+        // restore the border for windowed mode once loading is done.
+        if (splashStyle == 0 && windowMode == 1) {
+            SDL_SetWindowBordered(window, SDL_TRUE);
+        }
     }
 
     // ------------------------------------------------------------------
