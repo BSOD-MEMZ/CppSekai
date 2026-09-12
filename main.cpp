@@ -682,11 +682,16 @@ int main(int argc, char** argv)
         ImDrawList* dl = ImGui::GetBackgroundDrawList();
         dl->AddRectFilled(ImVec2(0.0f, 0.0f), io.DisplaySize, IM_COL32(11, 12, 17, 255));
         if (splashImg != 0 && splashImgW > 0 && splashImgH > 0) {
-            const float scale = std::min(io.DisplaySize.x / splashImgW, io.DisplaySize.y / splashImgH);
+            // "Cover" fit: fill the whole window, cropping the overflow, so
+            // there is never a black letterbox around the picture.
+            const float scale = std::max(io.DisplaySize.x / splashImgW, io.DisplaySize.y / splashImgH);
             const ImVec2 sz(splashImgW * scale, splashImgH * scale);
             const ImVec2 p0(0.5f * (io.DisplaySize.x - sz.x), 0.5f * (io.DisplaySize.y - sz.y));
+            const ImVec2 uv0(std::max(0.0f, -p0.x / sz.x), std::max(0.0f, -p0.y / sz.y));
+            const ImVec2 uv1(std::min(1.0f, (io.DisplaySize.x - p0.x) / sz.x),
+                std::min(1.0f, (io.DisplaySize.y - p0.y) / sz.y));
             dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(splashImg)),
-                p0, ImVec2(p0.x + sz.x, p0.y + sz.y));
+                p0, ImVec2(p0.x + sz.x, p0.y + sz.y), uv0, uv1);
         } else {
         const ImVec2 center(0.5f * io.DisplaySize.x, 0.44f * io.DisplaySize.y);
         ImFont* font = ImGui::GetFont();
