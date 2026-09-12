@@ -70,6 +70,8 @@ struct UserSettings
     int fpsLimit = 60;  // 0 = vsync only; >refresh rate auto-disables vsync
     // Subtle playback progress bar along the top edge of the play screen.
     bool showProgressBar = true;
+    // Hide the Windows touch ripple over our window (per-window setting).
+    bool hideTouchFeedback = true;
     float perfectMs = 40.0f;
     float greatMs = 90.0f;
     float goodMs = 140.0f;

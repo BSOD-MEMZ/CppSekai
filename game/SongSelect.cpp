@@ -342,6 +342,7 @@ void loadUserData(const std::string& path, UserSettings& settings,
             settings.windowHeight = s.value("windowHeight", settings.windowHeight);
             settings.fpsLimit = s.value("fpsLimit", settings.fpsLimit);
             settings.showProgressBar = s.value("showProgressBar", settings.showProgressBar);
+            settings.hideTouchFeedback = s.value("hideTouchFeedback", settings.hideTouchFeedback);
             settings.perfectMs = s.value("perfectMs", settings.perfectMs);
             settings.greatMs = s.value("greatMs", settings.greatMs);
             settings.goodMs = s.value("goodMs", settings.goodMs);
@@ -377,6 +378,7 @@ void saveUserData(const std::string& path, const UserSettings& settings,
         {"windowHeight", settings.windowHeight},
         {"fpsLimit", settings.fpsLimit},
         {"showProgressBar", settings.showProgressBar},
+        {"hideTouchFeedback", settings.hideTouchFeedback},
         {"perfectMs", settings.perfectMs},
         {"greatMs", settings.greatMs},
         {"goodMs", settings.goodMs},

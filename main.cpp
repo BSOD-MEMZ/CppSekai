@@ -4,6 +4,7 @@
 // We provide our own console main(); tell SDL not to redefine it as SDL_main.
 #define SDL_MAIN_HANDLED
 #include <SDL.h>
+#include <SDL_syswm.h>
 #include <GL/gl.h>
 
 #include "imgui.h"
@@ -65,7 +66,31 @@ namespace
         float lastLanePos = 0.0f;
         double lastMoveTimeSec = 0.0;
         bool flicked = false;
+        // Smoothed swipe velocity in world units per second (low-pass over
+        // the per-event samples - touch panels report unevenly spaced jumps,
+        // and a single-frame delta easily misses a fast flick).
+        float velY = 0.0f;
+        float velX = 0.0f;
     };
+
+    // Flick direction decision from smoothed swipe velocity. Touch swipes get
+    // relaxed thresholds: panels report coarse, jittery samples and the old
+    // single-frame check made flicks on a touchscreen genuinely hard.
+    game::FlickDir flickDirFrom(float velY, float velX, bool isTouch)
+    {
+        const float upThreshold = isTouch ? 0.55f : 1.0f;
+        const float sideThreshold = isTouch ? 0.75f : 1.2f;
+        if (velY > upThreshold && std::abs(velY) >= std::abs(velX) * 0.8f) {
+            return game::FlickUp;
+        }
+        if (velX > sideThreshold) {
+            return game::FlickRight;
+        }
+        if (velX < -sideThreshold) {
+            return game::FlickLeft;
+        }
+        return game::FlickNone;
+    }
 
     // Keyboard: 12 keys -> 12 lanes. Lane i (0..11) is the core's note lane i,
     // whose center sits at (i - 6) + 0.5 = i - 5.5 in lane coordinates.
@@ -97,9 +122,35 @@ namespace
         return stream.str();
     }
 
-    void printUsage()
+#ifdef _WIN32
+    // Hides (or restores) the Windows touch visual feedback - the ripple /
+    // circle the system draws around a touch contact - for OUR window only
+    // (SetWindowFeedbackSetting, Win8+). Because it is a per-window setting,
+    // closing the game restores the system behaviour automatically; there is
+    // no global state to save or undo.
+    void applyTouchFeedback(SDL_Window* window, bool hide)
     {
-        std::printf(
+        SDL_SysWMinfo info{};
+        SDL_VERSION(&info.version);
+        if (!SDL_GetWindowWMInfo(window, &info) || info.subsystem != SDL_SYSWM_WINDOWS) {
+            return;
+        }
+        using SetWindowFeedbackSettingFn = BOOL(WINAPI*)(HWND, UINT, DWORD, UINT32, const void*);
+        const auto fn = reinterpret_cast<SetWindowFeedbackSettingFn>(reinterpret_cast<void*>(
+            GetProcAddress(GetModuleHandleW(L"user32.dll"), "SetWindowFeedbackSetting")));
+        if (fn == nullptr) {
+            return; // pre-Win8 or stripped user32: feature simply stays on
+        }
+        const BOOL value = hide ? FALSE : TRUE;
+        // 1 = FEEDBACK_TOUCH_CONTACTVISUALIZATION (the ripple),
+        // 7 = FEEDBACK_TOUCH_TAP.
+        fn(info.info.win.window, 1, 0, sizeof(BOOL), &value);
+        fn(info.info.win.window, 7, 0, sizeof(BOOL), &value);
+    }
+#endif
+
+    void printUsage()
+    {        std::printf(
             "CppSekai - Project SEKAI style SUS chart player\n"
             "Usage: cppsekai [--sus <file.sus>] [--bgm <audio>] [--charts <dir>]\n"
             "                [--offset <sec>] [--filler <sec>] [--auto] [--speed <1-12>]\n"
@@ -335,6 +386,7 @@ int main(int argc, char** argv)
     int windowMode = 1; // 0=borderless 1=windowed 2=fullscreen(desktop)
     int fpsLimit = 60;  // extra frame cap on top of vsync; 0 = vsync only
     bool showProgressBar = true; // subtle top-edge playback bar (settings toggle)
+    bool hideTouchFeedback = true; // hide the system touch ripple over our window
 
     // Settings that also live in userdata.json (loaded below). Flags present on
     // the command line win over the saved values; these record which were given.
@@ -533,6 +585,7 @@ int main(int argc, char** argv)
         autoPlay = userSettings.autoplay;
     }
     showProgressBar = userSettings.showProgressBar;
+    hideTouchFeedback = userSettings.hideTouchFeedback;
 
     int windowW = std::max(320, winWidth);
     int windowH = std::max(240, winHeight);
@@ -554,6 +607,9 @@ int main(int argc, char** argv)
     }
     std::printf("[window] %dx%d mode=%s\n", windowW, windowH,
         windowMode == 0 ? "borderless" : windowMode == 1 ? "windowed" : "fullscreen");
+#ifdef _WIN32
+    applyTouchFeedback(window, userSettings.hideTouchFeedback);
+#endif
     bootLog("window created");
     SDL_GLContext glContext = SDL_GL_CreateContext(window);
     if (glContext == nullptr) {
@@ -918,6 +974,7 @@ int main(int argc, char** argv)
         userSettings.offsetSec = gUserOffsetSec;
         userSettings.autoplay = autoPlay;
         userSettings.showProgressBar = showProgressBar;
+        userSettings.hideTouchFeedback = hideTouchFeedback;
         const game::JudgementWindows& w = judgement.windows();
         userSettings.perfectMs = w.perfectMs;
         userSettings.greatMs = w.greatMs;
@@ -942,6 +999,12 @@ int main(int argc, char** argv)
     bool countdownActive = false;
     double countdownStartClock = 0.0;
     int countdownNumberShown = -1;
+
+    // Damage vignette: brief dark inner shadow around the screen edges on
+    // life loss (BAD / MISS / broken hold), a constant dark state at 0 life -
+    // same feedback the original game gives.
+    float lastSeenLife = game::kMaxLife;
+    float damageVignette = 0.0f;
     auto beginResumeCountdown = [&]() {
         pauseDialogOpen = false; // dialog closes (animation) behind the numbers
         countdownActive = true;
@@ -1078,6 +1141,16 @@ int main(int argc, char** argv)
                     persistUserData();
                 }
                 contentLeft();
+                bool hideTouchBox = hideTouchFeedback;
+                ui::checkBox("隐藏系统触摸特效", &hideTouchBox, interior);
+                if (hideTouchBox != hideTouchFeedback) {
+                    hideTouchFeedback = hideTouchBox;
+#ifdef _WIN32
+                    applyTouchFeedback(window, hideTouchFeedback);
+#endif
+                    persistUserData();
+                }
+                contentLeft();
                 // checkBox returns the *new* value, so gate on a real change -
                 // gating on the return value made the box impossible to untick.
                 bool autoPlayBox = autoPlay;
@@ -1209,17 +1282,17 @@ int main(int argc, char** argv)
             const float dy = worldY - track.lastWorldY;    // up in screen space
             const float dx = lanePos - track.lastLanePos;  // lane units
             const double dt = now - track.lastMoveTimeSec;
-            if (dt > 0.001 && !track.flicked) {
+            if (dt > 0.001) {
+                // Low-pass the per-event velocity: touch panels report
+                // unevenly spaced position jumps and a single-frame delta
+                // often under- or over-shoots a real flick.
                 const float upSpeed = dy / static_cast<float>(dt);
                 const float sideSpeed = dx / static_cast<float>(dt);
-                game::FlickDir dir = game::FlickNone;
-                if (upSpeed > 1.0f && std::abs(upSpeed) >= std::abs(sideSpeed) * 0.8f) {
-                    dir = game::FlickUp;
-                } else if (sideSpeed > 1.2f) {
-                    dir = game::FlickRight;
-                } else if (sideSpeed < -1.2f) {
-                    dir = game::FlickLeft;
-                }
+                track.velY = track.velY * 0.4f + upSpeed * 0.6f;
+                track.velX = track.velX * 0.4f + sideSpeed * 0.6f;
+            }
+            if (!track.flicked) {
+                const game::FlickDir dir = flickDirFrom(track.velY, track.velX, track.fingerId > 0);
                 if (dir != game::FlickNone) {
                     track.flicked = true;
                     const double songTime = audio.hasMusic() ? audio.songTime() : wallSongTime();
@@ -1414,6 +1487,26 @@ int main(int argc, char** argv)
                     break;
                 }
                 case SDL_FINGERUP: {
+                    // Last chance flick: judge the lift-off itself from the
+                    // smoothed swipe velocity - short, fast flicks on touch
+                    // panels often end before the mid-move check fires.
+                    if (state == AppState::Play && !autoPlay && !paused) {
+                        for (const TouchTrack& track : touches) {
+                            if (track.fingerId != event.tfinger.fingerId || track.flicked) {
+                                continue;
+                            }
+                            const game::FlickDir dir = flickDirFrom(track.velY, track.velX, true);
+                            if (dir != game::FlickNone) {
+                                const double songTime =
+                                    audio.hasMusic() ? audio.songTime() : wallSongTime();
+                                const game::Judge result = judgement.flick(
+                                    track.lanePos, static_cast<float>(songTime), dir, 0.8f);
+                                if (result != game::Judge::None) {
+                                    playHitSe(audio, judgement, seVolume);
+                                }
+                            }
+                        }
+                    }
                     endPointer(event.tfinger.fingerId);
                     break;
                 }
@@ -1780,6 +1873,15 @@ int main(int argc, char** argv)
                     }
                 }
             }
+            // Touch hover: every active pointer (finger or mouse pointer)
+            // lights the lane it is currently over, so dragging a finger
+            // around the field lights the lanes up as it moves. SDL's
+            // synthesized mouse position only follows the primary finger,
+            // which is why the tracks are the source of truth here.
+            for (const TouchTrack& track : touches) {
+                const size_t idx = static_cast<size_t>(laneIndexFromPos(track.lastLanePos));
+                laneHover[idx] = std::max(laneHover[idx], 0.42f);
+            }
 
             std::vector<platform::Renderer::LaneGlow> glows;
             for (int lane = 0; lane < LANE_COUNT; ++lane) {
@@ -1834,6 +1936,14 @@ int main(int argc, char** argv)
             hudState.lifeRatio = judgement.lifeRatio();
             hudState.autoJudge = autoPlay;
 
+            // Damage vignette state: any life drop flashes the edges, life
+            // stuck at 0 keeps them dark.
+            if (stats.life < lastSeenLife - 0.5f) {
+                damageVignette = 1.0f;
+            }
+            lastSeenLife = stats.life;
+            damageVignette = std::max(0.0f, damageVignette - frameDelta / 0.45f);
+
             // Debug (`--judge-frame N`): freeze the judge text on frame N of
             // its 60fps pop-in so the animation can be checked from a headless
             // screenshot, where no input can be injected.
@@ -1875,6 +1985,38 @@ int main(int argc, char** argv)
                     fg->AddRectFilled(ImVec2(0.0f, 0.0f),
                         ImVec2(static_cast<float>(windowW) * progress, barH),
                         IM_COL32(255, 255, 255, 84));
+                }
+            }
+
+            // ----------------------------------------------------------
+            // Damage vignette: dark inner shadow around the screen edges.
+            // A life loss flashes it (decays over ~0.45s); life at 0 keeps
+            // it permanently on (original-game feedback). Edge bands are
+            // per-axis gradients - opposite corners overlap naturally so
+            // the corners read darker, like a real vignette.
+            // ----------------------------------------------------------
+            {
+                const float deadVignette = judgement.lifeRatio() <= 0.0f ? 0.8f : 0.0f;
+                const float vig = std::clamp(damageVignette * 0.55f + deadVignette, 0.0f, 1.0f);
+                if (vig > 0.004f) {
+                    ImDrawList* fg = ImGui::GetForegroundDrawList();
+                    const float w = static_cast<float>(windowW);
+                    const float h = static_cast<float>(windowH);
+                    const int a = static_cast<int>(90.0f * vig);
+                    const float bandV = h * 0.16f; // top / bottom band height
+                    const float bandH = w * 0.12f; // left / right band width
+                    fg->AddRectFilledMultiColor(ImVec2(0.0f, 0.0f), ImVec2(w, bandV),
+                        IM_COL32(0, 0, 0, a), IM_COL32(0, 0, 0, a),
+                        IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, 0));
+                    fg->AddRectFilledMultiColor(ImVec2(0.0f, h - bandV), ImVec2(w, h),
+                        IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, 0),
+                        IM_COL32(0, 0, 0, a), IM_COL32(0, 0, 0, a));
+                    fg->AddRectFilledMultiColor(ImVec2(0.0f, 0.0f), ImVec2(bandH, h),
+                        IM_COL32(0, 0, 0, a), IM_COL32(0, 0, 0, 0),
+                        IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, a));
+                    fg->AddRectFilledMultiColor(ImVec2(w - bandH, 0.0f), ImVec2(w, h),
+                        IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, a),
+                        IM_COL32(0, 0, 0, a), IM_COL32(0, 0, 0, 0));
                 }
             }
 
