@@ -43,6 +43,8 @@ void JudgementEngine::load(const float* packed, int count)
     }
     mCursor = 0;
     mActiveHolds.clear();
+    mMissedHoldKeys.clear();
+    mHitEventIndices.clear();
     mStats = JudgementStats{};
     mLoaded = true;
 
@@ -88,6 +90,61 @@ void JudgementEngine::load(const float* packed, int count)
             }
         }
     }
+
+    // CppSekai: resolve each hold tick's owning hold (its kind 5 marker and
+    // the hold's start note). Ticks may only auto-hit while their hold was
+    // actually grabbed, so every tick needs to know which start note to ask.
+    // Matching is by TIME WINDOW, not lane: a hold's steps can ease sideways,
+    // so a mid-hold tick may sit on a different lane than the hold's start.
+    // Ticks without any covering marker (guide holds emit no kind 5 marker)
+    // keep the old always-auto-hit behaviour.
+    for (std::size_t i = 0; i < mNotes.size(); ++i) {
+        HitNote& tick = mNotes[i];
+        if (static_cast<int>(tick.kind) != 4) {
+            continue;
+        }
+        std::size_t bestMarker = static_cast<std::size_t>(-1);
+        float bestCenterDist = 0.0f;
+        for (std::size_t j = 0; j < mNotes.size(); ++j) {
+            const HitNote& marker = mNotes[j];
+            if (static_cast<int>(marker.kind) != 5) {
+                continue;
+            }
+            if (marker.timeSec > tick.timeSec + 0.02f) {
+                break; // markers are sorted by time
+            }
+            if (tick.timeSec > marker.endTimeSec + 0.02f) {
+                continue;
+            }
+            const float centerDist = std::fabs(marker.center - tick.center);
+            if (bestMarker == static_cast<std::size_t>(-1) || centerDist < bestCenterDist) {
+                bestMarker = j;
+                bestCenterDist = centerDist;
+            }
+        }
+        if (bestMarker == static_cast<std::size_t>(-1)) {
+            continue; // guide / markerless tick: stays always-auto-hit
+        }
+        tick.holdMarkerIndex = bestMarker;
+        const HitNote& marker = mNotes[bestMarker];
+        // The start note: a sibling tap at the marker's own time and lane;
+        // without one the marker itself stands in (spawn marks it as read, so
+        // the hold counts as engaged).
+        for (std::size_t k = bestMarker + 1; k-- > 0;) {
+            const HitNote& candidate = mNotes[k];
+            if (std::fabs(candidate.timeSec - marker.timeSec) > 0.05f) {
+                break;
+            }
+            if ((candidate.kind == 0.0f || candidate.kind == 1.0f)
+                && std::fabs(candidate.center - marker.center) < 0.01f) {
+                tick.holdStartIndex = k;
+                break;
+            }
+        }
+        if (tick.holdStartIndex == static_cast<std::size_t>(-1)) {
+            tick.holdStartIndex = bestMarker;
+        }
+    }
 }
 
 void JudgementEngine::reset()
@@ -97,6 +154,8 @@ void JudgementEngine::reset()
     }
     mCursor = 0;
     mActiveHolds.clear();
+    mMissedHoldKeys.clear();
+    mHitEventIndices.clear();
     mStats = JudgementStats{};
     mComboFactor = 1.0;
 }
@@ -255,6 +314,7 @@ HitNote* JudgementEngine::findCandidate(float lanePos, float songTimeSec, float 
         judge = Judge::Bad;
     }
     best->state = 1;
+    mHitEventIndices.push_back(static_cast<int>(best - mNotes.data()));
     // Critical is bit0 only - bits 1-2 carry the flick direction, so a
     // directional flick note (flags >= 2) must not read as critical.
     const bool critical = (static_cast<int>(best->flags) & 1) != 0;
@@ -299,6 +359,7 @@ void JudgementEngine::judgeHoldTail(ActiveHold& hold, Judge judge, float songTim
         return; // already resolved (e.g. the hold broke earlier)
     }
     tail.state = 1;
+    mHitEventIndices.push_back(static_cast<int>(hold.tailIndex));
     mStats.holdTails += 1;
     const bool critical = (static_cast<int>(tail.flags) & 1) != 0;
     mStats.lastHitKind = tail.kind;
@@ -336,19 +397,46 @@ void JudgementEngine::update(float songTimeSec)
         }
 
         if (note.kind == 4.0f) {
-            // Hold ticks auto-hit while a hold covering this lane is active
-            // (skeleton: auto-hit unconditionally, matching no-fail preview).
-            note.state = 1;
-            registerJudge(Judge::Perfect, (static_cast<int>(note.flags) & 1) != 0, note.volume, note.kind);
-            mStats.lastJudgeTimeSec = songTimeSec;
-            // A tick is its own hit: report its own lane so the effect for the
-            // hold step plays there instead of re-using the previous hit.
-            mStats.lastHitKind = note.kind;
-            mStats.lastHitCenter = note.center;
-            mStats.lastHitWidth = note.width;
-            mStats.lastHitTimeSec = note.timeSec;
-            mStats.lastHitFlickDir = noteFlickDir(note);
-            mStats.lastHitFriction = false;
+            // Hold ticks auto-hit only while the hold they belong to was
+            // actually grabbed and has not broken. A hold that was never hit
+            // is already fully accounted for by its start note's MISS, so its
+            // ticks are consumed silently - otherwise every tick would hand
+            // out a free PERFECT (and its combo / score) for a hold the
+            // player never touched.
+            const std::uint8_t startState = note.holdStartIndex < mNotes.size()
+                ? mNotes[note.holdStartIndex].state
+                : static_cast<std::uint8_t>(1);
+            bool holdBroken = false;
+            if (note.holdMarkerIndex < mNotes.size()) {
+                for (const ActiveHold& hold : mActiveHolds) {
+                    if (hold.noteIndex == note.holdMarkerIndex && hold.broken) {
+                        holdBroken = true;
+                        break;
+                    }
+                }
+            }
+
+            if (startState == 1 && !holdBroken) {
+                note.state = 1;
+                mHitEventIndices.push_back(static_cast<int>(i));
+                registerJudge(Judge::Perfect, (static_cast<int>(note.flags) & 1) != 0, note.volume, note.kind);
+                mStats.lastJudgeTimeSec = songTimeSec;
+                // A tick is its own hit: report its own lane so the effect for
+                // the hold step plays there instead of re-using the previous
+                // hit.
+                mStats.lastHitKind = note.kind;
+                mStats.lastHitCenter = note.center;
+                mStats.lastHitWidth = note.width;
+                mStats.lastHitTimeSec = note.timeSec;
+                mStats.lastHitFlickDir = noteFlickDir(note);
+                mStats.lastHitFriction = false;
+            } else if (startState == 2 || holdBroken) {
+                // The hold's own MISS / break already counted; swallow the
+                // tick without judging it again.
+                note.state = 2;
+            }
+            // startState == 0: the start note is still pending (the player may
+            // be a little late) - leave the tick undecided until next frame.
             continue;
         }
 
@@ -408,13 +496,16 @@ void JudgementEngine::update(float songTimeSec)
 
         if (startState == 2) {
             // Never grabbed: the start's own MISS already counted for the
-            // whole hold, so the tail is consumed silently. Nothing to dim
-            // either - the hold never activated.
+            // whole hold, so the tail is consumed silently. The renderer is
+            // told the hold was missed so its body keeps scrolling past the
+            // line instead of parking on it like a held hold.
             hold.broken = true;
             hold.finished = true;
             if (hold.tailIndex < mNotes.size() && mNotes[hold.tailIndex].state == 0) {
                 mNotes[hold.tailIndex].state = 2;
             }
+            mMissedHoldKeys.push_back(hold.center);
+            mMissedHoldKeys.push_back(hold.startTimeSec);
             continue;
         }
 
@@ -526,6 +617,8 @@ void JudgementEngine::update(float songTimeSec)
             if (hold.tailIndex < mNotes.size()) {
                 mNotes[hold.tailIndex].state = 2;
             }
+            mMissedHoldKeys.push_back(marker.center);
+            mMissedHoldKeys.push_back(marker.timeSec);
             continue;
         }
         mActiveHolds.push_back(hold);

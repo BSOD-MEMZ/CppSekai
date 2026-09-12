@@ -21,6 +21,9 @@ extern "C"
     int getHitEventCount(void);
     void setEffectAutoplay(int);
     void setDimmedHolds(const float*, int);
+    void markNoteHit(int);
+    void clearHitNotes(void);
+    void setMissedHolds(const float*, int);
     void triggerNoteEffect(float, float, float, int, int, int, int);
     const char* getMetadataTitle(void);
     const char* getMetadataArtist(void);
@@ -113,6 +116,22 @@ void setDimmedHolds(const std::vector<float>& keys)
 {
     // keys is a flat list of (center, hold start time seconds) pairs.
     ::setDimmedHolds(keys.empty() ? nullptr : keys.data(), static_cast<int>(keys.size() / 2));
+}
+
+void markNoteHit(int hitEventIndex)
+{
+    ::markNoteHit(hitEventIndex);
+}
+
+void clearHitNotes()
+{
+    ::clearHitNotes();
+}
+
+void setMissedHolds(const std::vector<float>& keys)
+{
+    // keys is a flat list of (center, hold start time seconds) pairs.
+    ::setMissedHolds(keys.empty() ? nullptr : keys.data(), static_cast<int>(keys.size() / 2));
 }
 
 void triggerNoteEffect(float center, float width, float noteTimeSec, int kind, bool critical, int flickDir,

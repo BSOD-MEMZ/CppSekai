@@ -53,6 +53,18 @@ void setEffectAutoplay(bool enabled);
 // HitEvent reports for a normal hold.
 void setDimmedHolds(const std::vector<float>& keys);
 
+// CppSekai addition: the player hit the note behind this HitEvent index
+// (same stream as getHitEventBuffer()). The core stops drawing that note
+// immediately; notes never reported as hit keep falling past the judgement
+// line until off screen (pjsk behaviour). clearHitNotes() on new chart/retry.
+void markNoteHit(int hitEventIndex);
+void clearHitNotes();
+
+// CppSekai addition: holds whose start note was never hit, same flat
+// (lane center, hold start time seconds) pair layout as setDimmedHolds().
+// Their bodies keep scrolling past the line instead of parking on it.
+void setMissedHolds(const std::vector<float>& keys);
+
 // Plays the core's note-hit effect (the game's own particle system) for the
 // note at this lane position: center / width are lane coordinates as reported
 // by the HitEvent stream, noteTimeSec is that event's time, kind is the

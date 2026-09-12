@@ -341,6 +341,9 @@ namespace mmw_preview
     {
         int refID{};
         Range visualTime{};
+        // CppSekai: the note's actual hit time (visualTime.max is extended
+        // past it so missed notes keep falling; see calculateDrawData).
+        double hitTime{};
     };
 
     struct DrawingLine
@@ -485,6 +488,16 @@ namespace mmw_preview
         // exactly the values the kind 5 HitEvent reports for a normal hold, so
         // setDimmedHolds() can match a drawing segment against them.
         std::vector<float> dimmedHoldKeys;
+        // CppSekai: hit-note removal + missed-hold fall-through (pjsk
+        // behaviour). hitEventNoteIds runs parallel to hitEvents so the host
+        // can report a hit by HitEvent index; the referenced note IDs stop
+        // being drawn immediately. Notes never hit keep falling past the
+        // judgement line until they leave the screen. missedHoldKeys (same
+        // flat pair layout as dimmedHoldKeys) marks holds whose start was
+        // never hit: their body scrolls past instead of parking on the line.
+        std::vector<int> hitEventNoteIds;
+        std::unordered_set<int> hitNoteIds;
+        std::vector<float> missedHoldKeys;
     };
 
     RuntimeState gRuntime{};
@@ -1127,6 +1140,10 @@ namespace mmw_preview
     {
         gRuntime.hitEvents.clear();
         gRuntime.packedHitEvents.clear();
+        // CppSekai: rebuild the HitEvent -> note ID table and forget the hit
+        // notes of the previous chart.
+        gRuntime.hitEventNoteIds.clear();
+        gRuntime.hitNoteIds.clear();
 
         if (gRuntime.score.tempoChanges.empty()) {
             return;
@@ -1193,6 +1210,9 @@ namespace mmw_preview
                 endTimeSec,
                 volume,
             });
+            // CppSekai: every HitEvent remembers which note sprite produced it,
+            // so markNoteHit() can remove that sprite from the field.
+            gRuntime.hitEventNoteIds.push_back(note.ID);
 
             if (note.type == NoteType::Hold) {
                 const HoldNote& hold = gRuntime.score.holdNotes.at(note.ID);
@@ -1207,16 +1227,28 @@ namespace mmw_preview
                         accumulateDuration(endNote.tick, TICKS_PER_BEAT, gRuntime.score.tempoChanges),
                         volume,
                     });
+                    gRuntime.hitEventNoteIds.push_back(note.ID);
                 }
             }
         }
 
-        std::stable_sort(gRuntime.hitEvents.begin(), gRuntime.hitEvents.end(), [](const HitEvent& lhs, const HitEvent& rhs) {
-            if (lhs.timeSec == rhs.timeSec) {
-                return lhs.center < rhs.center;
+        // CppSekai: sort the events together with their note IDs so the
+        // packed stream and the ID table stay index-aligned.
+        std::vector<std::pair<HitEvent, int>> combined;
+        combined.reserve(gRuntime.hitEvents.size());
+        for (std::size_t i = 0; i < gRuntime.hitEvents.size(); ++i) {
+            combined.emplace_back(gRuntime.hitEvents[i], gRuntime.hitEventNoteIds[i]);
+        }
+        std::stable_sort(combined.begin(), combined.end(), [](const auto& lhs, const auto& rhs) {
+            if (lhs.first.timeSec == rhs.first.timeSec) {
+                return lhs.first.center < rhs.first.center;
             }
-            return lhs.timeSec < rhs.timeSec;
+            return lhs.first.timeSec < rhs.first.timeSec;
         });
+        for (std::size_t i = 0; i < combined.size(); ++i) {
+            gRuntime.hitEvents[i] = combined[i].first;
+            gRuntime.hitEventNoteIds[i] = combined[i].second;
+        }
 
         gRuntime.packedHitEvents.reserve(gRuntime.hitEvents.size() * 7);
         for (const auto& event : gRuntime.hitEvents) {
@@ -2305,11 +2337,19 @@ namespace mmw_preview
                 continue;
             }
 
-            drawData.drawingNotes.push_back({note.ID, getNoteVisualTime(note, score, drawData.noteSpeed)});
-
             const float center = getNoteCenter(note);
             const float speedRatio = getEffectiveSpeedRatio(note, score);
             const float visibleDuration = getNoteVisibleDuration(note, score, drawData.noteSpeed);
+            // CppSekai: the visible window is extended one approach duration
+            // past the hit time, so a note the player missed keeps falling
+            // past the judgement line until it is off screen (pjsk). Notes
+            // that were hit are removed by the host through markNoteHit()
+            // (see drawNotes); in autoplay nothing is published and the
+            // upstream "vanish at the line" look is kept via the
+            // effectsAutoplay check.
+            const Range visualTime = getNoteVisualTime(note, score, drawData.noteSpeed);
+            drawData.drawingNotes.push_back(
+                {note.ID, {visualTime.min, visualTime.max + visibleDuration}, visualTime.max});
             auto [rangeIt, inserted] = simultaneousBuilder.try_emplace(note.tick, Range{center, center});
             auto [durationIt, durationInserted] = simultaneousDurations.try_emplace(note.tick, visibleDuration);
             if (!durationInserted) {
@@ -2405,6 +2445,38 @@ namespace mmw_preview
         }
     }
 
+    // CppSekai: holds whose start note the player never hit. Their body keeps
+    // scrolling past the judgement line like any missed note instead of
+    // parking on it (which is what a *held* hold does).
+    bool isHoldMissed(float center, double activeTime)
+    {
+        const std::vector<float>& keys = gRuntime.missedHoldKeys;
+        for (std::size_t i = 0; i + 1 < keys.size(); i += 2) {
+            if (std::fabs(keys[i] - center) < 0.01f
+                && std::fabs(static_cast<double>(keys[i + 1]) - activeTime) < 0.02) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // CppSekai: is the hold this HoldMid note belongs to marked as missed?
+    // Used by drawHoldTicks to keep a missed hold's ticks falling.
+    bool isTickHoldMissed(int tickRefID)
+    {
+        const auto noteIt = gRuntime.score.notes.find(tickRefID);
+        if (noteIt == gRuntime.score.notes.end()) {
+            return false;
+        }
+        const auto holdIt = gRuntime.score.holdNotes.find(noteIt->second.parentID);
+        if (holdIt == gRuntime.score.holdNotes.end()) {
+            return false;
+        }
+        const Note& startNote = gRuntime.score.notes.at(holdIt->second.start.ID);
+        return isHoldMissed(
+            getNoteCenter(startNote), accumulateDuration(startNote.tick, TICKS_PER_BEAT, gRuntime.score.tempoChanges));
+    }
+
     void drawLines(double currentScaledTime)
     {
         if (!gRuntime.config.simultaneousLine) {
@@ -2438,7 +2510,11 @@ namespace mmw_preview
         const float noteBottom = 1.0f - notesHeight;
 
         for (const auto& tick : gRuntime.drawData.drawingHoldTicks) {
-            if (currentScaledTime < tick.visualTime.min || currentScaledTime > tick.visualTime.max) {
+            // CppSekai: ticks of a hold the player never hit keep falling past
+            // the judgement line together with the rest of the hold.
+            const bool missedHold = isTickHoldMissed(tick.refID);
+            const double tickWindowEnd = tick.visualTime.max + (missedHold ? tick.visibleDuration : 0.0f);
+            if (currentScaledTime < tick.visualTime.min || currentScaledTime > tickWindowEnd) {
                 continue;
             }
             const auto& note = gRuntime.score.notes.at(tick.refID);
@@ -2453,6 +2529,18 @@ namespace mmw_preview
     void drawNotes(double currentTime, double currentScaledTime)
     {
         for (const auto& drawing : gRuntime.drawData.drawingNotes) {
+            // CppSekai: a note the player hit is removed from the field at the
+            // moment of the hit (pjsk), even when that happened before it
+            // reached the judgement line.
+            if (gRuntime.hitNoteIds.count(drawing.refID) != 0) {
+                continue;
+            }
+            // In autoplay (preview) nothing is published, so notes would fall
+            // past the line forever - restore the upstream "vanish at the
+            // line" look there.
+            if (gRuntime.effectsAutoplay && currentScaledTime > drawing.hitTime) {
+                continue;
+            }
             if (currentScaledTime < drawing.visualTime.min || currentScaledTime > drawing.visualTime.max) {
                 continue;
             }
@@ -2488,21 +2576,38 @@ namespace mmw_preview
         return false;
     }
 
+    // CppSekai: holds whose start note the player never hit - see isHoldMissed
+    // above (it lives next to isTickHoldMissed because drawHoldTicks needs it
+    // before its old definition point).
+
     void drawHoldCurves(double currentTime, double currentScaledTime)
     {
         const float totalTime = std::max(accumulateDuration(gRuntime.drawData.maxTicks, TICKS_PER_BEAT, gRuntime.score.tempoChanges), 0.0001f);
         const float mirror = gRuntime.config.mirror ? -1.0f : 1.0f;
 
         for (const auto& segment : gRuntime.drawData.drawingHoldSegments) {
-            const double visibleScaledTime = currentScaledTime + segment.visibleDuration;
-            if ((std::min(segment.headTime, segment.tailTime) > visibleScaledTime && segment.startTime > currentTime) || currentTime >= segment.endTime) {
-                continue;
-            }
-
             const Note& holdEnd = gRuntime.score.notes.at(segment.endID);
             const Note& holdStart = gRuntime.score.notes.at(holdEnd.parentID);
             const float holdStartCenter = getNoteCenter(holdStart) * mirror;
-            const bool holdActivated = currentTime >= segment.activeTime;
+            // CppSekai: was this hold never grabbed at all? Then its body
+            // keeps falling past the judgement line instead of parking on it
+            // (pjsk: a missed hold scrolls off the bottom of the screen).
+            const bool missed = !segment.isGuide && isHoldMissed(getNoteCenter(holdStart), segment.activeTime);
+            const double visibleScaledTime = currentScaledTime + segment.visibleDuration;
+            const double segmentHeadScaledCull = std::min(segment.headTime, segment.tailTime);
+            const double segmentTailScaledCull = std::max(segment.headTime, segment.tailTime);
+            if (missed) {
+                // Keep drawing until the whole body has scrolled past the
+                // line (one extra approach duration, like the plain notes).
+                if (segmentHeadScaledCull > visibleScaledTime
+                    || currentScaledTime > segmentTailScaledCull + segment.visibleDuration) {
+                    continue;
+                }
+            } else if ((segmentHeadScaledCull > visibleScaledTime && segment.startTime > currentTime) || currentTime >= segment.endTime) {
+                continue;
+            }
+
+            const bool holdActivated = !missed && currentTime >= segment.activeTime;
             const bool segmentActivated = currentTime >= segment.startTime;
             // CppSekai: was this long note let go of early? Matched against the
             // host's list, which is keyed on the *unmirrored* lane center.
@@ -2516,14 +2621,21 @@ namespace mmw_preview
 
             const double segmentHeadScaled = std::min(segment.headTime, segment.tailTime);
             const double segmentTailScaled = std::max(segment.headTime, segment.tailTime);
-            const double segmentStartScaled = std::max(segmentHeadScaled, currentScaledTime);
+            // CppSekai: a missed hold's head edge is not pinned to the current
+            // time - it keeps falling past the line (approach() extrapolates).
+            const double segmentStartScaled = missed ? segmentHeadScaled : std::max(segmentHeadScaled, currentScaledTime);
             const double segmentEndScaled = std::min(segmentTailScaled, visibleScaledTime);
             double segmentStartProgress{};
             double segmentEndProgress{};
             double holdStartProgress{};
             double holdEndProgress{};
 
-            if (!segmentActivated) {
+            if (missed) {
+                // Same lane interpolation as the not-yet-activated case, but
+                // the geometry keeps moving past the line.
+                segmentStartProgress = 0.0;
+                segmentEndProgress = unlerpD(segmentHeadScaled, segmentTailScaled, segmentEndScaled);
+            } else if (!segmentActivated) {
                 segmentStartProgress = 0.0;
                 segmentEndProgress = unlerpD(segmentHeadScaled, segmentTailScaled, segmentEndScaled);
             } else {
@@ -2540,7 +2652,10 @@ namespace mmw_preview
             float endLeft = segment.tailLeft;
             float endRight = segment.tailRight;
 
-            if (segmentActivated && gRuntime.score.holdNotes.at(holdStart.ID).startType == HoldNoteType::Normal) {
+            // CppSekai: for a missed hold the falling start note is already
+            // drawn by drawNotes (extended window), so don't pin a second
+            // sprite onto the parked body - there is no parked body here.
+            if (!missed && segmentActivated && gRuntime.score.holdNotes.at(holdStart.ID).startType == HoldNoteType::Normal) {
                 const float l = ease(startLeft, endLeft, static_cast<float>(segmentStartProgress));
                 const float r = ease(startRight, endRight, static_cast<float>(segmentStartProgress));
                 drawNoteBase(holdStart, l, r, 1.0f, static_cast<float>(segment.activeTime / totalTime),
@@ -2888,6 +3003,40 @@ extern "C"
     EMSCRIPTEN_KEEPALIVE void setDimmedHolds(const float* keys, int count)
     {
         std::vector<float>& out = mmw_preview::gRuntime.dimmedHoldKeys;
+        out.clear();
+        if (keys == nullptr || count <= 0) {
+            return;
+        }
+        out.assign(keys, keys + static_cast<std::size_t>(count) * 2);
+    }
+
+    // CppSekai addition (no upstream equivalent): reports that the player hit
+    // the note behind this HitEvent index. The referenced note sprite is then
+    // removed from the field at the moment of the hit, while notes that are
+    // never hit keep falling past the judgement line (pjsk behaviour). The
+    // index refers to the same stream getHitEventBufferPointer() exposes; the
+    // core keeps a HitEvent -> note ID table for the mapping.
+    EMSCRIPTEN_KEEPALIVE void markNoteHit(int hitEventIndex)
+    {
+        const std::vector<int>& ids = mmw_preview::gRuntime.hitEventNoteIds;
+        if (hitEventIndex >= 0 && static_cast<std::size_t>(hitEventIndex) < ids.size()) {
+            mmw_preview::gRuntime.hitNoteIds.insert(ids[static_cast<std::size_t>(hitEventIndex)]);
+        }
+    }
+
+    // CppSekai addition: forgets all hit notes (new chart / retry).
+    EMSCRIPTEN_KEEPALIVE void clearHitNotes()
+    {
+        mmw_preview::gRuntime.hitNoteIds.clear();
+    }
+
+    // CppSekai addition (no upstream equivalent): holds whose start note was
+    // never hit. Same flat (lane center, hold start time seconds) pair layout
+    // as setDimmedHolds(); their bodies keep scrolling past the judgement
+    // line instead of parking on it.
+    EMSCRIPTEN_KEEPALIVE void setMissedHolds(const float* keys, int count)
+    {
+        std::vector<float>& out = mmw_preview::gRuntime.missedHoldKeys;
         out.clear();
         if (keys == nullptr || count <= 0) {
             return;

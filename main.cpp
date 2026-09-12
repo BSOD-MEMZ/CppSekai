@@ -19,6 +19,7 @@
 #include "game/Hud.hpp"
 #include "game/SongSelect.hpp"
 #include "game/Ui.hpp"
+#include "game/TapEffect.hpp"
 
 #include <map>
 
@@ -184,11 +185,17 @@ namespace
         bool scoreRecorded = false; // set once the song is played to the end
     };
 
+    // CppSekai: how many of the judgement engine's hit event indices have
+    // already been published to the chart core (markNoteHit). Reset per session.
+    std::size_t s_hitPublishCursor = 0;
+
     bool startSession(Session& session, const game::ChartEntry& entry, platform::Renderer& renderer,
         platform::AudioEngine& audio, game::JudgementEngine& judgement, float noteSpeed, std::string& error)
     {
         audio.stopMusic();
         judgement.reset();
+        s_hitPublishCursor = 0;
+        core_api::clearHitNotes();
 
         const std::string susText = readFile(entry.susPath);
         if (susText.empty()) {
@@ -603,6 +610,7 @@ int main(int argc, char** argv)
     const std::string overlayDir = baseDir + "assets\\mmw\\overlay";
     const std::string fontDir = baseDir + "assets\\mmw\\font";
     const std::string seDir = baseDir + "assets\\se";
+    const std::string fxDir = baseDir + "assets\\fx";
     // Where the charts live: next to the exe when packaged, otherwise the
     // project's charts/ one level up (the usual build/ layout).
     std::vector<std::string> chartCandidates;
@@ -653,6 +661,17 @@ int main(int argc, char** argv)
     if (const platform::Renderer::HudSprite* closeSprite = renderer.hud("ui_close"); closeSprite != nullptr && closeSprite->id != 0) {
         ui::setCloseTexture(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(closeSprite->id)));
     }
+
+    // PJSK style tap feedback (expanding ring + triangles) on every screen
+    // except the play state. A missing asset only disables the effect.
+    game::TapEffect tapEffect;
+
+    // Tap feedback textures (assets/fx/tap_*.png). Failure is not fatal.
+    if (!tapEffect.load(renderer, fxDir, error)) {
+        std::fprintf(stderr, "warning: tap effect disabled (%s)\n", error.c_str());
+        error.clear();
+    }
+    bootLog("tap effect");
 
     // ------------------------------------------------------------------
     // Chart core
@@ -1230,6 +1249,13 @@ int main(int argc, char** argv)
                     }
                     break;
                 case SDL_FINGERDOWN: {
+                    // Tap feedback on the non-play screens (select, settings).
+                    if (state != AppState::Play && tapEffect.loaded()) {
+                        tapEffect.spawn(
+                            event.tfinger.x * static_cast<float>(windowW),
+                            event.tfinger.y * static_cast<float>(windowH));
+                        break;
+                    }
                     if (autoPlay || paused || state != AppState::Play) {
                         break;
                     }
@@ -1257,10 +1283,22 @@ int main(int argc, char** argv)
                 // when it lands on the HUD pause button.
                 // ------------------------------------------------------
                 case SDL_MOUSEBUTTONDOWN: {
-                    if (autoPlay || paused || state != AppState::Play) {
+                    if (event.button.button != SDL_BUTTON_LEFT && event.button.button != SDL_BUTTON_RIGHT) {
                         break;
                     }
-                    if (event.button.button != SDL_BUTTON_LEFT && event.button.button != SDL_BUTTON_RIGHT) {
+                    // Tap feedback everywhere except the play state: there the
+                    // press is a note hit and the judgement input must stay
+                    // untouched. Note there is deliberately NO
+                    // WantCaptureMouse check here - the song select screen is
+                    // one fullscreen ImGui window, so that flag is always set
+                    // and would swallow every click. The effect is purely
+                    // cosmetic, so it fires on buttons and sliders too (pjsk
+                    // does the same).
+                    if (state != AppState::Play && tapEffect.loaded()) {
+                        tapEffect.spawn(static_cast<float>(event.button.x),
+                            static_cast<float>(event.button.y));
+                    }
+                    if (autoPlay || paused || state != AppState::Play) {
                         break;
                     }
                     if (ImGui::GetIO().WantCaptureMouse) {
@@ -1474,6 +1512,22 @@ int main(int argc, char** argv)
             std::vector<float> dimmedHoldKeys;
             judgement.appendDimmedHoldKeys(dimmedHoldKeys);
             core_api::setDimmedHolds(dimmedHoldKeys);
+
+            // CppSekai: notes the player hit vanish from the field at the hit
+            // itself, while missed notes keep falling past the judgement line
+            // until they are off screen (pjsk). Publish the hit event indices
+            // the judgement engine resolved as hits since last frame, and the
+            // holds whose start was never hit so their bodies scroll past
+            // instead of parking. Nothing is published in autoplay - there the
+            // core keeps the upstream "vanish at the line" preview look.
+            if (!autoPlay) {
+                const std::vector<int>& hitIndices = judgement.hitEventIndices();
+                while (s_hitPublishCursor < hitIndices.size()) {
+                    core_api::markNoteHit(hitIndices[s_hitPublishCursor]);
+                    ++s_hitPublishCursor;
+                }
+                core_api::setMissedHolds(judgement.missedHoldKeys());
+            }
 
             // Debug (`--test-hits`): tap every upcoming note through the normal
             // judgement path, so the whole hit-effect chain can be checked in a
@@ -1701,6 +1755,10 @@ int main(int argc, char** argv)
             && (wallSongTime() - leadInSec) >= screenshotTimeSec) {
             wantScreenshot = true;
         }
+
+        // PJSK style tap feedback, always on top of whatever is on screen.
+        tapEffect.update(frameDelta);
+        tapEffect.draw();
 
         ImGui::Render();
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());

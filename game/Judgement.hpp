@@ -55,6 +55,12 @@ struct HitNote
     // but pjsk judges it by *releasing* the lane at the tail, so it must not
     // go through the plain auto-miss path.
     bool holdTail = false;
+    // CppSekai: hold bookkeeping for kind 4 ticks, resolved in load(). A tick
+    // may only auto-hit while the hold it belongs to was actually grabbed
+    // (its start note is in state 1) and has not broken; otherwise the tick is
+    // consumed silently - the hold's own miss already counted for all of it.
+    std::size_t holdStartIndex = static_cast<std::size_t>(-1);
+    std::size_t holdMarkerIndex = static_cast<std::size_t>(-1);
 };
 
 struct JudgementWindows
@@ -159,6 +165,19 @@ class JudgementEngine
     // frame and hand the result to core_api::setDimmedHolds().
     void appendDimmedHoldKeys(std::vector<float>& out) const;
 
+    // CppSekai: holds whose start note was never hit at all. Same flat
+    // (center, hold start time) key layout as the dimmed list. The renderer
+    // lets these keep scrolling past the judgement line instead of parking on
+    // it (pjsk: a missed hold falls off the screen like any missed note).
+    // Append-only per session; cleared by reset().
+    [[nodiscard]] const std::vector<float>& missedHoldKeys() const { return mMissedHoldKeys; }
+
+    // CppSekai: indices into the core's HitEvent stream of every note this
+    // engine resolved as HIT (taps, flicks, traces, hold tails, ticks).
+    // Append-only per session; the host feeds them to core_api::markNoteHit()
+    // so the renderer can remove hit notes from the field immediately.
+    [[nodiscard]] const std::vector<int>& hitEventIndices() const { return mHitEventIndices; }
+
     // Strict flick validation: on (default) a flick needs a matching swipe
     // direction and taps never clear flicks; off restores the lenient
     // skeleton behavior (any flick gesture / tap clears any flick note).
@@ -196,6 +215,8 @@ class JudgementEngine
     std::vector<HitNote> mNotes;
     std::vector<ActiveHold> mActiveHolds;
     std::vector<float> mHoldLanes;
+    std::vector<float> mMissedHoldKeys;
+    std::vector<int> mHitEventIndices;
     std::size_t mCursor = 0;
     bool mLoaded = false;
     int mTotalScoreNotes = 0;
