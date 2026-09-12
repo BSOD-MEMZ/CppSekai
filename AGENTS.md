@@ -163,6 +163,23 @@ BGM URL 规律：`https://assets.unipjsk.com/ondemand/music/long/se_<id>_01/se_<
 想看"切换难度后等级/颜色是否正确"，用 `--charts <只含一首多难度谱的目录>` 跑一次，
 再 `python .workbuddy/tools/pngcrop.py` 放大手机面板和等级圆核对。
 
+**要验证需要输入才出现的状态**（列表滚动、拖拽、悬停、点了某个按钮），无头模式可以先往
+ImGui 的事件队列里塞合成输入，再按 `--screenshot-time` 抓图 —— 这是唯一能自动跑交互的招，
+实测可行（2026-09-12 用它对过滚动/吸附）：
+
+```cpp
+// main.cpp 的 Select 分支里，drawSongSelect 之前（临时加，验完删掉）
+ImGuiIO& tio = ImGui::GetIO();
+tio.AddMousePosEvent(300.0f, 420.0f);          // 窗口像素坐标
+tio.AddMouseButtonEvent(0, true);              // / false = 松手
+tio.AddMouseWheelEvent(0.0f, -2.0f);           // 滚轮两格
+```
+
+要点：事件**下一帧**才生效；`AddMouseButtonEvent(0,false)` 之后列表还要走完惯性 + 0.20s
+静默才提交选中，所以 `--screenshot-time` 要给足（~2.0s 比较稳）；想直接读内部状态就在
+`drawSongSelect` 里临时加一行 `getenv("CPSEKAI_SCROLL_DEBUG")` 门控的 printf（日志走
+`cppsekai.log`），比盯着截图猜快得多。
+
 判定/特效的无头自检（都不需要真的操作）：
 
 ```bash
