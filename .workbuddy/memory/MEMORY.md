@@ -1,5 +1,16 @@
 # CppSekai — 项目长期记忆
 
+## SMTC 的 TimeSpan ABI（2026-09-12 修，别再踩）
+- `ITimelineVtbl` 的 TimeSpan 参数（StartTime/EndTime/Position 等）是 **8 字节 struct
+  按值传（INT64 tick，100ns 单位）**，不是 boxed IPropertyValue 指针——传指针会得到
+  垃圾刻度，系统面板永远显示不了进度（这就是"SMTC 无法传导"的真凶）。
+- updatePlayback 里有一次性 `[media]` HRESULT 诊断日志，SMTC 再出问题先看这个。
+- 新曲 BGM 路径不一定是 `se_<id>_01`：先查 `viewer-api.unipjsk.com/api/master/1/musicVocals`
+  的 `assetbundleName`（如视奸 628 = `vs_0628_01`），走
+  `assets.unipjsk.com/ondemand/music/long/<bundle>/<bundle>.mp3`；封面是
+  `startapp/music/jacket/jacket_s_<id>/jacket_s_<id>.png`；官方 fillerSec 在
+  musics master 里，可写进 sidecar `<id>.json`。
+
 ## 判定↔渲染联动协议（2026-09-12 新增）
 - **宿主→核心的三个发布口**（都在 main.cpp 播放分支，仅 `!autoPlay`）：
   `markNoteHit(HitEvent索引)`（增量，`s_hitPublishCursor` 在 startSession 重置）、
