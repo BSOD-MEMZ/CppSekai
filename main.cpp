@@ -597,6 +597,15 @@ int main(int argc, char** argv)
     if (windowMode != 1 || splashStyle == 0) {
         windowFlags |= SDL_WINDOW_BORDERLESS;
     }
+    // Image splash is a free-floating PNG: enable DWM per-pixel transparency
+    // (DwmExtendFrameIntoClientArea with -1 margins) so the picture's alpha
+    // shows the desktop instead of a black backdrop. The GL frames decide
+    // opacity themselves: clearing alpha=0 shows the desktop, clearing alpha=1
+    // (the game's normal background) is opaque, so this can stay on all run.
+    // SDL2 has no transparent-window flag (that is SDL3), so do it manually.
+    if (splashStyle == 0) {
+        SDL_GL_SetAttribute(SDL_GL_ALPHA_SIZE, 8); // the framebuffer needs an alpha channel
+    }
     SDL_Window* window = SDL_CreateWindow(
         "CppSekai",
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
@@ -623,13 +632,38 @@ int main(int argc, char** argv)
     SDL_GL_MakeCurrent(window, glContext);
     SDL_GL_SetSwapInterval(1);
     bootLog("gl context");
-    // Paint the very first frame (a plain dark clear) before any asset is
-    // loaded. Without it Windows shows an unpainted window - and after a
-    // swap the compositor has something to display even if the load below
-    // takes a while.
-    glClearColor(0.03f, 0.03f, 0.05f, 1.0f);
+    // Paint the very first frame before any asset is loaded. Without it
+    // Windows shows an unpainted window - and after a swap the compositor has
+    // something to display even if the load below takes a while. The image
+    // splash clears to fully transparent (see SDL_WINDOW_TRANSPARENT above).
+    if (splashStyle == 0) {
+        glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+    } else {
+        glClearColor(0.03f, 0.03f, 0.05f, 1.0f);
+    }
     glClear(GL_COLOR_BUFFER_BIT);
     SDL_GL_SwapWindow(window);
+#ifdef _WIN32
+    // DWM: negative margins extend the glass over the whole client area, which
+    // makes every pixel whose alpha < 255 blend with whatever is behind the
+    // window. Loaded dynamically - the toolchain has no Windows SDK libs.
+    if (splashStyle == 0) {
+        SDL_SysWMinfo wmi;
+        SDL_VERSION(&wmi.version);
+        if (SDL_GetWindowWMInfo(window, &wmi) && wmi.subsystem == SDL_SYSWM_WINDOWS) {
+            struct Margins { int left, right, top, bottom; };
+            using DwmExtendFn = long(__stdcall*)(HWND, const Margins*);
+            if (HMODULE dwm = LoadLibraryA("dwmapi.dll")) {
+                if (auto extend = reinterpret_cast<DwmExtendFn>(
+                        reinterpret_cast<void*>(GetProcAddress(dwm, "DwmExtendFrameIntoClientArea"))); extend) {
+                    const Margins full{-1, -1, -1, -1};
+                    extend(wmi.info.win.window, &full);
+                }
+                FreeLibrary(dwm);
+            }
+        }
+    }
+#endif
 
     std::string error;
     platform::Renderer renderer;
@@ -680,19 +714,16 @@ int main(int argc, char** argv)
         ImGui::NewFrame();
         ImGuiIO& io = ImGui::GetIO();
         ImDrawList* dl = ImGui::GetBackgroundDrawList();
-        dl->AddRectFilled(ImVec2(0.0f, 0.0f), io.DisplaySize, IM_COL32(11, 12, 17, 255));
         if (splashImg != 0 && splashImgW > 0 && splashImgH > 0) {
-            // "Cover" fit: fill the whole window, cropping the overflow, so
-            // there is never a black letterbox around the picture.
-            const float scale = std::max(io.DisplaySize.x / splashImgW, io.DisplaySize.y / splashImgH);
-            const ImVec2 sz(splashImgW * scale, splashImgH * scale);
-            const ImVec2 p0(0.5f * (io.DisplaySize.x - sz.x), 0.5f * (io.DisplaySize.y - sz.y));
-            const ImVec2 uv0(std::max(0.0f, -p0.x / sz.x), std::max(0.0f, -p0.y / sz.y));
-            const ImVec2 uv1(std::min(1.0f, (io.DisplaySize.x - p0.x) / sz.x),
-                std::min(1.0f, (io.DisplaySize.y - p0.y) / sz.y));
+            // Free-floating PNG: drawn at its native size, centered. No
+            // background fill at all - the window is DWM-transparent, so the
+            // picture's alpha shows the desktop directly.
+            const ImVec2 p0(0.5f * (io.DisplaySize.x - splashImgW),
+                0.5f * (io.DisplaySize.y - splashImgH));
             dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(splashImg)),
-                p0, ImVec2(p0.x + sz.x, p0.y + sz.y), uv0, uv1);
+                p0, ImVec2(p0.x + splashImgW, p0.y + splashImgH));
         } else {
+        dl->AddRectFilled(ImVec2(0.0f, 0.0f), io.DisplaySize, IM_COL32(11, 12, 17, 255));
         const ImVec2 center(0.5f * io.DisplaySize.x, 0.44f * io.DisplaySize.y);
         ImFont* font = ImGui::GetFont();
         const char* title = "CppSekai";
