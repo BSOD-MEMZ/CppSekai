@@ -1,5 +1,13 @@
 # CppSekai — 项目长期记忆
 
+## hold combo 机制（2026-09-12 实装）
+- pjsk 的 combo 按 **hold 期间每半拍 +1**（社区公式："八分拍中继点 = 0.1 倍权重的
+  COMBO 加分"），不是只有首尾两个音符。核心 calculateHitEvents 现在为每个 hold 合成
+  半拍 kind-4 tick（起点向上取整到八分位、终点向上取整、不含端点，同时间同轨道去重），
+  判定侧复用 tick 门控（按住才计分、断了静默）。
+- **坑：`--auto` 无头运行退出时会把 autoplay=true 持久化进 userdata.json**，污染之后
+  的普通运行；验证完要改回 False。截图模式不写成绩但写设置。
+
 ## SMTC 的 TimeSpan ABI（2026-09-12 修，别再踩）
 - `ITimelineVtbl` 的 TimeSpan 参数（StartTime/EndTime/Position 等）是 **8 字节 struct
   按值传（INT64 tick，100ns 单位）**，不是 boxed IPropertyValue 指针——传指针会得到
