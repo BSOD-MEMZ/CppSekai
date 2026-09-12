@@ -98,6 +98,17 @@ bash build.sh          # 仅需 Git Bash；产物 build/cppsekai.exe + SDL2.dll 
   生成（整数倍 alpha 加权 box 缩小到 max dim 512；start_grad 是 1:1 全屏渐变，跳过）。
   这套把 HUD 加载从 ~1.0s 降到 ~0.3s。build.sh 会连 assets 一起拷到 build/。
 - 判定窗口默认 perfect 40ms / great 90ms / good 140ms（非官方数值，做成可调的）。
+- **trace（kind 3，绿色竹节/滑条）按"覆盖"判定，不是按"点"**（2026-09-12 修）：
+  官方规则是手指按住那条轨道就判 PERFECT、没有尾判、头也不用重新点，所以
+  `JudgementEngine::update()` 里 kind 3 的分支会用 `mHoldLanes` 做覆盖检测（和"无 marker 的
+  guide tick"同一套），命中即 PERFECT；准点按下仍然走 `findCandidate()` 拿分级判定。
+  **修之前只有"按一下"能清 trace**，于是「tap 打头 + 4 个 trace 组成竹节」的谱（例如
+  0628 HARD 副歌）按住不放就会全 MISS —— 这是用户报的"竹节音符总是 miss"的真凶。
+  同一个谱面里 guide hold 本身**不发任何判定事件**（无头无尾无 tick，只有一个 markerless
+  mid tick），tap 头是独立的一条 1x 音符。
+- 自动演示必须零 miss：flick 尾（kind 2 的 hold 尾）在 `mActiveHolds` 里本来是故意留白、
+  等玩家滑动来清的，可在 `--auto` 下没人滑 → 每根都会 MISS（0628 HARD 有 13 根，
+  直接把血打空）。所以那条分支里 `if (mAutoPlay) judgeHoldTail(hold, Perfect)` 兜一下。
 - **flick 严格方向校验已实现并默认开启**（`JudgementEngine::mStrictFlick = true`，设置面板里
   是「严格 Flick 方向」复选框）。规则：严格模式下**点按永远清不掉 flick，滑动也永远清不掉 tap**；
   up/default（以及 SUS 没给方向的 legacy `FlickNone`）接受「上滑」或「无方向」，left/right
@@ -228,15 +239,33 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
   手机面板也保持旧曲目。停手 0.20s（或惯性衰减完）后把 `lround(scroll/pitch)` 那行提交为
   `groupIndex`（这才是真正的选中），再滑到正中间。选择只在"停手"时发生，这就是用户要的语义。
 - 两端各允许 `0.9*pitch` 的橡皮筋过冲，回弹靠逼近 `scrollTarget` 完成（"滚不到底"）。
+  → **2026-09-12 晚改成真循环**：列表是**闭环**的，滚过最后一行接的是第一行，没有端点也没有
+  橡皮筋（用户说的"滚不到底"是这个意思）。实现上一个 `slot` 是无限行序列里的位置，取行内容
+  一律 `rows[((slot % rowCount) + rowCount) % rowCount]`。因此**不要再给 `scroll` 加 clamp**，
+  惯性只会因为指数衰减停下（`< 100px/s` 归零）。
+- 行现在来自 `buildRows()`（`ListRow`：`header` 或 `song`）：排序 + 可选分组都在那里做，
+  结果按 `listSignature`（搜索词|排序|分组|难度|谱面数）缓存，别每帧重建。
+  分组开着时**顺序由分组决定**（`order` 会被覆盖），否则段标题会把同一组切成好几段。
+- 循环 + 分组下"中间那行"可能是段标题，所以提交选中时要 `nearestSongSlot()` 跳过标题；
+  `slotOfGroup()` 取离当前 `scroll` 最近的那一份拷贝（否则 shuffle 会绕整圈转）。
+  高亮卡片只画 `cardSlot` 那一处，同一个组在屏幕上出现两次时别画两张卡。
 - 鼠标和触摸走同一条路：SDL 的 touch→mouse 合成（`SDL_HINT_TOUCH_MOUSE_EVENTS=1`）会把单指
   拖拽变成 `ImGui` 眼中的鼠标拖动，所以只需要读 `io.MousePos` / `IsMouseDown`。
 - **点击必须在松手时判定**，且位移 < 8px 才算点击（拖拽永远不选中）。不要再用
   `InvisibleButton` + `IsItemClicked`：那个在**按下**时就触发，拖拽起手会误选。
-- 行的命中测试全部靠 `rowIndexAt(y)` 算，没有 ImGui item；列表用 `BeginChild` 只是为了拿裁剪矩形
+- 行的命中测试全部靠 `slotAtY(y)` 算，没有 ImGui item；列表用 `BeginChild` 只是为了拿裁剪矩形
   （`NoScrollbar | NoScrollWithMouse`）。
 - 前导等级圆显示的是**当前选中难度**的定数（`levelForDifficulty()`）：该难度没有谱面文件时
   回落到官方 `music-levels.json` 表，所以切难度时整列数字会一起变，颜色也跟着变
   （`kDiffColors[diffIndex]`）。手机面板里未选中的难度是**空心圆**（无底色填充）。
+- **排序 / 分组**（搜索框右边的两个 combobox）：排序有「按名称」「按难度」，分组有「关闭」
+  「按难度段（1-5 / 6-10 / … / 36+）」「按标题（あ/か/さ…/A-Z 0-9/その他）」。
+  名称排序和标题分组用的是**官方读音**（`musics.json` 的 `pronunciation`，main.cpp 里
+  `loadMusicPronunciations()` 载入，`foldForSort()` 把片假名折成平假名、ASCII 转小写），
+  所以「ウミユリ海底譚」落在 あ 行、片假名标题也能正确排序；没有读音的（自制谱）退回用标题
+  本身当 key（汉字会被排到所有假名之后 → 落进「その他」）。
+  注意 `#TITLE` 里写的是难度名（有些 unipjsk 导出写 `#TITLE "master"`）时要当空处理，
+  否则列表里会出现一堆叫 "master" 的歌。
 
 ## 平台 / 输入相关的坑（2026-09-12）
 
@@ -255,6 +284,11 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
 - `--auto` **只影响本次运行**：`persistUserData()` 里会看 `autoplayGiven`，命令行给的 autoplay
   不再写回 `userdata.json`（以前跑一次预览会把 AUTOPLAY 永久打开）。`--screenshot` 模式干脆
   完全不写 `userdata.json`。
+- **触摸路径要自己 hit-test 所有按钮**：触摸的合成鼠标事件带 `SDL_TOUCH_MOUSEID`，在
+  `SDL_MOUSEBUTTONDOWN` 分支里被过滤掉了，所以**任何只在鼠标分支里判定的按钮，触摸屏上都点不到**。
+  踩过两次：HUD 暂停按钮（已修）、开场卡片右下角的「跳过 >>」按钮（2026-09-12 修）。
+  新增可点元素时，要么放进 ImGui（合成鼠标事件能到 ImGui），要么在 `SDL_FINGERDOWN` 里补一份
+  同样的 hit-test（`game::introSkipHitTest` / `isPauseButton` 就是这个模式）。
 
 ## 系统要求
 

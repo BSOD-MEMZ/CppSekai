@@ -10,17 +10,27 @@
   则整段跳过 `persistUserData()`，一个字节都不写。
 
 ## 选曲列表的滚动模型 + 平台层三件事（2026-09-12 晚，详见 AGENTS.md）
-- **列表是自写状态机**：`scroll` = 列表视口垂直中线处的内容坐标，等间距 pitch 104*k；滚轮/拖拽/
-  惯性/吸附都只改它；`scrolling` 期间**不高亮也不换曲**，停手 0.20s 才把中间那行提交为选中；
-  两端有橡皮筋（"滚不到底"）。点击在松手时判定、位移<8px 才算点击。触摸复用 SDL 的
-  touch→mouse 合成，别另写手指滚动路径。
+- **列表是自写状态机 + 现在是真循环**：`scroll` = 列表视口垂直中线处的内容坐标，等间距 pitch 104*k；
+  滚轮/拖拽/惯性/吸附都只改它；`scrolling` 期间**不高亮也不换曲**，停手 0.20s 才把中间那行提交为
+  选中。**行是无限序列的 slot（`wrapSlot()` 取模），滚过最后一首接第一首**，不要加 clamp。
+  点击在松手时判定、位移<8px 才算点击。触摸复用 SDL 的 touch→mouse 合成，别另写手指滚动路径。
+- **排序 / 分组**：搜索框右边两个 combobox（按名称/按难度；关闭/按难度段/按标题）。名称排序与
+  标题分组用 musics.json 的 `pronunciation`（片假名折平假名），没有读音的谱退回标题本身。
+  行结构 `ListRow{header,song}` 由 `buildRows()` 生成，按 signature 缓存。
 - **列表前导等级跟当前选中难度走**（`levelForDifficulty()`，缺谱面文件时回落官方定数表）；
   手机面板未选中的难度是空心圆；「歌曲等级」牌子压在等级圆上沿。
+- **trace（kind 3，绿色竹节）按"覆盖"判定**：按住那条轨道就 PERFECT，没有尾判、头不用重按
+  （以前只有"按一下"能清 → 按住不放全 MISS）。准点按下仍走 findCandidate 拿分级。
+  竹节的构成 = tap 头 + N 个 friction tap(kind 3) + 一条 guide hold（纯视觉，不发判定事件）。
+- **可点元素必须在 `SDL_FINGERDOWN` 里也 hit-test**：触摸的合成鼠标事件带 `SDL_TOUCH_MOUSEID`
+  会被鼠标分支过滤 → 只写在鼠标分支的按钮触摸屏点不到（踩过两次：HUD 暂停、开场「跳过 >>」）。
 - **exe 是 Windows 子系统**（`-Wl,--subsystem,windows`）：双击无 cmd 窗口。
   `AttachConsole(ATTACH_PARENT_PROCESS)` 只在 stdout 句柄无效时才 `freopen("CONOUT$")`，
   否则会把管道/mintty 的输出抢走；都没有就写 `cppsekai.log`。
 - **flick 方向判定用屏幕 px/s**（阈值按 `windowH/1080` 缩放）。别退回 worldY vs lane 单位——
   两者尺度差 ~6 倍，等于要求上滑"竖直 3.6 倍"才算 flick，触摸屏上根本刷不出来。
+- **autoplay 必须零 miss**：flick 尾在 `mActiveHolds` 里是故意留白等玩家滑的，`--auto` 下要
+  用 `judgeHoldTail(hold, Perfect)` 兜底，否则预览会把血打空。
 - 文档：根目录新增 **`CLI.md`**（命令行手册）。工具：`.workbuddy/tools/pngcrop.py`
   （纯 python PNG 裁剪 + 放大，工具链没有 Pillow/ffmpeg）。
 

@@ -949,6 +949,19 @@ int main(int argc, char** argv)
         }
     }
 
+    // Official readings (musics.json "pronunciation"): "sort by name" and the
+    // aiueo grouping use them, so a katakana/kanji title still lands in the
+    // right row. Optional - a missing file just means title-based sorting.
+    for (const std::string& candidate :
+        {baseDir + "musics.json", baseDir + "..\\musics.json", std::string("musics.json")}) {
+        std::ifstream probe(candidate, std::ios::binary);
+        if (probe.good()) {
+            probe.close();
+            game::loadMusicPronunciations(candidate);
+            break;
+        }
+    }
+
     // ------------------------------------------------------------------
     // UI fonts
     // ------------------------------------------------------------------
@@ -1632,7 +1645,35 @@ int main(int argc, char** argv)
                             event.tfinger.y * static_cast<float>(windowH));
                         break;
                     }
-                    if (autoPlay || paused || state != AppState::Play) {
+                    if (paused || state != AppState::Play) {
+                        break;
+                    }
+                    // Opening-card skip button: the mouse path hit-tests it, but
+                    // a touch contact only produces SDL_FINGER* events (its
+                    // synthetic mouse events carry SDL_TOUCH_MOUSEID and are
+                    // filtered out), so on a touchscreen the button was dead.
+                    // Same conditions as the mouse path - it works during an
+                    // autoplay preview too.
+                    {
+                        const int fx = static_cast<int>(event.tfinger.x * static_cast<float>(windowW));
+                        const int fy = static_cast<int>(event.tfinger.y * static_cast<float>(windowH));
+                        const double currentSongTime =
+                            audio.hasMusic() ? audio.songTime() : wallSongTime();
+                        if (!ImGui::GetIO().WantCaptureMouse
+                            && currentSongTime + leadInSec < static_cast<double>(game::kHudIntroDurationSec)
+                            && game::introSkipHitTest(windowW, windowH, fx, fy)) {
+                            if (audio.hasMusic()) {
+                                audio.skipLeadIn();
+                            } else {
+                                perfStart = SDL_GetPerformanceCounter()
+                                    - static_cast<Uint64>(leadInSec * static_cast<double>(perfFreq));
+                            }
+                            std::printf("[intro] lead-in skipped\n");
+                            std::fflush(stdout);
+                            break;
+                        }
+                    }
+                    if (autoPlay) {
                         break;
                     }
                     // HUD pause button: same hit-test the mouse path uses -

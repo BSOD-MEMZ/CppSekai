@@ -77,5 +77,7 @@ rm -rf build/assets 2>/dev/null || true
 cp -r assets build/ 2>/dev/null || true
 # Official per-difficulty levels (song select pads; unipjsk charts ship without)
 cp -f music-levels.json build/ 2>/dev/null || true
+# Official song readings (song select "sort by name" + aiueo grouping)
+cp -f musics.json build/ 2>/dev/null || true
 
 echo "build OK -> build/cppsekai.exe"

@@ -25,6 +25,7 @@ struct ChartEntry
     std::string vocal;            // "初音ミク、KAITO" style list
     std::string difficulty;       // EASY..MASTER / APPEND / ETERNAL
     std::string level;
+    std::string kana;             // official reading (musics.json), may be empty
     std::string mv;               // "2D" / "3D" MV tag from the sidecar (optional)
     std::string displayName; // fallback label when the chart has no #TITLE
 
@@ -125,6 +126,13 @@ void loadMusicLevels(const std::string& path);
 
 // Level of `difficulty` ("EASY".."MASTER") for a song id, 0 when unknown.
 int musicLevel(int musicId, const std::string& difficulty);
+
+// Official song readings, for "sort by name" and the aiueo grouping. Accepts
+// the game's own musics.json (an array of objects with "id" and
+// "pronunciation", the fields unipjsk ships) or a plain {"75": "よんぴき..."}
+// map. Songs without an entry fall back to their title. May be called more
+// than once; later entries win.
+void loadMusicPronunciations(const std::string& path);
 
 // Recursively collects *.sus under dir (bounded depth). Entries are sorted
 // by title then file name.
