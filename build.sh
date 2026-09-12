@@ -39,6 +39,7 @@ SOURCES=(
     game/Ui.cpp
     game/Intro.cpp
     game/SongSelect.cpp
+    game/TapEffect.cpp
     core/native/src/mmw_preview.cpp
     core/native/mmw_port/Math.cpp
     core/native/mmw_port/MinMax.cpp
