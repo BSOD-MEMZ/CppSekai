@@ -21,7 +21,7 @@ bash setup.sh --charts # 额外下载 0075 / 0127 两张谱 + BGM 到 charts/
 | 目录 | 内容 | 大小 | 为什么不入库 |
 |---|---|---|---|
 | `toolchain/` | zig 0.14.1 + SDL2 2.32.10 MinGW 包 | ~300MB | zig.exe 超 GitHub 100MB 单文件硬限制；二进制入库会让每次 clone 都全量拉 300MB。`setup.sh` 30 秒拉完，版本已钉死 |
-| `assets/` | pjsk 官方 UI 贴图 + 判定音效 | ~10MB | 官方游戏素材，从上游 AGPL 仓库（sekai-mmw-preview-web）拉取，由 setup.sh 代劳 |
+| `assets/mmw/` | pjsk 官方 UI 贴图 + 特效 | ~10MB | ⚠️ 因历史提交**实际在库里**（见 [COPYRIGHT.md](COPYRIGHT.md)）；`assets/` 其余子目录（se/select/fx）不入库，缺了由 `setup.sh` 补 |
 | `charts/` | 官方谱面 + 音频 | 每首几 MB | 官方游戏数据，仅限本地游玩，不要公开分发 |
 | `build/` | 编译产物 | — | `build.sh` 重新生成 |
 

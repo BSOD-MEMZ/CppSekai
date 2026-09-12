@@ -26,12 +26,14 @@ zig 把 C++20 静态链成一个 ~4.8 MB 的 `cppsekai.exe`，SDL2 给窗口和�
 ## 1. 它到底能干什么
 
 - **SUS 谱面原生解析 + 演奏**：12 轨，tap / critical tap / flick / trace(friction) / hold 全部支持。
-- **三种输入共用一条路径**：键盘 12 键、鼠标左/右键（当成两个指针）、多指触摸，全部走同一个「屏幕 → 裁剪空间 → 世界轨道坐标」的逆变换。
+- **判定对齐原作**：PERFECT/GREAT/GOOD/BAD/MISS 五档判定，GOOD 及以下断连击；hold 中途松手断连（-40 血），**重新按住可以接上**，断开期间的 tick 保持 miss；hold 尾巴按松手时机评级。
+- **三种输入共用一条路径**：键盘 12 键、鼠标左/右键（当成两个指针）、多指触摸，全部走同一个「屏幕 → 裁剪空间 → 世界轨道坐标」的逆变换。**触摸屏对全部 UI（选曲/设置/弹窗）同样有效**。
 - **真·游戏特效**：命中特效不是自己糊的粒子，而是谱面核心自带的 pjsk 粒子系统（`effect.png` + 内嵌效果定义），帧序、时长、叠加混合与官方一致。
 - **音频时钟即主时钟**：不用 wall clock 猜时间，直接从音频设备的 PCM 帧计数推 `songTime`，音画天然对齐。
 - **自动吃掉官方音频的开头静音**：官服 mp3 前面有 ~9 秒填充，谱面 tick 0 在那之后。程序会自己扫出来（或读 sidecar），不需要手动对轴。
-- **选歌 → 演奏 → 暂停弹窗 → 成绩记录**，一套完整流程：`确定` / `重试` / `放弃` / `继续演出`，通关与 FULL COMBO 连同设置一起存进 `userdata.json`。
-- **系统集成**：Windows 媒体浮层（SMTC）显示曲名/进度，任务栏按钮上跑进度条。
+- **选歌 → 演奏 → 暂停弹窗 → 3-2-1 倒计时 → 继续演出**，一套完整流程：`确定` / `重试` / `放弃` / `继续演出`，通关与 FULL COMBO 连同设置一起存进 `userdata.json`。开场卡片右下角有「跳过 >>」按钮，直接跳到谱面 0 秒开打。
+- **设置齐全**（H 键或选曲界面的设置按钮）：音频偏移、音符速度、分辨率预设、窗口模式、帧率上限、播放进度条开关、AUTOPLAY 预览、判定窗口、严格 Flick 方向，全部持久化到 `userdata.json`。
+- **系统集成**：Windows 媒体浮层（SMTC）显示曲名/进度，任务栏按钮上跑进度条；演奏界面顶端还有一条 3px 的半透明播放进度条（设置里可关）。
 - **无头自检**：`--screenshot` 能不开窗口跑一帧存 PNG，改渲染不用靠肉眼盯屏幕。
 
 ---
@@ -70,6 +72,25 @@ bash setup.sh --charts     # 额外下载 0075 / 0127 两张谱 + BGM 到 charts
 | 触摸 | 多指 + 上滑 / 左右滑 | 多指同时判定 |
 | 键盘打 flick | 无方向 | 只能清「上/无方向」的 flick；**左/右 flick 必须用鼠标拖拽或触摸** |
 | 鼠标/触摸 | 点 HUD、面板、弹窗 | **永远不当作击打**（先做 ImGui 占用检测 + 暂停按钮命中测试） |
+| 触摸 | 点选曲 / 设置 / 弹窗 | 触摸会合成鼠标事件喂给 UI，所有界面元素都能点 |
+
+---
+
+## 3.5 设置面板（`H` 键或选曲界面的设置按钮）
+
+| 页签 | 项 | 说明 |
+|---|---|---|
+| 演奏 | 音频偏移 | −2000～+2000 ms，实时生效 |
+| 演奏 | 音符速度 | 1–12，实时生效 |
+| 画面 | 分辨率 | 1280×720 / 1600×900 / 1920×1080 / 2560×1440，非全屏时立即改窗口并居中；全屏下选了等退出全屏再生效 |
+| 画面 | 窗口模式 | borderless / windowed / fullscreen |
+| 画面 | 帧率上限 | 0 = 仅垂直同步；超过显示器刷新率会自动关垂直同步 |
+| 画面 | 显示播放进度条 | 演奏界面顶端的 3px 半透明进度条 |
+| 画面 | AUTOPLAY 谱面预览 | 全 PERFECT 自动演示，不写成绩 |
+| 判定 | 判定窗口 | Perfect/Great/Good 三档（ms），联动 BAD/MISS 边界 |
+| 判定 | 严格 Flick 方向 | 开启后点按永远清不掉 flick、方向必须匹配 |
+
+全部设置随 `userdata.json` 持久化，命令行参数优先于保存值。
 
 ---
 
@@ -228,8 +249,13 @@ flags: bit0 = critical, bits1-2 = flick 方向 (0 无 / 1 上 / 2 左 / 3 右)
 
 - **超时自动 MISS**：`update()` 每帧扫过 `timeSec < songTime - missAfterMs` 的音符，记 MISS 并把 combo 归零。
 - **Flick 严格方向**：flick 音符只在滑动方向匹配时才算过（上滑音符接受「上 / 无方向」，左右滑必须对应方向）；严格模式下点按永远不会清掉 flick，反之亦然。可在设置面板里关。
-- **Hold**：kind 5 是 hold 标记，配合同轨同刻的 tap 判定决定「起手是否成功」；之后每帧检查该轨是否仍被按住，掉了且离结束还早 → 断连。hold 期间的 kind 4 tick 自动完美通过。
-- **分数**：PERFECT 1000（critical 1500）/ GREAT 800 / GOOD 500，combo 与 maxCombo 另算。
+- **Hold 三段判定**：
+  - **起手**：kind 5 标记配合同轨同刻的 tap 判定决定「是否抓到」；
+  - **长条持续段**：hold 期间每半拍一个 kind 4 tick，按住时自动 PERFECT 计分（combo 照涨），断开期间的 tick 静默吞掉；
+  - **断连与重接**：中途松手 → 断连（MISS、-40 血、combo 归零），长条变灰；**重新按住该轨即重接**，剩余 tick 和尾判恢复正常判定（与原作一致）。断开期间已经吞掉的 tick 不追溯补分；
+  - **尾判**：松手时机离结束 ≤Perfect/Great/Good 窗口给对应评级，按到底也是 PERFECT，提前超过 180ms 才算断。
+- **分数**：对齐上游公式的真分数——`(TEAM_POWER / Σ权重) × 4 × 音符权重 × 定数系数 × combo系数 × 判定系数`，权重表见 `JudgementEngine::hudWeight`（tap 1.0 / critical 2.0 / flick 3.0 / tick 0.1…），combo 每 100 连击 +1% 上限 1.1，判定系数 Perfect 1.0 / Great 0.7 / Good 0.5。左上角按定数给段位字母和分数条。
+- **血量**：1000 起，MISS -80、BAD -50、长条中断 -40。
 - **特效联动**：每次成功命中，把该音符的 `center/width/kind/flickDir/critical/friction` 回灌给核心的 `triggerNoteEffect()`，让核心的粒子系统在正确的轨、正确的时刻放正确的特效。
 
 ### 6.5 音频：音频时钟是主时钟
@@ -242,8 +268,8 @@ flags: bit0 = critical, bits1-2 = flick 方向 (0 无 / 1 上 / 2 左 / 3 右)
 - `startPos` 是「谱面 tick 0 对应文件第几秒」。官服 mp3 前面有 ~9 秒静音，所以这个值 ≈ 9。优先级：**sidecar `fillerSec`/`offset` > 自动检测 > 0**。
 - 自动检测：用 miniaudio 以 44100Hz 单声道解码开头 20 秒，1024 帧一块找第一个峰值 > −45 dBFS（`184/32768`）的采样；小于 0.3 秒就当编码间隙，不算填充。
 - SUS 的 `#WAVEOFFSET`（秒）叠加在 `startPos` 上。
-- **开场前摇**：`start(leadIn)` 先把时钟锚在 `-leadIn` 秒，`songTime` 从负值爬到 0 才真正 `ma_sound_start`，所以开场卡片播完的瞬间音乐正好起。
-- **暂停 / 恢复**：暂停记下 `songTime` 并停掉声音；恢复时重新 seek 到 `pauseSongTime + startPos + userOffset` 并把帧锚点补回去，时钟不会跳。
+- **开场前摇**：`start(leadIn)` 先把时钟锚在 `-leadIn` 秒，`songTime` 从负值爬到 0 才真正 `ma_sound_start`，所以开场卡片播完的瞬间音乐正好起。开场卡片右下角的「跳过 >>」按钮直接把时钟跳到 0 并立刻起歌（`AudioEngine::skipLeadIn`），不用干等 6 秒。
+- **暂停 / 恢复**：暂停记下 `songTime` 并停掉声音；恢复时先播 3-2-1 倒计时（白色数字 + 光环 + `count_down.mp3`），倒数结束才 seek 回 `pauseSongTime + startPos + userOffset` 继续播放，时钟不会跳。
 - `lead-in` 最短 5.8s = 开场卡片 4.0s + 舞台淡入 1.8s（上游时序）。
 
 ### 6.6 界面：立即模式 + 1920×1080 虚拟坐标
@@ -334,6 +360,8 @@ CppSekai/
   AGENTS.md           给 AI 助手的项目指南（改代码前先读）
   SETUP.md            环境配置
   CHARTS.md           怎么下载 / 整理谱面（给玩家看的）
+  LICENSE             AGPL-3.0 许可证全文
+  COPYRIGHT.md        版权与合规说明：素材审计、风险矩阵、规避措施
 ```
 
 ---
@@ -353,9 +381,11 @@ CppSekai/
 
 ## 11. 授权与素材
 
-- 本仓库整体遵循 **AGPL-3.0-only**，改动必须保持开源。
+- 代码遵循 **AGPL-3.0-only**，仓库根有完整的 [`LICENSE`](LICENSE) 文件。任何分发（包括发 exe）都要求附上该许可并提供对应源码——指回本仓库链接即可。
   - 上游：[sekai-mmw-preview-web](https://github.com/watagashi-uni/sekai-mmw-preview-web)（AGPL-3.0）——谱面核心与渲染布局来自这里
   - 再上游：MikuMikuWorld（MIT）——`core/native/mmw_port/` 的移植来源
-  - 仓库里目前**还没有 `LICENSE` 文件**，建议补一份
-- `assets/` 下的贴图与音效是 Project SEKAI 的官方素材，`charts/` 是官方谱面数据，**仅限本地游玩，不入库、不再分发**。
-- 版权归 SEGA / Colorful Palette 所有，本项目与官方无关。
+  - 第三方库（imgui / miniaudio / stb / nlohmann-json / DirectXMath）各自遵循 MIT 等宽松许可，声明保留在 `third_party/` 各源文件头部
+- **素材全部属于 SEGA / Colorful Palette**：`assets/` 与 `charts/` 是官方游戏素材与数据，仅限本地游玩。
+  - ⚠️ **审计实情（2026-09）**：`assets/mmw/**`（305 个文件）与 `Drafts/`（22 个）因历史提交**实际被 git 跟踪**——README 早期「素材不入库」的说法对这两个目录不成立。风险等级与清理方案（`git filter-repo` 步骤、备选方案）见 **[COPYRIGHT.md](COPYRIGHT.md)**。
+- 发布纪律：任何 Release **只传源码或裸 exe**（资源按 exe 旁目录解析，裸 exe 里不含素材），永远不要打包 `assets/` 或 `charts/`。
+- 本项目与官方无关；如有侵权请联系移除。
