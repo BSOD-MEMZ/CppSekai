@@ -1170,7 +1170,13 @@ namespace mmw_preview
                 playEvent = hold.startType == HoldNoteType::Normal;
             } else if (note.type == NoteType::HoldEnd) {
                 const HoldNote& hold = gRuntime.score.holdNotes.at(note.parentID);
-                playEvent = hold.endType == HoldNoteType::Normal;
+                // CppSekai: guide/hidden holds (竹节) normally emit no start
+                // or tail events at all - nothing to press, nothing to
+                // release. But a flick END must stay swipeable (official:
+                // swipe while still holding, no release needed), so emit the
+                // end event when it is a flick even for these loose holds.
+                // Non-flick ends stay unjudged on purpose.
+                playEvent = hold.endType == HoldNoteType::Normal || note.isFlick();
             }
 
             if (playEvent && note.type == NoteType::HoldMid) {

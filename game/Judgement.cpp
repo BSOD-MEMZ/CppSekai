@@ -264,9 +264,14 @@ HitNote* JudgementEngine::findCandidate(float lanePos, float songTimeSec, float 
             break;
         }
         // Flick notes (kind 2) and tap/trace notes are player-hit. Kind 4
-        // ticks are auto, kind 5 markers are hold bookkeeping and a hold tail
-        // is resolved by the hold tracker (releasing the lane), never here.
-        if (note.kind == 4.0f || note.kind == 5.0f || note.holdTail) {
+        // ticks are auto, kind 5 markers are hold bookkeeping. A hold tail
+        // is normally resolved by the hold tracker (releasing the lane) -
+        // but a flick TAIL is cleared by swiping while still holding, like
+        // the official game, so flick gestures may reach it here.
+        if (note.kind == 4.0f || note.kind == 5.0f) {
+            continue;
+        }
+        if (note.holdTail && !(wantFlick && note.kind == 2.0f)) {
             continue;
         }
         const bool noteIsFlick = note.kind == 2.0f;
@@ -397,21 +402,42 @@ void JudgementEngine::update(float songTimeSec)
         }
 
         if (note.kind == 4.0f) {
-            // Hold ticks auto-hit only while the hold they belong to was
-            // actually grabbed and has not broken. A hold that was never hit
-            // is already fully accounted for by its start note's MISS, so its
-            // ticks are consumed silently - otherwise every tick would hand
-            // out a free PERFECT (and its combo / score) for a hold the
-            // player never touched.
-            const std::uint8_t startState = note.holdStartIndex < mNotes.size()
-                ? mNotes[note.holdStartIndex].state
-                : static_cast<std::uint8_t>(1);
+            std::uint8_t startState;
             bool holdBroken = false;
-            if (note.holdMarkerIndex < mNotes.size()) {
-                for (const ActiveHold& hold : mActiveHolds) {
-                    if (hold.noteIndex == note.holdMarkerIndex && hold.broken) {
-                        holdBroken = true;
+            if (note.holdMarkerIndex >= mNotes.size()) {
+                // Guide / hidden hold ticks (竹节): no kind-5 marker exists,
+                // so there is no hold tracker to ask. Official behaviour is
+                // the loosest possible - a finger anywhere over the segment
+                // is enough, and missing it costs nothing: the tick is
+                // consumed silently (no MISS, no life, no combo break).
+                bool covered = mAutoPlay; // autoplay preview: no fingers exist
+                for (const float lane : mHoldLanes) {
+                    if (laneCovers(note, lane, 0.5f)) {
+                        covered = true;
                         break;
+                    }
+                }
+                if (!covered) {
+                    note.state = 2;
+                    continue;
+                }
+                startState = 1;
+            } else {
+                // Hold ticks auto-hit only while the hold they belong to was
+                // actually grabbed and has not broken. A hold that was never
+                // hit is already fully accounted for by its start note's
+                // MISS, so its ticks are consumed silently - otherwise every
+                // tick would hand out a free PERFECT (and its combo / score)
+                // for a hold the player never touched.
+                startState = note.holdStartIndex < mNotes.size()
+                    ? mNotes[note.holdStartIndex].state
+                    : static_cast<std::uint8_t>(1);
+                if (note.holdMarkerIndex < mNotes.size()) {
+                    for (const ActiveHold& hold : mActiveHolds) {
+                        if (hold.noteIndex == note.holdMarkerIndex && hold.broken) {
+                            holdBroken = true;
+                            break;
+                        }
                     }
                 }
             }
@@ -574,6 +600,14 @@ void JudgementEngine::update(float songTimeSec)
             }
             // Tail judgement: releasing inside the window is graded by how far
             // from the end the finger came off; holding through is a PERFECT.
+            // A flick TAIL is the exception: it is cleared by swiping while
+            // still holding (findCandidate accepts it now), never by holding
+            // through or releasing - leaving it pending lets the holdTail
+            // auto-miss path grade a forgotten flick instead of gifting a
+            // PERFECT for doing nothing.
+            if (hold.tailIndex < mNotes.size() && mNotes[hold.tailIndex].kind == 2.0f) {
+                continue;
+            }
             Judge judge = Judge::Perfect;
             if (hold.released && hold.releaseTimeSec >= 0.0f) {
                 const float dtMs = (hold.endTimeSec - hold.releaseTimeSec) * 1000.0f;

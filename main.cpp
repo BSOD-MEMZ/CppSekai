@@ -1472,6 +1472,21 @@ int main(int argc, char** argv)
                     if (autoPlay || paused || state != AppState::Play) {
                         break;
                     }
+                    // HUD pause button: same hit-test the mouse path uses -
+                    // without it the button was mouse-only and a touchscreen
+                    // could never open the pause dialog.
+                    {
+                        const int fx = static_cast<int>(event.tfinger.x * static_cast<float>(windowW));
+                        const int fy = static_cast<int>(event.tfinger.y * static_cast<float>(windowH));
+                        const double currentSongTime =
+                            audio.hasMusic() ? audio.songTime() : wallSongTime();
+                        const float visibility = game::openingPlayfieldVisibility(
+                            static_cast<float>(currentSongTime + leadInSec), session.intro.hasContent);
+                        if (visibility > 0.0f && isPauseButton(fx, fy)) {
+                            pauseClickRequested = true;
+                            break;
+                        }
+                    }
                     beginPointer(event.tfinger.fingerId,
                         static_cast<int>(event.tfinger.x * static_cast<float>(windowW)),
                         static_cast<int>(event.tfinger.y * static_cast<float>(windowH)));
@@ -1991,9 +2006,11 @@ int main(int argc, char** argv)
             // ----------------------------------------------------------
             // Damage vignette: dark inner shadow around the screen edges.
             // A life loss flashes it (decays over ~0.45s); life at 0 keeps
-            // it permanently on (original-game feedback). Edge bands are
-            // per-axis gradients - opposite corners overlap naturally so
-            // the corners read darker, like a real vignette.
+            // it permanently on (original-game feedback). Edge bands do NOT
+            // overlap: left/right bands span the full height, top/bottom
+            // bands only the middle stretch, so every edge point gets
+            // exactly ONE layer of darkness (they used to stack in the
+            // corners and pile up much darker).
             // ----------------------------------------------------------
             {
                 const float deadVignette = judgement.lifeRatio() <= 0.0f ? 0.8f : 0.0f;
@@ -2005,12 +2022,14 @@ int main(int argc, char** argv)
                     const int a = static_cast<int>(90.0f * vig);
                     const float bandV = h * 0.16f; // top / bottom band height
                     const float bandH = w * 0.12f; // left / right band width
-                    fg->AddRectFilledMultiColor(ImVec2(0.0f, 0.0f), ImVec2(w, bandV),
+                    // Top / bottom: only between the side bands.
+                    fg->AddRectFilledMultiColor(ImVec2(bandH, 0.0f), ImVec2(w - bandH, bandV),
                         IM_COL32(0, 0, 0, a), IM_COL32(0, 0, 0, a),
                         IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, 0));
-                    fg->AddRectFilledMultiColor(ImVec2(0.0f, h - bandV), ImVec2(w, h),
+                    fg->AddRectFilledMultiColor(ImVec2(bandH, h - bandV), ImVec2(w - bandH, h),
                         IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, 0),
                         IM_COL32(0, 0, 0, a), IM_COL32(0, 0, 0, a));
+                    // Left / right: full height.
                     fg->AddRectFilledMultiColor(ImVec2(0.0f, 0.0f), ImVec2(bandH, h),
                         IM_COL32(0, 0, 0, a), IM_COL32(0, 0, 0, 0),
                         IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, a));
