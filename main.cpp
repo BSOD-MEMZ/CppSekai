@@ -334,6 +334,7 @@ int main(int argc, char** argv)
     int winHeight = 720;
     int windowMode = 0; // 0=borderless 1=windowed 2=fullscreen(desktop)
     int fpsLimit = 60;  // extra frame cap on top of vsync; 0 = vsync only
+    bool showProgressBar = true; // subtle top-edge playback bar (settings toggle)
 
     // Settings that also live in userdata.json (loaded below). Flags present on
     // the command line win over the saved values; these record which were given.
@@ -343,6 +344,8 @@ int main(int argc, char** argv)
     bool windowGiven = false;
     bool fpsGiven = false;
     bool autoplayGiven = false;
+    bool widthGiven = false;
+    bool heightGiven = false;
     game::UserSettings userSettings;
     std::map<std::string, game::ScoreRecord> scores;
 
@@ -363,8 +366,10 @@ int main(int argc, char** argv)
             gFillerSec = std::atof(utf8Argv[++i]);
         } else if (arg == "--width" && i + 1 < utf8Argc) {
             winWidth = std::atoi(utf8Argv[++i]);
+            widthGiven = true;
         } else if (arg == "--height" && i + 1 < utf8Argc) {
             winHeight = std::atoi(utf8Argv[++i]);
+            heightGiven = true;
         } else if (arg == "--window" && i + 1 < utf8Argc) {
             const std::string mode = utf8Argv[++i];
             windowGiven = true;
@@ -504,6 +509,15 @@ int main(int argc, char** argv)
     if (!windowGiven) {
         windowMode = userSettings.windowMode;
     }
+    // Saved resolution applies unless --width/--height overrode it. resW/resH
+    // keep the *chosen* size (the live windowW/H follow resizes + fullscreen),
+    // so persisting never records the desktop size of a fullscreen session.
+    if (!widthGiven && !heightGiven) {
+        winWidth = userSettings.windowWidth;
+        winHeight = userSettings.windowHeight;
+    }
+    int resW = std::max(320, winWidth);
+    int resH = std::max(240, winHeight);
     if (!fpsGiven) {
         fpsLimit = userSettings.fpsLimit;
     }
@@ -513,6 +527,7 @@ int main(int argc, char** argv)
     if (!autoplayGiven) {
         autoPlay = userSettings.autoplay;
     }
+    showProgressBar = userSettings.showProgressBar;
 
     int windowW = std::max(320, winWidth);
     int windowH = std::max(240, winHeight);
@@ -884,9 +899,12 @@ int main(int argc, char** argv)
         userSettings.seVolume = seVolume;
         userSettings.leadInSec = leadIn;
         userSettings.windowMode = windowMode;
+        userSettings.windowWidth = resW;
+        userSettings.windowHeight = resH;
         userSettings.fpsLimit = fpsLimitLive;
         userSettings.offsetSec = gUserOffsetSec;
         userSettings.autoplay = autoPlay;
+        userSettings.showProgressBar = showProgressBar;
         const game::JudgementWindows& w = judgement.windows();
         userSettings.perfectMs = w.perfectMs;
         userSettings.greatMs = w.greatMs;
@@ -971,7 +989,32 @@ int main(int argc, char** argv)
                     core_api::setPreviewConfig(0, 1, 1, 1, 0, 0, noteSpeed, 1.0f, 0.6f, 0.0f, 1.0f, 0.85f);
                 }
             } else if (tab == 1) {
-                // 画面: window mode + frame rate.
+                // 画面: resolution + window mode + frame rate.
+                contentLeft();
+                ImGui::Text("分辨率");
+                // Preset sizes; the live window resizes immediately when not
+                // in fullscreen (there the desktop size wins until exit).
+                static constexpr int kResW[4] = {1280, 1600, 1920, 2560};
+                static constexpr int kResH[4] = {720, 900, 1080, 1440};
+                static int resIdx = [](int w, int h) {
+                    for (int i = 0; i < 4; ++i) {
+                        if (kResW[i] == w && kResH[i] == h) {
+                            return i;
+                        }
+                    }
+                    return 0;
+                }(resW, resH);
+                contentLeft();
+                ImGui::SetNextItemWidth(interior);
+                if (ImGui::Combo("##resolution", &resIdx,
+                        "1280 x 720\0" "1600 x 900\0" "1920 x 1080\0" "2560 x 1440\0")) {
+                    resW = kResW[resIdx];
+                    resH = kResH[resIdx];
+                    if (windowMode != 2) {
+                        SDL_SetWindowSize(window, resW, resH);
+                        SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
+                    }
+                }
                 contentLeft();
                 ImGui::Text("窗口模式");
                 static int winMode = windowMode;
@@ -997,6 +1040,13 @@ int main(int argc, char** argv)
                 ImGui::Text("实测: %.1f fps", 1.0 / std::max(1e-6, lastFrameDeltaSec));
                 contentLeft();
                 ImGui::Text("显示器刷新率 %d Hz；超过刷新率会自动关垂直同步", displayRefreshHz);
+                contentLeft();
+                bool showProgressBox = showProgressBar;
+                ui::checkBox("显示播放进度条", &showProgressBox, interior);
+                if (showProgressBox != showProgressBar) {
+                    showProgressBar = showProgressBox;
+                    persistUserData();
+                }
                 contentLeft();
                 // checkBox returns the *new* value, so gate on a real change -
                 // gating on the return value made the box impossible to untick.
@@ -1337,6 +1387,27 @@ int main(int argc, char** argv)
                     if (state != AppState::Play && tapEffect.loaded()) {
                         tapEffect.spawn(static_cast<float>(event.button.x),
                             static_cast<float>(event.button.y));
+                    }
+                    // Opening-card skip button (bottom-right): jump the
+                    // lead-in straight to chart time 0 and start the music
+                    // now. Works in autoplay previews too.
+                    if (state == AppState::Play && !paused && !ImGui::GetIO().WantCaptureMouse) {
+                        const double currentSongTime =
+                            audio.hasMusic() ? audio.songTime() : wallSongTime();
+                        if (currentSongTime + leadInSec < static_cast<double>(game::kHudIntroDurationSec)
+                            && game::introSkipHitTest(windowW, windowH, event.button.x, event.button.y)) {
+                            if (audio.hasMusic()) {
+                                audio.skipLeadIn();
+                            } else {
+                                // No BGM: the clock is the wall clock - move
+                                // its anchor so chart time 0 is now.
+                                perfStart = SDL_GetPerformanceCounter()
+                                    - static_cast<Uint64>(leadInSec * static_cast<double>(perfFreq));
+                            }
+                            std::printf("[intro] lead-in skipped\n");
+                            std::fflush(stdout);
+                            break;
+                        }
                     }
                     if (autoPlay || paused || state != AppState::Play) {
                         break;
@@ -1718,6 +1789,23 @@ int main(int argc, char** argv)
                     static_cast<float>(leadInSec), dumpJudgeSheet);
             }
             game::drawIntro(renderer, session.intro, outputTime, windowW, windowH);
+
+            // Subtle playback progress bar along the very top edge of the
+            // window (semi-transparent, can be turned off in the settings).
+            if (showProgressBar) {
+                const float progress = trackDurationSec > 1.0
+                    ? std::clamp(static_cast<float>(songTime / trackDurationSec), 0.0f, 1.0f)
+                    : 0.0f;
+                ImDrawList* fg = ImGui::GetForegroundDrawList();
+                const float barH = 3.0f;
+                fg->AddRectFilled(ImVec2(0.0f, 0.0f),
+                    ImVec2(static_cast<float>(windowW), barH), IM_COL32(255, 255, 255, 24));
+                if (progress > 0.0f) {
+                    fg->AddRectFilled(ImVec2(0.0f, 0.0f),
+                        ImVec2(static_cast<float>(windowW) * progress, barH),
+                        IM_COL32(255, 255, 255, 84));
+                }
+            }
 
             // ----------------------------------------------------------
             // Pause button zone (right end of the life bar).

@@ -77,6 +77,11 @@ class AudioEngine
     // Must be called once per frame; starts the music when the lead-in ends.
     void update();
 
+    // Jumps the lead-in clock straight to chart time 0 and starts the music
+    // right now (the opening card's skip button). No-op once the music is
+    // already playing, while paused, or when there is no music loaded.
+    void skipLeadIn();
+
     // Current chart time in seconds (negative = lead-in).
     double songTime() const;
     double sampleRate() const;

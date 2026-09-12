@@ -338,7 +338,10 @@ void loadUserData(const std::string& path, UserSettings& settings,
             settings.offsetSec = s.value("offsetSec", settings.offsetSec);
             settings.leadInSec = s.value("leadInSec", settings.leadInSec);
             settings.windowMode = s.value("windowMode", settings.windowMode);
+            settings.windowWidth = s.value("windowWidth", settings.windowWidth);
+            settings.windowHeight = s.value("windowHeight", settings.windowHeight);
             settings.fpsLimit = s.value("fpsLimit", settings.fpsLimit);
+            settings.showProgressBar = s.value("showProgressBar", settings.showProgressBar);
             settings.perfectMs = s.value("perfectMs", settings.perfectMs);
             settings.greatMs = s.value("greatMs", settings.greatMs);
             settings.goodMs = s.value("goodMs", settings.goodMs);
@@ -352,6 +355,8 @@ void loadUserData(const std::string& path, UserSettings& settings,
     settings.perfectMs = std::clamp(settings.perfectMs, 10.0f, 100.0f);
     settings.greatMs = std::max(settings.greatMs, settings.perfectMs + 10.0f);
     settings.goodMs = std::max(settings.goodMs, settings.greatMs + 10.0f);
+    settings.windowWidth = std::clamp(settings.windowWidth, 320, 7680);
+    settings.windowHeight = std::clamp(settings.windowHeight, 240, 4320);
 }
 
 void saveUserData(const std::string& path, const UserSettings& settings,
@@ -368,7 +373,10 @@ void saveUserData(const std::string& path, const UserSettings& settings,
         {"offsetSec", settings.offsetSec},
         {"leadInSec", settings.leadInSec},
         {"windowMode", settings.windowMode},
+        {"windowWidth", settings.windowWidth},
+        {"windowHeight", settings.windowHeight},
         {"fpsLimit", settings.fpsLimit},
+        {"showProgressBar", settings.showProgressBar},
         {"perfectMs", settings.perfectMs},
         {"greatMs", settings.greatMs},
         {"goodMs", settings.goodMs},

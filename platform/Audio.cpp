@@ -107,6 +107,18 @@ void AudioEngine::start(double leadInSec)
     }
 }
 
+void AudioEngine::skipLeadIn()
+{
+    if (!mStarted || mMusicStarted || mPaused || !mMusicLoaded) {
+        return;
+    }
+    const double filePos = std::max(0.0, mMusicStartPosSec + mUserOffsetSec);
+    ma_sound_seek_to_pcm_frame(&mMusic, static_cast<ma_uint64>(filePos * sampleRate()));
+    ma_sound_start(&mMusic);
+    mMusicStartFrames = ma_engine_get_time_in_pcm_frames(&mEngine);
+    mMusicStarted = true;
+}
+
 double AudioEngine::musicDurationSec() const
 {
     if (!mMusicLoaded) {

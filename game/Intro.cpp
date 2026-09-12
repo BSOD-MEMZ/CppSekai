@@ -336,9 +336,11 @@ void loadIntroFonts(const std::string& fontDir, bool preferSystemFont)
             ranges.push_back(p[1]);
         }
         // 设 置 关 闭 是 否 继 续 演 出 重 试 放 弃 暂 停 跳 过 确 认 取 消
+        // 显 示 播 进 度 条 分 辨 率 (progress bar / resolution settings)
         for (ImWchar c : {0x8BBE, 0x7F6E, 0x5173, 0x95ED, 0x662F, 0x5426, 0x7EE7, 0x7EED, 0x6F14,
                  0x51FA, 0x91CD, 0x8BD5, 0x653E, 0x5F03, 0x6682, 0x505C, 0x8DF3, 0x8FC7, 0x786E,
-                 0x8BA4, 0x53D6, 0x6D88}) {
+                 0x8BA4, 0x53D6, 0x6D88, 0x663E, 0x793A, 0x64AD, 0x8FDB, 0x5EA6, 0x6761, 0x5206,
+                 0x8FA8, 0x7387}) {
             ranges.push_back(c);
             ranges.push_back(c);
         }
@@ -352,7 +354,8 @@ void loadIntroFonts(const std::string& fontDir, bool preferSystemFont)
         std::vector<ImWchar> ranges;
         for (ImWchar c : {0x8BBE, 0x7F6E, 0x5173, 0x95ED, 0x662F, 0x5426, 0x7EE7, 0x7EED, 0x6F14,
                  0x51FA, 0x91CD, 0x8BD5, 0x653E, 0x5F03, 0x6682, 0x505C, 0x8DF3, 0x8FC7, 0x786E,
-                 0x8BA4, 0x53D6, 0x6D88}) {
+                 0x8BA4, 0x53D6, 0x6D88, 0x663E, 0x793A, 0x64AD, 0x8FDB, 0x5EA6, 0x6761, 0x5206,
+                 0x8FA8, 0x7387}) {
             ranges.push_back(c);
             ranges.push_back(c);
         }
@@ -720,7 +723,44 @@ void drawIntro(platform::Renderer& renderer, const IntroInfo& intro, float outpu
             ps(textMaxWidth));
     }
 
+    // Skip button, bottom-right: a quiet translucent pill with 跳过 >>.
+    // Draw-only here - the click lands in main.cpp via introSkipHitTest().
+    const float skipFade = clamp01((kHudIntroDurationSec - outputTimeSec) / 0.5f);
+    if (outputTimeSec >= 0.0f && skipFade > 0.001f) {
+        constexpr float kSkipW = 128.0f;
+        constexpr float kSkipH = 46.0f;
+        constexpr float kSkipMargin = 40.0f;
+        const float bx = px(1920.0f - kSkipMargin - kSkipW);
+        const float by = py(1080.0f - kSkipMargin - kSkipH);
+        overlay->AddRectFilled(ImVec2(bx, by), ImVec2(bx + ps(kSkipW), by + ps(kSkipH)),
+            IM_COL32(255, 255, 255, alphaByte(0.14f * skipFade)), ps(0.5f * kSkipH));
+        overlay->AddRect(ImVec2(bx, by), ImVec2(bx + ps(kSkipW), by + ps(kSkipH)),
+            IM_COL32(255, 255, 255, alphaByte(0.42f * skipFade)), ps(0.5f * kSkipH));
+        const char* label = "跳过 >>";
+        const float labelSize = ps(22.0f);
+        const ImVec2 labelSize2 = gBodyFont->CalcTextSizeA(labelSize, FLT_MAX, 0.0f, label);
+        overlay->AddText(gBodyFont, labelSize,
+            ImVec2(bx + 0.5f * (ps(kSkipW) - labelSize2.x), by + 0.5f * (ps(kSkipH) - labelSize2.y)),
+            IM_COL32(255, 255, 255, alphaByte(0.85f * skipFade)), label);
+    }
+
     (void)INTRO_ENTER_FADE_SEC;
+}
+
+bool introSkipHitTest(int windowW, int windowH, int x, int y)
+{
+    // Same transform + rect constants drawIntro() uses for the pill.
+    constexpr float kSkipW = 128.0f;
+    constexpr float kSkipH = 46.0f;
+    constexpr float kSkipMargin = 40.0f;
+    const float scale = std::min(static_cast<float>(windowW) / 1920.0f, static_cast<float>(windowH) / 1080.0f);
+    const float offsetX = (static_cast<float>(windowW) - 1920.0f * scale) * 0.5f;
+    const float offsetY = (static_cast<float>(windowH) - 1080.0f * scale) * 0.5f;
+    const float bx = offsetX + (1920.0f - kSkipMargin - kSkipW) * scale;
+    const float by = offsetY + (1080.0f - kSkipMargin - kSkipH) * scale;
+    const float fx = static_cast<float>(x);
+    const float fy = static_cast<float>(y);
+    return fx >= bx && fx <= bx + kSkipW * scale && fy >= by && fy <= by + kSkipH * scale;
 }
 
 } // namespace game
