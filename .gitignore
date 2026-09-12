@@ -5,13 +5,9 @@ build/
 toolchain/
 
 # Game assets from upstream repo (pjsk sprites / SE; re-fetch with: bash setup.sh)
-# NOTE: setup.sh only restores assets/mmw from upstream. The hand-curated UI
-# sprites (assets/select, assets/mmw/ui) are NOT re-fetchable, so they must stay
-# tracked - hence "assets/*" + re-includes instead of ignoring the whole folder.
-# Check what would be lost with: git ls-files -o -i --exclude-standard assets/
-assets/*
-!assets/mmw/
-!assets/select/
+# Tracked in full since 2026-09-12: the old "assets/*" + re-include rules
+# silently dropped hand-curated sprites (select / fx / ui / splashscreen) on
+# every git add. setup.sh still restores assets/mmw if it ever goes missing.
 
 # Downloaded charts & audio (official game data; personal use only)
 charts/
