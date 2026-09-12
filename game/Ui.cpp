@@ -362,9 +362,11 @@ void infoRows(const std::vector<std::pair<std::string, std::string>>& rows, floa
     }
 }
 
-bool capsuleButton(const char* label, const ImVec2& size, bool primary)
+bool capsuleButton(const char* label, const ImVec2& sizeIn, bool primary)
 {
     const float s = scale();
+    // Every capsule draws a notch smaller than the space its caller reserves.
+    const ImVec2 size(sizeIn.x * 0.85f, sizeIn.y * 0.85f);
     ImVec2 lo = ImGui::GetCursorScreenPos();
     ImVec2 hi = ImVec2(lo.x + size.x, lo.y + size.y);
     if (size.x <= 0.0f || size.y <= 0.0f) {
@@ -388,7 +390,7 @@ bool capsuleButton(const char* label, const ImVec2& size, bool primary)
     dl->AddRectFilled(lo, hi, fill, radius);
 
     ImFont* font = game::bodyFont();
-    const float fontSize = 34.0f * s;
+    const float fontSize = std::min(34.0f * s, size.y * 0.5f);
     const ImVec2 textSize = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, label);
     dl->AddText(font, fontSize,
         ImVec2((lo.x + hi.x - textSize.x) * 0.5f, (lo.y + hi.y - textSize.y) * 0.5f), kBtnText, label);
@@ -427,9 +429,9 @@ bool checkBox(const char* label, bool* value, float rowWidth)
     const float s = scale();
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImFont* font = game::bodyFont();
-    const float fontSize = 30.0f * s;
-    const float boxSize = 40.0f * s;
-    const float gap = 16.0f * s;
+    const float fontSize = 26.0f * s;
+    const float boxSize = 32.0f * s;
+    const float gap = 12.0f * s;
     const ImVec2 textSize = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, label);
     const float groupW = boxSize + gap + textSize.x;
 
@@ -462,7 +464,7 @@ bool checkBox(const char* label, bool* value, float rowWidth)
         const ImVec2 c2(boxLo.x + boxSize * 0.44f, boxLo.y + boxSize * 0.74f);
         const ImVec2 c3(boxLo.x + boxSize * 0.80f, boxLo.y + boxSize * 0.28f);
         dl->AddPolyline(std::initializer_list<ImVec2>{c1, c2, c3}.begin(), 3, IM_COL32(255, 255, 255, 255),
-            0, 6.0f * s);
+            0, 5.0f * s);
     } else {
         dl->AddRect(boxLo, boxHi, kDivider, radius, 0, 2.0f * s);
     }

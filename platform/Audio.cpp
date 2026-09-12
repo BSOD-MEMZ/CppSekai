@@ -6,7 +6,9 @@
 #include "Audio.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 
 namespace platform
@@ -41,6 +43,7 @@ void AudioEngine::shutdown()
         ma_sound_uninit(&mCountdownSe);
         mCountdownSeLoaded = false;
     }
+    stopPreview();
     if (mEngineInitialized) {
         ma_engine_uninit(&mEngine);
         mEngineInitialized = false;
@@ -205,29 +208,39 @@ void AudioEngine::stopMusic()
         mMusicStarted = false;
     }
     mStarted = false;
-    mPreviewActive = false;
-    mPreviewPath.clear();
+    stopPreview(); // a running preview must never leak into a play session
 }
 
 bool AudioEngine::startPreview(const std::string& path, std::string& outError)
 {
-    if (mPreviewActive && mPreviewPath == path && mMusicLoaded) {
+    if (mPreviewActive && mPreviewLoaded && mPreviewPath == path) {
         return true; // already playing exactly this clip
     }
-    stopMusic();
+    stopPreview();
     if (path.empty()) {
         return true; // no BGM for this chart: stay silent
     }
-    if (!loadMusic(path, outError)) {
+    // STREAM, not DECODE: this runs on the UI thread between frames, and a
+    // full pre-decode of the track visibly froze the song list on every
+    // selection change. Streaming opens the file and decodes on the fly.
+    const auto loadStart = std::chrono::steady_clock::now();
+    if (ma_sound_init_from_file(&mEngine, path.c_str(), MA_SOUND_FLAG_STREAM, nullptr, nullptr,
+            &mPreviewSound)
+        != MA_SUCCESS) {
+        outError = "failed to load preview: " + path;
         mPreviewPath.clear();
         return false;
     }
-    const double len = musicDurationSec();
+    mPreviewLoaded = true;
+
+    ma_uint64 lengthFrames = 0;
+    if (ma_sound_get_length_in_pcm_frames(&mPreviewSound, &lengthFrames) != MA_SUCCESS) {
+        lengthFrames = 0;
+    }
+    const double len = static_cast<double>(lengthFrames) / sampleRate();
     if (len < 4.0) {
         // Too short to cut a meaningful clip - treat as silence.
-        ma_sound_stop(&mMusic);
-        mMusicStarted = false;
-        mPreviewPath.clear();
+        stopPreview();
         return false;
     }
     // The official select-screen preview plays an excerpt from partway into
@@ -235,37 +248,42 @@ bool AudioEngine::startPreview(const std::string& path, std::string& outError)
     // track and loops after 30 seconds.
     mPreviewStartSec = std::min(len * 0.35, len - 10.0);
     mPreviewEndSec = std::min(len, mPreviewStartSec + 30.0);
-    ma_sound_set_volume(&mMusic, 0.85f);
-    ma_sound_seek_to_pcm_frame(&mMusic, static_cast<ma_uint64>(mPreviewStartSec * sampleRate()));
-    ma_sound_start(&mMusic);
-    mMusicStarted = true;
+    ma_sound_set_volume(&mPreviewSound, 0.85f);
+    ma_sound_seek_to_pcm_frame(&mPreviewSound, static_cast<ma_uint64>(mPreviewStartSec * sampleRate()));
+    ma_sound_start(&mPreviewSound);
     mPreviewActive = true;
     mPreviewPath = path;
+    const auto loadMs =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - loadStart)
+            .count();
+    std::printf("[audio] preview streaming %s (%.0f ms)\n", path.c_str(), static_cast<double>(loadMs));
     return true;
 }
 
 void AudioEngine::updatePreview()
 {
-    if (!mPreviewActive || !mMusicLoaded || mPaused) {
+    if (!mPreviewActive || !mPreviewLoaded || mPaused) {
         return;
     }
     ma_uint64 cursor = 0;
-    if (ma_sound_get_cursor_in_pcm_frames(&mMusic, &cursor) == MA_SUCCESS) {
+    if (ma_sound_get_cursor_in_pcm_frames(&mPreviewSound, &cursor) == MA_SUCCESS) {
         const double pos = static_cast<double>(cursor) / sampleRate();
         if (pos >= mPreviewEndSec || pos < mPreviewStartSec - 0.5) {
-            ma_sound_seek_to_pcm_frame(&mMusic, static_cast<ma_uint64>(mPreviewStartSec * sampleRate()));
+            ma_sound_seek_to_pcm_frame(&mPreviewSound,
+                static_cast<ma_uint64>(mPreviewStartSec * sampleRate()));
         }
     }
 }
 
 void AudioEngine::stopPreview()
 {
-    if (mPreviewActive) {
-        ma_sound_stop(&mMusic);
-        mMusicStarted = false;
-        mPreviewActive = false;
-        mPreviewPath.clear();
+    if (mPreviewLoaded) {
+        ma_sound_stop(&mPreviewSound);
+        ma_sound_uninit(&mPreviewSound);
+        mPreviewLoaded = false;
     }
+    mPreviewActive = false;
+    mPreviewPath.clear();
 }
 
 void AudioEngine::update()

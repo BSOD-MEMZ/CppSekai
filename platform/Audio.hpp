@@ -100,9 +100,12 @@ class AudioEngine
 
     // ---- Song-select music preview ---------------------------------------
     // Plays a clip cut from partway into the track (like the official select
-    // screen, which never previews from the top) and loops it. startPreview
-    // is safe to call every frame with the same path - it only reloads when
-    // the path changes; an empty path just stops the preview.
+    // screen, which never previews from the top) and loops it. The preview
+    // sound STREAMS from disk instead of pre-decoding: the song select loads
+    // it on the UI thread, and a full decode stalled the list on every
+    // selection change. startPreview is safe to call every frame with the
+    // same path - it only reloads when the path changes; an empty path just
+    // stops the preview.
     bool startPreview(const std::string& path, std::string& outError);
     // Call once per frame while the preview shows: loops the clip.
     void updatePreview();
@@ -134,6 +137,8 @@ class AudioEngine
     std::string mPreviewPath;
     double mPreviewStartSec = 0.0;
     double mPreviewEndSec = 0.0;
+    bool mPreviewLoaded = false;
+    ma_sound mPreviewSound{}; // streaming; separate from the pre-decoded gameplay music
 
     bool mStarted = false;
     bool mMusicStarted = false;
