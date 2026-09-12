@@ -153,6 +153,16 @@ cd build
 pjsk 舞台、透视轨道和下落中的 note 贴图。charts/ 里有联网下载的谱面可直接用，
 BGM URL 规律：`https://assets.unipjsk.com/ondemand/music/long/se_<id>_01/se_<id>_01.mp3`（不是每首都有）。
 
+**选曲界面**也能无头截（不给 `--sus`，uiClock ~1.2s 时自动抓当前列表 + 手机面板；
+给 `--screenshot-time` 可以推迟抓图时刻，用来等滚动/动画停稳）：
+
+```bash
+./cppsekai.exe --screenshot select.png --width 1920 --height 1080
+```
+
+想看"切换难度后等级/颜色是否正确"，用 `--charts <只含一首多难度谱的目录>` 跑一次，
+再 `python .workbuddy/tools/pngcrop.py` 放大手机面板和等级圆核对。
+
 判定/特效的无头自检（都不需要真的操作）：
 
 ```bash
@@ -179,6 +189,55 @@ BGM URL 规律：`https://assets.unipjsk.com/ondemand/music/long/se_<id>_01/se_<
 
 `.workbuddy/tools/effect_sheet_usage.py` 会统计 `effect.png` 里哪些分块被内嵌粒子引用、
 多少不透明像素从没被采样过（`--dump` 出对比图）；改特效贴图或粒子数据后跑一下。
+
+**放大看截图细节**（工具链没有 Pillow / ImageMagick）：`.workbuddy/tools/pngcrop.py`
+是纯 python 的 PNG 裁剪 + 最近邻放大，用来核对小 UI（等级徽章、难度圆、HUD 数字）：
+
+```bash
+python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h> [zoom]
+```
+
+## 选曲列表的滚动模型（2026-09-12 重写，动之前先读）
+
+`game/SongSelect.cpp` 的列表**不是 ImGui 的滚动控件**，是自己写的状态机，因为官方 UI 的行为
+（没有滚动条、滚不到底、滚动时不选中、停手后中间那首被选中）ImGui 给不了：
+
+- 唯一的状态是 `scroll`：**位于列表视口垂直中线的那个内容坐标**。行位置 =
+  `viewCenterY + (i * pitch - scroll)`，`pitch` 固定 `104*k`（**等间距**，选中卡片 128 高、
+  普通行 84 高都画在自己的 slot 里，别再改回"选中行更高所以把后面的行往下推"——
+  那样 `center(i)` 会随选中行变化，吸附目标会跳 22px）。
+- 滚轮 / 拖动 / 惯性（`flingVel`，指数衰减）/ 吸附（`scrollTarget`，`1-exp(-16dt)` 逼近）
+  全都只改 `scroll`；`scrolling=true` 期间 **`cardIndex = -1`，任何行都不高亮**，
+  手机面板也保持旧曲目。停手 0.20s（或惯性衰减完）后把 `lround(scroll/pitch)` 那行提交为
+  `groupIndex`（这才是真正的选中），再滑到正中间。选择只在"停手"时发生，这就是用户要的语义。
+- 两端各允许 `0.9*pitch` 的橡皮筋过冲，回弹靠逼近 `scrollTarget` 完成（"滚不到底"）。
+- 鼠标和触摸走同一条路：SDL 的 touch→mouse 合成（`SDL_HINT_TOUCH_MOUSE_EVENTS=1`）会把单指
+  拖拽变成 `ImGui` 眼中的鼠标拖动，所以只需要读 `io.MousePos` / `IsMouseDown`。
+- **点击必须在松手时判定**，且位移 < 8px 才算点击（拖拽永远不选中）。不要再用
+  `InvisibleButton` + `IsItemClicked`：那个在**按下**时就触发，拖拽起手会误选。
+- 行的命中测试全部靠 `rowIndexAt(y)` 算，没有 ImGui item；列表用 `BeginChild` 只是为了拿裁剪矩形
+  （`NoScrollbar | NoScrollWithMouse`）。
+- 前导等级圆显示的是**当前选中难度**的定数（`levelForDifficulty()`）：该难度没有谱面文件时
+  回落到官方 `music-levels.json` 表，所以切难度时整列数字会一起变，颜色也跟着变
+  （`kDiffColors[diffIndex]`）。手机面板里未选中的难度是**空心圆**（无底色填充）。
+
+## 平台 / 输入相关的坑（2026-09-12）
+
+- **exe 是 Windows 子系统**（`build.sh` 里的 `-Wl,--subsystem,windows`）：双击不出 cmd 窗口。
+  `main()` 开头用 `AttachConsole(ATTACH_PARENT_PROCESS)` 接管父控制台，但只在
+  `GetStdHandle(STD_OUTPUT_HANDLE)` 无效时才 `freopen("CONOUT$")` —— 否则会把 mintty / 管道的
+  输出抢走（`./cppsekai.exe --help | head` 会变成空输出）。两者都没有就写 `cppsekai.log`。
+  改这段前先想清楚 stdout 的三种来源（真控制台 / 管道重定向 / 无）。
+- **flick 的方向判定必须用屏幕像素除以秒**（`flickDirFrom(upSpeed, sideSpeed, travelUp, travelSide,
+  isTouch, heightScale)`）：曾经拿 `worldY`（1 单位≈0.84×窗高）和 `lane` 单位（1 单位≈0.077×窗宽）
+  直接比大小，两者尺度差 ~6 倍，等于要求上滑比水平方向竖直 3.6 倍才算 flick —— 触摸屏上基本
+  刷不出来。阈值按 `windowH/1080` 缩放，别写死像素。触摸还多两条：上滑锥角放宽到 ~63°，
+  并要求**同方向累计位移 > 14px**（`travelUp/travelSide` 每次反向就重新计数，用来滤掉静止手指
+  的抖动）。`SDL_FINGERUP` 用 `peakUp/peakSide`（手势期间的峰值速度）而不是最后一帧速度，
+  短促 flick 常常在最后一个 motion 之前就结束了。
+- `--auto` **只影响本次运行**：`persistUserData()` 里会看 `autoplayGiven`，命令行给的 autoplay
+  不再写回 `userdata.json`（以前跑一次预览会把 AUTOPLAY 永久打开）。`--screenshot` 模式干脆
+  完全不写 `userdata.json`。
 
 ## 系统要求
 

@@ -62,31 +62,52 @@ namespace
         SDL_FingerID fingerId = 0;
         float lanePos = 0.0f;
         int laneIndex = 0;
-        float lastWorldY = 0.0f;
         float lastLanePos = 0.0f;
+        float lastScreenX = 0.0f;
+        float lastScreenY = 0.0f;
         double lastMoveTimeSec = 0.0;
         bool flicked = false;
-        // Smoothed swipe velocity in world units per second (low-pass over
-        // the per-event samples - touch panels report unevenly spaced jumps,
-        // and a single-frame delta easily misses a fast flick).
-        float velY = 0.0f;
-        float velX = 0.0f;
+        // Swipe velocity in *screen pixels per second*, low-passed over the
+        // per-event samples (touch panels report unevenly spaced jumps, and a
+        // single-frame delta easily misses a fast flick). Up / right positive.
+        float velUp = 0.0f;
+        float velSide = 0.0f;
+        // Largest smoothed speed seen during the gesture, and the total
+        // distance travelled - a flick is judged from these at lift-off too,
+        // because a short flick often ends before the next move event.
+        float peakUp = 0.0f;
+        float peakSide = 0.0f;
+        float travelUp = 0.0f;
+        float travelSide = 0.0f;
     };
 
-    // Flick direction decision from smoothed swipe velocity. Touch swipes get
-    // relaxed thresholds: panels report coarse, jittery samples and the old
-    // single-frame check made flicks on a touchscreen genuinely hard.
-    game::FlickDir flickDirFrom(float velY, float velX, bool isTouch)
+    // Flick direction from a swipe measured in screen px/s (up / right
+    // positive) plus how far the gesture actually travelled in that direction.
+    //
+    // Measuring both axes in pixels matters: the old check compared world-Y
+    // against *lane* units, and at 16:9 one lane unit is ~6x coarser than one
+    // world unit, so an up flick effectively had to be 3.6x more vertical than
+    // horizontal before it counted - which is why swiping on a touchscreen
+    // almost never registered. `heightScale` (= window height / 1080) keeps the
+    // threshold in the same "feel" at every resolution.
+    game::FlickDir flickDirFrom(float upSpeed, float sideSpeed, float travelUp, float travelSide, bool isTouch,
+        float heightScale)
     {
-        const float upThreshold = isTouch ? 0.55f : 1.0f;
-        const float sideThreshold = isTouch ? 0.75f : 1.2f;
-        if (velY > upThreshold && std::abs(velY) >= std::abs(velX) * 0.8f) {
+        const float upThreshold = (isTouch ? 500.0f : 900.0f) * heightScale;
+        const float sideThreshold = (isTouch ? 600.0f : 900.0f) * heightScale;
+        // How vertical an up flick has to be. A finger swipe is rarely
+        // straight, so touch gets a generous cone (~63 degrees off vertical);
+        // the travel check keeps tap jitter out.
+        const float upBias = isTouch ? 0.5f : 0.8f;
+        const float minTravel = 14.0f * heightScale;
+        if (upSpeed > upThreshold && travelUp > minTravel
+            && upSpeed >= std::abs(sideSpeed) * upBias) {
             return game::FlickUp;
         }
-        if (velX > sideThreshold) {
+        if (sideSpeed > sideThreshold && travelSide > minTravel) {
             return game::FlickRight;
         }
-        if (velX < -sideThreshold) {
+        if (sideSpeed < -sideThreshold && travelSide < -minTravel) {
             return game::FlickLeft;
         }
         return game::FlickNone;
@@ -155,17 +176,20 @@ namespace
             "Usage: cppsekai [--sus <file.sus>] [--bgm <audio>] [--charts <dir>]\n"
             "                [--offset <sec>] [--filler <sec>] [--auto] [--speed <1-12>]\n"
             "                [--se-volume <0-1>] [--lead-in <sec>] [--cover <image>]\n"
-            "                [--screenshot <png>] [--pjsk-font]\n"
+            "                [--screenshot <png>] [--screenshot-time <sec>] [--pjsk-font]\n"
             "                [--title <text>] [--lyricist <text>] [--composer <text>]\n"
             "                [--arranger <text>] [--vocal <text>] [--difficulty <text>]\n"
             "                [--width <px>] [--height <px>] [--window <mode>] [--fps <n>]\n"
-            "                [--judge-sheet] [--test-hits] [--show-pause-dialog]\n"
-            "                [--test-restart] [--restart-at <sec>]\n\n"
+            "                [--judge-sheet] [--judge-frame <n>] [--test-hits]\n"
+            "                [--show-pause-dialog] [--test-restart] [--restart-at <sec>]\n"
+            "                [--help]\n\n"
 
             "No --sus: opens the song select screen (scans --charts, then charts/ next\n"
             "to the exe, then the charts/ of the parent folder).\n"
             "--filler: seconds of silence at the head of the BGM (auto-detected when\n"
             "          omitted). --offset: manual fine tune in seconds.\n"
+            "--auto: autoplay preview for this run only (the saved setting is not\n"
+            "        changed). --screenshot: headless frame dump, then exit.\n"
             "--pjsk-font: use the bundled pjsk fonts instead of the system UI font.\n"
             "--window: borderless (default) | windowed | fullscreen. --width/--height:\n"
             "          window size (default 1280x720).\n"
@@ -180,7 +204,13 @@ namespace
             "          note arrow; see the strict-Flick setting). Right button\n"
             "          gives a second pointer.\n"
             "          Clicks on the HUD / panels never count as a hit.\n"
-            "Touch   : multi-touch lanes, swipe up for flicks\n");
+            "Touch   : multi-touch lanes, swipe up for flicks\n"
+            "Song list: wheel / drag to scroll, tap a row to pick it (the row in\n"
+            "          the middle is the selection), double click / tap to play,\n"
+            "          arrows + Enter, F5 = rescan charts/.\n"
+            "Logs    : to the console that launched the exe, otherwise cppsekai.log\n"
+            "          next to the working directory (--screenshot always logs to\n"
+            "          cppsekai.log). See CLI.md for the full manual.\n");
     }
 
     // Trigger the SE matching a hit event kind + critical flag.
@@ -342,6 +372,29 @@ namespace
 
 int main(int argc, char** argv)
 {
+#ifdef _WIN32
+    // The binary is linked as a Windows-subsystem app, so double-clicking it
+    // does not spawn a console window. A terminal that launched us (cmd /
+    // PowerShell) may have handed down its standard handles; when it did not,
+    // grab that console so the log lines (and --help) still show up there. With
+    // neither - a plain double click - everything goes to cppsekai.log so the
+    // run leaves something readable behind.
+    {
+        const HANDLE outHandle = GetStdHandle(STD_OUTPUT_HANDLE);
+        const bool haveStdout = outHandle != nullptr && outHandle != INVALID_HANDLE_VALUE;
+        const bool attached = AttachConsole(ATTACH_PARENT_PROCESS) != 0;
+        if (!haveStdout) {
+            if (attached) {
+                std::freopen("CONOUT$", "w", stdout);
+                std::freopen("CONOUT$", "w", stderr);
+            } else if (std::freopen("cppsekai.log", "w", stdout) != nullptr) {
+                std::freopen("cppsekai.log", "w", stderr);
+                setvbuf(stdout, nullptr, _IONBF, 0);
+                setvbuf(stderr, nullptr, _IONBF, 0);
+            }
+        }
+    }
+#endif
     // MinGW's argv is ANSI-codepage; the UI is UTF-8. Re-fetch the command
     // line as UTF-16 and convert, so --title with Japanese text survives.
     int utf8Argc = argc;
@@ -374,6 +427,7 @@ int main(int argc, char** argv)
     float seVolume = 0.8f;
     std::string screenshotPath; // if set: dump a frame and exit (headless check)
     double screenshotTimeSec = 4.0;
+    bool screenshotTimeGiven = false; // --screenshot-time was passed explicitly
     double leadIn = 6.0; // intro card (4s) + playfield fade-in, then the music
     bool dumpJudgeSheet = false;
     bool testHits = false; // debug: fire hit effects without player input
@@ -450,6 +504,7 @@ int main(int argc, char** argv)
             screenshotPath = utf8Argv[++i];
         } else if (arg == "--screenshot-time" && i + 1 < utf8Argc) {
             screenshotTimeSec = std::atof(utf8Argv[++i]);
+            screenshotTimeGiven = true;
         } else if (arg == "--lead-in" && i + 1 < utf8Argc) {
             leadIn = std::atof(utf8Argv[++i]);
             leadInGiven = true;
@@ -1046,7 +1101,12 @@ int main(int argc, char** argv)
         userSettings.windowHeight = resH;
         userSettings.fpsLimit = fpsLimitLive;
         userSettings.offsetSec = gUserOffsetSec;
-        userSettings.autoplay = autoPlay;
+        // The saved value is the *UI* preference: a command-line --auto only
+        // applies to this run, otherwise previewing a chart from a shell would
+        // silently leave autoplay on for the next normal launch.
+        if (!autoplayGiven) {
+            userSettings.autoplay = autoPlay;
+        }
         userSettings.showProgressBar = showProgressBar;
         userSettings.hideTouchFeedback = hideTouchFeedback;
         const game::JudgementWindows& w = judgement.windows();
@@ -1334,8 +1394,9 @@ int main(int argc, char** argv)
         track.fingerId = id;
         track.lanePos = lanePos;
         track.laneIndex = laneIndexFromPos(lanePos);
-        track.lastWorldY = worldY;
         track.lastLanePos = lanePos;
+        track.lastScreenX = static_cast<float>(x);
+        track.lastScreenY = static_cast<float>(y);
         track.lastMoveTimeSec = SDL_GetTicks() / 1000.0;
         touches.push_back(track);
         lanePress[static_cast<size_t>(track.laneIndex)] = 1.0f;
@@ -1347,14 +1408,15 @@ int main(int argc, char** argv)
         return true;
     };
 
-    // Tracks pointer movement; a fast swipe is a flick. The dominant axis in
-    // world/lane space picks the direction (up / left / right), which strict
-    // flick validation then compares against the note's arrow.
+    // Tracks pointer movement; a fast swipe is a flick. The gesture is judged
+    // in screen pixels per second (see flickDirFrom) so the up / left / right
+    // decision does not depend on the perspective scaling of the playfield.
     auto movePointer = [&](SDL_FingerID id, int x, int y) {
         const float clipX = (static_cast<float>(x) / static_cast<float>(windowW)) * 2.0f - 1.0f;
         const float clipY = 1.0f - (static_cast<float>(y) / static_cast<float>(windowH)) * 2.0f;
         const double now = SDL_GetTicks() / 1000.0;
         const float worldY = renderer.clipToWorldY(clipY);
+        const float heightScale = static_cast<float>(windowH) / 1080.0f;
         for (auto& track : touches) {
             if (track.fingerId != id) {
                 continue;
@@ -1362,20 +1424,37 @@ int main(int argc, char** argv)
             const float lanePos = std::abs(worldY) > 0.08f
                 ? renderer.clipToWorldX(clipX) / worldY
                 : renderer.clipToWorldX(clipX);
-            const float dy = worldY - track.lastWorldY;    // up in screen space
-            const float dx = lanePos - track.lastLanePos;  // lane units
+            const float dx = static_cast<float>(x) - track.lastScreenX;
+            const float dy = static_cast<float>(y) - track.lastScreenY; // screen: down is positive
             const double dt = now - track.lastMoveTimeSec;
             if (dt > 0.001) {
                 // Low-pass the per-event velocity: touch panels report
                 // unevenly spaced position jumps and a single-frame delta
                 // often under- or over-shoots a real flick.
-                const float upSpeed = dy / static_cast<float>(dt);
+                const float upSpeed = -dy / static_cast<float>(dt);
                 const float sideSpeed = dx / static_cast<float>(dt);
-                track.velY = track.velY * 0.4f + upSpeed * 0.6f;
-                track.velX = track.velX * 0.4f + sideSpeed * 0.6f;
+                track.velUp = track.velUp * 0.35f + upSpeed * 0.65f;
+                track.velSide = track.velSide * 0.35f + sideSpeed * 0.65f;
+                // Distance travelled in the current direction: the counter
+                // starts over whenever the movement reverses, so the jitter of
+                // a resting finger never adds up while a deliberate swipe does.
+                const float upDelta = -dy;
+                track.travelUp = (upDelta >= 0.0f) == (track.travelUp >= 0.0f)
+                    ? track.travelUp + upDelta
+                    : upDelta;
+                track.travelSide = (dx >= 0.0f) == (track.travelSide >= 0.0f)
+                    ? track.travelSide + dx
+                    : dx;
+                if (std::abs(track.velUp) > std::abs(track.peakUp)) {
+                    track.peakUp = track.velUp;
+                }
+                if (std::abs(track.velSide) > std::abs(track.peakSide)) {
+                    track.peakSide = track.velSide;
+                }
             }
             if (!track.flicked) {
-                const game::FlickDir dir = flickDirFrom(track.velY, track.velX, track.fingerId > 0);
+                const game::FlickDir dir = flickDirFrom(track.velUp, track.velSide, track.travelUp,
+                    track.travelSide, track.fingerId > 0, heightScale);
                 if (dir != game::FlickNone) {
                     track.flicked = true;
                     const double songTime = audio.hasMusic() ? audio.songTime() : wallSongTime();
@@ -1386,7 +1465,8 @@ int main(int argc, char** argv)
                     }
                 }
             }
-            track.lastWorldY = worldY;
+            track.lastScreenX = static_cast<float>(x);
+            track.lastScreenY = static_cast<float>(y);
             track.lastLanePos = lanePos;
             track.lastMoveTimeSec = now;
         }
@@ -1585,15 +1665,18 @@ int main(int argc, char** argv)
                     break;
                 }
                 case SDL_FINGERUP: {
-                    // Last chance flick: judge the lift-off itself from the
-                    // smoothed swipe velocity - short, fast flicks on touch
-                    // panels often end before the mid-move check fires.
+                    // Last chance flick: judge the lift-off from the fastest
+                    // swipe speed seen during the gesture - short, fast flicks
+                    // on touch panels often end before the mid-move check
+                    // fires (and the last move can already be a slow one).
                     if (state == AppState::Play && !autoPlay && !paused) {
+                        const float heightScale = static_cast<float>(windowH) / 1080.0f;
                         for (const TouchTrack& track : touches) {
                             if (track.fingerId != event.tfinger.fingerId || track.flicked) {
                                 continue;
                             }
-                            const game::FlickDir dir = flickDirFrom(track.velY, track.velX, true);
+                            const game::FlickDir dir = flickDirFrom(track.peakUp, track.peakSide, track.travelUp,
+                                track.travelSide, true, heightScale);
                             if (dir != game::FlickNone) {
                                 const double songTime =
                                     audio.hasMusic() ? audio.songTime() : wallSongTime();
@@ -1787,9 +1870,14 @@ int main(int argc, char** argv)
             // Settings card, opened from the musicsetting button (or H).
             drawSettingsCard();
 
-            // Headless check: dump the song list shortly after startup.
-            if (!screenshotPath.empty() && uiClock > 1.2) {
-                wantScreenshot = true;
+            // Headless check: dump the song list shortly after startup. An
+            // explicit --screenshot-time overrides the default 1.2s here as
+            // well, which is how a scroll / animation is let to settle first.
+            if (!screenshotPath.empty()) {
+                const double shotAt = screenshotTimeGiven ? std::max(0.5, screenshotTimeSec) : 1.2;
+                if (uiClock > shotAt) {
+                    wantScreenshot = true;
+                }
             }
         } else {
             // ----------------------------------------------------------

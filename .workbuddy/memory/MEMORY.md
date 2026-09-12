@@ -5,8 +5,25 @@
   COMBO 加分"），不是只有首尾两个音符。核心 calculateHitEvents 现在为每个 hold 合成
   半拍 kind-4 tick（起点向上取整到八分位、终点向上取整、不含端点，同时间同轨道去重），
   判定侧复用 tick 门控（按住才计分、断了静默）。
-- **坑：`--auto` 无头运行退出时会把 autoplay=true 持久化进 userdata.json**，污染之后
-  的普通运行；验证完要改回 False。截图模式不写成绩但写设置。
+- ~~坑：`--auto` 无头运行退出时会把 autoplay=true 持久化进 userdata.json~~ **已修（2026-09-12 晚）**：
+  `persistUserData()` 看 `autoplayGiven`，命令行给的 autoplay 不再写回存档；`--screenshot` 模式
+  则整段跳过 `persistUserData()`，一个字节都不写。
+
+## 选曲列表的滚动模型 + 平台层三件事（2026-09-12 晚，详见 AGENTS.md）
+- **列表是自写状态机**：`scroll` = 列表视口垂直中线处的内容坐标，等间距 pitch 104*k；滚轮/拖拽/
+  惯性/吸附都只改它；`scrolling` 期间**不高亮也不换曲**，停手 0.20s 才把中间那行提交为选中；
+  两端有橡皮筋（"滚不到底"）。点击在松手时判定、位移<8px 才算点击。触摸复用 SDL 的
+  touch→mouse 合成，别另写手指滚动路径。
+- **列表前导等级跟当前选中难度走**（`levelForDifficulty()`，缺谱面文件时回落官方定数表）；
+  手机面板未选中的难度是空心圆；「歌曲等级」牌子压在等级圆上沿。
+- **exe 是 Windows 子系统**（`-Wl,--subsystem,windows`）：双击无 cmd 窗口。
+  `AttachConsole(ATTACH_PARENT_PROCESS)` 只在 stdout 句柄无效时才 `freopen("CONOUT$")`，
+  否则会把管道/mintty 的输出抢走；都没有就写 `cppsekai.log`。
+- **flick 方向判定用屏幕 px/s**（阈值按 `windowH/1080` 缩放）。别退回 worldY vs lane 单位——
+  两者尺度差 ~6 倍，等于要求上滑"竖直 3.6 倍"才算 flick，触摸屏上根本刷不出来。
+- 文档：根目录新增 **`CLI.md`**（命令行手册）。工具：`.workbuddy/tools/pngcrop.py`
+  （纯 python PNG 裁剪 + 放大，工具链没有 Pillow/ffmpeg）。
+
 
 ## SMTC 的 TimeSpan ABI（2026-09-12 修，别再踩）
 - `ITimelineVtbl` 的 TimeSpan 参数（StartTime/EndTime/Position 等）是 **8 字节 struct

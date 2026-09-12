@@ -16,6 +16,11 @@ CXXFLAGS=(
     -std=c++20
     -O2
     -s
+    # Windows-subsystem binary: no cmd window when the game is launched by
+    # double click. main() still runs (the MinGW startup object calls it either
+    # way) and main.cpp re-attaches to the parent console when there is one, so
+    # running it from a terminal keeps printing the log there.
+    -Wl,--subsystem,windows
     -D_XM_NO_INTRINSICS_
     -D_CRT_SECURE_NO_WARNINGS
     -Icore/native
