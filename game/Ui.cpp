@@ -556,7 +556,14 @@ int messageDialog(platform::Renderer& renderer, const char* id, const char* titl
 {
     const float s = scale();
     const ImVec2 display = ImGui::GetIO().DisplaySize;
-    const float cardW = 500.0f * s;
+    // Button geometry first: the card must be wide enough for the capsule row
+    // (the 3-button pause dialog needs 524*s - a fixed 500*s card clipped it).
+    const float btnH = kCapsuleH * s * 0.72f;
+    const float btnW = 160.0f * s;
+    const float gap = 22.0f * s;
+    const float buttonsW = static_cast<float>(buttons.size()) * btnW
+        + (static_cast<float>(buttons.size()) - 1) * gap;
+    const float cardW = std::max(500.0f * s, buttonsW + 56.0f * s);
     const float cardH = 200.0f * s;
     ImVec2 center = ImVec2(display.x * 0.5f, display.y * 0.5f);
     ImVec2 size = ImVec2(cardW, cardH);
@@ -584,10 +591,7 @@ int messageDialog(platform::Renderer& renderer, const char* id, const char* titl
     cardTitle(title, size.x - 60.0f * s);
 
     // Capsule row, centered, laid out bottom.
-    const float btnH = kCapsuleH * s * 0.72f;
-    const float btnW = 160.0f * s;
-    const float gap = 22.0f * s;
-    const float totalW = static_cast<float>(buttons.size()) * btnW + (static_cast<float>(buttons.size()) - 1) * gap;
+    const float totalW = buttonsW;
     float x = center.x - totalW * 0.5f;
     const float y = center.y + size.y * 0.5f - btnH - 24.0f * s;
     for (size_t i = 0; i < buttons.size(); ++i) {

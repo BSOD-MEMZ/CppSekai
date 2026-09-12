@@ -94,6 +94,10 @@ class AudioEngine
 
     void playSe(SeKind kind, float volume);
 
+    // One-shot countdown beep (assets/se/count_down.mp3), played by the
+    // resume countdown. A missing file just disables it.
+    void playCountdownSe(float volume);
+
     // Hold loop SE: starts a looping voice while a hold is active, stops it
     // (with a short fade handled by calling code each frame) when not. Uses
     // the last pooled voice of the two hold-loop kinds, so one-shots are
@@ -111,6 +115,9 @@ class AudioEngine
     SeBank mSe{};
     bool mHoldLoopPlaying = false;
     int mHoldLoopKind = -1;
+
+    bool mCountdownSeLoaded = false;
+    ma_sound mCountdownSe{};
 
     bool mStarted = false;
     bool mMusicStarted = false;

@@ -37,6 +37,10 @@ void AudioEngine::shutdown()
         }
         mSe.loaded = false;
     }
+    if (mCountdownSeLoaded) {
+        ma_sound_uninit(&mCountdownSe);
+        mCountdownSeLoaded = false;
+    }
     if (mEngineInitialized) {
         ma_engine_uninit(&mEngine);
         mEngineInitialized = false;
@@ -94,6 +98,16 @@ bool AudioEngine::loadSe(const std::string& dir, std::string& outError)
         }
     }
     mSe.loaded = true;
+
+    // Resume-countdown beep (optional - a missing file just disables it).
+    const std::string countdownPath = dir + "/count_down.mp3";
+    if (ma_sound_init_from_file(&mEngine, countdownPath.c_str(), MA_SOUND_FLAG_DECODE, nullptr, nullptr,
+            &mCountdownSe)
+        == MA_SUCCESS) {
+        mCountdownSeLoaded = true;
+    } else {
+        std::printf("[audio] no countdown SE (%s)\n", countdownPath.c_str());
+    }
     return true;
 }
 
@@ -276,6 +290,17 @@ void AudioEngine::playSe(SeKind kind, float volume)
     ma_sound_seek_to_pcm_frame(&sound, 0);
     ma_sound_set_volume(&sound, std::max(0.0f, volume));
     ma_sound_start(&sound);
+}
+
+void AudioEngine::playCountdownSe(float volume)
+{
+    if (!mCountdownSeLoaded) {
+        return;
+    }
+    ma_sound_stop(&mCountdownSe);
+    ma_sound_seek_to_pcm_frame(&mCountdownSe, 0);
+    ma_sound_set_volume(&mCountdownSe, std::max(0.0f, volume));
+    ma_sound_start(&mCountdownSe);
 }
 
 void AudioEngine::setHoldLoop(bool active, bool critical, float volume)

@@ -493,15 +493,27 @@ void JudgementEngine::update(float songTimeSec)
         const bool held = mAutoPlay || laneHeld(hold);
 
         if (hold.broken) {
-            // Already missed. Only the look is still live: pjsk washes the
-            // remaining body out while the lane is up and puts it back to
-            // normal as soon as the player presses again. The MISS stands -
-            // nothing is re-judged here.
-            hold.dimmed = !held;
-            if (songTimeSec >= hold.endTimeSec) {
-                hold.finished = true;
+            if (held && songTimeSec < hold.endTimeSec) {
+                // pjsk: re-pressing the lane reconnects a broken hold. The
+                // break itself (MISS, -40 life, combo break) stands and the
+                // ticks consumed while detached stay missed, but everything
+                // from here on is judged normally again.
+                hold.broken = false;
+                hold.dimmed = false;
+                if (hold.tailIndex < mNotes.size() && mNotes[hold.tailIndex].state == 2) {
+                    mNotes[hold.tailIndex].state = 0; // back to pending
+                }
+                // fall through to the normal tracking below
+            } else {
+                // Still detached: pjsk washes the remaining body out while the
+                // lane is up and puts it back to normal as soon as the player
+                // presses again.
+                hold.dimmed = !held;
+                if (songTimeSec >= hold.endTimeSec) {
+                    hold.finished = true;
+                }
+                continue;
             }
-            continue;
         }
 
         const std::uint8_t startState = hold.startIndex < mNotes.size()
@@ -538,7 +550,8 @@ void JudgementEngine::update(float songTimeSec)
         if (!held && engaged && songTimeSec >= hold.startTimeSec + kHoldStartGraceSec
             && songTimeSec < hold.endTimeSec - kHoldGraceSec) {
             // Let go too early: the hold breaks (mid-hold miss, -40 life) and
-            // is drawn washed out from here on until the lane is held again.
+            // is drawn washed out from here on - unless the player presses the
+            // lane again, which reconnects it (see the broken branch above).
             hold.broken = true;
             hold.dimmed = true;
             mStats.holdBreaks += 1;

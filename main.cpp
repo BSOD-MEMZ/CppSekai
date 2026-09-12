@@ -467,7 +467,12 @@ int main(int argc, char** argv)
         return 1;
     }
     bootLog("sdl init");
-    SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0");
+    // Touch must synthesize mouse events or ImGui (which only reads mouse)
+    // ignores taps entirely: every UI element (song list, settings, dialogs)
+    // becomes unclickable on a touchscreen. The raw SDL_FINGER* path still
+    // fires for the playfield; the synthetic mouse events carry
+    // SDL_TOUCH_MOUSEID and are filtered out of the mouse handlers below.
+    SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "1");
     SDL_SetHint(SDL_HINT_MOUSE_TOUCH_EVENTS, "0");
     // Native IME UI (the candidate list) is OFF by default in SDL2, and the
     // ImGui SDL2 backend only enables it in its own Init - which runs after
@@ -692,6 +697,14 @@ int main(int argc, char** argv)
         error.clear();
     }
     bootLog("tap effect");
+
+    // Ring behind the resume-countdown numbers (same tap_ring.png). Failure
+    // is not fatal - the numbers draw without the halo.
+    ImTextureID countdownRing = 0;
+    if (const GLuint ringId = renderer.loadUiTexture(fxDir + "\\tap_ring.png", error); ringId != 0) {
+        countdownRing = reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(ringId));
+    }
+    error.clear();
 
     // ------------------------------------------------------------------
     // Chart core
@@ -922,6 +935,21 @@ int main(int argc, char** argv)
     bool pauseClickRequested = false;
 
     // ------------------------------------------------------------------
+    // Resume countdown: continuing from the pause dialog shows 3-2-1 with an
+    // expanding ring. The clock stays paused until the countdown finishes, so
+    // the field is frozen and no input gets through (paused stays true).
+    // ------------------------------------------------------------------
+    bool countdownActive = false;
+    double countdownStartClock = 0.0;
+    int countdownNumberShown = -1;
+    auto beginResumeCountdown = [&]() {
+        pauseDialogOpen = false; // dialog closes (animation) behind the numbers
+        countdownActive = true;
+        countdownStartClock = uiClock;
+        countdownNumberShown = -1;
+    };
+
+    // ------------------------------------------------------------------
     // Settings card ("debug panel"), shared by the song select and the
     // play states. Opened with H or the musicsetting button; alive flag
     // keeps it on screen while the close animation plays out.
@@ -937,7 +965,9 @@ int main(int argc, char** argv)
         // pjsk style settings panel (tabbed card, pjsk sliders).
         const float s = ui::scale();
         const ImVec2 display = ImGui::GetIO().DisplaySize;
-        ImVec2 cardSize = ImVec2(360.0f * s, 520.0f * s);
+        // 640 tall (was 520): the 画面 tab grew a resolution combo and the
+        // progress-bar checkbox and no longer fit the shorter card.
+        ImVec2 cardSize = ImVec2(360.0f * s, 640.0f * s);
         ImVec2 cardCenter = ImVec2(18.0f * s + cardSize.x * 0.5f, 18.0f * s + cardSize.y * 0.5f);
         const float interior = cardSize.x - 56.0f * s;
         const float padX = 28.0f * s;
@@ -1298,7 +1328,8 @@ int main(int argc, char** argv)
                         // the player drop a new .sus in and pick it up without
                         // restarting (the empty-state hint promises F5).
                         rescanRequested = true;
-                    } else if (state == AppState::Play && event.key.keysym.sym == SDLK_SPACE && !autoPlay) {
+                    } else if (state == AppState::Play && event.key.keysym.sym == SDLK_SPACE && !autoPlay
+                        && !countdownActive) {
                         // Space opens the pause dialog (same as the HUD button).
                         if (!pauseDialogOpen) {
                             paused = true;
@@ -1373,6 +1404,11 @@ int main(int argc, char** argv)
                 // when it lands on the HUD pause button.
                 // ------------------------------------------------------
                 case SDL_MOUSEBUTTONDOWN: {
+                    // Synthetic event from a touch (hint above): the finger
+                    // path already handled it, do not double-process.
+                    if (event.button.which == SDL_TOUCH_MOUSEID) {
+                        break;
+                    }
                     if (event.button.button != SDL_BUTTON_LEFT && event.button.button != SDL_BUTTON_RIGHT) {
                         break;
                     }
@@ -1426,6 +1462,9 @@ int main(int argc, char** argv)
                     break;
                 }
                 case SDL_MOUSEMOTION: {
+                    if (event.motion.which == SDL_TOUCH_MOUSEID) {
+                        break; // touch drag is handled by the finger path
+                    }
                     if (autoPlay || paused || state != AppState::Play) {
                         break;
                     }
@@ -1438,6 +1477,9 @@ int main(int argc, char** argv)
                     break;
                 }
                 case SDL_MOUSEBUTTONUP: {
+                    if (event.button.which == SDL_TOUCH_MOUSEID) {
+                        break; // touch release is handled by the finger path
+                    }
                     if (event.button.button != SDL_BUTTON_LEFT && event.button.button != SDL_BUTTON_RIGHT) {
                         break;
                     }
@@ -1450,10 +1492,9 @@ int main(int argc, char** argv)
         }
 
         if (escapePressed) {
+            countdownActive = false; // leaving / continuing cancels any countdown
             if (pauseDialogOpen) {
-                pauseDialogOpen = false;
-                paused = false;
-                audio.resume();
+                beginResumeCountdown();
             } else if (state == AppState::Play && susPath.empty()) {
                 // back to the song list
                 audio.stopMusic();
@@ -1470,7 +1511,7 @@ int main(int argc, char** argv)
             }
         }
 
-        if (state == AppState::Play && paused) {
+        if (state == AppState::Play && paused && !countdownActive) {
             SDL_Delay(16);
         }
 
@@ -1870,19 +1911,61 @@ int main(int argc, char** argv)
                     state = AppState::Select;
                     systemMedia.setTaskbarProgress(-1.0, false);
                 } else if (action == 2) {
-                    // Continue.
-                    pauseDialogOpen = false;
-                    paused = false;
-                    audio.resume();
+                    // Continue: 3-2-1 countdown, then the music resumes.
+                    beginResumeCountdown();
                 } else if (action == -2) {
                     // Close animation finished. If the dialog was still open
                     // the user dismissed it via the X (= continue).
                     if (pauseDialogOpen) {
-                        pauseDialogOpen = false;
-                        paused = false;
-                        audio.resume();
+                        beginResumeCountdown();
                     }
                     pauseDialogAlive = false;
+                }
+            }
+
+            // ----------------------------------------------------------
+            // Resume countdown: big white 3-2-1 with an expanding ring,
+            // one beep per number (assets/se/count_down.mp3). The music
+            // stays paused and resumes when the countdown ends.
+            // ----------------------------------------------------------
+            if (countdownActive) {
+                const double elapsed = uiClock - countdownStartClock;
+                if (elapsed >= 3.0) {
+                    countdownActive = false;
+                    paused = false;
+                    audio.resume();
+                } else {
+                    const int number = 3 - static_cast<int>(elapsed);
+                    if (number != countdownNumberShown) {
+                        countdownNumberShown = number;
+                        audio.playCountdownSe(seVolume);
+                    }
+                    const float frac = static_cast<float>(elapsed - std::floor(elapsed));
+                    auto easeOutCubic = [](float t) {
+                        t = std::clamp(t, 0.0f, 1.0f);
+                        const float inv = 1.0f - t;
+                        return 1.0f - inv * inv * inv;
+                    };
+                    ImDrawList* fg = ImGui::GetForegroundDrawList();
+                    const float cs = ui::scale();
+                    const ImVec2 c(static_cast<float>(windowW) * 0.5f, static_cast<float>(windowH) * 0.5f);
+                    // Ring: expands and fades within each one-second tick.
+                    if (countdownRing != 0) {
+                        const float diameter = (170.0f + 330.0f * easeOutCubic(frac)) * cs;
+                        const int alpha = static_cast<int>((1.0f - frac) * 170.0f);
+                        fg->AddImage(countdownRing,
+                            ImVec2(c.x - diameter * 0.5f, c.y - diameter * 0.5f),
+                            ImVec2(c.x + diameter * 0.5f, c.y + diameter * 0.5f),
+                            ImVec2(0, 0), ImVec2(1, 1), IM_COL32(255, 255, 255, alpha));
+                    }
+                    // The number pops in at the start of its tick.
+                    const float fontSize = 150.0f * cs * (0.85f + 0.15f * easeOutCubic(frac * 3.0f));
+                    const char digits[2] = {static_cast<char>('0' + number), '\0'};
+                    const ImVec2 ts = game::bodyFont()->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, digits);
+                    const ImVec2 pos(c.x - ts.x * 0.5f, c.y - ts.y * 0.5f);
+                    fg->AddText(game::bodyFont(), fontSize, ImVec2(pos.x + 3.0f * cs, pos.y + 3.0f * cs),
+                        IM_COL32(20, 22, 34, 200), digits);
+                    fg->AddText(game::bodyFont(), fontSize, pos, IM_COL32(255, 255, 255, 255), digits);
                 }
             }
 
