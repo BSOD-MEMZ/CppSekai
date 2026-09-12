@@ -551,6 +551,7 @@ namespace
         std::string artist;
         std::string vocal;
         std::string coverPath;
+        int musicId = 0; // song id, for the official level table
         int idx[kDiffCount] = {-1, -1, -1, -1, -1};
     };
 
@@ -603,6 +604,24 @@ namespace
         return tableLevel(entry.musicId, diffIndexOf(entry.difficulty));
     }
 
+    // Level shown next to a song in the list: the number of the *currently
+    // selected* difficulty, not of whatever chart happens to exist. When the
+    // song has no chart for that difficulty the official level table still
+    // knows the number, so a missing chart is not a missing level. 0 = "-".
+    int levelForDifficulty(const SongGroup& group, const std::vector<ChartEntry>& entries, int diffIndex)
+    {
+        if (diffIndex < 0 || diffIndex >= kDiffCount) {
+            return 0;
+        }
+        if (group.idx[diffIndex] >= 0) {
+            const int own = resolvedLevel(entries[static_cast<size_t>(group.idx[diffIndex])]);
+            if (own > 0) {
+                return own;
+            }
+        }
+        return tableLevel(group.musicId, diffIndex);
+    }
+
     std::vector<SongGroup> buildGroups(const std::vector<ChartEntry>& entries)
     {
         std::vector<SongGroup> groups;
@@ -623,10 +642,14 @@ namespace
                 group.artist = item.artist;
                 group.vocal = item.vocal;
                 group.coverPath = item.coverPath;
+                group.musicId = item.musicId;
                 groups.push_back(group);
                 titleIsReal.push_back(!item.title.empty());
             }
             SongGroup& group = groups[static_cast<size_t>(it->second)];
+            if (group.musicId <= 0) {
+                group.musicId = item.musicId;
+            }
             // A real chart title always beats the file-name fallback.
             if (!item.title.empty() && !titleIsReal[static_cast<size_t>(it->second)]) {
                 group.title = item.title;
@@ -921,13 +944,200 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         }
     }
 
+    // ------------------------------------------------------------------
+    // Song list: no scrollbar, no hard end. The list scrolls by moving the
+    // "content coordinate that sits at the vertical centre of the viewport";
+    // the row closest to that centre becomes the selection once the list
+    // stops moving. While it moves nothing is highlighted (the row that ends
+    // up in the middle is only picked when the finger / wheel lets go), which
+    // is what the official screen does. Wheel, mouse drag and touch drag all
+    // feed the same momentum model.
+    // ------------------------------------------------------------------
+    const float pitch = 104.0f * k;    // distance between two row centres
+    const float compactH = 84.0f * k;  // compact row height
+    const float cardH = 128.0f * k;    // expanded (selected) card height
     const float listY = listTop + searchH + 14.0f * k;
+    const float listH = h - listY - 24.0f * k;
+    const float overscroll = pitch * 0.9f; // pulled past an end, springs back
+
+    static float scroll = 0.0f;       // content y that sits at the view centre
+    static float scrollTarget = 0.0f; // where the view is heading
+    static float flingVel = 0.0f;     // px/s momentum kept after a release
+    static float dragVel = 0.0f;      // smoothed drag velocity (px/s)
+    static float dragDistance = 0.0f; // travelled while the pointer is down
+    static float dragLastY = 0.0f;
+    static float pressIndex = -1.0f;  // row the current gesture started on
+    static bool dragging = false;
+    static bool scrolling = false;    // list is moving => no highlight
+    static bool listInit = false;
+    static int lastGroup = -1;
+    static double lastInputTime = -100.0;
+    static std::string lastFilter;
+    static size_t listLastCount = 0;
+
+    const int visibleCount = static_cast<int>(visible.size());
+    const float maxScroll = visibleCount > 0 ? static_cast<float>(visibleCount - 1) * pitch : 0.0f;
+
     ImGui::SetCursorScreenPos(ImVec2(listX, listY));
-    ImGui::BeginChild("song_list", ImVec2(listW + 24.0f * k, h - listY - 24.0f * k), ImGuiChildFlags_None,
-        ImGuiWindowFlags_NoBackground);
+    ImGui::BeginChild("song_list", ImVec2(listW + 24.0f * k, listH), ImGuiChildFlags_None,
+        ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
     ImDrawList* listDl = ImGui::GetWindowDrawList();
-    const float rowX = ImGui::GetCursorScreenPos().x;
-    float rowY = ImGui::GetCursorScreenPos().y;
+    const ImVec2 viewPos = ImGui::GetCursorScreenPos();
+    const float rowX = viewPos.x;
+    float rowY = viewPos.y;
+    const float viewCenterY = viewPos.y + listH * 0.5f;
+    const float viewBottom = viewPos.y + listH;
+
+    const ImGuiIO& io = ImGui::GetIO();
+    const float frameDt = std::clamp(io.DeltaTime, 0.0005f, 0.05f);
+    const float mouseY = io.MousePos.y;
+
+    // Visible-list index of a song group (-1 when the filter hides it).
+    const auto indexOfVisible = [&](int gi) {
+        for (int i = 0; i < visibleCount; ++i) {
+            if (visible[static_cast<size_t>(i)] == gi) {
+                return i;
+            }
+        }
+        return -1;
+    };
+    // Row whose centre is closest to screen y `y`.
+    const auto rowIndexAt = [&](float y) {
+        if (visibleCount <= 0) {
+            return -1;
+        }
+        const float raw = (y - viewCenterY + scroll) / pitch;
+        return std::clamp(static_cast<int>(std::lround(raw)), 0, visibleCount - 1);
+    };
+
+    const bool inViewRect = io.MousePos.x >= rowX && io.MousePos.x <= rowX + listW
+        && mouseY >= viewPos.y && mouseY <= viewBottom;
+    // A touch contact arrives as a synthetic mouse event (SDL's touch->mouse
+    // synthesis), so this one path serves mouse and finger alike.
+    const bool listHovered = dragging || (inViewRect && ImGui::IsWindowHovered());
+
+    // A rescan or a new search term re-maps the list: recentre without gliding.
+    if (std::string(searchBuf) != lastFilter || entries.size() != listLastCount) {
+        lastFilter = searchBuf;
+        listLastCount = entries.size();
+        listInit = false;
+    }
+    if (!listInit && !visible.empty()) {
+        const int sel = std::max(0, indexOfVisible(groupIndex));
+        scroll = scrollTarget = static_cast<float>(sel) * pitch;
+        flingVel = 0.0f;
+        dragging = false;
+        scrolling = false;
+        listInit = true;
+    }
+    const int hoverIndex = listHovered ? rowIndexAt(mouseY) : -1;
+    if (visibleCount > 0) {
+        // Wheel: one notch = one row.
+        if (listHovered && io.MouseWheel != 0.0f) {
+            scrollTarget -= io.MouseWheel * pitch;
+            flingVel = 0.0f;
+            scrolling = true;
+            lastInputTime = timeSec;
+        }
+        // Double click / double tap: play the row straight away.
+        if (listHovered && hoverIndex >= 0 && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+            const SongGroup& g = groups[static_cast<size_t>(visible[static_cast<size_t>(hoverIndex)])];
+            if (g.idx[diffIndex] >= 0) {
+                action = g.idx[diffIndex];
+            }
+        }
+        // Press starts a drag. The row is only committed on release, and only
+        // when the gesture did not travel - dragging never selects.
+        if (listHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+            dragging = true;
+            dragDistance = 0.0f;
+            dragVel = 0.0f;
+            flingVel = 0.0f;
+            dragLastY = mouseY;
+            pressIndex = static_cast<float>(hoverIndex);
+            scrolling = true;
+            lastInputTime = timeSec;
+        }
+        if (dragging) {
+            const float dy = mouseY - dragLastY;
+            dragLastY = mouseY;
+            dragDistance += std::fabs(dy);
+            if (dy != 0.0f) {
+                scroll -= dy;
+                dragVel = dragVel * 0.6f + (-dy / frameDt) * 0.4f;
+                lastInputTime = timeSec;
+            }
+            if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+                dragging = false;
+                // A quick release keeps its speed (fling); a slow one settles
+                // right where it stopped.
+                flingVel = std::fabs(dragVel) > 260.0f ? std::clamp(dragVel, -7000.0f, 7000.0f) : 0.0f;
+                lastInputTime = timeSec;
+                const int hit = static_cast<int>(pressIndex);
+                if (dragDistance < 8.0f && hit >= 0 && hit < visibleCount) {
+                    // Tap: pick that row (it glides to the centre).
+                    groupIndex = visible[static_cast<size_t>(hit)];
+                    scrollTarget = static_cast<float>(hit) * pitch;
+                    scrolling = false;
+                }
+                pressIndex = -1.0f;
+            }
+            scrollTarget = scroll;
+        } else {
+            if (std::fabs(flingVel) > 1.0f) {
+                scroll += flingVel * frameDt;
+                scrollTarget = scroll;
+                flingVel *= std::exp(-frameDt * 9.0f);
+                if (std::fabs(flingVel) < 100.0f) {
+                    flingVel = 0.0f;
+                }
+                lastInputTime = timeSec;
+            }
+            // Nothing moved for a moment: commit the row sitting in the middle.
+            if (flingVel == 0.0f && scrolling && (timeSec - lastInputTime) > 0.20) {
+                const int idx = std::clamp(static_cast<int>(std::lround(scroll / pitch)), 0, visibleCount - 1);
+                groupIndex = visible[static_cast<size_t>(idx)];
+                scrollTarget = static_cast<float>(idx) * pitch;
+                scrolling = false;
+            }
+        }
+
+        // Rubber band: the list can be pulled a little past either end and
+        // springs back, so there is never a hard stop to bump into.
+        if (scroll < 0.0f || scroll > maxScroll) {
+            flingVel = 0.0f;
+            scroll = std::clamp(scroll, -overscroll, maxScroll + overscroll);
+        }
+        scrollTarget = std::clamp(scrollTarget, 0.0f, maxScroll);
+        if (!dragging) {
+            // Glide towards the target (snap / wheel / tap).
+            scroll += (scrollTarget - scroll) * (1.0f - std::exp(-frameDt * 16.0f));
+            if (std::fabs(scrollTarget - scroll) < 0.4f) {
+                scroll = scrollTarget;
+            }
+        }
+    }
+
+    // A selection made outside the list (shuffle button, arrow keys, the
+    // phone panel) glides the list over to that row.
+    if (!scrolling && groupIndex != lastGroup && !visible.empty()) {
+        const int idx = indexOfVisible(groupIndex);
+        if (idx >= 0) {
+            scrollTarget = static_cast<float>(idx) * pitch;
+        }
+    }
+    lastGroup = groupIndex;
+    // While the list is moving nothing is highlighted: the row that ends up
+    // in the middle is only picked (and highlighted) once it stops.
+    const int cardIndex = scrolling || visible.empty() ? -1 : indexOfVisible(groupIndex);
+
+    const auto levelLabel = [](int level, char* buf, size_t bufSize) -> const char* {
+        if (level <= 0) {
+            return "-";
+        }
+        std::snprintf(buf, bufSize, "%d", level);
+        return buf;
+    };
 
     if (visible.empty()) {
         ImGui::SetCursorScreenPos(ImVec2(rowX, rowY + 20.0f * k));
@@ -943,14 +1153,23 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     // "歌曲等级" caption plate (128x48 sprite from assets/select).
     const GLuint levelTex = selectTex(renderer, "songlevel");
 
-    for (const int gi : visible) {
+    // Only the rows that can be on screen are walked.
+    const int firstRow = visibleCount > 0 ? std::max(0, rowIndexAt(viewPos.y) - 1) : 0;
+    const int lastRow = visibleCount > 0 ? std::min(visibleCount - 1, rowIndexAt(viewBottom) + 1) : -1;
+    // The leading level indicator follows the selected difficulty instead of
+    // always being pink.
+    const ImU32 diffColor = kDiffColors[static_cast<size_t>(std::clamp(diffIndex, 0, kDiffCount - 1))];
+
+    for (int i = firstRow; i <= lastRow; ++i) {
+        const int gi = visible[static_cast<size_t>(i)];
         const SongGroup& g = groups[static_cast<size_t>(gi)];
-        const bool isSel = gi == groupIndex;
-        const float rowH = (isSel ? 128.0f : 84.0f) * k;
-        const float gap = 9.0f * k;
-        // The leading level indicator follows the selected difficulty instead
-        // of always being pink.
-        const ImU32 diffColor = kDiffColors[static_cast<size_t>(std::clamp(diffIndex, 0, kDiffCount - 1))];
+        // While the list is moving nothing is highlighted; the row that ends
+        // up in the middle is picked once it stops.
+        const bool isSel = i == cardIndex;
+        const float rowH = isSel ? cardH : compactH;
+        const float centerY = viewCenterY + (static_cast<float>(i) * pitch - scroll);
+        const ImVec2 p0(rowX, centerY - rowH * 0.5f);
+        const ImVec2 p1(rowX + listW, centerY + rowH * 0.5f);
         // Clear / full-combo mark of one diamond slot (0 = nothing to draw).
         const auto badgeFor = [&](int d) -> GLuint {
             if (d < 0 || d >= kDiffCount || g.idx[d] < 0) {
@@ -963,25 +1182,15 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             return e.cleared ? clearTex : 0;
         };
 
-        ImGui::SetCursorScreenPos(ImVec2(rowX, rowY));
-        ImGui::PushID(gi);
-        ImGui::InvisibleButton("row", ImVec2(listW, rowH));
-        if (ImGui::IsItemClicked()) {
-            groupIndex = gi;
-        }
-        if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && selected >= 0) {
-            action = selected;
-        }
-        ImGui::PopID();
-
-        const ImVec2 p0(rowX, rowY);
-        const ImVec2 p1(rowX + listW, rowY + rowH);
-
-        // The entry this row currently points at (for level + result badges).
+        // The entry this row currently points at (jacket / MV tag / diamonds).
         const int rowIdx = g.idx[diffIndex] >= 0 ? g.idx[diffIndex]
                                                  : (g.idx[3] >= 0 ? g.idx[3]
                                                                   : (g.idx[4] >= 0 ? g.idx[4] : g.idx[0]));
         const ChartEntry* rowEntry = rowIdx >= 0 ? &entries[static_cast<size_t>(rowIdx)] : nullptr;
+        // Level of the *selected* difficulty (official table when this song
+        // has no chart for it), so switching difficulty renumbers the list.
+        char levelBuf[16];
+        const char* rowLevel = levelLabel(levelForDifficulty(g, entries, diffIndex), levelBuf, sizeof(levelBuf));
 
         if (isSel) {
             // Expanded card: a translucent white rounded rectangle over the
@@ -989,32 +1198,26 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             listDl->AddRectFilled(p0, p1, IM_COL32(255, 255, 255, 190), 10.0f * k);
             listDl->AddRect(p0, p1, IM_COL32(255, 255, 255, 120), 10.0f * k, 0, 2.0f);
 
-            // Level badge: the "歌曲等级" caption plate from assets/select
-            // (128x48), with the level number in a filled circle underneath.
-            // The circle matches the leading indicator of the compact rows and
-            // takes the colour of the currently selected difficulty.
+            // Level badge: the level number of the selected difficulty in a
+            // filled circle, with the "歌曲等级" caption plate resting on the
+            // circle's upper edge (as in the official list).
             const float badgeL = p0.x + 14.0f * k;
-            const float tagY = p0.y + 20.0f * k;
+            const float tagY = p0.y + 22.0f * k;
             const float tagW = 62.0f * k;
             const float tagH = tagW * 48.0f / 128.0f;
+            const float ccx = badgeL + tagW * 0.5f;
+            const float ccy = tagY + tagH + 16.0f * k;
+            listDl->AddCircleFilled(ImVec2(ccx, ccy), 27.0f * k, diffColor);
+            addTextCentered(listDl, title, 28.0f * k, ImVec2(ccx, ccy - 1.0f * k), white, rowLevel);
             if (levelTex != 0) {
                 listDl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(levelTex)),
                     ImVec2(badgeL, tagY), ImVec2(badgeL + tagW, tagY + tagH),
                     ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), IM_COL32(255, 255, 255, 255));
             } else {
-                // Fallback when the sprite is missing: the old drawn plate.
+                // Fallback when the sprite is missing: the drawn plate.
                 listDl->AddRectFilled(ImVec2(badgeL, tagY), ImVec2(badgeL + tagW, tagY + 22.0f * k),
                     diffColor, 4.0f * k);
-                addTextCentered(listDl, body, 13.0f * k, ImVec2(badgeL + tagW * 0.5f, tagY + 11.0f * k),
-                    white, "歌曲等级");
-            }
-            if (rowEntry != nullptr) {
-                char levelBuf[16];
-                const float ccx = badgeL + tagW * 0.5f;
-                const float ccy = tagY + tagH + 27.0f * k;
-                listDl->AddCircleFilled(ImVec2(ccx, ccy), 27.0f * k, diffColor);
-                addTextCentered(listDl, title, 28.0f * k, ImVec2(ccx, ccy - 1.0f * k), white,
-                    levelText(*rowEntry, levelBuf, sizeof(levelBuf)));
+                addTextCentered(listDl, body, 13.0f * k, ImVec2(ccx, tagY + 11.0f * k), white, "歌曲等级");
             }
 
             const float textL = p0.x + 96.0f * k;
@@ -1037,18 +1240,19 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             }
         } else {
             // Compact row: no card fill - the entries are separated by a thin
-            // translucent rule, like the reference UI.
-            if (ImGui::IsItemHovered()) {
+            // translucent rule, like the reference UI. The rule under the row
+            // above the card would land inside the card, so it is skipped.
+            if (i == hoverIndex) {
                 listDl->AddRectFilled(p0, p1, IM_COL32(255, 255, 255, 20), 8.0f * k);
             }
-            listDl->AddLine(ImVec2(p0.x, p1.y + gap * 0.5f), ImVec2(p1.x, p1.y + gap * 0.5f),
-                IM_COL32(255, 255, 255, 48), 1.0f * k);
+            if (i != cardIndex - 1) {
+                const float ruleY = centerY + pitch * 0.5f;
+                listDl->AddLine(ImVec2(p0.x, ruleY), ImVec2(p1.x, ruleY), IM_COL32(255, 255, 255, 48), 1.0f * k);
+            }
 
-            const float cy = (p0.y + p1.y) * 0.5f;
-            char levelBuf[16];
+            const float cy = centerY;
             listDl->AddCircleFilled(ImVec2(p0.x + 30.0f * k, cy), 24.0f * k, diffColor);
-            addTextCentered(listDl, body, 20.0f * k, ImVec2(p0.x + 30.0f * k, cy - 1.0f * k), white,
-                rowEntry != nullptr ? levelText(*rowEntry, levelBuf, sizeof(levelBuf)) : "-");
+            addTextCentered(listDl, body, 20.0f * k, ImVec2(p0.x + 30.0f * k, cy - 1.0f * k), white, rowLevel);
 
             const float jx = p0.x + 62.0f * k;
             const float js = 60.0f * k;
@@ -1077,20 +1281,21 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
                     IM_COL32(40, 36, 20, 255), mv.c_str());
             }
         }
-
-        rowY += rowH + gap;
     }
 
     // Keyboard navigation over the visible (filtered) rows.
     if (!visible.empty()) {
         const auto moveTo = [&](int step) {
-            for (int i = 0; i < static_cast<int>(visible.size()); ++i) {
-                if (visible[static_cast<size_t>(i)] == groupIndex) {
-                    const int next = std::clamp(i + step, 0, static_cast<int>(visible.size()) - 1);
-                    groupIndex = visible[static_cast<size_t>(next)];
-                    return;
-                }
+            const int cur = indexOfVisible(groupIndex);
+            if (cur < 0) {
+                return;
             }
+            const int next = std::clamp(cur + step, 0, visibleCount - 1);
+            groupIndex = visible[static_cast<size_t>(next)];
+            scrollTarget = static_cast<float>(next) * pitch;
+            flingVel = 0.0f;
+            scrolling = false;
+            lastInputTime = timeSec;
         };
         if (ImGui::IsKeyPressed(ImGuiKey_DownArrow) || ImGui::IsKeyPressed(ImGuiKey_GamepadDpadDown)) {
             moveTo(1);
@@ -1217,8 +1422,9 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
                 dl->AddCircleFilled(c, dcD * 0.5f, kDiffColors[d]);
                 dl->AddCircle(c, dcD * 0.5f + 2.5f * k, white, 48, 3.0f * k);
             } else {
-                dl->AddCircleFilled(c, dcD * 0.5f, IM_COL32(30, 27, 56, 235));
-                dl->AddCircle(c, dcD * 0.5f, avail ? kDiffColors[d] : IM_COL32(110, 105, 140, 160), 48, 3.0f * k);
+                // Unselected difficulties are hollow rings - no dark fill, just
+                // the difficulty colour (dimmed for the ones this song lacks).
+                dl->AddCircle(c, dcD * 0.5f, avail ? kDiffColors[d] : IM_COL32(150, 145, 175, 110), 48, 3.0f * k);
             }
             char lvBuf[16];
             const char* lvText = "-";
