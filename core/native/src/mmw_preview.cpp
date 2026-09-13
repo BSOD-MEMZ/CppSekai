@@ -2,6 +2,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstdio> // CppSekai: the stale-hold diagnostic below
 #include <cstdlib>
 #include <cstring>
 #include <limits>
@@ -1146,6 +1147,22 @@ namespace mmw_preview
         // notes of the previous chart.
         gRuntime.hitEventNoteIds.clear();
         gRuntime.hitNoteIds.clear();
+        // CppSekai: and the per-session hold state. These two are keyed on
+        // (lane center, hold start time), which is identical for the same
+        // chart - a stale entry left over from the previous run makes the
+        // renderer treat a hold of the *new* run as missed (its body scrolls
+        // off the screen instead of parking on the line). Only the host
+        // clears them otherwise, and it deliberately publishes nothing while
+        // autoplaying, so without this a preview started after a run that
+        // missed a hold drew that hold as dropped.
+        if (!gRuntime.missedHoldKeys.empty() || !gRuntime.dimmedHoldKeys.empty()) {
+            std::fprintf(stdout, "[core] dropped %d stale missed / %d stale dimmed hold key(s)\n",
+                static_cast<int>(gRuntime.missedHoldKeys.size() / 2),
+                static_cast<int>(gRuntime.dimmedHoldKeys.size() / 2));
+            std::fflush(stdout);
+        }
+        gRuntime.missedHoldKeys.clear();
+        gRuntime.dimmedHoldKeys.clear();
 
         if (gRuntime.score.tempoChanges.empty()) {
             return;
@@ -1164,6 +1181,12 @@ namespace mmw_preview
             (void)id;
             float kind = 0.0f;
             bool playEvent = true;
+            // CppSekai: does this event stand for a long note's tail? It is
+            // reported through bit 3 of the flags word (see below) so the host
+            // can recognise a tail without guessing from the lane - a sliding
+            // long note ends in a different lane than it started, which is
+            // exactly the case the host's lane matching got wrong.
+            bool holdEndEvent = false;
 
             if (note.type == NoteType::Hold) {
                 const HoldNote& hold = gRuntime.score.holdNotes.at(note.ID);
@@ -1177,6 +1200,7 @@ namespace mmw_preview
                 // end event when it is a flick even for these loose holds.
                 // Non-flick ends stay unjudged on purpose.
                 playEvent = hold.endType == HoldNoteType::Normal || note.isFlick();
+                holdEndEvent = playEvent;
             }
 
             if (playEvent && note.type == NoteType::HoldMid) {
@@ -1203,10 +1227,16 @@ namespace mmw_preview
             // CppSekai: extended flags layout (upstream stores only bit0 =
             // critical). Bits 1-2 carry the flick direction (FlickType:
             // 1=up/default 2=left 3=right) so the judgement engine can do
-            // strict swipe-direction validation. Marked here because this is
-            // a local deviation from upstream sekai-mmw-preview-web.
+            // strict swipe-direction validation, and bit 3 marks a long
+            // note's tail event (NoteType::HoldEnd) so the host matches the
+            // tail exactly instead of guessing by lane - a sliding long note
+            // ends in a different lane than it started. Marked here because
+            // this is a local deviation from upstream sekai-mmw-preview-web.
             float flags = note.critical ? 1.0f : 0.0f;
             flags += static_cast<float>(static_cast<int>(note.flick)) * 2.0f;
+            if (holdEndEvent) {
+                flags += 8.0f;
+            }
             float endTimeSec = -1.0f;
             const float volume = getSEVolumeAtTick(note.tick, gRuntime.score);
             gRuntime.hitEvents.push_back(HitEvent{

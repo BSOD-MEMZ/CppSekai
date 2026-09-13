@@ -248,12 +248,12 @@ bool slider(const char* id, float* value, float minV, float maxV, float step, co
     const float s = scale();
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImFont* font = game::bodyFont();
-    const float fontSize = 24.0f * s;
-    const float btnSize = 38.0f * s;
-    const float btnRadius = 10.0f * s;
-    const float trackH = 7.0f * s;
-    const float thumbR = 12.0f * s;
-    const float rowH = 64.0f * s; // value text + track row (was 96/80/72)
+    const float fontSize = 23.0f * s;
+    const float btnSize = 31.0f * s;
+    const float btnRadius = 8.0f * s;
+    const float trackH = 6.0f * s;
+    const float thumbR = 11.0f * s;
+    const float rowH = 62.0f * s; // value text + track row (was 96/80/72/64)
 
     const ImVec2 pos = ImGui::GetCursorScreenPos();
     const float rowW = width > 0.0f ? width : ImGui::GetContentRegionAvail().x;
@@ -261,8 +261,8 @@ bool slider(const char* id, float* value, float minV, float maxV, float step, co
     ImGui::PushID(id);
 
     const float trackY = pos.y + rowH * 0.68f;
-    const float trackX0 = pos.x + btnSize + 20.0f * s;
-    const float trackX1 = pos.x + rowW - btnSize - 20.0f * s;
+    const float trackX0 = pos.x + btnSize + 16.0f * s;
+    const float trackX1 = pos.x + rowW - btnSize - 16.0f * s;
     bool changed = false;
 
     // Value above the track, centered, in pink.
@@ -323,7 +323,7 @@ bool slider(const char* id, float* value, float minV, float maxV, float step, co
         *value = std::max(minV, *value - step);
         changed = true;
     }
-    if (darkButton("+", trackX1 + 20.0f * s)) {
+    if (darkButton("+", trackX1 + 16.0f * s)) {
         *value = std::min(maxV, *value + step);
         changed = true;
     }
@@ -456,7 +456,9 @@ bool checkBox(const char* label, bool* value, float rowWidth)
     if (hovered && !checked) {
         fill = IM_COL32(255, 235, 243, 255);
     }
-    const float radius = 10.0f * s;
+    // Radius follows the box: the old 10px corner was tuned for a 32px box and
+    // looked round-shouldered once the box shrank to 24.
+    const float radius = boxSize * 0.26f;
     dl->AddRectFilled(ImVec2(boxLo.x, boxLo.y + 2.0f * s), ImVec2(boxHi.x, boxHi.y + 2.0f * s),
         IM_COL32(150, 150, 170, 50), radius); // shadow
     dl->AddRectFilled(boxLo, boxHi, fill, radius);
@@ -466,7 +468,7 @@ bool checkBox(const char* label, bool* value, float rowWidth)
         const ImVec2 c2(boxLo.x + boxSize * 0.44f, boxLo.y + boxSize * 0.74f);
         const ImVec2 c3(boxLo.x + boxSize * 0.80f, boxLo.y + boxSize * 0.28f);
         dl->AddPolyline(std::initializer_list<ImVec2>{c1, c2, c3}.begin(), 3, IM_COL32(255, 255, 255, 255),
-            0, 5.0f * s);
+            0, 4.0f * s);
     } else {
         dl->AddRect(boxLo, boxHi, kDivider, radius, 0, 2.0f * s);
     }

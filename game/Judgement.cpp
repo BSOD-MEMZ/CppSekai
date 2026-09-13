@@ -1,6 +1,7 @@
 #include "Judgement.hpp"
 
 #include <algorithm>
+#include <cstdio>
 #include <cmath>
 #include <limits>
 
@@ -21,6 +22,20 @@ namespace
     // The lane may be grabbed a little after the hold start without counting
     // as a break (mirrors the tap judgement window).
     constexpr float kHoldStartGraceSec = 0.14f;
+
+    // Lane coordinates: `center` is the middle of the note, `width` its span.
+    // Two notes whose spans touch belong to the same lane area - which is how
+    // a sliding long note's tail is matched to its marker (see load()).
+    bool laneSpansOverlap(float centerA, float widthA, float centerB, float widthB)
+    {
+        const float left = std::max(centerA - widthA * 0.5f, centerB - widthB * 0.5f);
+        const float right = std::min(centerA + widthA * 0.5f, centerB + widthB * 0.5f);
+        return right - left > 0.01f;
+    }
+
+    // Bit 3 of a HitEvent's flags word: the core says this event is a long
+    // note's tail (SUS NoteType::HoldEnd). See mmw_preview.cpp.
+    constexpr int kFlagHoldTail = 8;
 } // namespace
 
 void JudgementEngine::load(const float* packed, int count)
@@ -70,24 +85,70 @@ void JudgementEngine::load(const float* packed, int count)
     // Flag hold tails. The core emits a kind 5 marker at the hold's start
     // carrying endTimeSec, and a normal tap/flick/trace event at the end
     // time; that end event is the tail the player releases on.
+    //
+    // The core marks the tail event itself (flags bit 3), which is the only
+    // reliable key: a SLIDING long note (SUS ease / lane change) ends in a
+    // different lane than it started (チームメイト master: marker center -4
+    // width 4, tail center -3 width 6), and an unflagged tail is graded as a
+    // plain tap - which a player who is *holding* the lane can never clear, so
+    // the long note dropped at its very end. The lane matching below only
+    // covers events that arrive without the flag.
+    bool coreFlagsTails = false;
+    for (const HitNote& note : mNotes) {
+        if ((static_cast<int>(std::lround(note.flags)) & kFlagHoldTail) != 0) {
+            coreFlagsTails = true;
+            break;
+        }
+    }
+    for (HitNote& note : mNotes) {
+        if ((static_cast<int>(std::lround(note.flags)) & kFlagHoldTail) != 0) {
+            note.holdTail = true;
+        }
+    }
     for (std::size_t i = 0; i < mNotes.size(); ++i) {
         if (static_cast<int>(mNotes[i].kind) != 5) {
             continue;
         }
         const float endTime = mNotes[i].endTimeSec;
+        const float headCenter = mNotes[i].center;
+        const float headWidth = mNotes[i].width;
+        // The flagged tail closest to the hold's own lane (two holds can end
+        // on the same tick).
+        std::size_t flagged = mNotes.size();
+        float flaggedDistance = std::numeric_limits<float>::max();
+        std::size_t exact = mNotes.size();
+        std::size_t overlapping = mNotes.size();
         for (std::size_t j = 0; j < mNotes.size(); ++j) {
-            HitNote& candidate = mNotes[j];
+            const HitNote& candidate = mNotes[j];
             if (candidate.timeSec > endTime + 0.02f) {
                 break; // HitEvents are sorted by time
             }
-            if (candidate.holdTail || static_cast<int>(candidate.kind) > 3) {
+            if (candidate.timeSec < endTime - 0.02f) {
                 continue;
             }
-            if (candidate.timeSec >= endTime - 0.02f
-                && std::fabs(candidate.center - mNotes[i].center) < 0.01f) {
-                candidate.holdTail = true;
+            if (candidate.holdTail) {
+                const float distance = std::fabs(candidate.center - headCenter);
+                if (distance < flaggedDistance) {
+                    flaggedDistance = distance;
+                    flagged = j;
+                }
+                continue;
+            }
+            if (static_cast<int>(candidate.kind) > 3) {
+                continue;
+            }
+            if (std::fabs(candidate.center - headCenter) < 0.01f) {
+                exact = j;
                 break;
             }
+            if (overlapping == mNotes.size() && laneSpansOverlap(headCenter, headWidth, candidate.center, candidate.width)) {
+                overlapping = j;
+            }
+        }
+        const std::size_t pick = flagged != mNotes.size() ? flagged
+            : (exact != mNotes.size() ? exact : overlapping);
+        if (pick != mNotes.size()) {
+            mNotes[pick].holdTail = true;
         }
     }
 
@@ -145,6 +206,25 @@ void JudgementEngine::load(const float* packed, int count)
             tick.holdStartIndex = bestMarker;
         }
     }
+
+    // One summary line per chart. A hold marker whose tail event was not found
+    // is almost always a stream/engine mismatch (sliding long notes used to
+    // hit this), and the symptom - the tail silently graded as a plain tap -
+    // is invisible in the [stats] line, so state the counts up front.
+    int holdMarkers = 0;
+    int tailsMatched = 0;
+    for (const HitNote& note : mNotes) {
+        if (static_cast<int>(note.kind) == 5) {
+            ++holdMarkers;
+        }
+        if (note.holdTail) {
+            ++tailsMatched;
+        }
+    }
+    std::printf("[judge] %d event(s): %d note(s), %d hold(s), %d tail(s) matched%s\n",
+        static_cast<int>(mNotes.size()), mTotalScoreNotes, holdMarkers, tailsMatched,
+        coreFlagsTails ? " (core flags tails)" : " (lane-matched tails)");
+    std::fflush(stdout);
 }
 
 void JudgementEngine::reset()
@@ -711,18 +791,39 @@ void JudgementEngine::update(float songTimeSec)
             hold.startIndex = i;
         }
 
-        // The tail event: same lane, at the marker's end time.
+        // The tail event: the flagged event at the marker's end time, closest
+        // to the hold's own lane (two holds may end on the same tick). Sliding
+        // long notes end in a different lane, so a lane match alone is not
+        // enough - see the flagging loop in load().
+        std::size_t tail = mNotes.size();
+        std::size_t exactTail = mNotes.size();
+        std::size_t overlappingTail = mNotes.size();
+        float tailDistance = std::numeric_limits<float>::max();
         for (std::size_t j = i; j < mNotes.size(); ++j) {
             const HitNote& candidate = mNotes[j];
             if (candidate.timeSec > marker.endTimeSec + 0.02f) {
                 break;
             }
-            if (candidate.holdTail && candidate.timeSec >= marker.endTimeSec - 0.02f
-                && std::fabs(candidate.center - marker.center) < 0.01f) {
-                hold.tailIndex = j;
-                break;
+            if (candidate.timeSec < marker.endTimeSec - 0.02f) {
+                continue;
+            }
+            if (candidate.holdTail) {
+                const float distance = std::fabs(candidate.center - marker.center);
+                if (distance < tailDistance) {
+                    tailDistance = distance;
+                    tail = j;
+                }
+                continue;
+            }
+            if (exactTail == mNotes.size() && std::fabs(candidate.center - marker.center) < 0.01f) {
+                exactTail = j;
+            } else if (overlappingTail == mNotes.size()
+                && laneSpansOverlap(marker.center, marker.width, candidate.center, candidate.width)) {
+                overlappingTail = j;
             }
         }
+        hold.tailIndex = tail != mNotes.size() ? tail
+            : (exactTail != mNotes.size() ? exactTail : overlappingTail);
 
         const bool startMissed = hold.startIndex < mNotes.size() && mNotes[hold.startIndex].state == 2;
         if (startMissed) {

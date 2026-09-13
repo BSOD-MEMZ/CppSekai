@@ -535,6 +535,12 @@ void resolveSidecars(ChartEntry& entry)
     if (entry.bgmPath.empty()) {
         entry.bgmPath = findSidecar(path, {".mp3", ".wav", ".ogg", ".flac", ".m4a"}, {});
     }
+    // Charts that ship only the official vocal files (se_0374_01.mp3,
+    // vs_0374_01.mp3 ...) have nothing for findSidecar() to match, so they
+    // used to come out with no BGM at all - silent intro card, silent song
+    // select preview. Fall back to the セカイver (the version the legacy
+    // <id4>.mp3 download corresponds to).
+    applyDefaultVocal(entry);
     if (entry.audioStartSec <= 0.0) {
         entry.audioStartSec = std::atof(sideField("fillerSec").c_str());
     }
@@ -623,6 +629,9 @@ std::vector<ChartEntry> scanChartFolder(const std::string& dir)
         item.coverPath = findSidecar(path, imageExt, {"jacket", "cover"});
         item.bgmPath = findSidecar(path, audioExt, {});
         item.audioStartSec = std::atof(sideField("fillerSec").c_str());
+        // See resolveSidecars(): a chart whose audio is only the official
+        // per-version files needs the vocal table to find any BGM.
+        applyDefaultVocal(item);
 
         entries.push_back(item);
     }
@@ -1302,6 +1311,29 @@ bool applyVocalVersion(ChartEntry& entry, const std::vector<VocalVersion>& versi
         entry.vocal += singer;
     }
     return true;
+}
+
+std::string vocalAudioPath(const ChartEntry& entry, int index)
+{
+    const std::vector<VocalVersion> versions = availableVocals(entry);
+    if (index < 0 || index >= static_cast<int>(versions.size())) {
+        return {};
+    }
+    const fs::path file =
+        fs::path(entry.susPath).parent_path() / (versions[static_cast<size_t>(index)].asset + ".mp3");
+    return audioFileExists(file.string()) ? file.string() : std::string();
+}
+
+void applyDefaultVocal(ChartEntry& entry)
+{
+    if (!entry.bgmPath.empty()) {
+        return;
+    }
+    const std::vector<VocalVersion> versions = availableVocals(entry);
+    if (versions.empty()) {
+        return;
+    }
+    applyVocalVersion(entry, versions, defaultVocalIndex(entry.musicId, versions));
 }
 
 void loadMusicVocals(const std::string& path)
@@ -2255,7 +2287,10 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         phoneH = phoneW / phoneAspect;
     }
     const float phoneX = w - phoneW - 30.0f * k;
-    const float phoneY = (h - phoneH) * 0.5f;
+    // Nudged down on purpose: in the reference UI the phone runs off the
+    // bottom of the screen (its home bar is never visible), which also buys
+    // the content room for the vocal chip row.
+    const float phoneY = (h - phoneH) * 0.5f + 78.0f * k;
 
     // Tilt: -5 degrees, i.e. the right edge rides up (screen y grows down).
     constexpr float kTiltDeg = -5.0f;
@@ -2308,15 +2343,17 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             j0, ImVec2(j0.x + jw, j0.y + jh), 12.0f * k);
         dl->AddRect(j0, ImVec2(j0.x + jw, j0.y + jh), IM_COL32(255, 255, 255, 60), 12.0f * k, 0, 2.0f);
 
-        // Title / artist / vocal
-        float ty = j0.y + jh + phoneH * 0.014f;
+        // Title / artist / vocal. Everything below is laid out in flow: the
+        // vocal chip row is conditional, and the old fixed fractions let the
+        // difficulty circles land on top of it.
+        float ty = j0.y + jh + phoneH * 0.022f;
         if (title != nullptr) {
             addTextCentered(dl, title, 26.0f * k, ImVec2(cx, ty + 13.0f * k), white, group.title.c_str());
         }
-        ty += 40.0f * k;
+        ty += 46.0f * k;
         if (!item.artist.empty()) {
             addTextCentered(dl, body, 17.0f * k, ImVec2(cx, ty), grayText, item.artist.c_str());
-            ty += 26.0f * k;
+            ty += 31.0f * k;
         }
         // Vocal versions: only when the song actually ships more than one
         // version's audio next to the chart. The chip row sits between the
@@ -2325,8 +2362,15 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         {
             const std::vector<VocalVersion> versions = availableVocals(item);
             static std::map<int, int> vocalChoiceBySong; // musicId -> index
+            // The caller's value wins when it is valid for this song, so the
+            // version can be driven from outside (--select-vocal, a hand-off,
+            // or a test); otherwise fall back to what the player last picked
+            // here, then to the セカイver.
             int choice = defaultVocalIndex(item.musicId, versions);
-            if (const auto it = vocalChoiceBySong.find(item.musicId); it != vocalChoiceBySong.end()) {
+            if (vocalIndex >= 0 && vocalIndex < static_cast<int>(versions.size())) {
+                choice = vocalIndex;
+                vocalChoiceBySong[item.musicId] = choice;
+            } else if (const auto it = vocalChoiceBySong.find(item.musicId); it != vocalChoiceBySong.end()) {
                 choice = it->second;
             }
             // The panel shows the *chosen* version's singers, not the sidecar's
@@ -2367,7 +2411,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
                     }
                 }
                 addTextCentered(dl, body, voSize, ImVec2(cx, ty), grayText, vo.c_str());
-                ty += 24.0f * k;
+                ty += 29.0f * k;
             }
 
             if (versions.size() > 1) {
@@ -2423,7 +2467,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
                         active ? ui::kBtnText : IM_COL32(238, 238, 248, 235), label.c_str());
                     chipX += widths[i] + gap;
                 }
-                ty += chipH + 8.0f * k;
+                ty += chipH + 16.0f * k;
             }
         }
 
@@ -2432,7 +2476,9 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         const float dcGap = 9.0f * k;
         const float rowW = kDiffCount * dcD + (kDiffCount - 1) * dcGap;
         float dx = cx - rowW * 0.5f + dcD * 0.5f;
-        const float dcY = scrY0 + phoneH * 0.475f;
+        // Anchored to the content flow (with the old fraction as the floor for
+        // songs without a chip row), so the chips can never overlap it.
+        const float dcY = std::max(scrY0 + phoneH * 0.500f, ty + dcD * 0.5f + 34.0f * k);
         for (int d = 0; d < kDiffCount; ++d) {
             const bool avail = group.idx[d] >= 0;
             const bool active = d == diffIndex && avail;
@@ -2473,7 +2519,8 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         // 确定 button (mint capsule, drawn by hand so it tilts with the phone).
         const float okW = sw * 0.58f;
         const float okH = 56.0f * k;
-        const ImVec2 okA(cx - okW * 0.5f, scrY0 + phoneH * 0.560f);
+        const float okTop = std::max(scrY0 + phoneH * 0.600f, dcY + dcD * 0.5f + 44.0f * k);
+        const ImVec2 okA(cx - okW * 0.5f, okTop);
         const ImVec2 okB(okA.x + okW, okA.y + okH);
         ImGui::SetCursorScreenPos(tiltedItemPos(ImVec2(cx, (okA.y + okB.y) * 0.5f), ImVec2(okW, okH)));
         ImGui::PushID("ok");
@@ -2489,7 +2536,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
 
         // Shuffle + music settings buttons (pjsk round dark buttons).
         const float ibD = 64.0f * k;
-        const float ibY = scrY0 + phoneH * 0.640f;
+        const float ibY = std::max(scrY0 + phoneH * 0.700f, okB.y + 62.0f * k);
         const float ibGap = ibD * 1.7f;
         for (int i = 0; i < 2; ++i) {
             const ImVec2 c(cx + (i == 0 ? -ibGap * 0.5f : ibGap * 0.5f), ibY);

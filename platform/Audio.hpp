@@ -106,7 +106,11 @@ class AudioEngine
     // selection change. startPreview is safe to call every frame with the
     // same path - it only reloads when the path changes; an empty path just
     // stops the preview.
-    bool startPreview(const std::string& path, std::string& outError);
+    // `carryPosition` keeps the current clip offset when the path changes -
+    // used when switching between two vocal versions of the same song, so the
+    // switch sounds like the same take with a different singer. Leave it false
+    // when the *song* changed.
+    bool startPreview(const std::string& path, std::string& outError, bool carryPosition = false);
     // Call once per frame while the preview shows: loops the clip.
     void updatePreview();
     void stopPreview();

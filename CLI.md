@@ -70,6 +70,7 @@ cppsekai [--sus <file.sus>] [--bgm <audio>] [--charts <dir>] [--cover <image>]
          [--fps <n>] [--screenshot <png>] [--screenshot-time <sec>]
          [--judge-sheet] [--judge-frame <n>] [--test-hits]
          [--show-pause-dialog] [--settings] [--settings-tab <0-3>]
+         [--select-id <musicId>] [--select-vocal <n>] [--dump-events <n>]
          [--test-restart] [--restart-at <sec>]
          [--result-preview] [--result-at <sec>] [--help]
 ```
@@ -117,6 +118,10 @@ cppsekai [--sus <file.sus>] [--bgm <audio>] [--charts <dir>] [--cover <image>]
 | `--test-hits` | 不按键，按时间轴把音符逐个喂给判定引擎（查特效链路） |
 | `--show-pause-dialog` | 演奏 0.5s 后强制打开暂停弹窗（截弹窗用的） |
 | `--settings` `--settings-tab <0-3>` | 启动即打开设置卡片，并指定分页（0 演奏 / 1 画面 / 2 判定 / 3 系统），配合 `--screenshot` 截设置面板——按键没法在无头运行里送进去 |
+| `--select-id <musicId>` | 启动就停在选曲列表里这首歌上（截图 / 下载器交接用），首帧定位不会被列表初始布局覆盖 |
+| `--select-vocal <n>` | 预选第 n 个演唱版本（`availableVocals()` 的下标），用来截"切了版本"的界面 / 验证预览音频跟着走 |
+| `--dump-events <n>` | 谱面加载后打印前 n 个 packed HitEvent（time / center / width / kind / flags / endTime / volume）。谱面"看起来不对"时先看这个：分出是解析的问题还是渲染的问题 |
+| `--test-vocal-switch <sec>` | 选曲界面到点自动切到下一个演唱版本（回归测"切版本预览接着播"） |
 | `--test-restart` `--restart-at <sec>` | 走到指定秒数执行「放弃 → 换一首」——回归测「打到一半重选曲卡死」那个 bug |
 | `--result-at <sec>` | 谱面走到指定秒数就切到**结算画面**（用真实判定数据），不用等整首歌放完 |
 | `--result-preview` | 启动即进结算画面，且用参考截图的样例数字（940021 / PERFECT 634 …），专门用来跟原版截图做像素对比 |

@@ -321,6 +321,20 @@ namespace
         }
     }
 
+    // Per-kind SE gain, following the upstream overlay player: a tap plays at
+    // 0.75, a flick at 0.80, a trace (竹节) at 0.82 and a hold tick at 0.92.
+    // pjsk does not hit everything at the same level - the sustain sounds sit
+    // lower so a dense chart does not turn into a wall of clicks.
+    float seGainForKind(float kind)
+    {
+        switch (static_cast<int>(kind)) {
+            case 2: return 0.80f; // flick
+            case 3: return 0.82f; // trace / friction
+            case 4: return 0.92f; // hold tick
+            default: return 0.75f; // tap / critical tap
+        }
+    }
+
     void playHitSe(platform::AudioEngine& audio, const game::JudgementEngine& judgement, float seVolume)
     {
         const auto& stats = judgement.stats();
@@ -328,7 +342,8 @@ namespace
             return;
         }
         const bool quieter = stats.lastJudge == game::Judge::Good || stats.lastJudge == game::Judge::Bad;
-        audio.playSe(seForKind(stats.lastHitKind, stats.lastJudgeCritical), seVolume * (quieter ? 0.5f : 1.0f));
+        audio.playSe(seForKind(stats.lastHitKind, stats.lastJudgeCritical),
+            seVolume * seGainForKind(stats.lastHitKind) * (quieter ? 0.5f : 1.0f));
     }
 
     enum class AppState
@@ -389,6 +404,13 @@ namespace
     // already been published to the chart core (markNoteHit). Reset per session.
     std::size_t s_hitPublishCursor = 0;
 
+    // Debug (--dump-events <n>): print the first n packed HitEvents after a
+    // chart loads. Declared here because startSession (below) reads it.
+    int dumpEvents = 0;
+    int selectVocal = -1;         // --select-vocal <n>: preselect a vocal version
+    double testVocalSwitchSec = -1.0; // --test-vocal-switch <sec>: flip the version once
+    bool testVocalSwitchDone = false;
+
     bool startSession(Session& session, const game::ChartEntry& entry, platform::Renderer& renderer,
         platform::AudioEngine& audio, game::JudgementEngine& judgement, float noteSpeed, std::string& error)
     {
@@ -414,6 +436,24 @@ namespace
         const float* events = core_api::getHitEventBuffer();
         const int count = core_api::getHitEventCount();
         judgement.load(events, count);
+
+        // Debug (--dump-events <n>): print the first n packed HitEvents. Each
+        // event is 7 floats: time, center, width, kind, flags, endTime,
+        // volume. kind 0 tap / 1 critical / 2 flick / 3 trace / 4 hold tick /
+        // 5 hold marker (endTime valid). Invaluable when a chart "looks
+        // wrong": it separates what the parser produced from what the
+        // renderer did with it.
+        if (dumpEvents > 0) {
+            std::printf("[events] %d total, first %d:\n", count, std::min(dumpEvents, count));
+            for (int i = 0; i < count && i < dumpEvents; ++i) {
+                const float* e = events + static_cast<size_t>(i) * 7;
+                std::printf("  #%-4d t=%.3f center=%.3f w=%.2f kind=%d flags=%d end=%.3f vol=%.2f\n", i,
+                    static_cast<double>(e[0]), static_cast<double>(e[1]), static_cast<double>(e[2]),
+                    static_cast<int>(std::lround(e[3])), static_cast<int>(std::lround(e[4])),
+                    static_cast<double>(e[5]), static_cast<double>(e[6]));
+            }
+            std::fflush(stdout);
+        }
         // Chart level drives the score formula's levelFactor (upstream
         // hard-codes RATING = 26; the official level table is used here).
         int chartLevel = game::musicLevel(entry.musicId, entry.difficulty);
@@ -586,7 +626,7 @@ int main(int argc, char** argv)
     // Vocal version picked in the song select for the song under the cursor
     // (index into game::availableVocals(); -1 = the song has no switcher).
     // Written by drawSongSelect, read when a song is started.
-    int selectedVocal = -1;
+    int selectedVocal = selectVocal;
 
     for (int i = 1; i < utf8Argc; ++i) {
         const std::string arg = utf8Argv[i];
@@ -649,6 +689,12 @@ int main(int argc, char** argv)
             judgeAnimFrame = std::atoi(utf8Argv[++i]);
         } else if (arg == "--show-pause-dialog") {
             showPauseDialogShot = true;
+        } else if (arg == "--test-vocal-switch" && i + 1 < utf8Argc) {
+            testVocalSwitchSec = std::atof(utf8Argv[++i]);
+        } else if (arg == "--select-vocal" && i + 1 < utf8Argc) {
+            selectVocal = std::atoi(utf8Argv[++i]);
+        } else if (arg == "--dump-events" && i + 1 < utf8Argc) {
+            dumpEvents = std::atoi(utf8Argv[++i]);
         } else if (arg == "--select-id" && i + 1 < utf8Argc) {
             selectMusicId = std::atoi(utf8Argv[++i]);
         } else if (arg == "--settings") {
@@ -2359,11 +2405,25 @@ int main(int argc, char** argv)
             renderer.setLaneGlows({});
             renderer.renderFrame(nullptr, 0, 0.85f);
 
-            // Music preview: cut a clip from partway into the BGM and loop
-            // it, the way the official select screen never previews from the
-            // top. Reloads only when the selection changes.
+            // Music preview: cut a clip from partway into the BGM and loop it,
+            // the way the official select screen never previews from the top.
+            // Reloads only when the selection (or the chosen vocal version)
+            // changes; ran after drawSongSelect because `selectedVocal` is this
+            // frame's pick. Charts that ship only official vocal files have no
+            // <id4>.mp3 for the scan to find, so the chip is what decides what
+            // the preview plays.
             if (selected >= 0 && selected < static_cast<int>(entries.size())) {
-                audio.startPreview(entries[static_cast<size_t>(selected)].bgmPath, error);
+                const game::ChartEntry& playing = entries[static_cast<size_t>(selected)];
+                std::string previewPath = game::vocalAudioPath(playing, selectedVocal);
+                if (previewPath.empty()) {
+                    previewPath = playing.bgmPath;
+                }
+                // Only a *version* switch continues where the preview was: a
+                // different song has to start at its own clip start.
+                static std::string previewSong;
+                const bool sameSong = !previewSong.empty() && previewSong == playing.susPath;
+                previewSong = playing.susPath;
+                audio.startPreview(previewPath, error, sameSong);
                 error.clear(); // a missing BGM just means silence
             } else {
                 audio.stopPreview();
@@ -2380,6 +2440,18 @@ int main(int argc, char** argv)
 
             // The list's sort / grouping is part of the settings, so write it
             // back when the player changes it on the select screen.
+            if (testVocalSwitchSec >= 0.0 && !testVocalSwitchDone && selected >= 0
+                && uiClock >= testVocalSwitchSec) {
+                testVocalSwitchDone = true;
+                const int versionCount =
+                    static_cast<int>(game::availableVocals(entries[static_cast<size_t>(selected)]).size());
+                if (versionCount > 1) {
+                    selectedVocal = (std::max(selectedVocal, 0) + 1) % versionCount;
+                    std::printf("[t] switched to vocal version %d\n", selectedVocal);
+                    std::fflush(stdout);
+                }
+            }
+
             const int prevSortMode = userSettings.sortMode;
             const int prevGroupMode = userSettings.groupMode;
             const int action = game::drawSongSelect(renderer, entries, selected, windowW, windowH,
@@ -2547,7 +2619,21 @@ int main(int argc, char** argv)
                     core_api::markNoteHit(hitIndices[s_hitPublishCursor]);
                     ++s_hitPublishCursor;
                 }
-                core_api::setMissedHolds(judgement.missedHoldKeys());
+            }
+            // Published in both modes, and every frame: in autoplay the list is
+            // empty, which is exactly what the renderer needs to hear - a
+            // preview that publishes nothing keeps whatever the *previous* run
+            // left in the core, and would draw those holds as dropped.
+            {
+                const std::vector<float>& missed = judgement.missedHoldKeys();
+                static std::size_t lastMissedKeys = 0;
+                if (missed.size() != lastMissedKeys) {
+                    lastMissedKeys = missed.size();
+                    std::printf("[hold] %d long note(s) now marked missed\n",
+                        static_cast<int>(missed.size() / 2));
+                    std::fflush(stdout);
+                }
+                core_api::setMissedHolds(missed);
             }
 
             // Debug (`--test-hits`): tap every upcoming note through the normal
@@ -2637,7 +2723,8 @@ int main(int argc, char** argv)
             {
                 bool holdCritical = false;
                 const bool holding = !paused && judgement.anyActiveHold(&holdCritical);
-                audio.setHoldLoop(holding, holdCritical, seVolume * 0.9f);
+                // 0.70: the upstream overlay player's hold-loop level.
+                audio.setHoldLoop(holding, holdCritical, seVolume * 0.70f);
             }
 
             // ----------------------------------------------------------

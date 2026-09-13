@@ -212,10 +212,22 @@ void AudioEngine::stopMusic()
     stopPreview(); // a running preview must never leak into a play session
 }
 
-bool AudioEngine::startPreview(const std::string& path, std::string& outError)
+bool AudioEngine::startPreview(const std::string& path, std::string& outError, bool carryPosition)
 {
     if (mPreviewActive && mPreviewLoaded && mPreviewPath == path) {
         return true; // already playing exactly this clip
+    }
+    // Switching between two versions of the same song (a vocal chip): keep the
+    // position the player is listening at instead of jumping back to the clip
+    // start, so the switch sounds like the same take with a different singer.
+    // Both versions share the song's structure, so a clip-relative offset
+    // lands on the same bar.
+    double carriedSec = 0.0;
+    if (carryPosition && mPreviewActive && mPreviewLoaded) {
+        ma_uint64 cursor = 0;
+        if (ma_sound_get_cursor_in_pcm_frames(&mPreviewSound, &cursor) == MA_SUCCESS) {
+            carriedSec = std::max(0.0, static_cast<double>(cursor) / sampleRate() - mPreviewStartSec);
+        }
     }
     stopPreview();
     if (path.empty()) {
@@ -249,15 +261,20 @@ bool AudioEngine::startPreview(const std::string& path, std::string& outError)
     // track and loops after 30 seconds.
     mPreviewStartSec = std::min(len * 0.35, len - 10.0);
     mPreviewEndSec = std::min(len, mPreviewStartSec + 30.0);
+    // Continue where the previous version's preview was (clamped inside the
+    // new clip so a carried offset can never seek past its end).
+    const double seekSec =
+        std::clamp(mPreviewStartSec + carriedSec, mPreviewStartSec, mPreviewEndSec - 1.0);
     ma_sound_set_volume(&mPreviewSound, 0.85f);
-    ma_sound_seek_to_pcm_frame(&mPreviewSound, static_cast<ma_uint64>(mPreviewStartSec * sampleRate()));
+    ma_sound_seek_to_pcm_frame(&mPreviewSound, static_cast<ma_uint64>(seekSec * sampleRate()));
     ma_sound_start(&mPreviewSound);
     mPreviewActive = true;
     mPreviewPath = path;
     const auto loadMs =
         std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - loadStart)
             .count();
-    std::printf("[audio] preview streaming %s (%.0f ms)\n", path.c_str(), static_cast<double>(loadMs));
+    std::printf("[audio] preview streaming %s%s (%.0f ms)\n", path.c_str(),
+        carriedSec > 0.05 ? " (continued)" : "", static_cast<double>(loadMs));
     return true;
 }
 
