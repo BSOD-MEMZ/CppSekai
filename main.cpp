@@ -27,6 +27,8 @@
 #include <map>
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
+// Declarations only: platform/Renderer.cpp owns STB_IMAGE_IMPLEMENTATION.
+#include "third_party/mmw_preview/vendor/stb_image.h"
 #include "third_party/stb_image_write.h"
 
 #ifdef _WIN32
@@ -881,6 +883,35 @@ int main(int argc, char** argv)
     if (window == nullptr) {
         std::fprintf(stderr, "SDL_CreateWindow failed: %s\n", SDL_GetError());
         return 1;
+    }
+
+    // Window / taskbar icon, from icon.png next to the exe (or the repo root in
+    // the dev layout). The *file* icon comes from the embedded resource
+    // (app.rc); this is the one Windows uses while a window is open, and SDL's
+    // default would otherwise be a generic application icon. Missing file is
+    // not an error - the embedded one still shows in Explorer.
+    {
+        int iconW = 0;
+        int iconH = 0;
+        int iconChannels = 0;
+        const std::string iconCandidates[] = {
+            baseDir + "icon.png", baseDir + "..\\icon.png", std::string("icon.png")};
+        for (const std::string& candidate : iconCandidates) {
+            stbi_uc* pixels = stbi_load(candidate.c_str(), &iconW, &iconH, &iconChannels, 4);
+            if (pixels == nullptr) {
+                continue;
+            }
+            SDL_Surface* surface = SDL_CreateRGBSurfaceFrom(pixels, iconW, iconH, 32, iconW * 4,
+                0x000000FFu, 0x0000FF00u, 0x00FF0000u, 0xFF000000u);
+            if (surface != nullptr) {
+                SDL_SetWindowIcon(window, surface);
+                SDL_FreeSurface(surface);
+                std::printf("[window] icon %s (%dx%d)\n", candidate.c_str(), iconW, iconH);
+                std::fflush(stdout);
+            }
+            stbi_image_free(pixels);
+            break;
+        }
     }
     // Fullscreen is entered right away for the classic splash - its dark
     // backdrop wants the whole screen from the first frame. The image splash

@@ -67,7 +67,10 @@ SOURCES=(
 )
 
 mkdir -p build
-"$ZIG" c++ "${CXXFLAGS[@]}" "${SOURCES[@]}" \
+# Windows resources: the exe icon + version info. zig ships its own resource
+# compiler, so no windres / Windows SDK is needed.
+"$ZIG" rc app.rc build/app.res
+"$ZIG" c++ "${CXXFLAGS[@]}" "${SOURCES[@]}" build/app.res \
     "$SDL/lib/libSDL2.dll.a" \
     -limm32 -lsetupapi -lversion -lole32 -loleaut32 -lwinmm -lgdi32 -luser32 -ladvapi32     -lshell32 \
     -lopengl32 \
@@ -82,7 +85,7 @@ DL_SOURCES=(
 )
 # GUI subsystem: double-clicking it must not flash a console. The command line
 # modes attach to the parent console themselves (see main()).
-"$ZIG" c++ "${CXXFLAGS[@]}" -Wl,--subsystem,windows "${DL_SOURCES[@]}"     -lole32 -loleaut32 -lgdi32 -luser32 -ladvapi32 -lshell32 -lcomctl32 -lcomdlg32     -o build/chartdl.exe "$@"
+"$ZIG" c++ "${CXXFLAGS[@]}" -Wl,--subsystem,windows "${DL_SOURCES[@]}" build/app.res     -lole32 -loleaut32 -lgdi32 -luser32 -ladvapi32 -lshell32 -lcomctl32 -lcomdlg32     -o build/chartdl.exe "$@"
 
 # Runtime DLL + assets next to the exe
 cp -f "$SDL/bin/SDL2.dll" build/ 2>/dev/null || true
@@ -90,6 +93,8 @@ rm -rf build/assets 2>/dev/null || true
 cp -r assets build/ 2>/dev/null || true
 # Official per-difficulty levels (song select pads; unipjsk charts ship without)
 cp -f music-levels.json build/ 2>/dev/null || true
+# Window icon (the exe's own icon is embedded from app.rc)
+cp -f icon.png build/ 2>/dev/null || true
 # Official song readings (song select "sort by name" + aiueo grouping)
 cp -f musics.json build/ 2>/dev/null || true
 

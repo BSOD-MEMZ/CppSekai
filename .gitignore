@@ -17,6 +17,9 @@ charts/
 # together with charts/ to keep the records (scores are keyed by chart name).
 userdata.json
 
+# Release staging + archives (made by: bash package.sh)
+dist/
+
 # Local runtime artifacts
 *.log
 *.pdb

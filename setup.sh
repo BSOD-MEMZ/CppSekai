@@ -3,10 +3,16 @@
 # Downloads the pinned toolchain (zig 0.14.1 + SDL2 2.32.10) and the game
 # assets from the upstream AGPL repo. Nothing here is committed to git.
 # Usage:
-#   bash setup.sh            # toolchain + assets
-#   bash setup.sh --charts   # also download sample charts + BGM (unipjsk)
+#   bash setup.sh                # toolchain + assets
+#   bash setup.sh --assets-only  # assets only (for a binary release: no compiler)
+#   bash setup.sh --charts       # also download sample charts + BGM (unipjsk)
 set -e
 cd "$(dirname "$0")"
+
+ASSETS_ONLY=0
+for arg in "$@"; do
+    [ "$arg" = "--assets-only" ] && ASSETS_ONLY=1
+done
 
 ZIG_VERSION=0.14.1
 ZIG_URL="https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-windows-${ZIG_VERSION}.zip"
@@ -17,7 +23,11 @@ UPSTREAM="https://github.com/watagashi-uni/sekai-mmw-preview-web"
 mkdir -p toolchain assets
 
 # --- zig (C++ compiler; 0.16+ is broken for this project, keep 0.14.1) ------
-if [ ! -f "toolchain/zig014/zig-x86_64-windows-${ZIG_VERSION}/zig.exe" ]; then
+# Skipped with --assets-only: someone who downloaded a release has no reason to
+# pull a 90 MB compiler just to fetch sprites.
+if [ "$ASSETS_ONLY" = "1" ]; then
+    echo "[setup] --assets-only: skipping toolchain"
+elif [ ! -f "toolchain/zig014/zig-x86_64-windows-${ZIG_VERSION}/zig.exe" ]; then
     echo "[setup] downloading zig ${ZIG_VERSION}..."
     curl -sL --max-time 600 -o toolchain/zig.zip "$ZIG_URL"
     python -c "import zipfile; zipfile.ZipFile('toolchain/zig.zip').extractall('toolchain/zig014')"
@@ -27,7 +37,9 @@ else
 fi
 
 # --- SDL2 (MinGW development package) ---------------------------------------
-if [ ! -f "toolchain/SDL2-${SDL_VERSION}/x86_64-w64-mingw32/lib/libSDL2.dll.a" ]; then
+if [ "$ASSETS_ONLY" = "1" ]; then
+    : # see above
+elif [ ! -f "toolchain/SDL2-${SDL_VERSION}/x86_64-w64-mingw32/lib/libSDL2.dll.a" ]; then
     echo "[setup] downloading SDL2 ${SDL_VERSION}..."
     curl -sL --max-time 300 -o toolchain/sdl2.tar.gz "$SDL_URL"
     tar -xzf toolchain/sdl2.tar.gz -C toolchain/

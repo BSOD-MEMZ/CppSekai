@@ -1268,7 +1268,15 @@ namespace
         windowClass.hCursor = LoadCursorW(nullptr, IDC_ARROW);
         windowClass.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_BTNFACE + 1);
         windowClass.lpszClassName = L"CppSekaiChartDl";
-        windowClass.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
+        // The icon embedded by app.rc (id 1); falls back to the stock one.
+        const HINSTANCE instance = GetModuleHandleW(nullptr);
+        windowClass.hIcon = reinterpret_cast<HICON>(
+            LoadImageW(instance, MAKEINTRESOURCEW(1), IMAGE_ICON, 0, 0, LR_DEFAULTSIZE | LR_SHARED));
+        windowClass.hIconSm = reinterpret_cast<HICON>(
+            LoadImageW(instance, MAKEINTRESOURCEW(1), IMAGE_ICON, 16, 16, LR_SHARED));
+        if (windowClass.hIcon == nullptr) {
+            windowClass.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
+        }
         RegisterClassExW(&windowClass);
 
         HWND hwnd = CreateWindowExW(0, windowClass.lpszClassName, L"CppSekai 谱面下载器",

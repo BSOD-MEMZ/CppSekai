@@ -1,0 +1,36 @@
+// Windows resources for both executables (cppsekai.exe and chartdl.exe).
+//
+// Compiled by `zig rc` and linked straight into the exe, so Explorer, the
+// taskbar and the Alt-Tab switcher show the game's icon even before it runs.
+// The icon id must stay 1: the downloader loads it as MAKEINTRESOURCE(1) for
+// its window class, and main.cpp uses the same id for the window icon.
+//
+// Paths are relative to this file's folder (the repository root).
+
+1 ICON "icon.ico"
+
+1 VERSIONINFO
+FILEVERSION     1,0,0,0
+PRODUCTVERSION  1,0,0,0
+FILEOS          0x00000004L // VOS__WINDOWS32
+FILETYPE        0x00000001L // VFT_APP
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "080404b0" // Chinese (Simplified), Unicode
+        BEGIN
+            VALUE "CompanyName",      "CppSekai"
+            VALUE "FileDescription",  "CppSekai - Project SEKAI style SUS chart player"
+            VALUE "FileVersion",      "1.0.0.0"
+            VALUE "InternalName",     "cppsekai"
+            VALUE "OriginalFilename", "cppsekai.exe"
+            VALUE "ProductName",      "CppSekai"
+            VALUE "ProductVersion",   "1.0.0.0"
+            VALUE "LegalCopyright",   "AGPL-3.0-only. Chart core from sekai-mmw-preview-web (AGPL-3.0), MikuMikuWorld port (MIT). No game assets are distributed."
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0804, 1200
+    END
+END
