@@ -1420,9 +1420,11 @@ int main(int argc, char** argv)
         // pjsk style settings panel (tabbed card, pjsk sliders).
         const float s = ui::scale();
         const ImVec2 display = ImGui::GetIO().DisplaySize;
-        // 640 tall (was 520): the 画面 tab grew a resolution combo and the
-        // progress-bar checkbox and no longer fit the shorter card.
-        ImVec2 cardSize = ImVec2(360.0f * s, 640.0f * s);
+        // 700 tall (was 520 -> 640 -> 700): the 画面 tab is the tallest one
+        // (resolution + window mode + fps slider + 4 checkboxes) and has to fit
+        // without scrolling; the tab content is still clipped by a child, so a
+        // future row can never run under the 关闭 button.
+        ImVec2 cardSize = ImVec2(360.0f * s, 700.0f * s);
         ImVec2 cardCenter = ImVec2(18.0f * s + cardSize.x * 0.5f, 18.0f * s + cardSize.y * 0.5f);
         const float interior = cardSize.x - 56.0f * s;
         const float padX = 28.0f * s;
@@ -1676,7 +1678,7 @@ int main(int argc, char** argv)
             ImGui::PopStyleColor(5);
             ImGui::SetCursorScreenPos(ImVec2(cardCenter.x - cardSize.x * 0.5f + padX,
                 cardCenter.y + cardSize.y * 0.5f - 68.0f * s));
-            if (ui::capsuleButton("关闭", ImVec2(150.0f * s, 54.0f * s), false)) {
+            if (ui::capsuleButton("关闭", ImVec2(132.0f * s, 46.0f * s), false)) {
                 showDebug = false;
             }
             ui::endCard();
@@ -2657,6 +2659,11 @@ int main(int argc, char** argv)
                 lastSeenJudgeTime = stats.lastJudgeTimeSec;
                 hudState.lastJudge = stats.lastJudge;
                 hudState.lastJudgeAtSec = stats.lastJudgeTimeSec;
+                // Floating "+N" beside the score panel: the delta this
+                // judgement paid, keyed to the note's own chart time so the
+                // animation freezes with the clock.
+                hudState.scoreDelta = stats.lastScoreDelta;
+                hudState.scoreDeltaAtSec = stats.scoreDeltaAtSec;
                 if (autoPlay) {
                     // Autoplay: burst effects come from the core's own
                     // timeline, but nothing else plays the hit SE (the input

@@ -99,6 +99,12 @@ struct JudgementStats
     int combo = 0;
     int maxCombo = 0;
     double score = 0.0;
+    // Score gained by the most recent judgement, and the chart time of the
+    // note that produced it. The HUD prints it as the floating "+N" next to the
+    // score panel (upstream: HudSnapshot::scoreDelta + scorePlusTriggerSec).
+    // 0 for a MISS / BAD, which is what keeps the "+N" from showing up on them.
+    double lastScoreDelta = 0.0;
+    float scoreDeltaAtSec = -100.0f;
     float life = kMaxLife;
     int holdTails = 0;  // hold tails judged by releasing / holding through
     int holdBreaks = 0; // holds let go too early (mid-hold MISS)
@@ -237,7 +243,7 @@ class JudgementEngine
     double mWeightedNoteCount = 1.0;
     double mComboFactor = 1.0;
 
-    Judge registerJudge(Judge judge, bool critical, float volume, float kind);
+    Judge registerJudge(Judge judge, bool critical, float volume, float kind, float noteTimeSec);
     void registerMiss(float songTimeSec, float lifeCost);
     double scoreDeltaFor(float kind, bool critical) const;
     void judgeHoldTail(ActiveHold& hold, Judge judge, float songTimeSec);

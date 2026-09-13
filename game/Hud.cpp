@@ -11,9 +11,22 @@ namespace
 {
     constexpr float SCORE_ROOT_SCALE = 1.5f;
 
+    // How long the floating "+N" stays next to the score panel (upstream
+    // SCORE_DELTA_VISIBLE_WINDOW_SEC).
+    constexpr float kScoreDeltaVisibleSec = 0.5f;
+
     constexpr float scoreX(float v) { return 36.0f + v * SCORE_ROOT_SCALE; }
     constexpr float scoreY(float v) { return -3.0f + v * SCORE_ROOT_SCALE; }
     constexpr float scoreS(float v) { return v * SCORE_ROOT_SCALE; }
+
+    // Sprite keys of one score digit; the plus sign ships as "plus"/"splus".
+    std::string scoreDigitKey(char ch, bool shadow)
+    {
+        if (ch == '+') {
+            return shadow ? "digit_splus" : "digit_plus";
+        }
+        return std::string(shadow ? "digit_s" : "digit_") + ch;
+    }
 
     std::string digitsOf(double value, int minSlots)
     {
@@ -132,6 +145,16 @@ void drawHud(platform::Renderer& renderer, const HudState& state, float songTime
             ImVec2(clipped, 1.0f),
             tint);
     };
+    // Width of a sprite drawn at `h` tall (virtual units), from its own aspect.
+    // Used by the "+N" glyphs, which are centred on a slot instead of being
+    // placed by their top-left corner.
+    auto spriteWidth = [&](const std::string& name, float h) {
+        const platform::Renderer::HudSprite* sprite = renderer.hud(name);
+        if (sprite == nullptr || sprite->height <= 0) {
+            return h;
+        }
+        return h * (static_cast<float>(sprite->width) / static_cast<float>(sprite->height));
+    };
 
     // ------------------------------------------------------------------
     // Intro: main.cpp owns the opening card + the playfield fade (see
@@ -201,6 +224,45 @@ void drawHud(platform::Renderer& renderer, const HudState& state, float songTime
             drawList->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(main->id)),
                 ImVec2(centerX - mainW * 0.5f, py(slotY)),
                 ImVec2(centerX + mainW * 0.5f, py(slotY) + mainH));
+        }
+    }
+
+    // Floating "+N" beside the score panel: the score the last note paid,
+    // shown for 0.5s from that note's chart time, sliding in from the left and
+    // fading out at the end. 1:1 port of the upstream overlay's scorePlus block
+    // (alpha ramp 1.3*(1-0.9^(entry*12)), entry = progress/0.42, fade from
+    // progress 0.88, x slide -32u, y lift -2u).
+    const int plusValue = static_cast<int>(std::lround(std::max(0.0, state.scoreDelta)));
+    const float plusElapsed = songTimeSec - state.scoreDeltaAtSec;
+    if (plusValue > 0 && plusElapsed >= 0.0f && plusElapsed <= kScoreDeltaVisibleSec) {
+        const float progress = std::clamp(plusElapsed / kScoreDeltaVisibleSec, 0.0f, 1.0f);
+        const float entry = std::clamp(progress / 0.42f, 0.0f, 1.0f);
+        const float eased = 1.0f - std::pow(0.9f, entry * 12.0f);
+        constexpr float kFadeStart = 0.88f;
+        float alpha = std::min(1.0f, 1.3f * eased);
+        if (progress > kFadeStart) {
+            alpha *= std::max(0.0f, 1.0f - (progress - kFadeStart) / (1.0f - kFadeStart));
+        }
+        const float offsetX = -32.0f * (1.0f - eased);
+        const float offsetY = -2.0f * eased;
+        const std::string plusText = "+" + std::to_string(plusValue);
+        // Upstream keeps the cursor in HUD space from scoreX(290) on (the sign
+        // takes 7u, a digit 14u, plus a 4u gap after the sign).
+        float cursor = scoreX(290.0f);
+        const float plusCenterY = scoreY(74.0f + 11.0f) + offsetY * SCORE_ROOT_SCALE;
+        for (const char ch : plusText) {
+            const bool isSign = ch == '+';
+            const float slotW = scoreS(isSign ? 7.0f : 14.0f);
+            const float shadowH = scoreS(isSign ? 10.0f : 22.0f);
+            const float mainH = scoreS(isSign ? 8.0f : 18.0f);
+            const float centerX = cursor + offsetX * SCORE_ROOT_SCALE + slotW * 0.5f;
+            const float shadowW = spriteWidth(scoreDigitKey(ch, true), shadowH);
+            const float mainW = spriteWidth(scoreDigitKey(ch, false), mainH);
+            img(scoreDigitKey(ch, true), centerX - shadowW * 0.5f, plusCenterY - shadowH * 0.5f, shadowW,
+                shadowH, alpha);
+            img(scoreDigitKey(ch, false), centerX - mainW * 0.5f, plusCenterY - mainH * 0.5f, mainW, mainH,
+                alpha);
+            cursor += slotW + (isSign ? scoreS(4.0f) : 0.0f);
         }
     }
 

@@ -22,6 +22,11 @@ struct HudState
     // with the upstream score formula (see game/Judgement.hpp).
     char rank = 'd';
     float scoreBarRatio = 0.0f;
+    // Floating "+N" next to the score panel: the score the last judgement paid
+    // and the chart time of that note (the animation runs for
+    // kScoreDeltaVisibleSec from there). 0 = nothing to show.
+    double scoreDelta = 0.0;
+    float scoreDeltaAtSec = -100.0f;
     game::Judge lastJudge = game::Judge::None;
     float lastJudgeAtSec = -100.0f;
     float lifeRatio = 1.0f;

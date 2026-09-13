@@ -202,9 +202,9 @@ int tabBar(const char* id, const std::vector<std::string>& tabs, int* active, fl
     }
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImFont* font = game::bodyFont();
-    const float fontSize = 28.0f * s;
-    const float tabH = 58.0f * s;
-    const float radius = 16.0f * s;
+    const float fontSize = 24.0f * s;
+    const float tabH = 50.0f * s;
+    const float radius = 14.0f * s;
     const ImVec2 pos = ImGui::GetCursorScreenPos();
     const float rowW = rowWidth > 0.0f ? rowWidth : ImGui::GetContentRegionAvail().x;
     const float tabW = rowW / static_cast<float>(tabs.size());
@@ -248,12 +248,12 @@ bool slider(const char* id, float* value, float minV, float maxV, float step, co
     const float s = scale();
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImFont* font = game::bodyFont();
-    const float fontSize = 30.0f * s;
-    const float btnSize = 52.0f * s;
-    const float btnRadius = 14.0f * s;
-    const float trackH = 8.0f * s;
-    const float thumbR = 15.0f * s;
-    const float rowH = 72.0f * s; // value text + track row (was 96, then 80: cards shrank)
+    const float fontSize = 24.0f * s;
+    const float btnSize = 38.0f * s;
+    const float btnRadius = 10.0f * s;
+    const float trackH = 7.0f * s;
+    const float thumbR = 12.0f * s;
+    const float rowH = 64.0f * s; // value text + track row (was 96/80/72)
 
     const ImVec2 pos = ImGui::GetCursorScreenPos();
     const float rowW = width > 0.0f ? width : ImGui::GetContentRegionAvail().x;
@@ -261,8 +261,8 @@ bool slider(const char* id, float* value, float minV, float maxV, float step, co
     ImGui::PushID(id);
 
     const float trackY = pos.y + rowH * 0.68f;
-    const float trackX0 = pos.x + btnSize + 26.0f * s;
-    const float trackX1 = pos.x + rowW - btnSize - 26.0f * s;
+    const float trackX0 = pos.x + btnSize + 20.0f * s;
+    const float trackX1 = pos.x + rowW - btnSize - 20.0f * s;
     bool changed = false;
 
     // Value above the track, centered, in pink.
@@ -311,11 +311,11 @@ bool slider(const char* id, float* value, float minV, float maxV, float step, co
         const float c = btnSize * 0.5f;
         const float m = btnSize * 0.28f;
         const ImVec2 mid(lo.x + c, lo.y + c);
-        dl->AddRectFilled(ImVec2(mid.x - m, mid.y - 2.5f * s), ImVec2(mid.x + m, mid.y + 2.5f * s),
-            IM_COL32(255, 255, 255, 255), 2.0f * s);
+        dl->AddRectFilled(ImVec2(mid.x - m, mid.y - 2.0f * s), ImVec2(mid.x + m, mid.y + 2.0f * s),
+            IM_COL32(255, 255, 255, 255), 1.5f * s);
         if (label[0] == '+') {
-            dl->AddRectFilled(ImVec2(mid.x - 2.5f * s, mid.y - m), ImVec2(mid.x + 2.5f * s, mid.y + m),
-                IM_COL32(255, 255, 255, 255), 2.0f * s);
+            dl->AddRectFilled(ImVec2(mid.x - 2.0f * s, mid.y - m), ImVec2(mid.x + 2.0f * s, mid.y + m),
+                IM_COL32(255, 255, 255, 255), 1.5f * s);
         }
         return clicked;
     };
@@ -323,7 +323,7 @@ bool slider(const char* id, float* value, float minV, float maxV, float step, co
         *value = std::max(minV, *value - step);
         changed = true;
     }
-    if (darkButton("+", trackX1 + 26.0f * s)) {
+    if (darkButton("+", trackX1 + 20.0f * s)) {
         *value = std::min(maxV, *value + step);
         changed = true;
     }
@@ -390,7 +390,7 @@ bool capsuleButton(const char* label, const ImVec2& sizeIn, bool primary)
     dl->AddRectFilled(lo, hi, fill, radius);
 
     ImFont* font = game::bodyFont();
-    const float fontSize = std::min(34.0f * s, size.y * 0.5f);
+    const float fontSize = std::min(27.0f * s, size.y * 0.48f);
     const ImVec2 textSize = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, label);
     dl->AddText(font, fontSize,
         ImVec2((lo.x + hi.x - textSize.x) * 0.5f, (lo.y + hi.y - textSize.y) * 0.5f), kBtnText, label);
@@ -429,9 +429,11 @@ bool checkBox(const char* label, bool* value, float rowWidth)
     const float s = scale();
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImFont* font = game::bodyFont();
-    const float fontSize = 26.0f * s;
-    const float boxSize = 32.0f * s;
-    const float gap = 12.0f * s;
+    // Sized against the settings card's 23px body text: a 32px box with a 26px
+    // label read as oversized next to the slider labels and the section rows.
+    const float fontSize = 22.0f * s;
+    const float boxSize = 24.0f * s;
+    const float gap = 10.0f * s;
     const ImVec2 textSize = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, label);
     const float groupW = boxSize + gap + textSize.x;
 
@@ -571,13 +573,13 @@ int messageDialog(platform::Renderer& renderer, const char* id, const char* titl
     const ImVec2 display = ImGui::GetIO().DisplaySize;
     // Button geometry first: the card must be wide enough for the capsule row
     // (the 3-button pause dialog needs 524*s - a fixed 500*s card clipped it).
-    const float btnH = kCapsuleH * s * 0.72f;
-    const float btnW = 160.0f * s;
-    const float gap = 22.0f * s;
+    const float btnH = kCapsuleH * s * 0.62f;
+    const float btnW = 146.0f * s;
+    const float gap = 20.0f * s;
     const float buttonsW = static_cast<float>(buttons.size()) * btnW
         + (static_cast<float>(buttons.size()) - 1) * gap;
     const float cardW = std::max(500.0f * s, buttonsW + 56.0f * s);
-    const float cardH = 200.0f * s;
+    const float cardH = 184.0f * s;
     ImVec2 center = ImVec2(display.x * 0.5f, display.y * 0.5f);
     ImVec2 size = ImVec2(cardW, cardH);
 

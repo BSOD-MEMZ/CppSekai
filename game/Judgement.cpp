@@ -184,7 +184,7 @@ double JudgementEngine::scoreDeltaFor(float kind, bool critical) const
     return (kTeamPower / mWeightedNoteCount) * 4.0 * static_cast<double>(weight) * levelFactor * mComboFactor;
 }
 
-Judge JudgementEngine::registerJudge(Judge judge, bool critical, float volume, float kind)
+Judge JudgementEngine::registerJudge(Judge judge, bool critical, float volume, float kind, float noteTimeSec)
 {
     (void)volume;
     switch (judge) {
@@ -223,7 +223,12 @@ Judge JudgementEngine::registerJudge(Judge judge, bool critical, float volume, f
         mStats.life = std::clamp(mStats.life + kLifeBad, 0.0f, kMaxLife);
     }
 
-    mStats.score += scoreDeltaFor(kind, critical) * judgeMultiplier(judge);
+    const double delta = scoreDeltaFor(kind, critical) * judgeMultiplier(judge);
+    mStats.score += delta;
+    // Drives the HUD "+N": the delta and the chart time of the note that paid
+    // it. A MISS / BAD multiplies by 0, so the HUD shows nothing for them.
+    mStats.lastScoreDelta = delta;
+    mStats.scoreDeltaAtSec = noteTimeSec;
     mStats.lastJudge = judge;
     mStats.lastJudgeCritical = critical;
     return judge;
@@ -329,7 +334,7 @@ HitNote* JudgementEngine::findCandidate(float lanePos, float songTimeSec, float 
     mStats.lastHitTimeSec = best->timeSec;
     mStats.lastHitFlickDir = noteFlickDir(*best);
     mStats.lastHitFriction = best->kind == 3.0f; // kind 3 = trace / friction
-    registerJudge(judge, critical, best->volume, best->kind);
+    registerJudge(judge, critical, best->volume, best->kind, best->timeSec);
     return best;
 }
 
@@ -373,7 +378,7 @@ void JudgementEngine::judgeHoldTail(ActiveHold& hold, Judge judge, float songTim
     mStats.lastHitTimeSec = tail.timeSec;
     mStats.lastHitFlickDir = noteFlickDir(tail);
     mStats.lastHitFriction = tail.kind == 3.0f;
-    registerJudge(judge, critical, tail.volume, tail.kind);
+    registerJudge(judge, critical, tail.volume, tail.kind, tail.timeSec);
     mStats.lastJudgeTimeSec = songTimeSec;
 }
 
@@ -445,7 +450,8 @@ void JudgementEngine::update(float songTimeSec)
             if (startState == 1 && !holdBroken) {
                 note.state = 1;
                 mHitEventIndices.push_back(static_cast<int>(i));
-                registerJudge(Judge::Perfect, (static_cast<int>(note.flags) & 1) != 0, note.volume, note.kind);
+                registerJudge(Judge::Perfect, (static_cast<int>(note.flags) & 1) != 0, note.volume, note.kind,
+                    note.timeSec);
                 mStats.lastJudgeTimeSec = songTimeSec;
                 // A tick is its own hit: report its own lane so the effect for
                 // the hold step plays there instead of re-using the previous
@@ -505,7 +511,8 @@ void JudgementEngine::update(float songTimeSec)
             if (covered) {
                 note.state = 1;
                 mHitEventIndices.push_back(static_cast<int>(i));
-                registerJudge(Judge::Perfect, (static_cast<int>(note.flags) & 1) != 0, note.volume, note.kind);
+                registerJudge(Judge::Perfect, (static_cast<int>(note.flags) & 1) != 0, note.volume, note.kind,
+                    note.timeSec);
                 mStats.lastJudgeTimeSec = songTimeSec;
                 mStats.lastHitKind = note.kind;
                 mStats.lastHitCenter = note.center;
@@ -523,7 +530,8 @@ void JudgementEngine::update(float songTimeSec)
             // score / combo machinery shows a flawless run without input.
             // Effects come from the core's own timeline in this mode.
             note.state = 1;
-            registerJudge(Judge::Perfect, (static_cast<int>(note.flags) & 1) != 0, note.volume, note.kind);
+            registerJudge(Judge::Perfect, (static_cast<int>(note.flags) & 1) != 0, note.volume, note.kind,
+                    note.timeSec);
             mStats.lastJudgeTimeSec = songTimeSec;
             mStats.lastHitKind = note.kind;
             mStats.lastHitCenter = note.center;
