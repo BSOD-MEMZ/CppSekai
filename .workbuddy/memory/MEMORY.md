@@ -49,6 +49,11 @@
   （记录点必须放在结算切换块里）；HUD 暂停键三路输入合并成 hudPausePress() 并放到
   paused/autoPlay 检查之前。真实输入回归用 `build/winsend.exe`（PostMessage 鼠标消息）。
 - 2026-09-13 HUD 补上分数 `+N` 浮动与 `AUTO LIVE` 徽章；UI 组件尺寸收小；多歌手（演唱版本）
-  切换（数据 `music-vocals.json`，音频就是 `charts/<assetbundleName>.mp3`）；新增独立谱面
-  下载器 `build/chartdl.exe`（`downloader/`，winhttp LoadLibrary + ImGui 默认皮肤）。
-  与上游未对齐的清单见 `AGENTS.md`（最大一块是舞台背景生成 overlayBackgroundGen.ts）。
+  切换（数据 `music-vocals.json`，音频就是 `charts/<assetbundleName>.mp3`）；独立谱面下载器
+  `build/chartdl.exe`（`downloader/`，winhttp LoadLibrary + **纯 Win32 控件**）。
+- 2026-09-13 长条尾判改用核心 flags bit3 标记（滑动的长条尾判在别的轨道，原来整首 18/58
+  条尾巴被当普通 tap → 按住反而 MISS）；核心换谱时清 missed/dimmedHoldKeys（同一首歌
+  跨局撞车 → autoplay 预览把上一局漏的长条画成掉落）。
+- 2026-09-13 歌曲专属舞台背景 `game/StageBackground.cpp`（移植上游 overlayBackgroundGen.ts，
+  开歌生成一次 ~330ms，`--dump-stage-bg` 导出）；选曲预览音乐跟着演唱版本走（切版本接着
+  当前位置播）。
