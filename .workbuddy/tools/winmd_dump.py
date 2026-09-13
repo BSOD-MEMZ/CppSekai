@@ -93,7 +93,18 @@ def build_layout():
     L[0x06] = ["u32", "u16", "u16", "str", "blob", "idx:0x08"]
     L[0x08] = ["u16", "u16", "str"]
     L[0x09] = ["u16", "u16", "idx:0x06", "coded:TypeDefOrRef"]  # InterfaceImpl
+    L[0x0A] = ["coded:MemberRefParent", "str", "blob"]           # MemberRef
+    L[0x0B] = ["u16", "coded:HasConstant", "blob"]               # Constant
     return L
+
+# Coded-index column kinds -> the tables they can point at (ECMA-335 II.24.2.6).
+# The tag width depends on the table count, the index width on the largest
+# row count, so both must come from the real table lists.
+CODES = {
+    "TypeDefOrRef": [0x02, 0x01, 0x1B],
+    "MemberRefParent": [0x02, 0x01, 0x00, 0x06, 0x1B],
+    "HasConstant": [0x04, 0x08, 0x17],
+}
 
 L = build_layout()
 # compute table start offsets
@@ -118,10 +129,17 @@ for t in range(64):
         elif c.startswith("idx:"):
             rowsize += idx_size(int(c[4:], 16))
         elif c.startswith("coded:"):
-            rowsize += coded_size([0x02, 0x01, 0x1B])
+            rowsize += coded_size(CODES[c.split(":", 1)[1]])
     p2 += rowsize * rowcount(t)
 
 stroff, strsize = streams["#Strings"]
+
+import os
+if os.environ.get("WINMD_DEBUG"):
+    for t in range(64):
+        if rowcount(t):
+            print("table 0x%02X rows=%d off=%s layout=%s" % (
+                t, rowcount(t), offsets.get(t), L.get(t, "MISSING")))
 
 def getstr(i):
     o = stroff + i
@@ -147,7 +165,7 @@ def read_col(t, row, col):
         elif c.startswith("idx:"):
             rs += idx_size(int(c[4:], 16))
         elif c.startswith("coded:"):
-            rs += coded_size([0x02, 0x01, 0x1B])
+            rs += coded_size(CODES[c.split(":", 1)[1]])
     o = base + rs * (row - 1)
     out = []
     for c in L[t]:
@@ -167,28 +185,74 @@ def read_col(t, row, col):
             v = struct.unpack_from("<I" if idx_size(int(c[4:], 16)) == 4 else "<H", data, o)[0]
             o += idx_size(int(c[4:], 16)); out.append(v)
         elif c.startswith("coded:"):
-            sz = coded_size([0x02, 0x01, 0x1B])
+            tables = CODES[c.split(":", 1)[1]]
+            sz = coded_size(tables)
+            shift = (len(tables) - 1).bit_length()
             v = struct.unpack_from("<I" if sz == 4 else "<H", data, o)[0]; o += sz
-            out.append(v >> 2)
+            out.append(v >> shift)
     return out
 
+bloboff, blobsize = streams["#Blob"]
+
+def getblob(i):
+    """Raw bytes of blob-heap entry i (compressed length prefix included)."""
+    o = bloboff + i
+    b0 = data[o]
+    if b0 & 0x80 == 0:
+        n, o = b0, o + 1
+    elif b0 & 0xC0 == 0x80:
+        n, o = ((b0 & 0x3F) << 8) | data[o + 1], o + 2
+    else:
+        n, o = ((b0 & 0x1F) << 24) | (data[o + 1] << 16) | (data[o + 2] << 8) | data[o + 3], o + 4
+    return data[o:o + n]
+
+def constant_int(blob):
+    """Decode a Constant-table value blob as a signed 32-bit int (enum case)."""
+    if not blob:
+        return None
+    elem = blob[0]
+    if elem == 0x08 and len(blob) >= 5:      # ELEMENT_TYPE_I4
+        v = struct.unpack_from("<i", blob, 1)[0]
+        return v
+    if elem == 0x09 and len(blob) >= 5:      # ELEMENT_TYPE_U4
+        return struct.unpack_from("<I", blob, 1)[0]
+    if elem == 0x02:                         # ELEMENT_TYPE_BOOLEAN
+        return blob[1] if len(blob) > 1 else None
+    return None
+
 n = rowcount(0x02)
-targets = []
+all_types = []
 for rid in range(1, n + 1):
     flags, name, ns, extends, flist, mlist = read_col(0x02, rid, 0)
+    all_types.append((rid, ns, name, flist, mlist))
+
+targets = []
+for rid, ns, name, flist, mlist in all_types:
     if want:
-        if name in want:
+        # A name prefixed with "~" matches as a substring, so a versioned type
+        # (ISystemMediaTransportControls2/3/4, MediaPlaybackDisplayUpdater...)
+        # can be found without knowing the exact name.
+        if any((w[1:] in name if w.startswith("~") else w == name) for w in want):
             targets.append((rid, ns, name, flist, mlist))
     else:
         targets.append((rid, ns, name, flist, mlist))
 
 nm = rowcount(0x06)
-# method list end = next typedef's MethodList
+# A typedef's methods run until the NEXT typedef's MethodList, so the end index
+# must be computed over ALL typedefs - doing it over the matched subset only
+# padded every range to the end of the method table (useless for ABI checks).
 ends = {}
-ordered = sorted(targets, key=lambda x: x[4])
+ordered = sorted(all_types, key=lambda x: x[4])
 for i, t in enumerate(ordered):
     end = ordered[i + 1][4] if i + 1 < len(ordered) else nm + 1
     ends[t[0]] = end
+
+# NOTE: enum members are deliberately NOT dumped. Their numeric values live in
+# the Constant table (0x0B) and the row layout in a winmd is not the ECMA order
+# ([Value u32][Type u16][Parent u16] reads consistently, but the values still
+# land on the wrong members) - a wrong number here would be worse than none.
+# Get enum values from the official docs instead, and use this tool for the
+# thing it is good at: interface method order == vtable order.
 
 for rid, ns, name, flist, mlist in targets:
     end = ends[rid]

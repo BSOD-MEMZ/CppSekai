@@ -59,9 +59,16 @@ namespace
     const GUID IID_ITaskbarList3_ = {
         0xEA1AFB91, 0x9E28, 0x4B86, {0x90, 0xE9, 0x9E, 0x9F, 0x8A, 0x5E, 0xEF, 0xAF}};
 
-    // MediaPlaybackStatus (Windows.Media)
-    enum : int { StatusStopped = 3, StatusPlaying = 4, StatusPaused = 5 };
-    // MediaPlaybackType (Windows.Media)
+    // MediaPlaybackStatus (Windows.Media) - values from the official enum docs
+    // (https://learn.microsoft.com/uwp/api/windows.media.mediaplaybackstatus):
+    // Closed = 0, Changing = 1, Stopped = 2, Playing = 3, Paused = 4.
+    //
+    // This was off by one (3/4/5) for a long time, and that is exactly why the
+    // system media flyout never showed a sane session: pushing "Playing" sent
+    // 4, which the shell reads as PAUSED, so every session claimed to be paused
+    // while the timeline kept advancing (and "Paused" was 5, out of range).
+    enum : int { StatusStopped = 2, StatusPlaying = 3, StatusPaused = 4 };
+    // MediaPlaybackType (Windows.Media): Unknown = 0, Music = 1, Video = 2, Image = 3.
     enum : int { PlaybackTypeMusic = 1 };
 
     constexpr unsigned long long kTicksPerSec = 10000000ULL; // 100ns units
@@ -246,12 +253,14 @@ namespace
     using RoActivateInstanceFn = HRESULT(WINAPI*)(void* classId, void** instance);
     using WindowsCreateStringFn = HRESULT(WINAPI*)(const wchar_t* src, unsigned length, void** str);
     using WindowsDeleteStringFn = HRESULT(WINAPI*)(void* str);
+    using WindowsGetStringRawBufferFn = const wchar_t*(WINAPI*)(void* str, unsigned* length);
 
     HMODULE gCombase = nullptr;
     RoGetActivationFactoryFn gRoGetActivationFactory = nullptr;
     RoActivateInstanceFn gRoActivateInstance = nullptr;
     WindowsCreateStringFn gCreateString = nullptr;
     WindowsDeleteStringFn gDeleteString = nullptr;
+    WindowsGetStringRawBufferFn gGetStringRawBuffer = nullptr;
     bool gWinrtLoaded = false;
 
     void loadWinrt()
@@ -269,6 +278,8 @@ namespace
         gRoActivateInstance = reinterpret_cast<RoActivateInstanceFn>(GetProcAddress(gCombase, "RoActivateInstance"));
         gCreateString = reinterpret_cast<WindowsCreateStringFn>(GetProcAddress(gCombase, "WindowsCreateString"));
         gDeleteString = reinterpret_cast<WindowsDeleteStringFn>(GetProcAddress(gCombase, "WindowsDeleteString"));
+        gGetStringRawBuffer =
+            reinterpret_cast<WindowsGetStringRawBufferFn>(GetProcAddress(gCombase, "WindowsGetStringRawBuffer"));
     }
 
     // HSTRING wrapper. WinRT strings are ref-counted handles, not raw pointers.
@@ -422,25 +433,64 @@ void SystemMedia::setTrack(const std::string& title, const std::string& artist, 
     mTrackArtist = artist;
     mLastDurationSec = durationSec;
 
+    // One-shot diagnostics. Metadata was pushed silently before, so a rejected
+    // property (or an HSTRING that failed to build) looked exactly like the
+    // shell ignoring us - which is how the off-by-one playback status above
+    // stayed hidden.
+    static bool s_metaDiagLogged = false;
+    const auto diag = [&](const char* what, HRESULT hr) {
+        if (!s_metaDiagLogged) {
+            std::printf("[media] %s hr=0x%08lX (title='%s' artist='%s')\n", what,
+                static_cast<unsigned long>(hr), title.c_str(), artist.c_str());
+            std::fflush(stdout);
+        }
+    };
+
     void* updater = nullptr;
-    if (FAILED(vt<ISMTCVtbl>(mSmtc)->get_DisplayUpdater(mSmtc, &updater)) || updater == nullptr) {
+    const HRESULT updaterHr = vt<ISMTCVtbl>(mSmtc)->get_DisplayUpdater(mSmtc, &updater);
+    diag("get_DisplayUpdater", updaterHr);
+    if (FAILED(updaterHr) || updater == nullptr) {
         return;
     }
-    vt<IDisplayUpdaterVtbl>(updater)->put_Type(updater, PlaybackTypeMusic);
+    diag("put_Type", vt<IDisplayUpdaterVtbl>(updater)->put_Type(updater, PlaybackTypeMusic));
 
     void* props = nullptr;
-    if (SUCCEEDED(vt<IDisplayUpdaterVtbl>(updater)->get_MusicProperties(updater, &props)) && props != nullptr) {
+    const HRESULT propsHr = vt<IDisplayUpdaterVtbl>(updater)->get_MusicProperties(updater, &props);
+    diag("get_MusicProperties", propsHr);
+    if (SUCCEEDED(propsHr) && props != nullptr) {
         HString titleStr(title.empty() ? std::string("CppSekai") : title);
         HString artistStr(artist.empty() ? std::string("CppSekai") : artist);
         if (titleStr.valid()) {
-            vt<IMusicPropertiesVtbl>(props)->put_Title(props, titleStr.handle);
+            diag("put_Title", vt<IMusicPropertiesVtbl>(props)->put_Title(props, titleStr.handle));
+        } else {
+            diag("put_Title SKIPPED (HSTRING build failed)", E_FAIL);
         }
         if (artistStr.valid()) {
-            vt<IMusicPropertiesVtbl>(props)->put_Artist(props, artistStr.handle);
+            diag("put_Artist", vt<IMusicPropertiesVtbl>(props)->put_Artist(props, artistStr.handle));
+        }
+        // Read one property back: a write that silently no-ops (wrong vtable
+        // slot, wrong interface) is invisible otherwise.
+        void* back = nullptr;
+        if (SUCCEEDED(vt<IMusicPropertiesVtbl>(props)->get_Title(props, &back)) && back != nullptr) {
+            if (gGetStringRawBuffer != nullptr && !s_metaDiagLogged) {
+                unsigned len = 0;
+                const wchar_t* text = gGetStringRawBuffer(back, &len);
+                // Print the length + first code point instead of the text: the
+                // MinGW printf here mangles a %ls of a UTF-16 buffer, and what
+                // matters for the round trip is whether the property took the
+                // value at all.
+                std::printf("[media] Title readback: %u chars, first=U+%04X\n", len,
+                    (text != nullptr && len > 0) ? static_cast<unsigned>(text[0]) : 0u);
+                std::fflush(stdout);
+            }
+            if (gDeleteString != nullptr) {
+                gDeleteString(back);
+            }
         }
         safeRelease(props);
     }
-    vt<IDisplayUpdaterVtbl>(updater)->Update(updater);
+    diag("Update", vt<IDisplayUpdaterVtbl>(updater)->Update(updater));
+    s_metaDiagLogged = true;
     safeRelease(updater);
 
     mLastPositionSec = -1.0e9; // force a timeline push on the next update
@@ -481,6 +531,18 @@ void SystemMedia::updatePlayback(bool playing, bool paused, double positionSec, 
 
     const HRESULT statusHr = vt<ISMTCVtbl>(mSmtc)->put_PlaybackStatus(mSmtc, status);
     diag("put_PlaybackStatus", statusHr);
+
+    // Read the status back in the same diagnostic: the shell's own idea of
+    // "playing" is what the media flyout shows, so a mismatch here means the
+    // MediaPlaybackStatus constant is wrong (that is how the old off-by-one
+    // values slipped through - the write itself always returned S_OK).
+    if (!s_diagLogged) {
+        int readback = -1;
+        if (SUCCEEDED(vt<ISMTCVtbl>(mSmtc)->get_PlaybackStatus(mSmtc, &readback))) {
+            std::printf("[media] PlaybackStatus readback = %d (wrote %d)\n", readback, status);
+            std::fflush(stdout);
+        }
+    }
 
     if (gRoActivateInstance == nullptr || gRoGetActivationFactory == nullptr) {
         return;
