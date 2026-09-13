@@ -54,6 +54,8 @@ namespace
     ImFont* gTitleFont = nullptr;
     ImFont* gBodyFont = nullptr;
     ImFont* gDiffFont = nullptr;
+    ImFont* gBoldFont = nullptr;
+    ImFont* gCondFont = nullptr;
 
     float clamp01(float value)
     {
@@ -363,6 +365,69 @@ void loadIntroFonts(const std::string& fontDir, bool preferSystemFont)
         return ranges;
     }();
 
+    // Two extra faces the result screen wants, loaded straight from the
+    // system font folder by file name (more robust than a registry lookup for
+    // bold faces). Both are optional: whatever is missing falls back to the
+    // body font.
+    auto addResultFonts = [&]() {
+#ifdef _WIN32
+        wchar_t windowsDir[MAX_PATH]{};
+        GetWindowsDirectoryW(windowsDir, MAX_PATH);
+        const std::string fontRoot = wideToUtf8(windowsDir) + "\\Fonts\\";
+        auto openFont = [&](const char* fileName, ImFont*& outFont, const char* label,
+                            const ImWchar* ranges) {
+            if (outFont != nullptr) {
+                return;
+            }
+            const std::string path = fontRoot + fileName;
+            std::FILE* probe = std::fopen(path.c_str(), "rb");
+            if (probe == nullptr) {
+                return;
+            }
+            std::fclose(probe);
+            ImFontConfig config;
+            config.OversampleH = 2;
+            config.OversampleV = 2;
+            std::snprintf(config.Name, sizeof(config.Name), "%s", fileName);
+            outFont = io.Fonts->AddFontFromFileTTF(path.c_str(), 42.0f, &config, ranges);
+            if (outFont != nullptr) {
+                std::printf("[intro] result %s face %s loaded\n", label, fileName);
+            }
+        };
+        // Heavy CJK (得分 / 最高得分 / 歌曲等级 / 继续).
+        if (gBodyFont == nullptr) {
+            gBodyFont = io.Fonts->AddFontDefault();
+        }
+        for (const char* file : {"msyhbd.ttc", "Dengb.ttf", "simhei.ttf", "msjhbd.ttc"}) {
+            openFont(file, gBoldFont, "bold", io.Fonts->GetGlyphRangesJapanese());
+            if (gBoldFont == nullptr) {
+                continue;
+            }
+            // Merge the simplified-Chinese set for 纪 / 录 / 级 / 继 / 续.
+            ImFontConfig merge;
+            merge.MergeMode = true;
+            merge.OversampleH = 2;
+            merge.OversampleV = 2;
+            io.Fonts->AddFontFromFileTTF((fontRoot + file).c_str(), 42.0f, &merge,
+                io.Fonts->GetGlyphRangesChineseSimplifiedCommon());
+            break;
+        }
+        // Condensed bold latin (PERFECT/GREAT/.../SCORERANK/RESULT).
+        for (const char* file : {"ARIALNB.TTF", "ARIALN.TTF"}) {
+            openFont(file, gCondFont, "condensed", nullptr);
+            if (gCondFont != nullptr) {
+                break;
+            }
+        }
+#endif
+        if (gBoldFont == nullptr) {
+            gBoldFont = gBodyFont;
+        }
+        if (gCondFont == nullptr) {
+            gCondFont = gBodyFont;
+        }
+    };
+
 #ifdef _WIN32
     // Default: draw with the font the OS uses for its own UI, so the game
     // follows the system. A candidate is only accepted once it proves it can
@@ -410,6 +475,7 @@ void loadIntroFonts(const std::string& fontDir, bool preferSystemFont)
             gBodyFont = font;
             gTitleFont = font;
             gDiffFont = font;
+            addResultFonts();
             io.Fonts->Build();
             std::printf("[intro] system font %s @42px loaded (%s)\n", candidate.face.c_str(),
                 candidate.path.c_str());
@@ -485,6 +551,7 @@ void loadIntroFonts(const std::string& fontDir, bool preferSystemFont)
     if (gDiffFont == nullptr) {
         gDiffFont = gTitleFont;
     }
+    addResultFonts();
     io.Fonts->Build();
 }
 
@@ -501,6 +568,16 @@ ImFont* bodyFont()
 ImFont* difficultyFont()
 {
     return gDiffFont;
+}
+
+ImFont* boldFont()
+{
+    return gBoldFont;
+}
+
+ImFont* condensedFont()
+{
+    return gCondFont;
 }
 
 IntroInfo buildIntroInfo(const IntroMetadata& metadata, bool hasCover)

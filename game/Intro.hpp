@@ -58,6 +58,15 @@ ImFont* titleFont();
 ImFont* bodyFont();
 ImFont* difficultyFont();
 
+// Extra faces used by the result screen, loaded by loadIntroFonts() when the
+// system provides them (both fall back to bodyFont()):
+//   boldFont()      - heavy CJK (YaHei Bold / SimHei) for 得分 / 最高得分 / 继续
+//   condensedFont() - condensed bold latin (Arial Narrow Bold), the closest
+//                     Windows face to pjsk's Roboto Condensed UI font, used by
+//                     PERFECT/GREAT/... and the giant RESULT watermark.
+ImFont* boldFont();
+ImFont* condensedFont();
+
 // Builds the card content. Mirrors buildIntroCardState() upstream, including
 // the 0..6 difficulty codes and the file-name fallback.
 IntroInfo buildIntroInfo(const IntroMetadata& metadata, bool hasCover);

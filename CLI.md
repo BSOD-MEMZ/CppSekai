@@ -69,7 +69,8 @@ cppsekai [--sus <file.sus>] [--bgm <audio>] [--charts <dir>] [--cover <image>]
          [--width <px>] [--height <px>] [--window borderless|windowed|fullscreen]
          [--fps <n>] [--screenshot <png>] [--screenshot-time <sec>]
          [--judge-sheet] [--judge-frame <n>] [--test-hits]
-         [--show-pause-dialog] [--test-restart] [--restart-at <sec>] [--help]
+         [--show-pause-dialog] [--test-restart] [--restart-at <sec>]
+         [--result-preview] [--result-at <sec>] [--help]
 ```
 
 ### 4.1 内容 / 对齐
@@ -115,6 +116,8 @@ cppsekai [--sus <file.sus>] [--bgm <audio>] [--charts <dir>] [--cover <image>]
 | `--test-hits` | 不按键，按时间轴把音符逐个喂给判定引擎（查特效链路） |
 | `--show-pause-dialog` | 演奏 0.5s 后强制打开暂停弹窗（截弹窗用的） |
 | `--test-restart` `--restart-at <sec>` | 走到指定秒数执行「放弃 → 换一首」——回归测「打到一半重选曲卡死」那个 bug |
+| `--result-at <sec>` | 谱面走到指定秒数就切到**结算画面**（用真实判定数据），不用等整首歌放完 |
+| `--result-preview` | 启动即进结算画面，且用参考截图的样例数字（940021 / PERFECT 634 …），专门用来跟原版截图做像素对比 |
 | `--help` / `-h` | 打印用法并退出 |
 
 ---
@@ -141,7 +144,18 @@ cppsekai [--sus <file.sus>] [--bgm <audio>] [--charts <dir>] [--cover <image>]
 # 判定文字逐帧看
 ./build/cppsekai.exe --sus charts/0075_master.sus --auto --judge-frame 3 \
     --screenshot "D:/tmp/judge.png" --screenshot-time 6
+
+# 结算画面：启动即进（样例数字），入场动画跑完自动抓图
+./build/cppsekai.exe --sus charts/0628_expert.sus --result-preview \
+    --screenshot "D:/tmp/result.png" --width 1920 --height 1080
+
+# 结算画面：真实跑一段再切（用实际判定数据）
+./build/cppsekai.exe --sus charts/0628_master.sus --auto --result-at 8 \
+    --screenshot-time 30 --screenshot "D:/tmp/result_live.png"
 ```
+
+> 结算画面在 `--screenshot` 模式下**不等 `--screenshot-time`**：入场动画跑完
+> （2.6 s）就自动抓，所以那个参数给大一点无所谓。
 
 要点：
 

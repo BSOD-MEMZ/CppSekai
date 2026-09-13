@@ -43,6 +43,7 @@ SOURCES=(
     game/Hud.cpp
     game/Ui.cpp
     game/Intro.cpp
+    game/Result.cpp
     game/SongSelect.cpp
     game/TapEffect.cpp
     core/native/src/mmw_preview.cpp

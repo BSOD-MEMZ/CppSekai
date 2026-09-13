@@ -18,6 +18,7 @@
 #include "game/Intro.hpp"
 #include "game/Judgement.hpp"
 #include "game/Hud.hpp"
+#include "game/Result.hpp"
 #include "game/SongSelect.hpp"
 #include "game/Ui.hpp"
 #include "game/TapEffect.hpp"
@@ -265,7 +266,7 @@ namespace
             "                [--width <px>] [--height <px>] [--window <mode>] [--fps <n>]\n"
             "                [--judge-sheet] [--judge-frame <n>] [--test-hits]\n"
             "                [--show-pause-dialog] [--test-restart] [--restart-at <sec>]\n"
-            "                [--help]\n\n"
+            "                [--result-preview] [--result-at <sec>] [--help]\n\n"
 
             "No --sus: opens the song select screen (scans --charts, then charts/ next\n"
             "to the exe, then the charts/ of the parent folder).\n"
@@ -282,6 +283,9 @@ namespace
             "          SPACE = pause, F = fullscreen, H = debug panel, ESC = back/quit\n"
             "--test-hits: fire the hit effects for upcoming notes without input (debug).\n"
             "--judge-frame <n>: freeze the judge text on animation frame n (debug).\n"
+            "--result-preview: jump straight to the result screen at boot (debug; uses\n"
+            "                  the reference screenshot's numbers for pixel checks).\n"
+            "--result-at <sec>: show the result screen once the chart reaches <sec>.\n"
             "Mouse   : left/right button = tap a lane (hold = long note),\n"
             "          drag up/left/right = flick (direction must match the\n"
             "          note arrow; see the strict-Flick setting). Right button\n"
@@ -331,7 +335,39 @@ namespace
     {
         Select,
         Play,
+        Result,
     };
+
+    // Snapshot handed to the result screen when a chart ends. Filled from the
+    // judgement stats + the record that was stored for this chart.
+    game::ResultData buildResultData(const game::IntroInfo& intro, const game::ChartEntry& entry,
+        const game::JudgementStats& stats, double previousBest, float chartRating)
+    {
+        game::ResultData data;
+        data.title = !intro.title.empty() ? intro.title : entry.title;
+        if (data.title.empty()) {
+            data.title = entry.displayName;
+        }
+        data.difficulty = !entry.difficulty.empty() ? entry.difficulty : intro.difficulty;
+        data.level = entry.level;
+        if (data.level.empty() && entry.musicId > 0) {
+            const int level = game::musicLevel(entry.musicId, data.difficulty);
+            if (level > 0) {
+                data.level = std::to_string(level);
+            }
+        }
+        data.score = stats.score;
+        data.highScore = previousBest;
+        data.newRecord = stats.score > previousBest + 0.5;
+        data.perfect = stats.perfect;
+        data.great = stats.great;
+        data.good = stats.good;
+        data.bad = stats.bad;
+        data.miss = stats.miss;
+        data.maxCombo = stats.maxCombo;
+        data.chartRating = chartRating;
+        return data;
+    }
 
     // Opening card metadata. SUS has no lyricist/composer fields, so they can
     // be supplied on the command line (same flags as the upstream preview
@@ -518,6 +554,8 @@ int main(int argc, char** argv)
     bool showPauseDialogShot = false; // headless check: force the pause dialog open
     bool testRestart = false; // debug: replay "give up -> pick another song"
     double restartAtSec = 8.0;
+    bool resultPreview = false; // debug: boot straight into the result screen
+    double resultAtSec = -1.0;  // debug: show the result at this chart time
     int winWidth = 1366;
     int winHeight = 768;
     int windowMode = 1; // 0=borderless 1=windowed 2=fullscreen(desktop)
@@ -606,6 +644,13 @@ int main(int argc, char** argv)
             testRestart = true;
         } else if (arg == "--restart-at" && i + 1 < utf8Argc) {
             restartAtSec = std::atof(utf8Argv[++i]);
+        } else if (arg == "--result-preview") {
+            // Debug: show the result screen right away. Without --result-at
+            // the sample numbers of the reference screenshot are used, which
+            // is what makes a pixel comparison against it possible.
+            resultPreview = true;
+        } else if (arg == "--result-at" && i + 1 < utf8Argc) {
+            resultAtSec = std::atof(utf8Argv[++i]);
         } else if (arg == "--title" && i + 1 < utf8Argc) {
             gCardMetadata.title = utf8Argv[++i];
         } else if (arg == "--lyricist" && i + 1 < utf8Argc) {
@@ -1303,6 +1348,14 @@ int main(int argc, char** argv)
     game::HudState hudState;
     float lastSeenJudgeTime = -100.0f;
     bool wantScreenshot = false;
+
+    // Result screen state: the snapshot it draws, when it appeared (drives the
+    // entrance animation) and the previous best score of the chart being
+    // played (captured *before* the new record is written).
+    game::ResultData resultData;
+    double resultShownAt = 0.0;
+    bool resultScheduled = false;
+    double resultPreviousBest = 0.0;
     // Set by the mouse handler when the HUD pause button was clicked, so the
     // same click is not also treated as a lane hit.
     bool pauseClickRequested = false;
@@ -1735,6 +1788,38 @@ int main(int argc, char** argv)
             touches.end());
     };
 
+    // Debug (--result-preview): open the result screen before the first frame
+    // with the numbers from the reference screenshot, so `--screenshot` can be
+    // diffed against it. The song metadata still comes from the loaded chart.
+    if (resultPreview) {
+        resultData = buildResultData(session.intro, session.entry, judgement.stats(), 0.0,
+            judgement.chartRating());
+        if (resultData.title.empty()) {
+            resultData.title = "1000年生きてる";
+        }
+        if (resultData.difficulty.empty()) {
+            resultData.difficulty = "EXPERT";
+        }
+        if (resultData.level.empty()) {
+            resultData.level = "23";
+        }
+        resultData.score = 940021.0;
+        resultData.highScore = 0.0;
+        resultData.newRecord = true;
+        resultData.perfect = 634;
+        resultData.great = 32;
+        resultData.good = 4;
+        resultData.bad = 2;
+        resultData.miss = 1;
+        resultData.maxCombo = 361;
+        resultData.chartRating = 23.0f;
+        beginSessionClockPending = false;
+        audio.stopMusic();
+        state = AppState::Result;
+        resultShownAt = uiClock;
+        std::printf("[result] preview mode\n");
+    }
+
     while (running) {
         const Uint64 nowCounter = SDL_GetPerformanceCounter();
         lastFrameDeltaSec = static_cast<double>(nowCounter - lastFrameCounter) / static_cast<double>(perfFreq);
@@ -2077,7 +2162,7 @@ int main(int argc, char** argv)
             countdownActive = false; // leaving / continuing cancels any countdown
             if (pauseDialogOpen) {
                 beginResumeCountdown();
-            } else if (state == AppState::Play && susPath.empty()) {
+            } else if (state == AppState::Result || (state == AppState::Play && susPath.empty())) {
                 // back to the song list
                 audio.stopMusic();
                 audio.setHoldLoop(false, false, 0.0f);
@@ -2086,6 +2171,8 @@ int main(int argc, char** argv)
                 lanePress.fill(0.0f);
                 paused = false;
                 session.active = false;
+                resultScheduled = false;
+                resultData = game::ResultData{};
                 state = AppState::Select;
                 systemMedia.setTaskbarProgress(-1.0, false);
             } else {
@@ -2147,6 +2234,8 @@ int main(int argc, char** argv)
                     std::fill(std::begin(keyHeld), std::end(keyHeld), false);
                     lanePress.fill(0.0f);
                     paused = false;
+                    resultScheduled = false;
+                    resultData = game::ResultData{};
                     state = AppState::Play;
                     beginSessionClock();
                 } else {
@@ -2175,7 +2264,7 @@ int main(int argc, char** argv)
                     wantScreenshot = true;
                 }
             }
-        } else {
+        } else if (state == AppState::Play) {
             // ----------------------------------------------------------
             // Playing
             // ----------------------------------------------------------
@@ -2323,11 +2412,40 @@ int main(int argc, char** argv)
                 const auto& st = judgement.stats();
                 const bool fullCombo = st.miss == 0;
                 const std::string key = game::scoreKey(session.entry);
-                scores[key] = game::mergeScore(scores[key], true, fullCombo);
+                // Keep the old best for the result screen's 最高得分 / 新纪录!
+                // before the merge below overwrites it.
+                resultPreviousBest = scores[key].bestScore;
+                scores[key] = game::mergeScore(scores[key], true, fullCombo, st.score);
                 game::applyScores(entries, scores);
                 persistUserData();
                 std::printf("[score] %s cleared%s (%s)\n", key.c_str(),
                     fullCombo ? " (full combo)" : "", userDataFile.c_str());
+            }
+
+            // ----------------------------------------------------------
+            // Song finished -> result screen. The music is cut here (the
+            // chart keeps running past the last note while the track plays
+            // out), then the result screen takes over with its own clock.
+            // ----------------------------------------------------------
+            const bool resultDue = trackDurationSec > 1.0
+                && songTime >= (resultAtSec > 0.0 ? resultAtSec : trackDurationSec - 0.15);
+            if (resultDue && !resultScheduled) {
+                resultScheduled = true;
+                resultData = buildResultData(session.intro, session.entry, judgement.stats(),
+                    resultPreviousBest, judgement.chartRating());
+                audio.setHoldLoop(false, false, 0.0f);
+                audio.stopMusic();
+                touches.clear();
+                std::fill(std::begin(keyHeld), std::end(keyHeld), false);
+                lanePress.fill(0.0f);
+                paused = false;
+                countdownActive = false;
+                systemMedia.setTaskbarProgress(-1.0, false);
+                state = AppState::Result;
+                resultShownAt = uiClock;
+                std::printf("[result] shown (score=%.0f best=%.0f newRecord=%d)\n",
+                    resultData.score, resultData.highScore, resultData.newRecord ? 1 : 0);
+                std::fflush(stdout);
             }
 
             // Hold loop SE: loop while a hold is being tracked (anyActiveHold
@@ -2641,6 +2759,29 @@ int main(int argc, char** argv)
             }
 
             if (!screenshotPath.empty() && songTime >= screenshotTimeSec) {
+                wantScreenshot = true;
+            }
+        } else if (state == AppState::Result) {
+            // ----------------------------------------------------------
+            // Result screen. The stage keeps rendering behind it (the panel is
+            // translucent), so the same renderFrame() call as the play state
+            // is used with the playfield frozen.
+            // ----------------------------------------------------------
+            renderer.setLaneGlows({});
+            renderer.renderFrame(nullptr, 0, 0.85f);
+
+            const float resultElapsed = static_cast<float>(uiClock - resultShownAt);
+            const bool continuePressed =
+                game::drawResult(renderer, resultData, resultElapsed, windowW, windowH);
+            if (continuePressed) {
+                resultScheduled = false;
+                resultData = game::ResultData{};
+                lastSeenJudgeTime = -100.0f;
+                hudState = game::HudState{};
+                state = AppState::Select;
+            }
+            // Headless check: dump the settled result screen.
+            if (!screenshotPath.empty() && !wantScreenshot && resultElapsed >= 2.6f) {
                 wantScreenshot = true;
             }
         }

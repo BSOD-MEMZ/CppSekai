@@ -31,6 +31,13 @@ game/Judgement.*  # 判定引擎（本项目新增，判定逻辑都在这）
 game/Ui.*         # pjsk 风格弹窗组件库：beginCard（缩放入/出场动画 + 标题栏拖动）、
                   # tabBar、slider（深色±按钮+薄荷轨道）、infoRows、capsuleButton、
                   # cardTitle、checkBox、stepper、messageDialog（-3=动画中 -2=关闭完成）
+game/Result.*     # 结算画面（PRESENT/RESULT）：参考原版截图 1:1 复刻，全部画在 ImGui
+                  # background draw list 上的 1920x1080 虚拟画布（和 HUD 同一套 px/py/ps 变换）。
+                  # 左半边（RESULT 水印、曲目卡、得分、判定行）用参考截图的绝对 x；
+                  # 右半边（进度条、SCORERANK 牌、继续按钮）挂在上方面板右缘上——手机版那块
+                  # 是留给 live2d 的，16:9 里没有角色，所以面板直接铺到右边。
+                  # 数字全部用游戏自带精灵（score/digit/*、combo/p*），不是字体。
+                  # 详细测量笔记见下面「结算画面」一节。
 game/Intro.*      # ImGui 卡片/UI；字体跟随系统（注册表找字体文件 + CJK 字形探测，Yu Gothic UI
                   # 是 CFF 轮廓 stb_truetype 渲染不了，会自动落到 Microsoft YaHei UI；--pjsk-font 回退）
 main.cpp          # SDL2 窗口、事件循环、输入映射、ImGui HUD、截图模式
@@ -341,6 +348,48 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
   （cover 铺满 + dim 黑罩）。模糊只在滑条松手时重算，拖动期间别重算（CPU pass）。
 
 
+## 结算画面（2026-09-13，`game/Result.cpp`）
+
+**几何来自像素测量，不要凭感觉改。** 参考图是 2388x1080 的手机截图（Project SEKAI 官方
+结算画面），用 `.workbuddy/tools/` 里的 python 脚本逐区域扫出来的数值，全部换算到
+1920x1080 虚拟画布：
+
+| 元素 | 参考图（2388 宽） | 虚拟画布 |
+|---|---|---|
+| 顶部条面板 | x 413..1973，y −45..177，圆角 50，白色 59% | 左边 413，右边贴到 1905（画布右缘 −15） |
+| 曲绘 | 453..588，21..154（135×135，粉 #FF4577，内缩 11） | 同左（绝对 x） |
+| 标题 | x 615，cap 40..67 | 同左 |
+| EXPERT 胶囊 | 615..806（宽 191） | 同左；右侧接深色胶囊 806..996（宽 190） |
+| 得分数字 | 右对齐 1233，字高 86，步进 61.6 | 同左（精灵见下） |
+| 得分/最高得分标签 | 中心 (546,355) / (537,456)，字号 70 / 36 | 同左 |
+| 进度条 | x 1246..1777（宽 531），y 80..104（高 24） | 右端 = 面板右缘 −196 |
+| C/B/A/S 刻度 | 条内 746/990/1234/1478（**精灵自身的 1650 宽设计空间**），pin：梯形 63→82 + 竖线到 105 | 同比例 |
+| SCORERANK 牌 | x 1798..1918（宽 120），y −20..175（顶部被裁） | 右端 = 面板右缘 −55 |
+| 判定行 | 牌 x 450（宽 372 高 55 圆角 18），首行中心 y 656，行距 64.6；标签 x 472，数字右对齐 785 | 同左 |
+| COMBO | 标签中心 951，数字右对齐 1225 | 同左 |
+| 继续按钮 | 320×79，mint #77EDDD，深色字 | 右端 = 面板右缘，底 1039 |
+
+**排印上的三个坑：**
+
+1. **字号必须乘 `c.scale`**。ImGui 的 `AddText(font, size, ...)` 的 size 是**像素**，不是
+   虚拟单位。1920x1080 时 scale=1 看不出问题，1366x768 下所有文字会大 1.4 倍、评级字母
+   直接冲出牌子——踩过一次，`game/Result.cpp` 里所有文字助手都在内部乘了 scale。
+2. **数字不要用字体，用精灵**：`score/digit/<d>.png`（33×44）是游戏自己的记分数字体，
+   `combo/p<d>.png`（116×150）是 combo 数字。结果画面里这些数字比精灵**横向压扁约 18%**
+   （`kDigitSqueeze = 0.82`）——不压的话每个数字都偏宽、行总宽对不上。
+3. **拉丁标签用哪个字体**：原版的 UI 字体「字宽/字高 ≈ 0.83」。微软雅黑 Bold 是 0.83 ✓，
+   Arial Narrow Bold 只有 0.65（太窄）。所以**标签走 `boldFont()`（msyhbd.ttc）**，
+   只有 RESULT 水印（0.64）和刻度字母用 `condensedFont()`（ARIALNB）。字宽还不够时用
+   `textTracked()` 的 tracking 补——判定行 PERFECT 是 46px + tracking 3.2，正好 169 宽。
+4. RESULT 水印是**空心描边**（白 22% 描边 3px + 内部填背景色），不是实心灰字：
+   `textOutlined()` 就是干这个的。评级字母用 `textCenteredFauxBold()` 加粗（原版是 Heavy）。
+
+**流程**：曲末（`trackDurationSec − 0.15`）切进 `AppState::Result`，停音乐、清触点，用
+`judgement.stats()` 组 `ResultData`；成绩记录在切换前就已经写盘，`resultPreviousBest`
+（= `ScoreRecord::bestScore`，新加的字段）必须在 merge **之前**取，否则永远不是新纪录。
+点「继续」（或 ESC）回选曲。调试：`--result-preview`（启动即进，用参考图的样例数字）、
+`--result-at <sec>`（跑到指定秒数切）。
+
 ## 平台 / 输入相关的坑（2026-09-12）
 
 - **exe 是 Windows 子系统**（`build.sh` 里的 `-Wl,--subsystem,windows`）：双击不出 cmd 窗口。
@@ -400,7 +449,7 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
 
 1. hold 音效循环（SeHoldLoop 未接）与 SE kind 区分（当前键盘全播一个音）
 2. 输入/音频延迟校准界面
-3. 结算画面、连击特效（judge v3 的 1~5 已用于判定文字，6=AUTO 仍未用）
+3. 连击特效（judge v3 的 1~5 已用于判定文字，6=AUTO 仍未用）
 4. 键盘 12 键布局可能不顺手，考虑做成可配置；键盘也打不了 left/right flick（只能发 FlickUp），
    要么给按键加"按住+方向键"的组合，要么引导玩家用鼠标/触摸
 5. 【暂缓·长期，想清楚再做】歌手 / 音源版本选择。同一首歌的 `SEKAI ver.` / `VIRTUAL SINGER ver.` /
@@ -417,4 +466,4 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
      `CHARTS.md`（sidecar 字段表补 `audio`）
 
 > 已实现的旧待办：flick 严格方向校验（见「约定与坑」里的说明）、hold 尾判（松手判定）、
-> HUD 真实分数与血量、放弃后重选曲卡死。
+> HUD 真实分数与血量、放弃后重选曲卡死、**结算画面**（见「结算画面」一节）。

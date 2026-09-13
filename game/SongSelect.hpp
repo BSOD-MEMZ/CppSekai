@@ -50,6 +50,9 @@ struct ScoreRecord
 {
     bool cleared = false;
     bool fullCombo = false;
+    // Highest score reached, used by the result screen for 最高得分 / 新纪录!.
+    // Kept alongside the flags in the same file, so old saves stay valid.
+    double bestScore = 0.0;
 };
 
 // Settings + play results are persisted together in one userdata.json; see
@@ -109,8 +112,8 @@ void saveUserData(const std::string& path, const UserSettings& settings,
     const std::map<std::string, ScoreRecord>& scores);
 
 // Records the result of one chart (merges with the existing record) and
-// returns the merged record.
-ScoreRecord mergeScore(const ScoreRecord& old, bool cleared, bool fullCombo);
+// returns the merged record. `score` only ever raises the stored best.
+ScoreRecord mergeScore(const ScoreRecord& old, bool cleared, bool fullCombo, double score = 0.0);
 
 // Key used in scores.json: the chart's file name (e.g. "0075_master.sus").
 std::string scoreKey(const ChartEntry& entry);

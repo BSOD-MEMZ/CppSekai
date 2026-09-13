@@ -285,11 +285,12 @@ void setSelectBackdrop(GLuint texture, int texW, int texH, float dim)
     gSelectBackdropDim = dim;
 }
 
-ScoreRecord mergeScore(const ScoreRecord& old, bool cleared, bool fullCombo)
+ScoreRecord mergeScore(const ScoreRecord& old, bool cleared, bool fullCombo, double score)
 {
     ScoreRecord out = old;
     out.cleared = out.cleared || cleared;
     out.fullCombo = out.fullCombo || fullCombo;
+    out.bestScore = std::max(out.bestScore, score);
     return out;
 }
 
@@ -337,12 +338,14 @@ void loadUserData(const std::string& path, UserSettings& settings,
         if (scoreDoc.is_object()) {
             for (auto it = scoreDoc.begin(); it != scoreDoc.end(); ++it) {
                 if (!it.value().is_object()
-                    || (!it.value().contains("cleared") && !it.value().contains("fullCombo"))) {
+                    || (!it.value().contains("cleared") && !it.value().contains("fullCombo")
+                        && !it.value().contains("bestScore"))) {
                     continue; // not a score record (e.g. the "settings" object)
                 }
                 ScoreRecord rec;
                 rec.cleared = it.value().value("cleared", false);
                 rec.fullCombo = it.value().value("fullCombo", false);
+                rec.bestScore = it.value().value("bestScore", 0.0);
                 scores[it.key()] = rec;
             }
         }
@@ -391,7 +394,8 @@ void saveUserData(const std::string& path, const UserSettings& settings,
 {
     nlohmann::json scoreDoc = nlohmann::json::object();
     for (const auto& [name, rec] : scores) {
-        scoreDoc[name] = {{"cleared", rec.cleared}, {"fullCombo", rec.fullCombo}};
+        scoreDoc[name] = {{"cleared", rec.cleared}, {"fullCombo", rec.fullCombo},
+            {"bestScore", rec.bestScore}};
     }
     nlohmann::json doc;
     doc["settings"] = {
