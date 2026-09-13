@@ -341,6 +341,32 @@ sidecar JSON 支持的字段：`title` `artist` `lyricist` `composer` `arranger`
 | `userdata.json` | 谱面目录那一层（`build/` 布局下就是仓库根，和 `charts/` 并排） | 玩家数据：通关 / FULL COMBO 记录 **+ 全部设置**。按谱面**文件名**作 key，所以换机器重新下载同样的谱，把这份文件拷到 `charts/` 旁边成绩就还在 |
 | `music-levels.json` | 根目录 / exe 旁边 / 上级目录 | 官方等级表（unipjsk 导出的 SUS 被剃掉了 `#PLAYLEVEL`）。支持 `{"75":[6,13,17,23,28]}` 或游戏原版 `musicDifficulties.json` 格式 |
 | `musics.json` | 根目录 | 官方曲库元数据。程序实际用其中两项：**读音**（`pronunciation`，名称排序 + あ行分组）和 **曲名**（`title`，unipjsk 导出的 SUS `#TITLE` 是空的，靠它回填） |
+| `music-vocals.json` | 根目录 | 官方演唱版本表（717 首 / 1786 个版本）：每首歌的 `sekai / virtual_singer / another_vocal …` 版本、演唱角色、音频包名。选曲界面的版本切换器用它；`.workbuddy/tools/gen_music_vocals.py` 可重新生成 |
+
+---
+
+## 7.5 谱面下载器（`chartdl.exe`，单独的小程序）
+
+不想手抄 `curl` 就双击 `build/chartdl.exe`（旧版 ImGui 默认皮肤，就那种很朴素的样子）：
+
+| 演奏 | |
+|---|---|
+| ![下载器](docs/preview_downloader.png) | |
+
+- 左边 715 首的表格（搜索：id / 曲名 / 读音），勾选多首 → **queue checked** 批量下
+- 右边是选中曲目的详情：5 个难度、**每个演唱版本**（点了就下那个版本的 BGM）、曲绘、sidecar 元数据
+- 下载中显示总进度条 + 当前文件大小，日志在下面；已存在的文件默认跳过
+- 命令行也能用（方便脚本化）：
+
+```bash
+./build/chartdl.exe --list 374                       # 查歌
+./build/chartdl.exe --download 374 --diffs all --vocals all
+./build/chartdl.exe --download 75,127 --out ../charts --force
+```
+
+文件放到 `<out>/`（默认 `..\charts`），命名和游戏要求一致：谱面 `0374_master.sus`、
+BGM `<assetbundleName>.mp3`（`se_0374_01.mp3` / `an_0374_02.mp3` …）、曲绘 `0374.png`、
+元数据 `0374.json`。
 
 ---
 

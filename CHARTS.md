@@ -8,6 +8,19 @@ CppSekai 的谱面**不随仓库分发**（官方游戏数据，版权原因）�
 
 ---
 
+## 零、图形界面（最省事）
+
+```bash
+bash build.sh              # 会连 build/chartdl.exe 一起编出来
+./build/chartdl.exe        # 双击也行
+```
+
+715 首随便搜，勾几个难度和要的演唱版本，点 **queue checked**：谱面 / BGM / 曲绘 / sidecar
+一次到位，已存在的文件默认跳过。命令行（`--list` / `--download`）见 `chartdl.exe --help`。
+下面的手工 curl 法在下载器不方便时再用。
+
+---
+
 ## 一、最快路径（推荐）
 
 ```bash

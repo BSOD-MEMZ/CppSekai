@@ -54,6 +54,20 @@ main.cpp          # SDL2 窗口、事件循环、输入映射、ImGui HUD、截�
 - packed HitEvent（7 floats）：timeSec, center(轨道坐标), width, kind, flags, endTimeSec, volume。
   kind：0=tap 1=critical tap 2=flick 3=trace 4=hold tick(自动) 5=hold 标记(endTimeSec 有效)。
 
+## 工具
+
+- `downloader/chartdl.cpp` → `build/chartdl.exe`：**独立的谱面下载器**（不算游戏的一部分，
+  build.sh 里单独编一次）。刻意用 ImGui 默认皮肤 + 默认字体的"老样子"，只共享 vendored 的
+  ImGui / SDL2 / nlohmann。HTTP 走 `winhttp.dll` **运行时 LoadLibrary**（工具链只有 winhttp.def，
+  没有导入库——和 SystemMedia 用 combase 的办法一样）。下载在 `std::thread` 里跑，进度用
+  `gJobMutex` 保护；**别在 worker 里持有 `gJobs[i]` 的引用**（GUI 线程还会 push_back，会悬空）。
+  `--list` / `--download` 是给脚本和回归用的无界面模式。日志同时进 stdout 和 `chartdl.log`
+  （GUI 从资源管理器启动时 stdout 是黑洞）。
+- `.workbuddy/tools/gen_music_vocals.py` → `music-vocals.json`：从官方的 musicVocals +
+  gameCharacters 表生成演唱版本表（`asset` 就是 unipjsk 的音频目录名）。
+- `.workbuddy/tools/winsend.c` → `build/winsend.exe`：按窗口标题 PostMessage 真鼠标消息，
+  无交互会话下驱动 UI（见「平台 / 输入相关的坑」）。
+
 ## 构建
 
 ```bash

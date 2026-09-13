@@ -72,6 +72,21 @@ mkdir -p build
     -lopengl32 \
     -o build/cppsekai.exe "$@"
 
+# ---------------------------------------------------------------------------
+# Chart downloader (a separate, standalone tool: same libraries, no game code).
+# Shares the vendored ImGui + SDL2 + nlohmann/json, so it builds in a second.
+# ---------------------------------------------------------------------------
+DL_SOURCES=(
+    downloader/chartdl.cpp
+    third_party/imgui/imgui.cpp
+    third_party/imgui/imgui_draw.cpp
+    third_party/imgui/imgui_tables.cpp
+    third_party/imgui/imgui_widgets.cpp
+    third_party/imgui/imgui_impl_sdl2.cpp
+    third_party/imgui/imgui_impl_opengl3.cpp
+)
+"$ZIG" c++ "${CXXFLAGS[@]}" -Wl,--subsystem,console "${DL_SOURCES[@]}"     "$SDL/lib/libSDL2.dll.a"     -limm32 -lsetupapi -lversion -lole32 -loleaut32 -lwinmm -lgdi32 -luser32 -ladvapi32 -lshell32     -lopengl32     -o build/chartdl.exe "$@"
+
 # Runtime DLL + assets next to the exe
 cp -f "$SDL/bin/SDL2.dll" build/ 2>/dev/null || true
 rm -rf build/assets 2>/dev/null || true
