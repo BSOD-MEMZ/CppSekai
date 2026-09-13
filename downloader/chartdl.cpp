@@ -4,9 +4,8 @@
 // game's charts\ folder, including every vocal version of a song, and writes the
 // metadata sidecar (<id4>.json) the game reads.
 //
-// It shares nothing with the game except the vendored libraries (SDL2 + ImGui +
-// nlohmann::json) and deliberately keeps the *old* CppSekai look: ImGui's
-// default dark theme, default font, stock widgets - no pjsk skin.
+// It shares nothing with the game: the UI is plain Win32 common controls
+// (ListView + edit + progress bar), Chinese, no skin - a utility, not the game.
 //
 //   chartdl.exe                       # the GUI
 //   chartdl.exe --list [filter]       # print the song table and exit
@@ -15,17 +14,18 @@
 //
 // HTTP comes from winhttp.dll loaded at runtime (the toolchain has no import
 // library for it, same trick platform/SystemMedia.cpp uses for combase.dll).
-#define SDL_MAIN_HANDLED
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
-#include <SDL.h>
-
-#include <GL/gl.h>
+// Unicode build: the ListView / button macros then resolve to their W variants
+// (and IDC_ARROW & friends become wide resource pointers).
+#define UNICODE
+#define _UNICODE
 #include <windows.h>
 
-#include "imgui.h"
-#include "imgui_impl_opengl3.h"
-#include "imgui_impl_sdl2.h"
+#include <commctrl.h>
+#include <shellapi.h>
+#include <shlobj.h>
+
 #include "nlohmann/json.hpp"
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
@@ -88,11 +88,11 @@ Api& api()
 {
     static Api instance = [] {
         Api a;
-        a.dll = reinterpret_cast<void*>(SDL_LoadObject("winhttp.dll"));
+        a.dll = reinterpret_cast<void*>(LoadLibraryW(L"winhttp.dll"));
         if (a.dll == nullptr) {
             return a;
         }
-        auto sym = [&](const char* name) { return SDL_LoadFunction(a.dll, name); };
+        auto sym = [&](const char* name) { return GetProcAddress(static_cast<HMODULE>(a.dll), name); };
         a.open = reinterpret_cast<decltype(a.open)>(sym("WinHttpOpen"));
         a.connect = reinterpret_cast<decltype(a.connect)>(sym("WinHttpConnect"));
         a.openRequest = reinterpret_cast<decltype(a.openRequest)>(sym("WinHttpOpenRequest"));
@@ -688,10 +688,635 @@ int runJobQueue(std::string& error)
     return failed == 0 ? 0 : 1;
 }
 
+// ---------------------------------------------------------------------------
+// Win32 UI
+//
+// Plain common controls on purpose: a ListView with checkboxes, an edit box, a
+// progress bar and a log. Nothing is skinned, nothing is drawn by hand, and the
+// text is Chinese - it is a small utility, not the game.
+// ---------------------------------------------------------------------------
+namespace
+{
+    // widen() lives in namespace http above.
+    using http::widen;
+
+    constexpr int kIdSearch = 1000;
+    constexpr int kIdOutDir = 1001;
+    constexpr int kIdBrowse = 1002;
+    constexpr int kIdOpenDir = 1003;
+    constexpr int kIdQueue = 1004;
+    constexpr int kIdCancel = 1005;
+    constexpr int kIdCheckAll = 1006;
+    constexpr int kIdList = 1007;
+    constexpr int kIdProgress = 1008;
+    constexpr int kIdStatus = 1009;
+    constexpr int kIdLog = 1010;
+    constexpr int kIdDetailGroup = 1011;
+    constexpr int kIdDetailTitle = 1012;
+    constexpr int kIdJacket = 1013;
+    constexpr int kIdSidecar = 1014;
+    constexpr int kIdDiffBase = 1100;  // 1100..1104 = EASY..MASTER
+    constexpr int kIdVocalBase = 1120; // 1120.. = one per vocal version
+
+    HWND gList = nullptr;
+    HWND gOutDirLabel = nullptr;
+    HWND gSearchLabel = nullptr;
+    HWND gSearch = nullptr;
+    HWND gOutDirEdit = nullptr;
+    HWND gQueueButton = nullptr;
+    HWND gCancelButton = nullptr;
+    HWND gProgress = nullptr;
+    HWND gStatus = nullptr;
+    HWND gLogList = nullptr;
+    HWND gDetailTitle = nullptr;
+    HWND gJacketCheck = nullptr;
+    HWND gSidecarCheck = nullptr;
+    HWND gDiffChecks[5] = {};
+    std::vector<HWND> gVocalChecks;
+    HFONT gFont = nullptr;
+
+    std::vector<int> gRowSong;   // list row -> gSongs index (after filtering)
+    int gDetailSong = -1;        // song the right panel describes
+    std::size_t gLogShown = 0;   // log lines already appended to the listbox
+    double gGuiStartSec = 0.0;   // for --screenshot-time
+
+    std::string gOutDir;
+
+    fs::path wideToPath(const std::wstring& text)
+    {
+        const int size = WideCharToMultiByte(CP_UTF8, 0, text.c_str(), -1, nullptr, 0, nullptr, nullptr);
+        std::string utf8(static_cast<std::size_t>(std::max(0, size - 1)), '\0');
+        if (size > 1) {
+            WideCharToMultiByte(CP_UTF8, 0, text.c_str(), -1, utf8.data(), size, nullptr, nullptr);
+        }
+        return fs::path(utf8);
+    }
+
+    std::string windowText(HWND control)
+    {
+        const int length = GetWindowTextLengthW(control);
+        std::wstring buffer(static_cast<std::size_t>(std::max(0, length)) + 1, L'\0');
+        GetWindowTextW(control, buffer.data(), length + 1);
+        buffer.resize(static_cast<std::size_t>(length));
+        return std::string(wideToPath(buffer).string());
+    }
+
+    void setStatus(const std::string& text)
+    {
+        SetWindowTextW(gStatus, widen(text).c_str());
+    }
+
+    void appendLog(const std::string& text)
+    {
+        if (gLogList == nullptr) {
+            return;
+        }
+        std::wstring wide = widen(text);
+        // Drop the leading header when the engine sends one.
+        for (wchar_t& ch : wide) {
+            if (ch == L'\r' || ch == L'\n') {
+                ch = L' ';
+            }
+        }
+        const int index = static_cast<int>(
+            SendMessageW(gLogList, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(wide.c_str())));
+        SendMessageW(gLogList, LB_SETTOPINDEX, static_cast<WPARAM>(index), 0);
+    }
+
+    bool matchesFilter(const Song& song, const std::string& filter)
+    {
+        if (filter.empty()) {
+            return true;
+        }
+        if (std::to_string(song.id).find(filter) != std::string::npos) {
+            return true;
+        }
+        if (song.title.find(filter) != std::string::npos) {
+            return true;
+        }
+        return song.kana.find(filter) != std::string::npos;
+    }
+
+    // Fills the list from gSongs, keeping the current search filter and the
+    // check state of the songs that stay visible.
+    void rebuildList(const std::string& filter)
+    {
+        // Remember what was ticked.
+        std::map<int, bool> checked;
+        const int rows = static_cast<int>(gRowSong.size());
+        for (int row = 0; row < rows; ++row) {
+            const bool isChecked =
+                ListView_GetCheckState(gList, row) != 0;
+            checked[gRowSong[static_cast<std::size_t>(row)]] = isChecked;
+        }
+
+        SendMessageW(gList, WM_SETREDRAW, FALSE, 0);
+        ListView_DeleteAllItems(gList);
+        gRowSong.clear();
+
+        for (std::size_t i = 0; i < gSongs.size(); ++i) {
+            const Song& song = gSongs[i];
+            if (!matchesFilter(song, filter)) {
+                continue;
+            }
+            wchar_t id[16];
+            std::swprintf(id, 16, L"%04d", song.id);
+            LVITEMW item{};
+            item.mask = LVIF_TEXT;
+            item.iItem = static_cast<int>(gRowSong.size());
+            item.pszText = id;
+            const int row = static_cast<int>(SendMessageW(gList, LVM_INSERTITEMW, 0,
+                reinterpret_cast<LPARAM>(&item)));
+            auto setColumn = [&](int column, const std::wstring& text) {
+                ListView_SetItemText(gList, row, column, const_cast<wchar_t*>(text.c_str()));
+            };
+            setColumn(1, widen(song.title));
+            setColumn(2, widen(song.kana));
+            std::string levels = "E" + std::to_string(song.levels[0]) + " N" + std::to_string(song.levels[1])
+                + " H" + std::to_string(song.levels[2]) + " X" + std::to_string(song.levels[3]) + " M"
+                + std::to_string(song.levels[4]);
+            setColumn(3, widen(levels));
+            setColumn(4, widen(std::to_string(song.vocals.size()) + " 版本"));
+            const auto state = checked.find(static_cast<int>(i));
+            ListView_SetCheckState(gList, row, state != checked.end() && state->second ? TRUE : FALSE);
+            gRowSong.push_back(static_cast<int>(i));
+        }
+        SendMessageW(gList, WM_SETREDRAW, TRUE, 0);
+        InvalidateRect(gList, nullptr, TRUE);
+    }
+
+    void updateDetailPanel(int songIndex);
+
+    LRESULT CALLBACK windowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
+    {
+        switch (message) {
+            case WM_CREATE: {
+                gFont = reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+                auto create = [&](const wchar_t* cls, const wchar_t* text, DWORD style, int id) {
+                    HWND control = CreateWindowExW(0, cls, text, WS_CHILD | WS_VISIBLE | style, 0, 0, 10, 10,
+                        hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), nullptr, nullptr);
+                    SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(gFont), TRUE);
+                    return control;
+                };
+
+                gOutDirLabel = create(L"STATIC", L"输出目录", SS_LEFT, -1);
+                gOutDirEdit = create(L"EDIT", L"", WS_BORDER | ES_AUTOHSCROLL, kIdOutDir);
+                create(L"BUTTON", L"浏览…", BS_PUSHBUTTON, kIdBrowse);
+                create(L"BUTTON", L"打开目录", BS_PUSHBUTTON, kIdOpenDir);
+
+                gSearchLabel = create(L"STATIC", L"搜索", SS_LEFT, -1);
+                gSearch = create(L"EDIT", L"", WS_BORDER | ES_AUTOHSCROLL, kIdSearch);
+                gQueueButton = create(L"BUTTON", L"下载勾选的歌曲", BS_PUSHBUTTON | BS_DEFPUSHBUTTON, kIdQueue);
+                create(L"BUTTON", L"全选 / 全不选", BS_PUSHBUTTON, kIdCheckAll);
+                gCancelButton = create(L"BUTTON", L"取消", BS_PUSHBUTTON, kIdCancel);
+
+                gList = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"",
+                    WS_CHILD | WS_VISIBLE | LVS_REPORT | LVS_SHOWSELALWAYS,
+                    0, 0, 10, 10, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdList)), nullptr, nullptr);
+                SendMessageW(gList, WM_SETFONT, reinterpret_cast<WPARAM>(gFont), TRUE);
+                ListView_SetExtendedListViewStyle(gList,
+                    LVS_EX_FULLROWSELECT | LVS_EX_CHECKBOXES | LVS_EX_DOUBLEBUFFER);
+                struct Column
+                {
+                    const wchar_t* title;
+                    int width;
+                };
+                const Column columns[] = {
+                    {L"ID", 52}, {L"曲名", 220}, {L"读音", 140}, {L"难度 (E/N/H/X/M)", 150}, {L"演唱版本", 90}};
+                for (int i = 0; i < 5; ++i) {
+                    LVCOLUMNW column{};
+                    column.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM;
+                    column.pszText = const_cast<wchar_t*>(columns[i].title);
+                    column.cx = columns[i].width;
+                    column.iSubItem = i;
+                    ListView_InsertColumn(gList, i, &column);
+                }
+
+                create(L"BUTTON", L"下载内容", BS_GROUPBOX, kIdDetailGroup);
+                gDetailTitle = create(L"STATIC", L"（在左边选一首歌）", SS_LEFT, kIdDetailTitle);
+                for (int d = 0; d < 5; ++d) {
+                    gDiffChecks[d] =
+                        create(L"BUTTON", widen(kDiffNames[d]).c_str(), BS_AUTOCHECKBOX, kIdDiffBase + d);
+                    SendMessageW(gDiffChecks[d], BM_SETCHECK, BST_CHECKED, 0);
+                }
+                gJacketCheck = create(L"BUTTON", L"曲绘", BS_AUTOCHECKBOX, kIdJacket);
+                gSidecarCheck = create(L"BUTTON", L"元数据 (sidecar json)", BS_AUTOCHECKBOX, kIdSidecar);
+                SendMessageW(gJacketCheck, BM_SETCHECK, BST_CHECKED, 0);
+                SendMessageW(gSidecarCheck, BM_SETCHECK, BST_CHECKED, 0);
+
+                gProgress = CreateWindowExW(0, PROGRESS_CLASSW, L"", WS_CHILD | WS_VISIBLE, 0, 0, 10, 10,
+                    hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdProgress)), nullptr, nullptr);
+                SendMessageW(gProgress, PBM_SETRANGE, 0, MAKELPARAM(0, 1000));
+                gStatus = create(L"STATIC", L"就绪", SS_LEFT, kIdStatus);
+                gLogList = CreateWindowExW(WS_EX_CLIENTEDGE, L"LISTBOX", L"",
+                    WS_CHILD | WS_VISIBLE | WS_VSCROLL | LBS_NOINTEGRALHEIGHT | LBS_DISABLENOSCROLL, 0, 0, 10, 10,
+                    hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdLog)), nullptr, nullptr);
+                SendMessageW(gLogList, WM_SETFONT, reinterpret_cast<WPARAM>(gFont), TRUE);
+
+                SetWindowTextW(gOutDirEdit, widen(gOutDir).c_str());
+                SetTimer(hwnd, 1, 150, nullptr);
+                return 0;
+            }
+            case WM_SIZE: {
+                const int width = LOWORD(lParam);
+                const int height = HIWORD(lParam);
+                const int margin = 10;
+                const int panelWidth = 330;
+                const int bottomHeight = 188;
+                const int listWidth = width - margin * 3 - panelWidth;
+                const int listHeight = height - 76 - bottomHeight - margin;
+                const int panelX = margin * 2 + listWidth;
+
+                SetWindowPos(GetDlgItem(hwnd, kIdDetailGroup), nullptr, panelX, 68, panelWidth - margin, listHeight + 4,
+                    SWP_NOZORDER);
+                SetWindowPos(gList, nullptr, margin, 68, listWidth, listHeight + 4, SWP_NOZORDER);
+
+                SetWindowPos(gOutDirLabel, nullptr, margin, 15, 62, 20, SWP_NOZORDER);
+                SetWindowPos(gOutDirEdit, nullptr, 76, 12, width - 76 - 220, 24, SWP_NOZORDER);
+                SetWindowPos(GetDlgItem(hwnd, kIdBrowse), nullptr, width - 208, 12, 90, 24, SWP_NOZORDER);
+                SetWindowPos(GetDlgItem(hwnd, kIdOpenDir), nullptr, width - 112, 12, 102, 24, SWP_NOZORDER);
+                SetWindowPos(gSearchLabel, nullptr, margin, 45, 62, 20, SWP_NOZORDER);
+                SetWindowPos(gSearch, nullptr, 76, 42, 240, 24, SWP_NOZORDER);
+                SetWindowPos(gQueueButton, nullptr, 330, 42, 150, 24, SWP_NOZORDER);
+                SetWindowPos(GetDlgItem(hwnd, kIdCheckAll), nullptr, 488, 42, 120, 24, SWP_NOZORDER);
+                SetWindowPos(gCancelButton, nullptr, 616, 42, 80, 24, SWP_NOZORDER);
+
+                const int progressY = height - bottomHeight + 4;
+                SetWindowPos(gProgress, nullptr, margin, progressY, width - margin * 2, 20, SWP_NOZORDER);
+                SetWindowPos(gStatus, nullptr, margin, progressY + 24, width - margin * 2, 18, SWP_NOZORDER);
+                SetWindowPos(gLogList, nullptr, margin, progressY + 46, width - margin * 2, bottomHeight - 56,
+                    SWP_NOZORDER);
+
+                SetWindowPos(gDetailTitle, nullptr, panelX + 14, 92, panelWidth - 28, 18, SWP_NOZORDER);
+                if (gDetailSong >= 0) {
+                    updateDetailPanel(gDetailSong);
+                }
+                return 0;
+            }
+            case WM_GETMINMAXINFO: {
+                auto* info = reinterpret_cast<MINMAXINFO*>(lParam);
+                info->ptMinTrackSize = {860, 560};
+                return 0;
+            }
+            case WM_COMMAND: {
+                const int id = LOWORD(wParam);
+                if (id == kIdBrowse) {
+                    BROWSEINFOW browse{};
+                    browse.hwndOwner = hwnd;
+                    browse.lpszTitle = L"选择谱面输出目录";
+                    browse.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
+                    LPITEMIDLIST item = SHBrowseForFolderW(&browse);
+                    if (item != nullptr) {
+                        wchar_t path[MAX_PATH] = {};
+                        if (SHGetPathFromIDListW(item, path)) {
+                            gOutDir.assign(wideToPath(path).string());
+                            SetWindowTextW(gOutDirEdit, path);
+                        }
+                        CoTaskMemFree(item);
+                    }
+                    return 0;
+                }
+                if (id == kIdOpenDir) {
+                    std::wstring dir = widen(gOutDir);
+                    ShellExecuteW(hwnd, L"open", dir.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+                    return 0;
+                }
+                if (id == kIdCheckAll) {
+                    const bool anyUnchecked = [&] {
+                        const int rows = ListView_GetItemCount(gList);
+                        for (int row = 0; row < rows; ++row) {
+                            if (ListView_GetCheckState(gList, row) == 0) {
+                                return true;
+                            }
+                        }
+                        return false;
+                    }();
+                    const int rows = ListView_GetItemCount(gList);
+                    SendMessageW(gList, WM_SETREDRAW, FALSE, 0);
+                    for (int row = 0; row < rows; ++row) {
+                        ListView_SetCheckState(gList, row, anyUnchecked ? TRUE : FALSE);
+                    }
+                    SendMessageW(gList, WM_SETREDRAW, TRUE, 0);
+                    InvalidateRect(gList, nullptr, TRUE);
+                    return 0;
+                }
+                if (id == kIdCancel) {
+                    gCancel.store(true);
+                    setStatus("正在取消…");
+                    return 0;
+                }
+                if (id == kIdQueue) {
+                    if (gRunning.load()) {
+                        return 0;
+                    }
+                    gOutDir.assign(windowText(gOutDirEdit));
+                    Request request;
+                    for (int d = 0; d < 5; ++d) {
+                        request.diffs[d] =
+                            SendMessageW(gDiffChecks[d], BM_GETCHECK, 0, 0) == BST_CHECKED;
+                    }
+                    request.jacket = SendMessageW(gJacketCheck, BM_GETCHECK, 0, 0) == BST_CHECKED;
+                    request.sidecar = SendMessageW(gSidecarCheck, BM_GETCHECK, 0, 0) == BST_CHECKED;
+                    for (std::size_t v = 0; v < gVocalChecks.size(); ++v) {
+                        if (SendMessageW(gVocalChecks[v], BM_GETCHECK, 0, 0) == BST_CHECKED) {
+                            request.vocalIndexes.push_back(v);
+                        }
+                    }
+
+                    // Only the detail panel's vocals apply to the detail song;
+                    // for every other ticked row every version is taken.
+                    bool anyDiff = false;
+                    for (int d = 0; d < 5; ++d) {
+                        anyDiff = anyDiff || request.diffs[d];
+                    }
+                    if (!anyDiff && request.vocalIndexes.empty() && !request.jacket && !request.sidecar) {
+                        MessageBoxW(hwnd, L"右边至少要勾一样东西（难度 / 演唱版本 / 曲绘 / 元数据）。",
+                            L"CppSekai 谱面下载器", MB_OK | MB_ICONINFORMATION);
+                        return 0;
+                    }
+
+                    const int rows = ListView_GetItemCount(gList);
+                    int queued = 0;
+                    for (int row = 0; row < rows; ++row) {
+                        if (ListView_GetCheckState(gList, row) == 0) {
+                            continue;
+                        }
+                        const int songIndex = gRowSong[static_cast<std::size_t>(row)];
+                        const Song& song = gSongs[static_cast<std::size_t>(songIndex)];
+                        Request songRequest = request;
+                        if (songIndex != gDetailSong || song.vocals.empty()) {
+                            songRequest.vocalIndexes.clear();
+                            for (std::size_t v = 0; v < song.vocals.size(); ++v) {
+                                songRequest.vocalIndexes.push_back(v);
+                            }
+                        }
+                        queueSong(song, songRequest, fs::path(gOutDir), false);
+                        ++queued;
+                    }
+                    if (queued == 0) {
+                        MessageBoxW(hwnd, L"左边没有勾选任何歌曲。", L"CppSekai 谱面下载器",
+                            MB_OK | MB_ICONINFORMATION);
+                        return 0;
+                    }
+                    gCancel.store(false);
+                    gRunning.store(true);
+                    std::thread(worker).detach();
+                    setStatus("开始下载…");
+                    appendLog("=== " + std::to_string(queued) + " 首歌曲，共 "
+                        + std::to_string(gJobs.size()) + " 个文件 ===");
+                    return 0;
+                }
+                if (id == kIdSearch && HIWORD(wParam) == EN_CHANGE) {
+                    rebuildList(windowText(gSearch));
+                    return 0;
+                }
+                return 0;
+            }
+            case WM_NOTIFY: {
+                auto* header = reinterpret_cast<NMHDR*>(lParam);
+                if (header->idFrom == kIdList && header->code == LVN_ITEMCHANGED) {
+                    const int row = ListView_GetNextItem(gList, -1, LVNI_SELECTED);
+                    const int songIndex =
+                        row >= 0 && row < static_cast<int>(gRowSong.size())
+                        ? gRowSong[static_cast<std::size_t>(row)]
+                        : -1;
+                    if (songIndex != gDetailSong) {
+                        updateDetailPanel(songIndex);
+                    }
+                }
+                return 0;
+            }
+            case WM_TIMER: {
+                // Progress + log refresh (the worker thread only touches its own
+                // state under gJobMutex).
+                long long received = 0;
+                long long total = 0;
+                std::size_t finished = 0;
+                {
+                    std::lock_guard<std::mutex> lock(gJobMutex);
+                    for (const Job& job : gJobs) {
+                        if (job.state == JobState::Done || job.state == JobState::Failed
+                            || job.state == JobState::Skipped) {
+                            ++finished;
+                            received += std::max(job.bytes, job.total);
+                            total += std::max(job.bytes, job.total);
+                            continue;
+                        }
+                        received += job.bytes;
+                        total += job.total;
+                    }
+                }
+                const int permille = total > 0 ? static_cast<int>(received * 1000 / total) : 0;
+                SendMessageW(gProgress, PBM_SETPOS, static_cast<WPARAM>(std::max(0, permille)), 0);
+                if (gRunning.load() || finished < gJobs.size()) {
+                    setStatus("下载中 " + std::to_string(finished) + "/" + std::to_string(gJobs.size())
+                        + " 个文件  " + humanBytes(received) + " / " + humanBytes(total));
+                } else if (!gJobs.empty()) {
+                    std::size_t failed = 0;
+                    for (const Job& job : gJobs) {
+                        failed += job.state == JobState::Failed ? 1 : 0;
+                    }
+                    setStatus(failed == 0 ? "全部完成" : ("完成，失败 " + std::to_string(failed) + " 个"));
+                }
+
+                std::vector<std::string> lines;
+                {
+                    std::lock_guard<std::mutex> lock(gLogMutex);
+                    for (std::size_t i = gLogShown; i < gLog.size(); ++i) {
+                        lines.push_back(gLog[i]);
+                    }
+                    gLogShown = gLog.size();
+                }
+                for (const std::string& line : lines) {
+                    appendLog(line);
+                }
+                return 0;
+            }
+            case WM_DESTROY:
+                KillTimer(hwnd, 1);
+                PostQuitMessage(0);
+                return 0;
+            default:
+                break;
+        }
+        return DefWindowProcW(hwnd, message, wParam, lParam);
+    }
+
+    // Right-hand panel: which difficulty / vocal version / extras to fetch for
+    // the song currently selected in the list.
+    void updateDetailPanel(int songIndex)
+    {
+        gDetailSong = songIndex;
+        for (HWND check : gVocalChecks) {
+            DestroyWindow(check);
+        }
+        gVocalChecks.clear();
+        if (songIndex < 0 || songIndex >= static_cast<int>(gSongs.size())) {
+            SetWindowTextW(gDetailTitle, L"（在左边选一首歌）");
+            return;
+        }
+        const Song& song = gSongs[static_cast<std::size_t>(songIndex)];
+        const std::wstring title = L"#" + std::to_wstring(song.id) + L"  " + widen(song.title);
+        SetWindowTextW(gDetailTitle, title.c_str());
+
+        RECT panel{};
+        GetWindowRect(GetDlgItem(GetParent(gList), kIdDetailGroup), &panel);
+        MapWindowPoints(HWND_DESKTOP, GetParent(gList), reinterpret_cast<POINT*>(&panel), 2);
+        const int baseX = panel.left + 14;
+        int y = panel.top + 40;
+        const int rowHeight = 22;
+
+        SetWindowPos(gDetailTitle, nullptr, baseX, panel.top + 18, panel.right - panel.left - 28, 18,
+            SWP_NOZORDER);
+
+        for (int d = 0; d < 5; ++d) {
+            const int level = song.levels[d];
+            const bool available = level > 0;
+            std::wstring label = widen(kDiffNames[d]);
+            if (available) {
+                label += L"  Lv." + std::to_wstring(level);
+            } else {
+                label += L"  （无）";
+            }
+            SetWindowTextW(gDiffChecks[d], label.c_str());
+            EnableWindow(gDiffChecks[d], available ? TRUE : FALSE);
+            SendMessageW(gDiffChecks[d], BM_SETCHECK, available ? BST_CHECKED : BST_UNCHECKED, 0);
+            SetWindowPos(gDiffChecks[d], nullptr, baseX, y, panel.right - panel.left - 28, rowHeight, SWP_NOZORDER);
+            y += rowHeight;
+        }
+        y += 8;
+        for (std::size_t v = 0; v < song.vocals.size(); ++v) {
+            const VocalVersion& version = song.vocals[v];
+            std::wstring label = widen(version.caption.empty() ? version.type : version.caption);
+            if (!version.singers.empty()) {
+                label += L"  " + widen(version.singers);
+            }
+            HWND check = CreateWindowExW(0, L"BUTTON", label.c_str(),
+                WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, baseX, y, panel.right - panel.left - 28, rowHeight,
+                GetParent(gList), reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdVocalBase + v)), nullptr, nullptr);
+            SendMessageW(check, WM_SETFONT, reinterpret_cast<WPARAM>(gFont), TRUE);
+            SendMessageW(check, BM_SETCHECK, BST_CHECKED, 0);
+            gVocalChecks.push_back(check);
+            y += rowHeight;
+        }
+        if (song.vocals.empty()) {
+            HWND none = CreateWindowExW(0, L"STATIC", L"（没有演唱版本数据）", WS_CHILD | WS_VISIBLE,
+                baseX, y, panel.right - panel.left - 28, rowHeight, GetParent(gList), nullptr, nullptr, nullptr);
+            SendMessageW(none, WM_SETFONT, reinterpret_cast<WPARAM>(gFont), TRUE);
+            y += rowHeight;
+        }
+        y += 8;
+        SetWindowPos(gJacketCheck, nullptr, baseX, y, panel.right - panel.left - 28, rowHeight, SWP_NOZORDER);
+        y += rowHeight;
+        SetWindowPos(gSidecarCheck, nullptr, baseX, y, panel.right - panel.left - 28, rowHeight, SWP_NOZORDER);
+    }
+
+    // --screenshot: grab the window with GDI (no screen capture, no input) so
+    // the UI can be checked from a script.
+    bool saveWindowPng(HWND hwnd, const std::string& path)
+    {
+        RECT rect{};
+        GetClientRect(hwnd, &rect);
+        const int width = rect.right;
+        const int height = rect.bottom;
+        if (width <= 0 || height <= 0) {
+            return false;
+        }
+        HDC windowDc = GetDC(hwnd);
+        HDC memDc = CreateCompatibleDC(windowDc);
+        BITMAPINFO info{};
+        info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+        info.bmiHeader.biWidth = width;
+        info.bmiHeader.biHeight = -height; // top-down
+        info.bmiHeader.biPlanes = 1;
+        info.bmiHeader.biBitCount = 32;
+        info.bmiHeader.biCompression = BI_RGB;
+        void* bits = nullptr;
+        HBITMAP bitmap = CreateDIBSection(memDc, &info, DIB_RGB_COLORS, &bits, nullptr, 0);
+        HGDIOBJ old = SelectObject(memDc, bitmap);
+        PrintWindow(hwnd, memDc, PW_RENDERFULLCONTENT);
+
+        std::vector<unsigned char> rgba(static_cast<std::size_t>(width) * height * 4);
+        const auto* source = static_cast<const unsigned char*>(bits);
+        for (std::size_t i = 0; i < rgba.size(); i += 4) {
+            rgba[i + 0] = source[i + 2];
+            rgba[i + 1] = source[i + 1];
+            rgba[i + 2] = source[i + 0];
+            rgba[i + 3] = 255;
+        }
+        SelectObject(memDc, old);
+        DeleteObject(bitmap);
+        DeleteDC(memDc);
+        ReleaseDC(hwnd, windowDc);
+
+        return stbi_write_png(path.c_str(), width, height, 4, rgba.data(), width * 4) != 0;
+    }
+
+    int runGui(fs::path outDir, const std::string& screenshotPath, double screenshotTime)
+    {
+        gOutDir = outDir.string();
+        loadData();
+        if (!gDataError.empty()) {
+            appendLog(std::string("[data] ") + gDataError);
+        }
+
+        WNDCLASSEXW windowClass{};
+        windowClass.cbSize = sizeof(windowClass);
+        windowClass.style = CS_HREDRAW | CS_VREDRAW;
+        windowClass.lpfnWndProc = windowProc;
+        windowClass.hInstance = GetModuleHandleW(nullptr);
+        windowClass.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+        windowClass.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_BTNFACE + 1);
+        windowClass.lpszClassName = L"CppSekaiChartDl";
+        windowClass.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
+        RegisterClassExW(&windowClass);
+
+        HWND hwnd = CreateWindowExW(0, windowClass.lpszClassName, L"CppSekai 谱面下载器",
+            WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 1180, 760, nullptr, nullptr,
+            windowClass.hInstance, nullptr);
+        if (hwnd == nullptr) {
+            return 1;
+        }
+        ShowWindow(hwnd, SW_SHOW);
+        UpdateWindow(hwnd);
+        rebuildList("");
+
+        const ULONGLONG start = GetTickCount64();
+        MSG message{};
+        while (true) {
+            while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
+                if (message.message == WM_QUIT) {
+                    return 0;
+                }
+                TranslateMessage(&message);
+                DispatchMessageW(&message);
+            }
+            if (!screenshotPath.empty()
+                && static_cast<double>(GetTickCount64() - start) / 1000.0 >= screenshotTime) {
+                saveWindowPng(hwnd, screenshotPath);
+                break;
+            }
+            MsgWaitForMultipleObjects(0, nullptr, FALSE, 30, QS_ALLINPUT);
+        }
+        return 0;
+    }
+} // namespace
+
 int main(int argc, char** argv)
 {
-    // The MinGW/subsystem-free build keeps stdout when launched from a shell;
-    // a double-click gets no console, which is fine for the GUI mode.
+    // Built as a GUI subsystem app (no console flash when double-clicked), so a
+    // command line run has to borrow the shell's console back for its output.
+    if (argc > 1) {
+        // Only when nothing is connected already: a shell that piped our output
+        // (git bash, cmd) has a valid handle and must keep it.
+        const HANDLE standardOut = GetStdHandle(STD_OUTPUT_HANDLE);
+        if ((standardOut == nullptr || standardOut == INVALID_HANDLE_VALUE)
+            && AttachConsole(ATTACH_PARENT_PROCESS)) {
+            FILE* dummy = nullptr;
+            freopen_s(&dummy, "CONOUT$", "w", stdout);
+            freopen_s(&dummy, "CONOUT$", "w", stderr);
+        }
+    }
     fs::path outDir = "..\\charts";
     std::string listFilter;
     std::string downloadIds;
@@ -753,6 +1378,7 @@ int main(int argc, char** argv)
         std::fprintf(stderr, "[data] %s\n", gDataError.c_str());
     }
     note("[data] " + std::to_string(gSongs.size()) + " songs");
+    InitCommonControls();
 
     auto difficultyMask = [&](bool mask[5]) {
         if (diffArg == "all") {
@@ -821,332 +1447,5 @@ int main(int argc, char** argv)
         return runJobQueue(error);
     }
 
-    // -----------------------------------------------------------------------
-    // GUI
-    // -----------------------------------------------------------------------
-    if (SDL_Init(SDL_INIT_VIDEO) != 0) {
-        std::fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
-        return 1;
-    }
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, 0);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
-    SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
-    SDL_Window* window = SDL_CreateWindow("CppSekai chart downloader", SDL_WINDOWPOS_CENTERED,
-        SDL_WINDOWPOS_CENTERED, 1180, 720, SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE);
-    if (window == nullptr) {
-        std::fprintf(stderr, "SDL_CreateWindow failed: %s\n", SDL_GetError());
-        return 1;
-    }
-    SDL_GLContext gl = SDL_GL_CreateContext(window);
-    SDL_GL_MakeCurrent(window, gl);
-    SDL_GL_SetSwapInterval(1);
-
-    IMGUI_CHECKVERSION();
-    ImGui::CreateContext();
-    // The old look: stock ImGui dark theme, stock metrics - but the stock font
-    // has no kana / kanji, so one system CJK face is merged in (the game does
-    // the same, and Yu Gothic UI must be skipped there: CFF outlines, which
-    // stb_truetype cannot rasterise).
-    {
-        const char* candidates[] = {"C:\\Windows\\Fonts\\msyh.ttc", "C:\\Windows\\Fonts\\msyh.ttf",
-            "C:\\Windows\\Fonts\\meiryo.ttc", "C:\\Windows\\Fonts\\msgothic.ttc"};
-        ImFontConfig config;
-        config.OversampleH = 1;
-        config.OversampleV = 1;
-        for (const char* path : candidates) {
-            if (fs::exists(path)) {
-                ImFont* font = ImGui::GetIO().Fonts->AddFontFromFileTTF(path, 16.0f, &config,
-                    ImGui::GetIO().Fonts->GetGlyphRangesJapanese());
-                note(std::string("[font] ") + path + (font != nullptr ? " ok" : " FAILED"));
-                break;
-            }
-        }
-    }
-    ImGui::StyleColorsDark();
-    ImGui_ImplSDL2_InitForOpenGL(window, gl);
-    ImGui_ImplOpenGL3_Init("#version 330 core");
-
-    bool running = true;
-    char search[64] = "";
-    char outDirBuf[512];
-    std::snprintf(outDirBuf, sizeof(outDirBuf), "%s", outDir.string().c_str());
-    int selectedRow = -1;
-    std::vector<char> checked(gSongs.size(), 0);
-    Request request;
-    if (!gSongs.empty() && !gSongs[0].vocals.empty()) {
-        request.vocalIndexes.push_back(0);
-    }
-    bool forceRedownload = false;
-    Uint64 startTicks = SDL_GetTicks64();
-
-    while (running) {
-        SDL_Event event;
-        while (SDL_PollEvent(&event) != 0) {
-            ImGui_ImplSDL2_ProcessEvent(&event);
-            if (event.type == SDL_QUIT) {
-                running = false;
-            }
-        }
-
-        if (!screenshotPath.empty()
-            && static_cast<double>(SDL_GetTicks64() - startTicks) / 1000.0 >= screenshotTime) {
-            running = false;
-        }
-
-        ImGui_ImplOpenGL3_NewFrame();
-        ImGui_ImplSDL2_NewFrame();
-        ImGui::NewFrame();
-
-        const ImGuiViewport* viewport = ImGui::GetMainViewport();
-        ImGui::SetNextWindowPos(viewport->WorkPos);
-        ImGui::SetNextWindowSize(viewport->WorkSize);
-        ImGui::Begin("CppSekai chart downloader", nullptr, ImGuiWindowFlags_NoCollapse);
-
-        ImGui::Text("source: assets.unipjsk.com  |  %d songs loaded", static_cast<int>(gSongs.size()));
-        if (!gDataError.empty()) {
-            ImGui::SameLine();
-            ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "(%s)", gDataError.c_str());
-        }
-        ImGui::SetNextItemWidth(-1.0f);
-        ImGui::InputText("##outdir", outDirBuf, sizeof(outDirBuf));
-        ImGui::SetNextItemWidth(320.0f);
-        ImGui::InputTextWithHint("##search", "search: id / title / reading", search, sizeof(search));
-        ImGui::SameLine();
-        if (ImGui::Button("queue checked")) {
-            int queued = 0;
-            for (size_t i = 0; i < gSongs.size(); ++i) {
-                if (checked[i] != 0) {
-                    queueSong(gSongs[i], request, outDirBuf, forceRedownload);
-                    ++queued;
-                }
-            }
-            if (queued > 0) {
-                startWorker();
-            } else {
-                logLine("[warn] nothing checked");
-            }
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("cancel")) {
-            gCancel.store(true);
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("clear list")) {
-            std::lock_guard<std::mutex> lock(gJobMutex);
-            gJobs.clear();
-        }
-        ImGui::Checkbox("re-download existing files", &forceRedownload);
-        ImGui::SameLine();
-        ImGui::Checkbox("jacket", &request.jacket);
-        ImGui::SameLine();
-        ImGui::Checkbox("sidecar metadata", &request.sidecar);
-        ImGui::SameLine();
-        ImGui::Text("| difficulties:");
-        for (int d = 0; d < 5; ++d) {
-            ImGui::SameLine();
-            ImGui::Checkbox(kDiffNames[d], &request.diffs[d]);
-        }
-        ImGui::Separator();
-
-        // Left: song table. Right: details of the selected song.
-        ImGui::BeginChild("##songs", ImVec2(ImGui::GetContentRegionAvail().x * 0.56f, -170.0f), true);
-        if (ImGui::BeginTable("songs", 6,
-                ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_ScrollY)) {
-            ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 22.0f);
-            ImGui::TableSetupColumn("id", ImGuiTableColumnFlags_WidthFixed, 44.0f);
-            ImGui::TableSetupColumn("title", ImGuiTableColumnFlags_WidthStretch);
-            ImGui::TableSetupColumn("reading", ImGuiTableColumnFlags_WidthFixed, 150.0f);
-            ImGui::TableSetupColumn("EXP", ImGuiTableColumnFlags_WidthFixed, 34.0f);
-            ImGui::TableSetupColumn("MST", ImGuiTableColumnFlags_WidthFixed, 34.0f);
-            ImGui::TableHeadersRow();
-            const std::string needle = search;
-            int shown = 0;
-            for (size_t i = 0; i < gSongs.size(); ++i) {
-                const Song& song = gSongs[i];
-                if (!needle.empty()) {
-                    const std::string hay = song.title + song.kana + std::to_string(song.id);
-                    if (hay.find(needle) == std::string::npos) {
-                        continue;
-                    }
-                }
-                ++shown;
-                ImGui::TableNextRow();
-                ImGui::TableSetColumnIndex(0);
-                ImGui::PushID(static_cast<int>(i));
-                bool rowChecked = checked[i] != 0;
-                if (ImGui::Checkbox("##check", &rowChecked)) {
-                    checked[i] = rowChecked ? 1 : 0;
-                }
-                ImGui::PopID();
-                ImGui::TableSetColumnIndex(1);
-                ImGui::Text("%04d", song.id);
-                ImGui::TableSetColumnIndex(2);
-                if (ImGui::Selectable(song.title.c_str(), selectedRow == static_cast<int>(i),
-                        ImGuiSelectableFlags_SpanAllColumns)) {
-                    selectedRow = static_cast<int>(i);
-                    request.vocalIndexes.clear();
-                    if (!song.vocals.empty()) {
-                        request.vocalIndexes.push_back(0);
-                    }
-                }
-                ImGui::TableSetColumnIndex(3);
-                ImGui::TextUnformatted(song.kana.c_str());
-                ImGui::TableSetColumnIndex(4);
-                ImGui::Text("%d", song.levels[3]);
-                ImGui::TableSetColumnIndex(5);
-                ImGui::Text("%d", song.levels[4]);
-            }
-            ImGui::EndTable();
-            if (!needle.empty()) {
-                ImGui::Text("%d match(es)", shown);
-            }
-        }
-        ImGui::EndChild();
-
-        ImGui::SameLine();
-        ImGui::BeginChild("##details", ImVec2(0.0f, -170.0f), true);
-        if (selectedRow >= 0 && selectedRow < static_cast<int>(gSongs.size())) {
-            const Song& song = gSongs[selectedRow];
-            ImGui::Text("%s", song.title.c_str());
-            ImGui::TextWrapped("%s", song.kana.c_str());
-            ImGui::Text("id %04d   lyricist %s", song.id, song.lyricist.c_str());
-            ImGui::Text("composer %s   arranger %s", song.composer.c_str(), song.arranger.c_str());
-            ImGui::Text("levels  E %d  N %d  H %d  EXP %d  MST %d", song.levels[0], song.levels[1],
-                song.levels[2], song.levels[3], song.levels[4]);
-            const fs::path dir(outDirBuf);
-            ImGui::Separator();
-            ImGui::Text("charts:");
-            for (int d = 0; d < 5; ++d) {
-                ImGui::SameLine();
-                const bool have = fileExists(chartPath(dir, song.id, kDiffNames[d]));
-                ImGui::TextColored(have ? ImVec4(0.4f, 1.0f, 0.5f, 1.0f) : ImVec4(1.0f, 0.5f, 0.5f, 1.0f),
-                    "%s", kDiffNames[d]);
-            }
-            ImGui::Separator();
-            ImGui::Text("vocal versions:");
-            if (song.vocals.empty()) {
-                ImGui::TextDisabled("(no official vocal table entry)");
-            }
-            for (size_t v = 0; v < song.vocals.size(); ++v) {
-                const VocalVersion& version = song.vocals[v];
-                const bool have = fileExists(audioPath(dir, version, song.id));
-                bool picked = std::find(request.vocalIndexes.begin(), request.vocalIndexes.end(), v)
-                    != request.vocalIndexes.end();
-                ImGui::PushID(static_cast<int>(v) + 500);
-                if (ImGui::Checkbox("##vocal", &picked)) {
-                    if (picked) {
-                        request.vocalIndexes.push_back(v);
-                    } else {
-                        request.vocalIndexes.erase(std::remove(request.vocalIndexes.begin(),
-                                                        request.vocalIndexes.end(), v),
-                            request.vocalIndexes.end());
-                    }
-                }
-                ImGui::PopID();
-                ImGui::SameLine();
-                ImGui::Text("%-26s %-22s %s", version.caption.c_str(), version.singers.c_str(),
-                    have ? "[have]" : "");
-                if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip("%s\n%s", version.asset.c_str(), audioUrl(version, song.id).c_str());
-                }
-            }
-            ImGui::Separator();
-            const bool haveJacket = fileExists(jacketPath(dir, song));
-            ImGui::Text("jacket: %s", haveJacket ? "[have]" : "[missing]");
-            if (ImGui::Button("queue this song")) {
-                queueSong(song, request, dir, forceRedownload);
-                startWorker();
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("open folder")) {
-                std::string cmd = "explorer \"" + fs::absolute(dir).string() + "\"";
-                std::system(cmd.c_str());
-            }
-        } else {
-            ImGui::TextDisabled("select a song on the left");
-        }
-        ImGui::EndChild();
-
-        // Bottom: queue progress + log.
-        ImGui::BeginChild("##queue", ImVec2(0.0f, 0.0f), true);
-        long long doneBytes = 0;
-        long long totalBytes = 0;
-        size_t finished = 0;
-        size_t totalJobs = 0;
-        std::string activeName = "(idle)";
-        {
-            std::lock_guard<std::mutex> lock(gJobMutex);
-            totalJobs = gJobs.size();
-            for (const Job& job : gJobs) {
-                finished += job.state != JobState::Waiting && job.state != JobState::Active ? 1 : 0;
-                if (job.state == JobState::Active) {
-                    activeName = job.path.filename().string() + "  " + humanBytes(job.bytes)
-                        + (job.total > 0 ? " / " + humanBytes(job.total) : "");
-                    totalBytes += job.total;
-                }
-                doneBytes += job.bytes;
-            }
-        }
-        const float progress = totalJobs == 0 ? 0.0f
-                                              : static_cast<float>(finished) / static_cast<float>(totalJobs);
-        ImGui::ProgressBar(progress, ImVec2(-1.0f, 0.0f),
-            (std::to_string(finished) + " / " + std::to_string(totalJobs)).c_str());
-        ImGui::Text("%s   %s", gRunning.load() ? "downloading" : "idle", activeName.c_str());
-        ImGui::SameLine();
-        ImGui::Text("   %s total so far", humanBytes(doneBytes).c_str());
-        ImGui::Separator();
-        ImGui::BeginChild("##log", ImVec2(0.0f, 0.0f), false, ImGuiWindowFlags_HorizontalScrollbar);
-        {
-            std::lock_guard<std::mutex> lock(gLogMutex);
-            for (const std::string& line : gLog) {
-                ImGui::TextUnformatted(line.c_str());
-            }
-            if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 1.0f) {
-                ImGui::SetScrollHereY(1.0f);
-            }
-        }
-        ImGui::EndChild();
-        ImGui::EndChild();
-
-        ImGui::End();
-
-        ImGui::Render();
-        int w = 0;
-        int h = 0;
-        SDL_GetWindowSize(window, &w, &h);
-        glViewport(0, 0, w, h);
-        glClearColor(0.10f, 0.11f, 0.12f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT);
-        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-
-        if (!screenshotPath.empty()
-            && static_cast<double>(SDL_GetTicks64() - startTicks) / 1000.0 >= screenshotTime) {
-            std::vector<unsigned char> pixels(static_cast<size_t>(w) * static_cast<size_t>(h) * 4);
-            glPixelStorei(GL_PACK_ALIGNMENT, 1);
-            glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
-            // stb_image_write expects rows top-down; GL gives them bottom-up.
-            std::vector<unsigned char> flipped(pixels.size());
-            const size_t rowBytes = static_cast<size_t>(w) * 4;
-            for (int y = 0; y < h; ++y) {
-                std::memcpy(flipped.data() + static_cast<size_t>(y) * rowBytes,
-                    pixels.data() + static_cast<size_t>(h - 1 - y) * rowBytes, rowBytes);
-            }
-            stbi_write_png(screenshotPath.c_str(), w, h, 4, flipped.data(), static_cast<int>(rowBytes));
-            std::printf("screenshot saved: %s\n", screenshotPath.c_str());
-        }
-        SDL_GL_SwapWindow(window);
-    }
-
-    if (gRunning.load()) {
-        gCancel.store(true);
-    }
-    ImGui_ImplOpenGL3_Shutdown();
-    ImGui_ImplSDL2_Shutdown();
-    ImGui::DestroyContext();
-    SDL_GL_DeleteContext(gl);
-    SDL_DestroyWindow(window);
-    SDL_Quit();
-    return 0;
+    return runGui(outDir, screenshotPath, screenshotTime);
 }

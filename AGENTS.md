@@ -57,10 +57,15 @@ main.cpp          # SDL2 窗口、事件循环、输入映射、ImGui HUD、截�
 ## 工具
 
 - `downloader/chartdl.cpp` → `build/chartdl.exe`：**独立的谱面下载器**（不算游戏的一部分，
-  build.sh 里单独编一次）。刻意用 ImGui 默认皮肤 + 默认字体的"老样子"，只共享 vendored 的
-  ImGui / SDL2 / nlohmann。HTTP 走 `winhttp.dll` **运行时 LoadLibrary**（工具链只有 winhttp.def，
+  build.sh 里单独编一次）。界面是**纯 Win32 通用控件**（ListView 带 checkbox + Edit +
+  ProgressBar + ListBox，全中文，不共享 ImGui/SDL），链接 `-Wl,--subsystem,windows`，
+  命令行模式自己 `AttachConsole(ATTACH_PARENT_PROCESS)` 把父进程控制台借回来（已经拿到
+  管道句柄时不能抢，否则 `chartdl.exe --list | head` 输出会跑去 console）。
+  HTTP 走 `winhttp.dll` **运行时 LoadLibrary**（工具链只有 winhttp.def，
   没有导入库——和 SystemMedia 用 combase 的办法一样）。下载在 `std::thread` 里跑，进度用
   `gJobMutex` 保护；**别在 worker 里持有 `gJobs[i]` 的引用**（GUI 线程还会 push_back，会悬空）。
+  踩坑：文件里 `namespace http { std::wstring widen(...) }`，UI 段要用 `using http::widen;`；
+  全局 `gLog` 是日志字符串数组，控件句柄得另起名（`gLogList`）。
   `--list` / `--download` 是给脚本和回归用的无界面模式。日志同时进 stdout 和 `chartdl.log`
   （GUI 从资源管理器启动时 stdout 是黑洞）。
 - `.workbuddy/tools/gen_music_vocals.py` → `music-vocals.json`：从官方的 musicVocals +
@@ -212,11 +217,12 @@ bash build.sh          # 仅需 Git Bash；产物 build/cppsekai.exe + SDL2.dll 
 
 对着 `D:\Dev\sekai-mmw-preview-web` 逐个查过的结论，按「值不值得做」排：
 
-1. **舞台背景生成（最大的一个）**：上游 `src/lib/overlayBackgroundGen.ts`（492 行）拿曲绘做
-   透视变形 + 遮罩合成，生成那套"两面侧屏 + 中间屏"的歌曲专属舞台背景；我们**完全没有**，
-   所以永远是默认背景。核心移植层里也没有这段（`setPreviewConfig` 的 `stageCover` /
-   `stageOpacity` / `backgroundBrightness` 三个参数上游自己也只是存着没用）。要做得把 TS
-   那套图像处理搬到 C++（CPU 处理一次 + 上传纹理），工作量中等偏大。
+1. ~~**舞台背景生成**~~：**已做**（2026-09-13）。`game/StageBackground.cpp` 是上游
+   `src/lib/overlayBackgroundGen.ts` 的 C++ 移植（单应矩阵把曲绘投进舞台侧屏/中间屏，
+   再按 base/windows/bottom 顺序合成 2048x1168 底板），由 `Renderer::setSongBackground()`
+   换掉默认背景贴图，开歌时按曲绘生成一次（约 330ms）。差异：只合成 upstream 的 normal
+   四角（mirror 那组是镜像布局用的），也没做"铺成正方形再滚动"——我们 16:9 一次全看得见。
+   想缩短生成时间的话，瓶颈是整块底板的 overlay 遍数（可按四边形包围盒裁）。
 2. **长条 / guide 浓度没做成设置项**：上游有 `holdAlpha`（默认 1.0）/ `guideAlpha`（0.8），
    我们虽然把参数传了（guide 0.6）但没进设置面板。顺带一提上游后来把"长条只在头判激活后
    才显示"（`segmentActivated`）做进了核心，我们用的是另一套（`markNoteHit` /

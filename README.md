@@ -347,7 +347,7 @@ sidecar JSON 支持的字段：`title` `artist` `lyricist` `composer` `arranger`
 
 ## 7.5 谱面下载器（`chartdl.exe`，单独的小程序）
 
-不想手抄 `curl` 就双击 `build/chartdl.exe`（旧版 ImGui 默认皮肤，就那种很朴素的样子）：
+不想手抄 `curl` 就双击 `build/chartdl.exe`（Windows 原生控件：列表 + 进度条，中文界面，没有皮肤）：
 
 | 演奏 | |
 |---|---|
