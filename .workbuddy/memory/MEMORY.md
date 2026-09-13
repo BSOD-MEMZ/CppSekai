@@ -19,6 +19,15 @@
 - `--screenshot` 给的目录**必须已存在**，否则进程静默挂住不退出。
 - 无头自检：`--screenshot` + `--screenshot-time`，断言看日志 `[stats]`/`[score]`/`[result]` 行。
 
+## 发布 / 打包
+- `bash package.sh [版本]` → `dist/CppSekai-<日期>/` + zip（~2.7MB）。
+  **不发** assets / charts / toolchain（官方素材，COPYRIGHT.md 禁止分发）；
+  发 exe + SDL2.dll + icon.png + 三张官方事实数据表 + 文档 + LICENSE(AGPL 全文) + setup.sh。
+  用户侧流程：`bash setup.sh --assets-only` 拉素材 → chartdl.exe 下谱面。
+  详见 README「7.4 发布 / 打包」。
+- 图标：`app.rc`（`zig rc` 编译资源，id 1）+ 运行时 `SDL_SetWindowIcon(icon.png)`；
+  改 id 要同步改 chartdl 的 `LoadImageW(MAKEINTRESOURCE(1))`。
+
 ## 资源 / git 的坑
 - `.gitignore` 忽略整个 `assets/`（还有 `charts/`、`build/`、`toolchain/`、`userdata.json`）。
   `assets/mmw/**` 在仓库里只是"先 commit 后加规则"；**任何新加的 `assets/` 子目录都要
