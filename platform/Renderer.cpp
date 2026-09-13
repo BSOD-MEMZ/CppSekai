@@ -495,8 +495,9 @@ GLuint Renderer::loadBackdropTexture(const std::string& path, float blur01, int&
 
 bool Renderer::loadSplash(const std::string& assetDir, std::string& outError){
     // Only what drawStaticScene() needs for the very first frame.
+    mDefaultBackgroundPath = assetDir + "/background_overlay.png";
     if (mBackground.id == 0) {
-        mBackground = loadTextureFromFile(assetDir + "/background_overlay.png", outError);
+        mBackground = loadTextureFromFile(mDefaultBackgroundPath, outError);
         if (mBackground.id == 0) {
             return false;
         }
@@ -514,8 +515,9 @@ bool Renderer::loadSplash(const std::string& assetDir, std::string& outError){
 
 bool Renderer::loadAssets(const std::string& assetDir, std::string& outError)
 {
+    mDefaultBackgroundPath = assetDir + "/background_overlay.png";
     if (mBackground.id == 0) {
-        mBackground = loadTextureFromFile(assetDir + "/background_overlay.png", outError);
+        mBackground = loadTextureFromFile(mDefaultBackgroundPath, outError);
         if (mBackground.id == 0) {
             return false;
         }
@@ -650,6 +652,49 @@ bool Renderer::loadCover(const std::string& path, std::string& outError)
         return false;
     }
     mCover = HudSprite{texture.id, texture.width, texture.height};
+    outError.clear();
+    return true;
+}
+
+bool Renderer::setSongBackground(const std::uint8_t* rgba, int width, int height, std::string& outError)
+{
+    // Back to the default room plate (no song selected / no jacket).
+    if (rgba == nullptr || width <= 0 || height <= 0) {
+        if (!mDefaultBackgroundPath.empty()) {
+            Texture plate = loadTextureFromFile(mDefaultBackgroundPath, outError);
+            if (plate.id != 0) {
+                if (mBackground.id != 0) {
+                    glDeleteTextures(1, &mBackground.id);
+                }
+                mBackground = plate;
+                buildStaticVertices();
+            }
+        }
+        outError.clear();
+        return true;
+    }
+
+    GLuint id = 0;
+    glGenTextures(1, &id);
+    if (id == 0) {
+        outError = "failed to create the stage background texture";
+        return false;
+    }
+    glBindTexture(GL_TEXTURE_2D, id);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    if (mBackground.id != 0) {
+        glDeleteTextures(1, &mBackground.id);
+    }
+    mBackground = Texture{id, width, height};
+    // The quad's UVs were baked from the previous texture's size.
+    buildStaticVertices();
     outError.clear();
     return true;
 }

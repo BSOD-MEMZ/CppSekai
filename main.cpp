@@ -20,6 +20,7 @@
 #include "game/Hud.hpp"
 #include "game/Result.hpp"
 #include "game/SongSelect.hpp"
+#include "game/StageBackground.hpp"
 #include "game/Ui.hpp"
 #include "game/TapEffect.hpp"
 
@@ -408,6 +409,7 @@ namespace
     // chart loads. Declared here because startSession (below) reads it.
     int dumpEvents = 0;
     int selectVocal = -1;         // --select-vocal <n>: preselect a vocal version
+    std::string dumpStageBgPath;  // --dump-stage-bg <png>: write the generated plate
     double testVocalSwitchSec = -1.0; // --test-vocal-switch <sec>: flip the version once
     bool testVocalSwitchDone = false;
 
@@ -691,6 +693,8 @@ int main(int argc, char** argv)
             showPauseDialogShot = true;
         } else if (arg == "--test-vocal-switch" && i + 1 < utf8Argc) {
             testVocalSwitchSec = std::atof(utf8Argv[++i]);
+        } else if (arg == "--dump-stage-bg" && i + 1 < utf8Argc) {
+            dumpStageBgPath = utf8Argv[++i];
         } else if (arg == "--select-vocal" && i + 1 < utf8Argc) {
             selectVocal = std::atoi(utf8Argv[++i]);
         } else if (arg == "--dump-events" && i + 1 < utf8Argc) {
@@ -1326,6 +1330,9 @@ int main(int argc, char** argv)
         }
     }
     std::string loadedCoverPath;
+    // Jacket whose stage backdrop is currently installed ("" = the default
+    // plate). A CPU composite is only worth redoing when the song changes.
+    std::string stageBackgroundFor;
 
     AppState state = susPath.empty() ? AppState::Select : AppState::Play;
     Session session;
@@ -2402,6 +2409,13 @@ int main(int argc, char** argv)
             // ----------------------------------------------------------
             // Song select
             // ----------------------------------------------------------
+            if (!stageBackgroundFor.empty()) {
+                // Back to the default room plate: the song select is not a
+                // performance, and the next song generates its own anyway.
+                stageBackgroundFor.clear();
+                renderer.setSongBackground(nullptr, 0, 0, error);
+                error.clear();
+            }
             renderer.setLaneGlows({});
             renderer.renderFrame(nullptr, 0, 0.85f);
 
@@ -2827,6 +2841,37 @@ int main(int argc, char** argv)
                 hudState.lastJudge = game::Judge::Perfect;
                 hudState.lastJudgeAtSec =
                     static_cast<float>(songTime) - static_cast<float>(judgeAnimFrame) / 60.0f;
+            }
+
+            // ----------------------------------------------------------
+            // Song stage: this song's jacket projected into the stage screens
+            // (game/StageBackground.cpp, ported from the upstream generator).
+            // A CPU composite of the whole plate, so it is done once per
+            // jacket, not per frame.
+            // ----------------------------------------------------------
+            if (session.entry.coverPath != stageBackgroundFor) {
+                stageBackgroundFor = session.entry.coverPath;
+                int plateW = 0;
+                int plateH = 0;
+                std::vector<std::uint8_t> plate;
+                if (!session.entry.coverPath.empty()) {
+                    const auto buildStart = std::chrono::steady_clock::now();
+                    plate = game::buildStageBackground(baseDir + "assets/mmw/overlay/bggen/v3",
+                        session.entry.coverPath, plateW, plateH);
+                    const auto buildMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - buildStart)
+                                             .count();
+                    std::printf("[stage] %s plate %dx%d in %lld ms\n", plate.empty() ? "no" : "built",
+                        plateW, plateH, static_cast<long long>(buildMs));
+                    std::fflush(stdout);
+                }
+                if (!dumpStageBgPath.empty() && !plate.empty()) {
+                    stbi_write_png(dumpStageBgPath.c_str(), plateW, plateH, 4, plate.data(), plateW * 4);
+                    std::printf("[stage] wrote %s\n", dumpStageBgPath.c_str());
+                    std::fflush(stdout);
+                }
+                renderer.setSongBackground(plate.empty() ? nullptr : plate.data(), plateW, plateH, error);
+                error.clear();
             }
 
             // ----------------------------------------------------------

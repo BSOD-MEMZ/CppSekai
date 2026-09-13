@@ -42,6 +42,14 @@ class Renderer
     bool loadHud(const std::string& overlayDir, std::string& outError);
     [[nodiscard]] const HudSprite* hud(const std::string& name) const;
 
+    // Installs a song-specific stage backdrop ("bggen v3", see
+    // game/StageBackground.cpp) in place of the default room plate: the stage
+    // screens show this song's jacket. RGBA8, `width` x `height` must match the
+    // plate. Pixels are copied into a GL texture; the static background quad is
+    // rebuilt for the new texture size. Pass nullptr (or 0 size) to go back to
+    // the default plate.
+    bool setSongBackground(const std::uint8_t* rgba, int width, int height, std::string& outError);
+
     // Album cover / jacket shown by the opening card and the song list.
     // Pass an empty path (or clearCover) when the chart has no jacket.
     bool loadCover(const std::string& path, std::string& outError);
@@ -125,6 +133,9 @@ class Renderer
     GLuint mVbo = 0;
 
     Texture mBackground;
+    // The default plate, so a song-specific stage background can be swapped
+    // out again without re-deriving the asset path.
+    std::string mDefaultBackgroundPath;
     Texture mStage;
     Texture mNotes;
     Texture mLongNoteLine;
