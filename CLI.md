@@ -69,7 +69,8 @@ cppsekai [--sus <file.sus>] [--bgm <audio>] [--charts <dir>] [--cover <image>]
          [--width <px>] [--height <px>] [--window borderless|windowed|fullscreen]
          [--fps <n>] [--screenshot <png>] [--screenshot-time <sec>]
          [--judge-sheet] [--judge-frame <n>] [--test-hits]
-         [--show-pause-dialog] [--test-restart] [--restart-at <sec>]
+         [--show-pause-dialog] [--settings] [--settings-tab <0-3>]
+         [--test-restart] [--restart-at <sec>]
          [--result-preview] [--result-at <sec>] [--help]
 ```
 
@@ -115,6 +116,7 @@ cppsekai [--sus <file.sus>] [--bgm <audio>] [--charts <dir>] [--cover <image>]
 | `--judge-frame <n>` | 把判定文字**冻结**在第 n 帧（60fps 计），用来逐帧核对动画 |
 | `--test-hits` | 不按键，按时间轴把音符逐个喂给判定引擎（查特效链路） |
 | `--show-pause-dialog` | 演奏 0.5s 后强制打开暂停弹窗（截弹窗用的） |
+| `--settings` `--settings-tab <0-3>` | 启动即打开设置卡片，并指定分页（0 演奏 / 1 画面 / 2 判定 / 3 系统），配合 `--screenshot` 截设置面板——按键没法在无头运行里送进去 |
 | `--test-restart` `--restart-at <sec>` | 走到指定秒数执行「放弃 → 换一首」——回归测「打到一半重选曲卡死」那个 bug |
 | `--result-at <sec>` | 谱面走到指定秒数就切到**结算画面**（用真实判定数据），不用等整首歌放完 |
 | `--result-preview` | 启动即进结算画面，且用参考截图的样例数字（940021 / PERFECT 634 …），专门用来跟原版截图做像素对比 |

@@ -553,6 +553,8 @@ int main(int argc, char** argv)
     bool testHits = false; // debug: fire hit effects without player input
     int judgeAnimFrame = -1; // debug: freeze the judge text on this animation frame
     bool showPauseDialogShot = false; // headless check: force the pause dialog open
+    bool showSettingsShot = false; // headless check: force the settings card open
+    int settingsTabShot = -1;      // headless check: which settings tab to show
     bool testRestart = false; // debug: replay "give up -> pick another song"
     double restartAtSec = 8.0;
     bool resultPreview = false; // debug: boot straight into the result screen
@@ -638,6 +640,12 @@ int main(int argc, char** argv)
             judgeAnimFrame = std::atoi(utf8Argv[++i]);
         } else if (arg == "--show-pause-dialog") {
             showPauseDialogShot = true;
+        } else if (arg == "--settings") {
+            // Headless check: open the settings card right away, so a
+            // --screenshot run can look at it (a key press can't be sent).
+            showSettingsShot = true;
+        } else if (arg == "--settings-tab" && i + 1 < utf8Argc) {
+            settingsTabShot = std::atoi(utf8Argv[++i]);
         } else if (arg == "--test-restart") {
             // Debug: at --restart-at seconds, give the running song up and
             // start the next chart (the sequence that used to hang on the
@@ -1203,6 +1211,11 @@ int main(int argc, char** argv)
     // ------------------------------------------------------------------
     platform::SystemMedia systemMedia;
     systemMedia.init(window);
+    if (!userSettings.reportSmtc) {
+        // Turned off in the settings: never become the active media session,
+        // so Windows keeps showing whatever it showed before.
+        systemMedia.setReporting(false);
+    }
 
     // ------------------------------------------------------------------
     // Song list / session
@@ -1252,8 +1265,10 @@ int main(int argc, char** argv)
             duration = core_api::getChartEndTimeSec();
         }
         trackDurationSec = std::max(0.0, duration);
-        systemMedia.setTrack(session.intro.title, session.entry.artist, trackDurationSec,
-            session.entry.coverPath);
+        if (userSettings.reportSmtc) {
+            systemMedia.setTrack(session.intro.title, session.entry.artist, trackDurationSec,
+                session.entry.coverPath);
+        }
     };
     if (state == AppState::Play) {
         game::ChartEntry entry;
@@ -1283,7 +1298,7 @@ int main(int argc, char** argv)
     bool pauseDialogOpen = false; // pjsk style pause dialog (重试/放弃/继续演出)
     bool running = true;
     bool fullscreen = false;
-    bool showDebug = false; // toggled by H or the musicsetting button on the song select
+    bool showDebug = showSettingsShot; // H / the musicsetting button on the song select
     Uint64 perfFreq = SDL_GetPerformanceFrequency();
     Uint64 perfStart = SDL_GetPerformanceCounter();
 
@@ -1419,9 +1434,10 @@ int main(int argc, char** argv)
                 cardCenter.y - cardSize.y * 0.5f + 16.0f * s));
             ui::cardTitle("设置", interior);
 
-            static int tab = 0;
+            static int tab = settingsTabShot >= 0 ? settingsTabShot : 0;
             ui::tabBar("settings-tabs",
-                {std::string("演奏"), std::string("画面"), std::string("判定")}, &tab, interior);
+                {std::string("演奏"), std::string("画面"), std::string("判定"), std::string("系统")},
+                &tab, interior);
 
             // ImGui::Text starts each line at the window's left edge
             // (padding is 0); pin content lines to the card interior.
@@ -1439,6 +1455,20 @@ int main(int argc, char** argv)
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10.0f * s, 6.0f * s));
             ImGui::PushFont(game::bodyFont(), 23.0f * s);
             ImGui::PushItemWidth(interior);
+
+            // Everything below the tab bar lives in a clipping child: the 画面
+            // tab is taller than the card, and a row that runs past the bottom
+            // ends up underneath the 关闭 button (submitted later, so it eats
+            // the clicks). Scrolling here keeps every row reachable.
+            const float contentTop = ImGui::GetCursorScreenPos().y;
+            const float contentBottom = cardCenter.y + cardSize.y * 0.5f - 74.0f * s;
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+            ImGui::SetCursorScreenPos(ImVec2(cardCenter.x - cardSize.x * 0.5f, contentTop));
+            ImGui::BeginChild("##tabcontent",
+                ImVec2(cardSize.x, std::max(40.0f * s, contentBottom - contentTop)),
+                ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoScrollbar);
+            ImGui::PopStyleVar();
+            ImGui::SetCursorScreenPos(ImVec2(cardCenter.x - cardSize.x * 0.5f + padX, contentTop));
 
             if (tab == 0) {
                 // 演奏: audio offset + note speed.
@@ -1582,7 +1612,7 @@ int main(int argc, char** argv)
                     userSettings.autoplay = autoPlayBox;
                     persistUserData();
                 }
-            } else {
+            } else if (tab == 2) {
                 // 判定: judgement windows.
                 contentLeft();
                 ImGui::Text("判定窗口 (ms)");
@@ -1610,7 +1640,36 @@ int main(int argc, char** argv)
                     windows.badMs = windows.missAfterMs;
                     judgement.setWindows(windows);
                 }
+            } else {
+                // 系统: how the game behaves towards Windows and the desktop.
+                contentLeft();
+                bool autoPauseBox = userSettings.autoPauseOnBlur;
+                ui::checkBox("失焦时自动暂停", &autoPauseBox, interior);
+                if (autoPauseBox != userSettings.autoPauseOnBlur) {
+                    userSettings.autoPauseOnBlur = autoPauseBox;
+                    persistUserData();
+                }
+                contentLeft();
+                bool smtcBox = userSettings.reportSmtc;
+                ui::checkBox("启用 SMTC 汇报", &smtcBox, interior);
+                if (smtcBox != userSettings.reportSmtc) {
+                    userSettings.reportSmtc = smtcBox;
+                    // Off: stop the media session right away instead of leaving
+                    // the flyout with a stale song. On: re-announce, otherwise
+                    // nothing shows up until the next song starts.
+                    systemMedia.setReporting(smtcBox);
+                    if (smtcBox) {
+                        announceTrack();
+                    }
+                    persistUserData();
+                }
             }
+            // End on an item: the checkbox helper leaves the cursor at the row
+            // bottom with a bare SetCursorScreenPos, which trips ImGui's
+            // "don't extend the parent with SetCursorPos" check when the child
+            // is the last window in the frame.
+            ImGui::Dummy(ImVec2(1.0f, 1.0f));
+            ImGui::EndChild();
             ImGui::PopFont();
             ImGui::PopStyleVar(2);
             ImGui::PopStyleColor(5);
@@ -1889,7 +1948,8 @@ int main(int argc, char** argv)
                         // properly - just go back to the song list with the
                         // sound off instead.
                         if (event.window.event == SDL_WINDOWEVENT_FOCUS_LOST && state == AppState::Play
-                            && !paused && !pauseDialogOpen && screenshotPath.empty()) {
+                            && !paused && !pauseDialogOpen && screenshotPath.empty()
+                            && userSettings.autoPauseOnBlur) {
                             const double currentSongTime =
                                 audio.hasMusic() ? audio.songTime() : wallSongTime();
                             if (currentSongTime < 0.0) {
@@ -2309,7 +2369,9 @@ int main(int argc, char** argv)
             const float outputTime = static_cast<float>(songTime + leadInSec);
 
             // Report to Windows: SMTC position + taskbar button progress.
-            systemMedia.updatePlayback(true, paused, songTime, trackDurationSec);
+            if (userSettings.reportSmtc) {
+                systemMedia.updatePlayback(true, paused, songTime, trackDurationSec);
+            }
             systemMedia.setTaskbarProgress(
                 trackDurationSec > 1.0 ? songTime / trackDurationSec : -1.0, paused);
 

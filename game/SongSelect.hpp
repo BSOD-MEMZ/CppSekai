@@ -82,6 +82,13 @@ struct UserSettings
     bool strictFlick = true;
     // Autoplay chart preview (all-PERFECT run, AUTO judge text, no records).
     bool autoplay = false;
+    // Pause the run when the window loses keyboard focus (alt-tab, a popup
+    // stealing focus). Off = the song keeps running in the background.
+    bool autoPauseOnBlur = true;
+    // Report the current song to Windows (SMTC: the volume flyout / taskbar
+    // media widget). Off = nothing is announced, so a media widget showing
+    // something else is left alone.
+    bool reportSmtc = true;
     // Splash style: 0 = static centered image (assets\splashscreen.png,
     // default), 1 = classic dark screen with title + progress bar.
     int splashStyle = 0;
@@ -93,7 +100,10 @@ struct UserSettings
     // Song-list order / grouping, so the list comes back the way it was left
     // (see game::drawSongSelect, which owns the two values while it runs).
     int sortMode = 0;  // 0 = by name, 1 = by difficulty
-    int groupMode = 0; // 0 = off, 1 = by level band, 2 = by title, 3 = by initial
+    // 0 = off, 1 = by level band, 2 = by reading (aiueo row: あ か さ た ...,
+    // latin letters one section each), 3 = by first character (one section per
+    // kana).
+    int groupMode = 0;
 };
 
 // Path of userdata.json: <exeDir>\.. \userdata.json when a charts\ folder sits

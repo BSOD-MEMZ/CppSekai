@@ -366,6 +366,8 @@ void loadUserData(const std::string& path, UserSettings& settings,
             settings.goodMs = s.value("goodMs", settings.goodMs);
             settings.strictFlick = s.value("strictFlick", settings.strictFlick);
             settings.autoplay = s.value("autoplay", settings.autoplay);
+            settings.autoPauseOnBlur = s.value("autoPauseOnBlur", settings.autoPauseOnBlur);
+            settings.reportSmtc = s.value("reportSmtc", settings.reportSmtc);
             settings.splashStyle = s.value("splashStyle", settings.splashStyle);
             settings.bgStyle = s.value("bgStyle", settings.bgStyle);
             settings.bgBlur = s.value("bgBlur", settings.bgBlur);
@@ -414,6 +416,8 @@ void saveUserData(const std::string& path, const UserSettings& settings,
         {"goodMs", settings.goodMs},
         {"strictFlick", settings.strictFlick},
         {"autoplay", settings.autoplay},
+        {"autoPauseOnBlur", settings.autoPauseOnBlur},
+        {"reportSmtc", settings.reportSmtc},
         {"splashStyle", settings.splashStyle},
         {"bgStyle", settings.bgStyle},
         {"bgBlur", settings.bgBlur},
@@ -791,15 +795,26 @@ namespace
         return "その他";
     }
 
-    // aiueo row of a reading/title (the list's section headers).
+    // aiueo row of a reading/title (the list's section headers). Japanese
+    // readings collapse to their row (あ か さ た な は ま や ら わ), while
+    // latin titles keep one section PER LETTER (A, B, C ...) and digits get
+    // their own "#" - lumping them into a single "A-Z 0-9" bucket would make
+    // English-titled charts (custom charts without an official reading) look
+    // like one giant section.
     std::string kanaRowLabel(const std::string& key)
     {
         const unsigned int cp = firstCodePoint(key);
         if (cp == 0) {
             return "その他";
         }
-        if ((cp >= 'a' && cp <= 'z') || (cp >= '0' && cp <= '9')) {
-            return "A-Z 0-9";
+        if (cp >= 'a' && cp <= 'z') {
+            return std::string(1, static_cast<char>(cp - 'a' + 'A'));
+        }
+        if (cp >= 'A' && cp <= 'Z') {
+            return std::string(1, static_cast<char>(cp));
+        }
+        if (cp >= '0' && cp <= '9') {
+            return "#";
         }
         if (cp >= 0x3041 && cp <= 0x3096) { // hiragana
             static const std::pair<unsigned int, const char*> rows[] = {
@@ -863,7 +878,7 @@ namespace
     constexpr int kOrderByDifficulty = 1;
     constexpr int kGroupOff = 0;
     constexpr int kGroupDifficulty = 1;
-    constexpr int kGroupTitle = 2;
+    constexpr int kGroupReading = 2; // one section per aiueo row (letters: one per letter)
     constexpr int kGroupInitial = 3; // one section per first character
     constexpr int kGroupCount = 4;
 
@@ -1302,7 +1317,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     }
     {
         const char* kSortLabels[2] = {"按名称", "按难度"};
-        const char* kGroupLabels[kGroupCount] = {"关闭", "按难度段", "按标题", "按首字母"};
+        const char* kGroupLabels[kGroupCount] = {"关闭", "按难度段", "按读音", "按首字"};
         const float comboW = 168.0f * k;
         const std::string sortPreview = std::string("排序：") + kSortLabels[sortMode];
         const std::string groupPreview = std::string("分组：") + kGroupLabels[groupMode];
@@ -1407,7 +1422,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     // Sorting / grouping decides the row layout. Grouping wins over the sort
     // combo because a section's songs have to stay together.
     const int order = groupMode == kGroupDifficulty ? kOrderByDifficulty
-        : (groupMode == kGroupTitle || groupMode == kGroupInitial)
+        : (groupMode == kGroupReading || groupMode == kGroupInitial)
             ? kOrderByName
             : sortMode;
     const std::string listSignature = std::string(searchBuf) + "|" + std::to_string(order) + "|"

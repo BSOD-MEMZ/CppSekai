@@ -702,6 +702,42 @@ void SystemMedia::setTrack(const std::string& title, const std::string& artist, 
 #endif
 }
 
+void SystemMedia::setReporting(bool on)
+{
+#ifdef _WIN32
+    if (mSmtc == nullptr) {
+        return;
+    }
+    auto* v = vt<ISMTCVtbl>(mSmtc);
+    if (on) {
+        v->put_IsEnabled(mSmtc, 1);
+    } else {
+        v->put_PlaybackStatus(mSmtc, StatusStopped);
+        v->put_IsEnabled(mSmtc, 0);
+        if (mThumbnail != nullptr) {
+            safeRelease(mThumbnail);
+            mThumbnail = nullptr;
+        }
+        mTrackTitle.clear();
+        mTrackArtist.clear();
+    }
+    // Read it back: a toggle that silently no-ops looks exactly like Windows
+    // ignoring us (the same reason setTrack reads its own properties back).
+    unsigned char enabled = 7;
+    v->get_IsEnabled(mSmtc, &enabled);
+    std::printf("[media] reporting %s (IsEnabled readback = %d)\n", on ? "on" : "off",
+        static_cast<int>(enabled));
+    std::fflush(stdout);
+    // Whatever the cached state says, the shell has just been reset: force the
+    // next setTrack / updatePlayback to push everything again.
+    mLastPositionSec = -1.0e9;
+    mLastStatus = -1;
+    mLastDurationSec = 0.0;
+#else
+    (void)on;
+#endif
+}
+
 void SystemMedia::updatePlayback(bool playing, bool paused, double positionSec, double durationSec)
 {
 #ifdef _WIN32

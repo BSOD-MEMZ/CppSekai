@@ -35,6 +35,12 @@ class SystemMedia
     void setTrack(const std::string& title, const std::string& artist, double durationSec,
         const std::string& coverPath = std::string());
 
+    // Turns the SMTC side on/off at runtime (the settings toggle). Off makes
+    // Windows drop our media session, so the flyout falls back to whatever was
+    // playing before instead of keeping the last song of ours stuck there.
+    // init() leaves it enabled.
+    void setReporting(bool on);
+
     // Call every frame (cheap: only pushes an update when the position moved
     // by more than ~0.5s or the state changed).
     void updatePlayback(bool playing, bool paused, double positionSec, double durationSec);

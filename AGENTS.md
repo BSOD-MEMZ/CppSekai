@@ -181,6 +181,17 @@ bash build.sh          # 仅需 Git Bash；产物 build/cppsekai.exe + SDL2.dll 
   SetCursorScreenPos；卡片/组件内部不要用 Dummy 预留后重置光标到 (0,0)；零 item 的
   BeginGroup/EndGroup 会触发 ImGui 断言；`Ui.cpp` 的 `withAlpha(col, a)` 是**缩放** col 自身的
   alpha（曾经是"替换"，把 kBackdrop 的 84 变成 255，暂停遮罩变成全黑——改语义时留意）。
+- 设置卡片 360x640、四个页签（演奏 / 画面 / 判定 / 系统）；`--settings` + `--settings-tab <0-3>`
+  无头打开（按键没法送进无头运行），配合 `--screenshot` 截图。
+  **页签内容放在一个裁剪用的 `BeginChild` 里**：「画面」页比卡片高，多出来的行会钻到「关闭」
+  按钮底下（按钮后提交，把点击全吃掉）。这个 child 的末尾**必须补一句 `ImGui::Dummy`**——
+  `ui::checkBox()` 最后一条是裸的 `SetCursorScreenPos`，child 作为当帧最后一个窗口时
+  `EndChild()` 会弹 "SetCursorPos ... to extend window/parent boundaries" 断言。
+- 系统页签两项：`autoPauseOnBlur`（失焦自动暂停，关掉 = 切出去歌继续跑）、`reportSmtc`
+  （是否汇报 SMTC）。关 SMTC 走 `systemMedia.setReporting(false)`，把媒体会话整个摘掉
+  （`put_PlaybackStatus(Stopped)` + `put_IsEnabled(0)`），**不是**只停推送——否则系统浮层
+  会一直挂着我们最后一首旧歌。启动时若已关闭，`init()` 之后立刻 `setReporting(false)`。
+  任务栏进度条（`ITaskbarList3`）不归这个开关管，始终在跑。
 - 游戏资源（assets/、charts/）来自公开渠道，仅限本地游玩，不要提交或分发。
 
 ## 验证（不开窗口的自动检查）
@@ -309,12 +320,15 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
   回落到官方 `music-levels.json` 表，所以切难度时整列数字会一起变，颜色也跟着变
   （`kDiffColors[diffIndex]`）。手机面板里未选中的难度是**空心圆**（无底色填充）。
 - **排序 / 分组**（搜索框右边的两个 combobox）：排序有「按名称」「按难度」，分组有「关闭」
-  「按难度段（1-5 / 6-10 / … / 36+）」「按标题（あ/か/さ…/A-Z 0-9/その他）」「按首字母
+  「按难度段（1-5 / 6-10 / … / 36+）」「按读音（あ/か/さ…/A-Z 逐字母/#）」「按首字
   （A-Z / 0-9 / あ い う…，用 initialLabel()）」。
-  名称排序和标题分组用的是**官方读音**（`musics.json` 的 `pronunciation`，main.cpp 里
+  名称排序和读音分组用的是**官方读音**（`musics.json` 的 `pronunciation`，main.cpp 里
   `loadMusicPronunciations()` 载入，`foldForSort()` 把片假名折成平假名、ASCII 转小写），
-  所以「ウミユリ海底譚」落在 あ 行、片假名标题也能正确排序；没有读音的（自制谱）退回用标题
-  本身当 key（汉字会被排到所有假名之后 → 落进「その他」）。
+  所以「ウミユリ海底譚」落在 あ 行、片假名标题也能正确排序；官方 715 首的读音**全是假名**
+  （`Tell Your World` = てるゆあわーるど → た 行），所以逐字母段只对**没有读音的自制谱**
+  生效（那时退回用标题当 key）。汉字开头且没有读音的会落进「その他」（按字节序排在最后）。
+  `kanaRowLabel()` 是「行」级的标签（あ か さ た な は ま や ら わ + 逐字母 + `#`），
+  `initialLabel()` 是「首字」级的（逐假名 + 逐字母）。
   注意 `#TITLE` 里写的是难度名（有些 unipjsk 导出写 `#TITLE "master"`）时要当空处理，
   否则列表里会出现一堆叫 "master" 的歌。
   这两个值**存在 settings 里**（`sortMode` / `groupMode`），`drawSongSelect` 收 `int&`，
