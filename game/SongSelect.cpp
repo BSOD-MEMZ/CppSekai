@@ -1512,6 +1512,15 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         const float inv = 1.0f - std::clamp(t, 0.0f, 1.0f);
         return 1.0f - inv * inv * inv;
     };
+    // Whether the section index was already open when the current mouse gesture
+    // started. This is the safe gate for the index panel: a press and its
+    // release can land in the SAME frame, and then the list's release-commit
+    // and the panel's press handling would both act on one click - a header tap
+    // would open the panel AND pick a letter in the same gesture.
+    static bool indexOpenAtPress = false;
+    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        indexOpenAtPress = indexOpen;
+    }
 
     if (!listInit && rowCount > 0) {
         if (!rowsBuilt) {
@@ -1664,6 +1673,10 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     // always being pink.
     const ImU32 diffColor = kDiffColors[static_cast<size_t>(std::clamp(diffIndex, 0, kDiffCount - 1))];
 
+    // Everything the row loop adds is captured so it can fade out while the
+    // section index is up - the letters sit on a cleared area, not on top of
+    // the song rows.
+    const int listVtxFirst = listDl->VtxBuffer.Size;
     for (int slot = firstSlot; slot <= lastSlot; ++slot) {
         const ListRow& view = rows[static_cast<size_t>(wrapSlot(slot))];
         const float centerY = viewCenterY + (static_cast<float>(slot) * pitch - scroll);
@@ -1827,10 +1840,22 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     }
 
     // ------------------------------------------------------------------
-    // Section jump index: replaces the list while it is open. It is one key
-    // per section (the header labels, which is why tapping a header opens it),
-    // laid out as a grid; tapping a key flies the list there and closes it.
-    // Fades in rather than popping, so the swap reads as a transition.
+    if (indexAnim > 0.0f) {
+        const int fade = static_cast<int>(std::clamp(1.0f - indexAnim, 0.0f, 1.0f) * 255.0f);
+        for (int i = listVtxFirst; i < listDl->VtxBuffer.Size; ++i) {
+            ImU32& col = listDl->VtxBuffer[i].col;
+            const ImU32 a = (col >> IM_COL32_A_SHIFT) & 0xFF;
+            col = (col & ~IM_COL32_A_MASK) | (static_cast<ImU32>(a * fade / 255u) << IM_COL32_A_SHIFT);
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Section jump index: replaces the list while it is open. Deliberately
+    // bare - no plate, no title, no close button - just the section initials
+    // (the header labels, which is why tapping a header opens it). Tapping a
+    // letter flies the list there; tapping anywhere else restores the list.
+    // The letters scatter outward while fading in and gather back on the way
+    // out (one curve drives both directions).
     // ------------------------------------------------------------------
     if (indexAnim > 0.002f && rowCount > 0) {
         struct SectionKey
@@ -1852,100 +1877,91 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         }
 
         const float t = easeOutCubic(indexAnim);
-        const int panelAlpha = static_cast<int>(std::clamp(t, 0.0f, 1.0f) * 255.0f);
         const float panelW = listW + 24.0f * k;
         const float panelH = listH;
         const ImVec2 panelC(viewPos.x + panelW * 0.5f, viewPos.y + panelH * 0.5f);
-        // The plate itself scales up, the content just fades and lifts a little
-        // (draw lists cannot scale glyphs, so text stays at its size).
-        const float scale = 0.94f + 0.06f * t;
-        const ImVec2 b0(panelC.x - panelW * 0.5f * scale, panelC.y - panelH * 0.5f * scale);
-        const ImVec2 b1(panelC.x + panelW * 0.5f * scale, panelC.y + panelH * 0.5f * scale);
-        listDl->AddRectFilled(b0, b1, IM_COL32(22, 20, 44, panelAlpha), 14.0f * k);
-        listDl->AddRect(b0, b1, IM_COL32(255, 255, 255, static_cast<int>(40.0f * t)), 14.0f * k, 0, 2.0f * k);
 
-        const float lift = (1.0f - t) * 14.0f * k;
-        const auto fade = [&](int a) { return static_cast<int>(static_cast<float>(a) * t); };
-        ImFont* headFont = title != nullptr ? title : body;
-        listDl->AddText(headFont, 24.0f * k, ImVec2(b0.x + 22.0f * k, b0.y + 16.0f * k - lift),
-            IM_COL32(255, 255, 255, fade(235)), "段落跳转");
-        listDl->AddText(body, 15.0f * k, ImVec2(b0.x + 22.0f * k, b0.y + 48.0f * k - lift),
-            IM_COL32(178, 178, 198, fade(200)), "点击一个标题跳转");
+        // Hit-testing is done by hand, exactly like the list rows: an
+        // InvisibleButton over the whole area would claim the press before the
+        // letters (ImGui locks the active id on mouse-down, so anything
+        // submitted after it never sees the click). Interaction only counts
+        // once the panel is really up - a click during the fade must fall
+        // through to the list instead of picking a letter that is flying in.
+        const bool interactive = indexOpenAtPress && indexAnim > 0.65f;
+        const ImVec2 mousePos = ImGui::GetIO().MousePos;
+        const bool clicked = interactive && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
+        bool hitLetter = false;
 
-        // Close button in the panel's top-right corner.
-        const float closeD = 30.0f * k;
-        const ImVec2 closeC(b1.x - 22.0f * k - closeD * 0.5f, b0.y + 26.0f * k);
-        ImGui::SetCursorScreenPos(ImVec2(closeC.x - closeD * 0.5f, closeC.y - closeD * 0.5f));
-        ImGui::PushID("sections_close");
-        ImGui::InvisibleButton("close", ImVec2(closeD, closeD));
-        const bool closeHovered = ImGui::IsItemHovered();
-        const bool closeClicked = ImGui::IsItemClicked();
-        ImGui::PopID();
-        listDl->AddCircleFilled(closeC, closeD * 0.5f,
-            closeHovered ? IM_COL32(122, 116, 168, fade(255)) : IM_COL32(74, 68, 112, fade(210)));
-        listDl->AddLine(ImVec2(closeC.x - 6.0f * k, closeC.y - 6.0f * k),
-            ImVec2(closeC.x + 6.0f * k, closeC.y + 6.0f * k), IM_COL32(255, 255, 255, fade(230)), 2.0f * k);
-        listDl->AddLine(ImVec2(closeC.x + 6.0f * k, closeC.y - 6.0f * k),
-            ImVec2(closeC.x - 6.0f * k, closeC.y + 6.0f * k), IM_COL32(255, 255, 255, fade(230)), 2.0f * k);
-        if (closeClicked) {
-            indexOpen = false;
+        // Which section the list is sitting on, so its letter can be marked.
+        std::string currentLabel;
+        if (cardSlot < 1000000) {
+            for (int i = wrapSlot(cardSlot); i >= 0; --i) {
+                if (rows[static_cast<size_t>(i)].header) {
+                    currentLabel = rows[static_cast<size_t>(i)].label;
+                    break;
+                }
+            }
         }
 
-        // Keys: a grid of the section labels. The key of the section the list is
-        // currently showing is highlighted so the panel doubles as a "you are
-        // here" indicator.
-        const float padX = 22.0f * k;
-        const float gridTop = b0.y + 76.0f * k;
-        const float gridW = panelW * scale - padX * 2.0f;
-        const float gap = 10.0f * k;
-        const int cols = std::clamp(static_cast<int>(gridW / (74.0f * k)), 3, 8);
-        const float keyW = (gridW - gap * static_cast<float>(cols - 1)) / static_cast<float>(cols);
-        const float keyH = 44.0f * k;
-        const std::string currentLabel = cardSlot < 1000000 && rowCount > 0
-            ? [&]() -> std::string {
-                  // Label of the section holding the current selection.
-                  int row = wrapSlot(cardSlot);
-                  for (int i = row; i >= 0; --i) {
-                      if (rows[static_cast<size_t>(i)].header) {
-                          return rows[static_cast<size_t>(i)].label;
-                      }
-                  }
-                  return std::string();
-              }()
-            : std::string();
-
         const int keyCount = static_cast<int>(keys.size());
+        const int cols = std::clamp(static_cast<int>(panelW / (96.0f * k)), 3, 8);
+        const int gridRows = std::max(1, (keyCount + cols - 1) / cols);
+        const float cellW = panelW / static_cast<float>(cols);
+        // Keep the whole grid inside the panel however many sections there are.
+        const float cellH = std::clamp(panelH / static_cast<float>(gridRows + 1), 44.0f * k, 96.0f * k);
+        const float gridH = cellH * static_cast<float>(gridRows);
+        const float gridTop = panelC.y - gridH * 0.5f;
+        const float spread = std::min(panelW, panelH) * 0.42f; // scatter distance
+
         for (int i = 0; i < keyCount; ++i) {
             const int col = i % cols;
             const int rowI = i / cols;
-            const ImVec2 k0(b0.x + padX + static_cast<float>(col) * (keyW + gap),
-                gridTop + static_cast<float>(rowI) * (keyH + gap) - lift);
-            if (k0.y + keyH > b1.y - 10.0f * k) {
-                break; // no room left; the label set is bigger than the panel
+            const float cellCx = viewPos.x + cellW * (static_cast<float>(col) + 0.5f);
+            const float cellCy = gridTop + cellH * (static_cast<float>(rowI) + 0.5f);
+            if (cellCy > viewPos.y + panelH) {
+                break; // no room left for further rows
             }
-            const ImVec2 k1(k0.x + keyW, k0.y + keyH);
-            ImGui::SetCursorScreenPos(k0);
-            ImGui::PushID(i);
-            ImGui::InvisibleButton("key", ImVec2(keyW, keyH));
-            const bool hovered = ImGui::IsItemHovered();
-            const bool clicked = ImGui::IsItemClicked();
-            ImGui::PopID();
+            // Per-letter timing: the ones further from the middle arrive a
+            // touch later, which reads as the group gathering into place.
+            const float dx0 = cellCx - panelC.x;
+            const float dy0 = cellCy - panelC.y;
+            const float dist = std::sqrt(dx0 * dx0 + dy0 * dy0);
+            const float stagger = 0.35f * std::clamp(dist / std::max(1.0f, spread), 0.0f, 1.0f);
+            const float lt = std::clamp((t - stagger * (1.0f - t)) / std::max(0.15f, 1.0f - stagger * (1.0f - t)),
+                0.0f, 1.0f);
+            // Outward scatter: at lt = 0 the letter sits far from the centre and
+            // slides in; on the way out (t shrinking) it flies back out again.
+            const float push = (1.0f - lt) * spread;
+            const float dlen = std::max(1.0f, dist);
+            const ImVec2 pos(cellCx + dx0 / dlen * push, cellCy + dy0 / dlen * push);
+
+            // Half-open rect (max exclusive): the cells tile the area, so a
+            // click exactly on a shared edge must belong to ONE cell only -
+            // with <= on both ends two letters were picked in the same frame
+            // and the list jumped to the wrong section.
+            const bool hovered = mousePos.x >= cellCx - cellW * 0.5f && mousePos.x < cellCx + cellW * 0.5f
+                && mousePos.y >= cellCy - cellH * 0.5f && mousePos.y < cellCy + cellH * 0.5f;
+            if (hovered) {
+                hitLetter = true;
+            }
 
             const bool active = keys[static_cast<size_t>(i)].label == currentLabel;
-            ImU32 fill = IM_COL32(58, 52, 92, fade(235));
+            ImFont* letterFont = title != nullptr ? title : body;
+            const float size = (active ? 34.0f : 30.0f) * k * (0.88f + 0.12f * lt);
+            const int alpha = static_cast<int>((hovered || active ? 255.0f : 205.0f) * lt);
+            addTextCentered(listDl, letterFont, size, pos,
+                active ? IM_COL32(255, 255, 255, alpha)
+                       : (hovered ? IM_COL32(255, 255, 255, alpha) : IM_COL32(232, 232, 244, alpha)),
+                keys[static_cast<size_t>(i)].label.c_str());
             if (active) {
-                fill = IM_COL32(126, 118, 208, fade(245));
-            } else if (hovered) {
-                fill = IM_COL32(92, 84, 146, fade(245));
+                // A short bar under the current section instead of a box.
+                const float half = size * 0.34f;
+                listDl->AddRectFilled(ImVec2(pos.x - half, pos.y + size * 0.62f),
+                    ImVec2(pos.x + half, pos.y + size * 0.62f + 3.0f * k),
+                    IM_COL32(255, 255, 255, static_cast<int>(230.0f * lt)), 1.5f * k);
             }
-            listDl->AddRectFilled(k0, k1, fill, 10.0f * k);
-            if (active) {
-                listDl->AddRect(k0, k1, IM_COL32(255, 255, 255, fade(200)), 10.0f * k, 0, 2.0f * k);
-            }
-            addTextCentered(listDl, body, 19.0f * k, ImVec2((k0.x + k1.x) * 0.5f, (k0.y + k1.y) * 0.5f),
-                IM_COL32(240, 240, 250, fade(255)), keys[static_cast<size_t>(i)].label.c_str());
 
-            if (clicked && keys[static_cast<size_t>(i)].group >= 0) {
+            if (hitLetter && hovered && clicked && keys[static_cast<size_t>(i)].group >= 0) {
                 // Land with this section's first song in the middle, so its
                 // header ends up one row above.
                 const int slot = nearestSlotOfRow(keys[static_cast<size_t>(i)].headerRow + 1);
@@ -1960,7 +1976,16 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
                 std::fflush(stdout);
             }
         }
+
+        // A click that was not on a letter restores the list (the letters are
+        // not ImGui items, so this is the only place that can decide).
+        if (clicked && !hitLetter) {
+            indexOpen = false;
+            std::puts("[select] index closed (blank area)");
+            std::fflush(stdout);
+        }
     }
+
 
     // Keyboard navigation over the (cyclically) listed rows.
     if (rowCount > 0) {

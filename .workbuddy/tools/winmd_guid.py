@@ -167,4 +167,12 @@ for k in sorted(found):
     if "Media" in k or "Foundation" in k:
         pass
 for name in sys.argv[2:]:
-    print("%-70s %s" % (name, found.get(name, "NOT FOUND")))
+    # `found` is keyed by "Namespace.Type"; accept a bare type name too (that
+    # is how the interfaces are named in the C/C++ headers).
+    hit = found.get(name)
+    if hit is None:
+        for k, v in found.items():
+            if k == name or k.endswith("." + name):
+                hit = v
+                break
+    print("%-70s %s" % (name, hit if hit is not None else "NOT FOUND"))

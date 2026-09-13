@@ -8,6 +8,9 @@
 // order of an interface's methods in metadata is its ABI vtable order.
 #include "SystemMedia.hpp"
 
+#include <filesystem>
+#include <system_error>
+
 #include <SDL.h>
 #include <SDL_syswm.h>
 
@@ -52,6 +55,15 @@ namespace
     // systemmediatransportcontrolsinterop.h.
     const GUID IID_ISystemMediaTransportControlsInterop = {
         0xDDB0472D, 0xC911, 0x4A1F, {0x86, 0xD9, 0xDC, 0x3D, 0x71, 0xA9, 0x5F, 0x5A}};
+    // Cover art plumbing (Windows.Foundation.winmd / Windows.Storage.winmd;
+    // cross-checked against well-known IIDs):
+    // {44A9796F-723E-4FDF-A218-033E75B0C084} Windows.Foundation.IUriRuntimeClassFactory
+    const GUID IID_IUriRuntimeClassFactory = {
+        0x44A9796F, 0x723E, 0x4FDF, {0xA2, 0x18, 0x03, 0x3E, 0x75, 0xB0, 0xC0, 0x84}};
+    // {857309DC-3FBF-4E7D-986F-EF3B1A07A964}
+    // Windows.Storage.Streams.IRandomAccessStreamReferenceStatics
+    const GUID IID_IRandomAccessStreamReferenceStatics = {
+        0x857309DC, 0x3FBF, 0x4E7D, {0x98, 0x6F, 0xEF, 0x3B, 0x1A, 0x07, 0xA9, 0x64}};
 
     // {56FDF344-FD6D-11D0-958A-006097C9A090} / {EA1AFB91-9E28-4B86-90E9-9E9F8A5EEFAF}
     const GUID CLSID_TaskbarList_ = {
@@ -218,6 +230,69 @@ namespace
         HRESULT (STDMETHODCALLTYPE* GetForWindow)(void*, HWND, const GUID*, void**);
     };
 
+    // ---- Thumbnail (cover art) plumbing -----------------------------------
+    // SMTC takes the album picture as a RandomAccessStreamReference. The
+    // documented recipe goes through StorageFile.GetFileFromPathAsync, but that
+    // async factory never completes here: this thread is an STA, so the
+    // completion is queued to the apartment, and polling its status (with or
+    // without message pumping) left it "Started" until the timeout. So the
+    // synchronous route is used instead - Windows.Foundation.Uri built from the
+    // file path, then RandomAccessStreamReference.CreateFromUri, which the
+    // shell resolves itself (a file:// URI is readable in the same user
+    // context). Interface order verified with .workbuddy/tools/winmd_dump.py.
+    //
+    // Windows.Foundation.IUriRuntimeClassFactory - only CreateUri is called.
+    struct IUriRuntimeClassFactoryVtbl
+    {
+        HRESULT (STDMETHODCALLTYPE* QueryInterface)(void*, const GUID*, void**);
+        ULONG (STDMETHODCALLTYPE* AddRef)(void*);
+        ULONG (STDMETHODCALLTYPE* Release)(void*);
+        HRESULT (STDMETHODCALLTYPE* GetIids)(void*, ULONG*, GUID**);
+        HRESULT (STDMETHODCALLTYPE* GetRuntimeClassName)(void*, void**);
+        HRESULT (STDMETHODCALLTYPE* GetTrustLevel)(void*, int*);
+        // 6. CreateUri, 7. CreateWithRelativeUri
+        HRESULT (STDMETHODCALLTYPE* CreateUri)(void*, void*, void**);
+    };
+
+    // Windows.Foundation.IUriRuntimeClass - only get_AbsoluteUri (6) is read
+    // back, but the leading members keep the offset honest.
+    struct IUriRuntimeClassVtbl
+    {
+        HRESULT (STDMETHODCALLTYPE* QueryInterface)(void*, const GUID*, void**);
+        ULONG (STDMETHODCALLTYPE* AddRef)(void*);
+        ULONG (STDMETHODCALLTYPE* Release)(void*);
+        HRESULT (STDMETHODCALLTYPE* GetIids)(void*, ULONG*, GUID**);
+        HRESULT (STDMETHODCALLTYPE* GetRuntimeClassName)(void*, void**);
+        HRESULT (STDMETHODCALLTYPE* GetTrustLevel)(void*, int*);
+        HRESULT (STDMETHODCALLTYPE* get_AbsoluteUri)(void*, void**); // 6
+        HRESULT (STDMETHODCALLTYPE* get_DisplayUri)(void*, void**);
+        HRESULT (STDMETHODCALLTYPE* get_Domain)(void*, void**);
+        HRESULT (STDMETHODCALLTYPE* get_Extension)(void*, void**);
+        HRESULT (STDMETHODCALLTYPE* get_Fragment)(void*, void**);
+        HRESULT (STDMETHODCALLTYPE* get_Host)(void*, void**);
+        HRESULT (STDMETHODCALLTYPE* get_Password)(void*, void**);
+        HRESULT (STDMETHODCALLTYPE* get_Path)(void*, void**);
+        HRESULT (STDMETHODCALLTYPE* get_Query)(void*, void**);
+        HRESULT (STDMETHODCALLTYPE* get_QueryParsed)(void*, void**);
+        HRESULT (STDMETHODCALLTYPE* get_RawUri)(void*, void**);
+        HRESULT (STDMETHODCALLTYPE* get_SchemeName)(void*, void**); // 17
+    };
+
+    // Windows.Storage.Streams.IRandomAccessStreamReferenceStatics.
+    struct IRandomAccessStreamReferenceStaticsVtbl
+    {
+        HRESULT (STDMETHODCALLTYPE* QueryInterface)(void*, const GUID*, void**);
+        ULONG (STDMETHODCALLTYPE* AddRef)(void*);
+        ULONG (STDMETHODCALLTYPE* Release)(void*);
+        HRESULT (STDMETHODCALLTYPE* GetIids)(void*, ULONG*, GUID**);
+        HRESULT (STDMETHODCALLTYPE* GetRuntimeClassName)(void*, void**);
+        HRESULT (STDMETHODCALLTYPE* GetTrustLevel)(void*, int*);
+        // 6. CreateFromFile, 7. CreateFromUri, 8. CreateFromStream
+        HRESULT (STDMETHODCALLTYPE* CreateFromFile)(void*, void*, void**);
+        HRESULT (STDMETHODCALLTYPE* CreateFromUri)(void*, void*, void**);
+        HRESULT (STDMETHODCALLTYPE* CreateFromStream)(void*, void*, void**);
+    };
+
     struct ITaskbarList3Vtbl
     {
         HRESULT (STDMETHODCALLTYPE* QueryInterface)(void*, const GUID*, void**);
@@ -326,6 +401,105 @@ namespace
         bool valid() const { return handle != nullptr; }
     };
 
+    // file:/// URI for an absolute Windows path. Everything outside the
+    // unreserved set is percent-encoded byte by byte, so a jacket whose name
+    // has Japanese characters still produces a valid URI (the URI has to be
+    // UTF-8 encoded; the file system path is already UTF-8 here).
+    std::string fileUriFromPath(const std::string& rawPath)
+    {
+        std::string path = rawPath;
+        {
+            std::error_code ec;
+            const std::filesystem::path full =
+                std::filesystem::weakly_canonical(std::filesystem::path(rawPath), ec);
+            if (!ec && !full.empty()) {
+                path = full.string();
+            }
+        }
+        static const char* kHex = "0123456789ABCDEF";
+        std::string uri = "file:///";
+        for (const unsigned char c : path) {
+            const bool plain = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
+                || c == '-' || c == '_' || c == '.' || c == '~' || c == '/';
+            if (c == '\\') {
+                uri.push_back('/');
+            } else if (plain) {
+                uri.push_back(static_cast<char>(c));
+            } else if (c == ':') {
+                // Keep the drive-letter colon (file:///D:/...); other colons
+                // would start a scheme and must be escaped.
+                if (uri.size() == 8) {
+                    uri.push_back(':');
+                } else {
+                    uri.append("%3A");
+                }
+            } else {
+                uri.push_back('%');
+                uri.push_back(kHex[c >> 4]);
+                uri.push_back(kHex[c & 0x0F]);
+            }
+        }
+        return uri;
+    }
+
+    // RandomAccessStreamReference for an image file, or nullptr.
+    void* streamReferenceFromPath(const std::string& path, std::string& outUri)
+    {
+        if (gRoGetActivationFactory == nullptr || path.empty()) {
+            return nullptr;
+        }
+        outUri = fileUriFromPath(path);
+        HString classId(L"Windows.Foundation.Uri");
+        void* factory = nullptr;
+        if (FAILED(gRoGetActivationFactory(classId.handle, &IID_IUriRuntimeClassFactory, &factory))
+            || factory == nullptr) {
+            return nullptr;
+        }
+        HString uriString(outUri);
+        void* uri = nullptr;
+        const HRESULT uriHr = vt<IUriRuntimeClassFactoryVtbl>(factory)->CreateUri(factory, uriString.handle, &uri);
+        safeRelease(factory);
+        if (FAILED(uriHr) || uri == nullptr) {
+            return nullptr;
+        }
+        // Read it back: CreateUri already validates, but this proves the shell
+        // will see the URI we intended (and comes out percent-encoded).
+        void* absolute = nullptr;
+        if (SUCCEEDED(vt<IUriRuntimeClassVtbl>(uri)->get_AbsoluteUri(uri, &absolute)) && absolute != nullptr) {
+            if (gGetStringRawBuffer != nullptr) {
+                unsigned len = 0;
+                const wchar_t* text = gGetStringRawBuffer(absolute, &len);
+                if (text != nullptr && len > 0) {
+                    const int bytes = WideCharToMultiByte(CP_UTF8, 0, text, static_cast<int>(len), nullptr, 0,
+                        nullptr, nullptr);
+                    if (bytes > 0) {
+                        std::string utf8(static_cast<size_t>(bytes), '\0');
+                        WideCharToMultiByte(CP_UTF8, 0, text, static_cast<int>(len), utf8.data(), bytes, nullptr,
+                            nullptr);
+                        outUri = utf8;
+                    }
+                }
+            }
+            if (gDeleteString != nullptr) {
+                gDeleteString(absolute);
+            }
+        }
+
+        HString refClassId(L"Windows.Storage.Streams.RandomAccessStreamReference");
+        void* refFactory = nullptr;
+        if (FAILED(gRoGetActivationFactory(refClassId.handle, &IID_IRandomAccessStreamReferenceStatics, &refFactory))
+            || refFactory == nullptr) {
+            safeRelease(uri);
+            return nullptr;
+        }
+        void* reference = nullptr;
+        const HRESULT refHr = vt<IRandomAccessStreamReferenceStaticsVtbl>(refFactory)->CreateFromUri(refFactory,
+            uri, &reference);
+        safeRelease(refFactory);
+        safeRelease(uri);
+        return FAILED(refHr) ? nullptr : reference;
+    }
+
 #else  // !_WIN32
     void loadWinrt() {}
 #endif // _WIN32
@@ -407,6 +581,10 @@ bool SystemMedia::init(SDL_Window* window)
 void SystemMedia::shutdown()
 {
 #ifdef _WIN32
+    if (mThumbnail != nullptr) {
+        safeRelease(mThumbnail);
+        mThumbnail = nullptr;
+    }
     if (mSmtc != nullptr) {
         safeRelease(mSmtc);
         mSmtc = nullptr;
@@ -423,7 +601,8 @@ void SystemMedia::shutdown()
 #endif
 }
 
-void SystemMedia::setTrack(const std::string& title, const std::string& artist, double durationSec)
+void SystemMedia::setTrack(const std::string& title, const std::string& artist, double durationSec,
+    const std::string& coverPath)
 {
 #ifdef _WIN32
     if (mSmtc == nullptr) {
@@ -489,6 +668,27 @@ void SystemMedia::setTrack(const std::string& title, const std::string& artist, 
         }
         safeRelease(props);
     }
+
+    // Cover art. The flyout looks empty without it; the reference is built from
+    // a file:// URI (see the plumbing above for why not StorageFile).
+    if (!coverPath.empty()) {
+        std::string uri;
+        if (mThumbnail != nullptr) {
+            safeRelease(mThumbnail);
+            mThumbnail = nullptr;
+        }
+        mThumbnail = streamReferenceFromPath(coverPath, uri);
+        if (mThumbnail != nullptr) {
+            diag("put_Thumbnail", vt<IDisplayUpdaterVtbl>(updater)->put_Thumbnail(updater, mThumbnail));
+        } else {
+            diag("put_Thumbnail SKIPPED (no stream reference)", E_FAIL);
+        }
+        if (!s_metaDiagLogged) {
+            std::printf("[media] cover -> %s (%s)\n", mThumbnail == nullptr ? "FAILED" : "ok", uri.c_str());
+            std::fflush(stdout);
+        }
+    }
+
     diag("Update", vt<IDisplayUpdaterVtbl>(updater)->Update(updater));
     s_metaDiagLogged = true;
     safeRelease(updater);

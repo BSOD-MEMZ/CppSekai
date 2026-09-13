@@ -1204,7 +1204,8 @@ int main(int argc, char** argv)
             duration = core_api::getChartEndTimeSec();
         }
         trackDurationSec = std::max(0.0, duration);
-        systemMedia.setTrack(session.intro.title, session.entry.artist, trackDurationSec);
+        systemMedia.setTrack(session.intro.title, session.entry.artist, trackDurationSec,
+            session.entry.coverPath);
     };
     if (state == AppState::Play) {
         game::ChartEntry entry;
@@ -2472,11 +2473,15 @@ int main(int argc, char** argv)
             // ----------------------------------------------------------
             // Damage vignette: dark inner shadow around the screen edges.
             // A life loss flashes it (decays over ~0.45s); life at 0 keeps
-            // it permanently on (original-game feedback). Edge bands do NOT
-            // overlap: left/right bands span the full height, top/bottom
-            // bands only the middle stretch, so every edge point gets
-            // exactly ONE layer of darkness (they used to stack in the
-            // corners and pile up much darker).
+            // it permanently on (original-game feedback). The shadow has to
+            // hug all four window edges, corners included:
+            //   * the four edge bands are inset so they never overlap,
+            //   * the four corner squares carry a two-colour gradient (dark on
+            //     the two outer edges, 0 at the inner corner) so the darkening
+            //     is continuous around the perimeter without stacking.
+            // Insetting the bands WITHOUT the corner squares (what this used
+            // to do) left the top/bottom edges undarkened in the corners, which
+            // read as "the shadow is not around the window".
             // ----------------------------------------------------------
             {
                 const float deadVignette = judgement.lifeRatio() <= 0.0f ? 0.8f : 0.0f;
@@ -2486,22 +2491,31 @@ int main(int argc, char** argv)
                     const float w = static_cast<float>(windowW);
                     const float h = static_cast<float>(windowH);
                     const int a = static_cast<int>(90.0f * vig);
+                    const int z = 0;
+                    const ImU32 dark = IM_COL32(0, 0, 0, a);
+                    const ImU32 none = IM_COL32(0, 0, 0, z);
                     const float bandV = h * 0.16f; // top / bottom band height
                     const float bandH = w * 0.12f; // left / right band width
-                    // Top / bottom: only between the side bands.
+                    // Top / bottom, between the corner squares.
                     fg->AddRectFilledMultiColor(ImVec2(bandH, 0.0f), ImVec2(w - bandH, bandV),
-                        IM_COL32(0, 0, 0, a), IM_COL32(0, 0, 0, a),
-                        IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, 0));
+                        dark, dark, none, none);
                     fg->AddRectFilledMultiColor(ImVec2(bandH, h - bandV), ImVec2(w - bandH, h),
-                        IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, 0),
-                        IM_COL32(0, 0, 0, a), IM_COL32(0, 0, 0, a));
-                    // Left / right: full height.
-                    fg->AddRectFilledMultiColor(ImVec2(0.0f, 0.0f), ImVec2(bandH, h),
-                        IM_COL32(0, 0, 0, a), IM_COL32(0, 0, 0, 0),
-                        IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, a));
-                    fg->AddRectFilledMultiColor(ImVec2(w - bandH, 0.0f), ImVec2(w, h),
-                        IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, a),
-                        IM_COL32(0, 0, 0, a), IM_COL32(0, 0, 0, 0));
+                        none, none, dark, dark);
+                    // Left / right, between the corner squares.
+                    fg->AddRectFilledMultiColor(ImVec2(0.0f, bandV), ImVec2(bandH, h - bandV),
+                        dark, none, none, dark);
+                    fg->AddRectFilledMultiColor(ImVec2(w - bandH, bandV), ImVec2(w, h - bandV),
+                        none, dark, dark, none);
+                    // Corners: dark along the two outer edges, fading to the
+                    // window's inside (bilinear between the four colours).
+                    fg->AddRectFilledMultiColor(ImVec2(0.0f, 0.0f), ImVec2(bandH, bandV),
+                        dark, dark, none, dark); // top-left
+                    fg->AddRectFilledMultiColor(ImVec2(w - bandH, 0.0f), ImVec2(w, bandV),
+                        dark, dark, dark, none); // top-right
+                    fg->AddRectFilledMultiColor(ImVec2(0.0f, h - bandV), ImVec2(bandH, h),
+                        dark, none, dark, dark); // bottom-left
+                    fg->AddRectFilledMultiColor(ImVec2(w - bandH, h - bandV), ImVec2(w, h),
+                        none, dark, dark, dark); // bottom-right
                 }
             }
 

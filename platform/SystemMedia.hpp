@@ -30,7 +30,10 @@ class SystemMedia
     bool taskbarAvailable() const { return mTaskbar != nullptr; }
 
     // Call once per song. durationSec is the playable length (0 = unknown).
-    void setTrack(const std::string& title, const std::string& artist, double durationSec);
+    // coverPath is an absolute path to the jacket image ("" = none); it becomes
+    // the thumbnail the media flyout shows.
+    void setTrack(const std::string& title, const std::string& artist, double durationSec,
+        const std::string& coverPath = std::string());
 
     // Call every frame (cheap: only pushes an update when the position moved
     // by more than ~0.5s or the state changed).
@@ -43,6 +46,10 @@ class SystemMedia
     void* mWindow = nullptr; // HWND
     void* mTaskbar = nullptr; // ITaskbarList3*
     void* mSmtc = nullptr;    // ISystemMediaTransportControls*
+    // The RandomAccessStreamReference behind the current thumbnail. Kept alive
+    // on purpose: the shell resolves it (opens the file) whenever it feels like
+    // rendering the flyout, not at the moment it is handed over.
+    void* mThumbnail = nullptr;
 
     // Cached so we only touch WinRT when something actually changed.
     std::string mTrackTitle;
