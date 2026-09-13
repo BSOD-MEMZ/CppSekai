@@ -423,6 +423,10 @@ namespace
         judgement.setChartRating(chartLevel > 0 ? static_cast<float>(chartLevel) : 26.0f);
 
         if (!entry.bgmPath.empty()) {
+            // Logged because the file now depends on the vocal version picked in
+            // the song select (charts\se_0374_01.mp3 vs an_0374_02.mp3 ...).
+            std::printf("[audio] bgm: %s\n", entry.bgmPath.c_str());
+            std::fflush(stdout);
             audio.loadMusic(entry.bgmPath, error);
         }
         // Official pjsk audio starts with fillerSec seconds of silence; chart
@@ -555,6 +559,7 @@ int main(int argc, char** argv)
     bool showPauseDialogShot = false; // headless check: force the pause dialog open
     bool showSettingsShot = false; // headless check: force the settings card open
     int settingsTabShot = -1;      // headless check: which settings tab to show
+    int selectMusicId = 0;         // --select-id: preselect this song id in the list
     bool testRestart = false; // debug: replay "give up -> pick another song"
     double restartAtSec = 8.0;
     bool resultPreview = false; // debug: boot straight into the result screen
@@ -578,6 +583,10 @@ int main(int argc, char** argv)
     bool heightGiven = false;
     game::UserSettings userSettings;
     std::map<std::string, game::ScoreRecord> scores;
+    // Vocal version picked in the song select for the song under the cursor
+    // (index into game::availableVocals(); -1 = the song has no switcher).
+    // Written by drawSongSelect, read when a song is started.
+    int selectedVocal = -1;
 
     for (int i = 1; i < utf8Argc; ++i) {
         const std::string arg = utf8Argv[i];
@@ -640,6 +649,8 @@ int main(int argc, char** argv)
             judgeAnimFrame = std::atoi(utf8Argv[++i]);
         } else if (arg == "--show-pause-dialog") {
             showPauseDialogShot = true;
+        } else if (arg == "--select-id" && i + 1 < utf8Argc) {
+            selectMusicId = std::atoi(utf8Argv[++i]);
         } else if (arg == "--settings") {
             // Headless check: open the settings card right away, so a
             // --screenshot run can look at it (a key press can't be sent).
@@ -1179,6 +1190,21 @@ int main(int argc, char** argv)
         }
     }
 
+    // Official vocal versions (music-vocals.json, next to musics.json). The
+    // song select grows a version switcher for songs that have more than one
+    // version's mp3 sitting next to the chart; without the table there is no
+    // switcher, everything else works the same.
+    for (const std::string& candidate :
+        {baseDir + "music-vocals.json", baseDir + "..\\music-vocals.json",
+            std::string("music-vocals.json")}) {
+        std::ifstream probe(candidate, std::ios::binary);
+        if (probe.good()) {
+            probe.close();
+            game::loadMusicVocals(candidate);
+            break;
+        }
+    }
+
     // ------------------------------------------------------------------
     // UI fonts
     // ------------------------------------------------------------------
@@ -1243,6 +1269,16 @@ int main(int argc, char** argv)
     }
     game::applyScores(entries, scores);
     int selected = entries.empty() ? -1 : 0;
+    if (selectMusicId > 0) {
+        // --select-id <id>: park the list on that song (used by screenshots and
+        // by the chart downloader's "play this" hand-off).
+        for (size_t i = 0; i < entries.size(); ++i) {
+            if (entries[i].musicId == selectMusicId) {
+                selected = static_cast<int>(i);
+                                break;
+            }
+        }
+    }
     std::string loadedCoverPath;
 
     AppState state = susPath.empty() ? AppState::Select : AppState::Play;
@@ -2347,7 +2383,8 @@ int main(int argc, char** argv)
             const int prevSortMode = userSettings.sortMode;
             const int prevGroupMode = userSettings.groupMode;
             const int action = game::drawSongSelect(renderer, entries, selected, windowW, windowH,
-                static_cast<float>(uiClock), userSettings.sortMode, userSettings.groupMode);
+                static_cast<float>(uiClock), userSettings.sortMode, userSettings.groupMode,
+                selectedVocal);
             if (prevSortMode != userSettings.sortMode || prevGroupMode != userSettings.groupMode) {
                 persistUserData();
             }
@@ -2355,7 +2392,11 @@ int main(int argc, char** argv)
             const bool wantRescan = rescanRequested || action == game::SelectRescan;
             rescanRequested = false;
             if (action >= 0 && action < static_cast<int>(entries.size())) {
-                if (startSession(session, entries[static_cast<size_t>(action)], renderer, audio, judgement, noteSpeed, error)) {
+                // Point the entry at the chosen vocal version's audio before it
+                // goes in (the entries themselves are const here).
+                game::ChartEntry playEntry = entries[static_cast<size_t>(action)];
+                game::applyVocalVersion(playEntry, game::availableVocals(playEntry), selectedVocal);
+                if (startSession(session, playEntry, renderer, audio, judgement, noteSpeed, error)) {
                     loadedCoverPath = session.entry.coverPath;
                     announceTrack();
                     touches.clear();

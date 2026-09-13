@@ -295,6 +295,23 @@ namespace
         const auto it = gMusicTitles.find(musicId);
         return it == gMusicTitles.end() ? std::string() : it->second;
     }
+
+    // -----------------------------------------------------------------
+    // Vocal versions (music-vocals.json, generated from the official
+    // musicVocals + gameCharacters tables). Only the *table* lives here; which
+    // versions have their mp3 next to the chart is decided per entry by
+    // availableVocals().
+    // -----------------------------------------------------------------
+    std::map<int, std::vector<VocalVersion>> gMusicVocals;
+
+    // Existence check for one asset's audio file. Only ever called for the
+    // selected song (a handful of stats per frame), so no caching: a stale
+    // cache would hide a file the player just dropped in and pressed F5 for.
+    bool audioFileExists(const std::string& path)
+    {
+        std::error_code ec;
+        return fs::exists(path, ec) && fs::is_regular_file(path, ec);
+    }
 } // namespace
 
 std::string gSelectAssetDir; // set via setSelectAssetDir()
@@ -1209,8 +1226,137 @@ void loadMusicMaster(const std::string& path)
     }
 }
 
+const std::vector<VocalVersion>& musicVocals(int musicId)
+{
+    static const std::vector<VocalVersion> empty;
+    const auto it = gMusicVocals.find(musicId);
+    return it == gMusicVocals.end() ? empty : it->second;
+}
+
+std::vector<VocalVersion> availableVocals(const ChartEntry& entry)
+{
+    std::vector<VocalVersion> out;
+    if (entry.musicId <= 0) {
+        return out;
+    }
+    const fs::path dir = fs::path(entry.susPath).parent_path();
+    for (const VocalVersion& version : musicVocals(entry.musicId)) {
+        VocalVersion copy = version;
+        copy.available = audioFileExists((dir / (version.asset + ".mp3")).string());
+        if (copy.available) {
+            out.push_back(std::move(copy));
+        }
+    }
+    return out;
+}
+
+std::string vocalShortLabel(const VocalVersion& version)
+{
+    if (version.type == "sekai") {
+        return "セカイ";
+    }
+    if (version.type == "virtual_singer" || version.type == "original_song") {
+        return "バーチャル";
+    }
+    if (version.singers.empty()) {
+        return version.caption;
+    }
+    if (version.singers.size() == 1) {
+        return version.singers.front();
+    }
+    return version.singers.front() + " 他";
+}
+
+int defaultVocalIndex(int musicId, const std::vector<VocalVersion>& available)
+{
+    if (available.empty()) {
+        return -1;
+    }
+    // The セカイver is what the plain <id4>.mp3 download is (unipjsk serves
+    // se_<id>_01 there), so it keeps an existing library sounding the same.
+    for (size_t i = 0; i < available.size(); ++i) {
+        if (available[i].type == "sekai") {
+            return static_cast<int>(i);
+        }
+    }
+    (void)musicId;
+    return 0;
+}
+
+bool applyVocalVersion(ChartEntry& entry, const std::vector<VocalVersion>& versions, int index)
+{
+    if (index < 0 || index >= static_cast<int>(versions.size())) {
+        return false;
+    }
+    const VocalVersion& version = versions[static_cast<size_t>(index)];
+    const fs::path file = fs::path(entry.susPath).parent_path() / (version.asset + ".mp3");
+    if (!audioFileExists(file.string())) {
+        return false;
+    }
+    entry.bgmPath = file.string();
+    entry.vocal.clear();
+    for (const std::string& singer : version.singers) {
+        if (!entry.vocal.empty()) {
+            entry.vocal += "、";
+        }
+        entry.vocal += singer;
+    }
+    return true;
+}
+
+void loadMusicVocals(const std::string& path)
+{
+    std::error_code ec;
+    if (path.empty() || !fs::exists(path, ec)) {
+        return;
+    }
+    std::ifstream file(path, std::ios::binary);
+    if (!file) {
+        return;
+    }
+    nlohmann::json doc;
+    try {
+        doc = nlohmann::json::parse(file);
+    } catch (...) {
+        return;
+    }
+    if (!doc.is_object()) {
+        return;
+    }
+    for (auto it = doc.begin(); it != doc.end(); ++it) {
+        const int musicId = std::atoi(it.key().c_str());
+        if (musicId <= 0 || !it.value().is_array()) {
+            continue;
+        }
+        std::vector<VocalVersion> list;
+        for (const auto& row : it.value()) {
+            if (!row.is_object()) {
+                continue;
+            }
+            VocalVersion version;
+            version.id = row.value("id", 0);
+            version.type = row.value("type", std::string{});
+            version.caption = row.value("caption", std::string{});
+            version.asset = row.value("asset", std::string{});
+            if (row.contains("singers") && row["singers"].is_array()) {
+                for (const auto& singer : row["singers"]) {
+                    if (singer.is_string()) {
+                        version.singers.push_back(singer.get<std::string>());
+                    }
+                }
+            }
+            if (!version.asset.empty()) {
+                list.push_back(std::move(version));
+            }
+        }
+        if (!list.empty()) {
+            gMusicVocals[musicId] = std::move(list);
+        }
+    }
+}
+
 int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& entries, int& selected,
-    int windowW, int windowH, float timeSec, int& sortMode, int& groupMode)
+    int windowW, int windowH, float timeSec, int& sortMode, int& groupMode, int& vocalIndex)
 {
     int action = SelectNone;
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
@@ -1223,12 +1369,36 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     static int groupIndex = 0;
     static int diffIndex = 3; // EXPERT, like the reference UI
     static size_t lastCount = 0;
+    static bool firstFrame = true;
+    // Group to park the list on for the very first layout (-1 = derive it from
+    // the first row, the historical behaviour).
+    static int startGroup = -1;
     if (entries.size() != lastCount) {
         lastCount = entries.size();
         groups = buildGroups(entries);
         groupIndex = 0;
+        firstFrame = true;
     } else if (groups.empty() && !entries.empty()) {
         groups = buildGroups(entries);
+        firstFrame = true;
+    }
+    // First frame: start on the caller's `selected` instead of always parking on
+    // the first song (the CLI --select-id hand-off; the difficulty is left as
+    // configured so the default stays EXPERT).
+    if (firstFrame) {
+        firstFrame = false;
+        startGroup = -1;
+        if (selected > 0 && selected < static_cast<int>(entries.size())) {
+            for (size_t gi = 0; gi < groups.size(); ++gi) {
+                for (int d = 0; d < kDiffCount; ++d) {
+                    if (groups[gi].idx[d] == selected) {
+                        groupIndex = static_cast<int>(gi);
+                        startGroup = static_cast<int>(gi);
+                        break;
+                    }
+                }
+            }
+        }
     }
     if (groupIndex >= static_cast<int>(groups.size())) {
         groupIndex = groups.empty() ? 0 : static_cast<int>(groups.size()) - 1;
@@ -1578,12 +1748,16 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     if (!listInit && rowCount > 0) {
         if (!rowsBuilt) {
             // Very first layout: start on the first row of the list (the scan
-            // order and the sorted order differ, so group 0 is not it).
+            // order and the sorted order differ, so group 0 is not it) - unless
+            // the caller parked the list on a specific song, in which case the
+            // group was already resolved and must not be thrown away here.
             rowsBuilt = true;
-            for (const ListRow& r : rows) {
-                if (!r.header) {
-                    groupIndex = r.group;
-                    break;
+            if (startGroup < 0) {
+                for (const ListRow& r : rows) {
+                    if (!r.header) {
+                        groupIndex = r.group;
+                        break;
+                    }
                 }
             }
         }
@@ -2144,10 +2318,113 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             addTextCentered(dl, body, 17.0f * k, ImVec2(cx, ty), grayText, item.artist.c_str());
             ty += 26.0f * k;
         }
-        if (!item.vocal.empty()) {
-            const std::string vo = "Vo. " + item.vocal;
-            addTextCentered(dl, body, 15.0f * k, ImVec2(cx, ty), grayText, vo.c_str());
-            ty += 24.0f * k;
+        // Vocal versions: only when the song actually ships more than one
+        // version's audio next to the chart. The chip row sits between the
+        // credits and the difficulty pads; the "Vo." line follows the chosen
+        // chip (that is the whole point of the switch).
+        {
+            const std::vector<VocalVersion> versions = availableVocals(item);
+            static std::map<int, int> vocalChoiceBySong; // musicId -> index
+            int choice = defaultVocalIndex(item.musicId, versions);
+            if (const auto it = vocalChoiceBySong.find(item.musicId); it != vocalChoiceBySong.end()) {
+                choice = it->second;
+            }
+            // The panel shows the *chosen* version's singers, not the sidecar's
+            // (that one is the sekai ver by construction).
+            std::string vocalText = item.vocal;
+            if (!versions.empty() && choice >= 0 && choice < static_cast<int>(versions.size())) {
+                vocalIndex = choice;
+                const VocalVersion& picked = versions[static_cast<size_t>(choice)];
+                if (!picked.singers.empty()) {
+                    vocalText.clear();
+                    for (const std::string& singer : picked.singers) {
+                        if (!vocalText.empty()) {
+                            vocalText += "、";
+                        }
+                        vocalText += singer;
+                    }
+                }
+            }
+
+            // Panel content width: the difficulty pads below use it, and the
+            // credits / chips have to stay inside it (a 5-singer セカイver line
+            // is easily wider than the phone screen).
+            const float panelW = 336.0f * k;
+            if (!vocalText.empty()) {
+                std::string vo = "Vo. " + vocalText;
+                float voSize = 15.0f * k;
+                ImVec2 ts = body->CalcTextSizeA(voSize, FLT_MAX, 0.0f, vo.c_str());
+                if (ts.x > panelW) {
+                    voSize = voSize * (panelW / ts.x);
+                    ts = body->CalcTextSizeA(voSize, FLT_MAX, 0.0f, vo.c_str());
+                }
+                while (ts.x > panelW && vo.size() > 4) {
+                    vo.erase(vo.size() - 2, 1); // drop a char, keep the ellipsis
+                    ts = body->CalcTextSizeA(voSize, FLT_MAX, 0.0f, (vo + "…").c_str());
+                    if (ts.x <= panelW) {
+                        vo += "…";
+                        break;
+                    }
+                }
+                addTextCentered(dl, body, voSize, ImVec2(cx, ty), grayText, vo.c_str());
+                ty += 24.0f * k;
+            }
+
+            if (versions.size() > 1) {
+                // Chip row, centred. Width comes from the label so "バーチャル"
+                // and "花里みのり" both look right.
+                float fontSize = 14.0f * k;
+                float chipH = 26.0f * k;
+                float pad = 12.0f * k;
+                float gap = 6.0f * k;
+                std::vector<float> widths;
+                const auto measure = [&]() {
+                    widths.clear();
+                    float sum = 0.0f;
+                    for (const VocalVersion& version : versions) {
+                        const std::string label = vocalShortLabel(version);
+                        const ImVec2 ts = body->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, label.c_str());
+                        widths.push_back(ts.x + pad * 2.0f);
+                        sum += widths.back();
+                    }
+                    return sum + gap * static_cast<float>(versions.size() - 1);
+                };
+                float total = measure();
+                if (total > panelW) {
+                    // Shrink the whole row (font, padding and gaps together) so
+                    // four chips still fit the phone screen.
+                    const float scale = std::clamp(panelW / total, 0.62f, 1.0f);
+                    fontSize *= scale;
+                    chipH *= scale;
+                    pad *= scale;
+                    gap *= scale;
+                    total = measure();
+                }
+                float chipX = cx - total * 0.5f;
+                const float chipCy = ty + chipH * 0.5f + 2.0f * k;
+                for (size_t i = 0; i < versions.size(); ++i) {
+                    const std::string label = vocalShortLabel(versions[i]);
+                    const ImVec2 lo(chipX, chipCy - chipH * 0.5f);
+                    const ImVec2 hi(chipX + widths[i], chipCy + chipH * 0.5f);
+                    ImGui::SetCursorScreenPos(tiltedItemPos(ImVec2((lo.x + hi.x) * 0.5f, chipCy),
+                        ImVec2(widths[i], chipH)));
+                    ImGui::PushID(static_cast<int>(i) + 9000);
+                    ImGui::InvisibleButton("vocal", ImVec2(widths[i], chipH));
+                    const bool clicked = ImGui::IsItemClicked();
+                    ImGui::PopID();
+                    const bool active = static_cast<int>(i) == (choice < 0 ? 0 : choice);
+                    if (clicked) {
+                        vocalChoiceBySong[item.musicId] = static_cast<int>(i);
+                        vocalIndex = static_cast<int>(i);
+                    }
+                    dl->AddRectFilled(lo, hi, active ? ui::kPrimary : IM_COL32(255, 255, 255, 34),
+                        chipH * 0.5f);
+                    addTextCentered(dl, body, fontSize, ImVec2((lo.x + hi.x) * 0.5f, chipCy),
+                        active ? ui::kBtnText : IM_COL32(238, 238, 248, 235), label.c_str());
+                    chipX += widths[i] + gap;
+                }
+                ty += chipH + 8.0f * k;
+            }
         }
 
         // Difficulty buttons
