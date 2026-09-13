@@ -603,6 +603,7 @@ bool Renderer::loadHud(const std::string& overlayDir, std::string& outError)
     add("life_fill", "life/v3/normal.png");
     add("life_danger", "life/v3/danger.png");
     add("life_overflow", "life/v3/overflow.png");
+    add("auto_badge", "autolive.png");
     add("ui_close", "../ui/close.png");
 
     for (int i = 1; i <= 6; ++i) {

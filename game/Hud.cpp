@@ -1,5 +1,7 @@
 #include "Hud.hpp"
 
+#include "Intro.hpp"
+
 #include "imgui.h"
 
 #include <algorithm>
@@ -96,7 +98,6 @@ ScoreRank scoreRankAndBar(double score, float rating)
 void drawHud(platform::Renderer& renderer, const HudState& state, float songTimeSec, int windowW, int windowH,
     float leadInSec, bool dumpJudgeSheet)
 {
-    (void)leadInSec;
     // Background list: above the GL frame, but below pjsk dialog cards so
     // pause dialogs / panels can dim and cover the HUD.
     ImDrawList* drawList = ImGui::GetBackgroundDrawList();
@@ -469,6 +470,27 @@ void drawHud(platform::Renderer& renderer, const HudState& state, float songTime
             const float h = 70.0f;
             const float w = h * (static_cast<float>(sprite->width) / static_cast<float>(sprite->height));
             img("judge_" + std::to_string(i), 200.0f + static_cast<float>(i - 1) * (w + 20.0f), 850.0f, w, h, 1.0f);
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // AUTO badge (bottom-right), autoplay previews only. 1:1 port of the
+    // upstream overlay: after 1.6s of chart-local time it blinks - the phase is
+    // (local - start) / 1.25 wrapped into 1.2 periods, and the sine of that
+    // half-wave is the alpha (so it is dark for the first 0.9*period of each
+    // wrap). Drawn at (1566, 988) 330x74.
+    // ------------------------------------------------------------------
+    if (state.autoJudge) {
+        constexpr float kBlinkStartSec = 1.6f;
+        constexpr float kBlinkPeriodSec = 1.25f;
+        constexpr float kBlinkModSec = 1.2f;
+        const float hudLocalTimeSec = songTimeSec + leadInSec
+            - (kHudIntroDurationSec + kIntroCleanBgDurationSec);
+        if (hudLocalTimeSec >= kBlinkStartSec) {
+            const float blinkPhase = std::fmod((hudLocalTimeSec - kBlinkStartSec) / kBlinkPeriodSec,
+                kBlinkModSec);
+            const float autoAlpha = std::max(0.0f, std::sin(blinkPhase * 3.14159265359f));
+            img("auto_badge", 1566.0f, 988.0f, 330.0f, 74.0f, autoAlpha);
         }
     }
 }

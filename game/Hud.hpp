@@ -31,7 +31,8 @@ struct HudState
     float lastJudgeAtSec = -100.0f;
     float lifeRatio = 1.0f;
     // Autoplay preview: show the AUTO sprite (judge_6) instead of the judge
-    // word, timing/animation identical to the regular judgement text.
+    // word, timing/animation identical to the regular judgement text. Also
+    // enables the blinking AUTO badge bottom-right (overlay/autolive.png).
     bool autoJudge = false;
 };
 
