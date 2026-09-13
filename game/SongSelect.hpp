@@ -82,6 +82,15 @@ struct UserSettings
     // Splash style: 0 = static centered image (assets\splashscreen.png,
     // default), 1 = classic dark screen with title + progress bar.
     int splashStyle = 0;
+    // Song-select background: 0 = the built-in gradient, 1 = the user's
+    // Windows desktop wallpaper (blurred) so the screen matches the desktop.
+    int bgStyle = 0;
+    float bgBlur = 0.5f; // 0..1 blur amount for the wallpaper
+    float bgDim = 0.45f; // 0..1 darkening on top of it (keeps the list readable)
+    // Song-list order / grouping, so the list comes back the way it was left
+    // (see game::drawSongSelect, which owns the two values while it runs).
+    int sortMode = 0;  // 0 = by name, 1 = by difficulty
+    int groupMode = 0; // 0 = off, 1 = by level band, 2 = by title, 3 = by initial
 };
 
 // Path of userdata.json: <exeDir>\.. \userdata.json when a charts\ folder sits
@@ -114,6 +123,13 @@ void applyScores(std::vector<ChartEntry>& entries, const std::map<std::string, S
 // frame and the clear indicators) load from <dir>\select\<name>.png.
 // Call once at startup.
 void setSelectAssetDir(const std::string& dir);
+
+// Optional song-select backdrop (the blurred desktop wallpaper). `texture` 0
+// falls back to the built-in gradient. texW/texH are the texture's pixel size
+// (used to cover the screen without distorting it) and `dim` (0..1) is a dark
+// overlay drawn on top so the white text stays readable. The host owns the
+// texture and calls this again whenever the setting changes.
+void setSelectBackdrop(GLuint texture, int texW, int texH, float dim);
 
 // Official per-difficulty levels, keyed by song id. unipjsk exports have their
 // SUS header stripped (no #TITLE / #PLAYLEVEL, "#DIFFICULTY 0"), so the level
@@ -155,7 +171,10 @@ enum SelectAction
 
 // Draws the screen. `selected` is kept between frames; returns the index of
 // the chart to start, SelectNone, or SelectQuit.
+// `sortMode` / `groupMode` are in/out: the list's sort and grouping live in the
+// settings, so they survive a restart (the caller persists them when they
+// change).
 int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& entries, int& selected,
-    int windowW, int windowH, float timeSec);
+    int windowW, int windowH, float timeSec, int& sortMode, int& groupMode);
 
 } // namespace game

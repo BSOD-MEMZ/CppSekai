@@ -270,6 +270,21 @@ void setSelectAssetDir(const std::string& dir)
     gSelectAssetDir = dir;
 }
 
+// Blurred desktop wallpaper used as the screen backdrop (0 = draw the built-in
+// gradient instead). Owned by the host - see setSelectBackdrop().
+GLuint gSelectBackdropTex = 0;
+int gSelectBackdropW = 0;
+int gSelectBackdropH = 0;
+float gSelectBackdropDim = 0.0f;
+
+void setSelectBackdrop(GLuint texture, int texW, int texH, float dim)
+{
+    gSelectBackdropTex = texture;
+    gSelectBackdropW = texW;
+    gSelectBackdropH = texH;
+    gSelectBackdropDim = dim;
+}
+
 ScoreRecord mergeScore(const ScoreRecord& old, bool cleared, bool fullCombo)
 {
     ScoreRecord out = old;
@@ -349,6 +364,11 @@ void loadUserData(const std::string& path, UserSettings& settings,
             settings.strictFlick = s.value("strictFlick", settings.strictFlick);
             settings.autoplay = s.value("autoplay", settings.autoplay);
             settings.splashStyle = s.value("splashStyle", settings.splashStyle);
+            settings.bgStyle = s.value("bgStyle", settings.bgStyle);
+            settings.bgBlur = s.value("bgBlur", settings.bgBlur);
+            settings.bgDim = s.value("bgDim", settings.bgDim);
+            settings.sortMode = s.value("sortMode", settings.sortMode);
+            settings.groupMode = s.value("groupMode", settings.groupMode);
         }
     } catch (...) {
         // malformed file: keep the defaults
@@ -359,6 +379,11 @@ void loadUserData(const std::string& path, UserSettings& settings,
     settings.goodMs = std::max(settings.goodMs, settings.greatMs + 10.0f);
     settings.windowWidth = std::clamp(settings.windowWidth, 320, 7680);
     settings.windowHeight = std::clamp(settings.windowHeight, 240, 4320);
+    settings.bgStyle = std::clamp(settings.bgStyle, 0, 1);
+    settings.bgBlur = std::clamp(settings.bgBlur, 0.0f, 1.0f);
+    settings.bgDim = std::clamp(settings.bgDim, 0.0f, 1.0f);
+    settings.sortMode = std::clamp(settings.sortMode, 0, 1);
+    settings.groupMode = std::clamp(settings.groupMode, 0, 3);
 }
 
 void saveUserData(const std::string& path, const UserSettings& settings,
@@ -386,6 +411,11 @@ void saveUserData(const std::string& path, const UserSettings& settings,
         {"strictFlick", settings.strictFlick},
         {"autoplay", settings.autoplay},
         {"splashStyle", settings.splashStyle},
+        {"bgStyle", settings.bgStyle},
+        {"bgBlur", settings.bgBlur},
+        {"bgDim", settings.bgDim},
+        {"sortMode", settings.sortMode},
+        {"groupMode", settings.groupMode},
     };
     doc["scores"] = scoreDoc;
     std::ofstream file(path, std::ios::binary);
@@ -713,6 +743,50 @@ namespace
         return c;
     }
 
+    // UTF-8 encoding of one code point (the 1-3 byte forms cover everything we
+    // build labels from).
+    std::string utf8Encode(unsigned int cp)
+    {
+        std::string out;
+        if (cp < 0x80) {
+            out.push_back(static_cast<char>(cp));
+        } else if (cp < 0x800) {
+            out.push_back(static_cast<char>(0xC0 | (cp >> 6)));
+            out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+        } else {
+            out.push_back(static_cast<char>(0xE0 | ((cp >> 12) & 0x0F)));
+            out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+            out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+        }
+        return out;
+    }
+
+    // Fine-grained index key: the first character of a reading/title, so the
+    // grouped list can offer an "A B C ... あ い う" jump index instead of the
+    // coarse aiueo rows. Digits and latin letters keep their own key, small
+    // kana fold onto their vowel.
+    std::string initialLabel(const std::string& key)
+    {
+        const unsigned int cp = firstCodePoint(key);
+        if (cp == 0) {
+            return "その他";
+        }
+        if (cp >= 'a' && cp <= 'z') {
+            return std::string(1, static_cast<char>(cp - 'a' + 'A'));
+        }
+        if ((cp >= 'A' && cp <= 'Z') || (cp >= '0' && cp <= '9')) {
+            return std::string(1, static_cast<char>(cp));
+        }
+        if (cp >= 0x3041 && cp <= 0x3049) { // ぁぃぅぇぉ -> あいうえお
+            static const unsigned int kVowels[5] = {0x3042, 0x3044, 0x3046, 0x3048, 0x304A};
+            return utf8Encode(kVowels[(cp - 0x3041) / 2]);
+        }
+        if (cp >= 0x3041 && cp <= 0x3096) { // hiragana
+            return utf8Encode(cp);
+        }
+        return "その他";
+    }
+
     // aiueo row of a reading/title (the list's section headers).
     std::string kanaRowLabel(const std::string& key)
     {
@@ -786,6 +860,8 @@ namespace
     constexpr int kGroupOff = 0;
     constexpr int kGroupDifficulty = 1;
     constexpr int kGroupTitle = 2;
+    constexpr int kGroupInitial = 3; // one section per first character
+    constexpr int kGroupCount = 4;
 
     // Sort + optionally group the filtered songs into display rows. Rows are
     // what the (cyclic) scroll model walks: a header takes a slot like a song,
@@ -825,7 +901,9 @@ namespace
             if (groupMode != kGroupOff) {
                 const std::string label = groupMode == kGroupDifficulty
                     ? levelBandLabel(levelOf(gi))
-                    : kanaRowLabel(sortKeyOf(groups[static_cast<size_t>(gi)]));
+                    : groupMode == kGroupInitial
+                        ? initialLabel(sortKeyOf(groups[static_cast<size_t>(gi)]))
+                        : kanaRowLabel(sortKeyOf(groups[static_cast<size_t>(gi)]));
                 if (!haveLabel || label != lastLabel) {
                     ListRow header;
                     header.header = true;
@@ -1079,7 +1157,7 @@ void loadMusicPronunciations(const std::string& path)
 }
 
 int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& entries, int& selected,
-    int windowW, int windowH, float timeSec)
+    int windowW, int windowH, float timeSec, int& sortMode, int& groupMode)
 {
     int action = SelectNone;
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
@@ -1142,12 +1220,34 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     ImFont* title = titleFont();
     ImFont* body = bodyFont() != nullptr ? bodyFont() : ImGui::GetFont();
 
-    // Background: dark blue wash with a slow moving highlight.
-    dl->AddRectFilledMultiColor(ImVec2(0, 0), ImVec2(w, h),
-        IM_COL32(30, 26, 58, 255), IM_COL32(52, 40, 88, 255),
-        IM_COL32(20, 18, 40, 255), IM_COL32(46, 36, 78, 255));
-    const float glowX = w * (0.5f + 0.35f * std::sin(timeSec * 0.25f));
-    dl->AddCircleFilled(ImVec2(glowX, h * 0.35f), h * 0.6f, IM_COL32(120, 130, 230, 30), 64);
+    // Background: the blurred desktop wallpaper when the player picked it,
+    // otherwise the built-in dark blue wash with a slow moving highlight.
+    if (gSelectBackdropTex != 0 && gSelectBackdropW > 0 && gSelectBackdropH > 0) {
+        // "Cover" the window: scale so both sides are filled, centre it and let
+        // ImGui clip the overflow (the aspect of a wallpaper rarely matches).
+        const float srcAspect = static_cast<float>(gSelectBackdropW) / static_cast<float>(gSelectBackdropH);
+        const float dstAspect = w / h;
+        float dw = w;
+        float dh = h;
+        if (srcAspect > dstAspect) {
+            dw = h * srcAspect;
+        } else {
+            dh = w / srcAspect;
+        }
+        const ImVec2 p0((w - dw) * 0.5f, (h - dh) * 0.5f);
+        dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(gSelectBackdropTex)),
+            p0, ImVec2(p0.x + dw, p0.y + dh));
+        if (gSelectBackdropDim > 0.0f) {
+            const int alpha = static_cast<int>(std::clamp(gSelectBackdropDim, 0.0f, 1.0f) * 255.0f);
+            dl->AddRectFilled(ImVec2(0, 0), ImVec2(w, h), IM_COL32(8, 10, 24, alpha));
+        }
+    } else {
+        dl->AddRectFilledMultiColor(ImVec2(0, 0), ImVec2(w, h),
+            IM_COL32(30, 26, 58, 255), IM_COL32(52, 40, 88, 255),
+            IM_COL32(20, 18, 40, 255), IM_COL32(46, 36, 78, 255));
+        const float glowX = w * (0.5f + 0.35f * std::sin(timeSec * 0.25f));
+        dl->AddCircleFilled(ImVec2(glowX, h * 0.35f), h * 0.6f, IM_COL32(120, 130, 230, 30), 64);
+    }
 
     const ImU32 white = IM_COL32(255, 255, 255, 255);
     const ImU32 grayText = IM_COL32(178, 178, 198, 255);
@@ -1189,11 +1289,16 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
 
     // Sort / grouping selectors, to the right of the search box (the official
     // screen has a sort FAB there - a combo is easier to hit on a touchscreen).
-    static int sortMode = kOrderByName;
-    static int groupMode = kGroupOff; // grouping is off by default
+    // Both live in the caller's settings, so the list comes back as it was.
+    if (sortMode < 0 || sortMode > 1) {
+        sortMode = 0;
+    }
+    if (groupMode < 0 || groupMode >= kGroupCount) {
+        groupMode = 0;
+    }
     {
         const char* kSortLabels[2] = {"按名称", "按难度"};
-        const char* kGroupLabels[3] = {"关闭", "按难度段", "按标题"};
+        const char* kGroupLabels[kGroupCount] = {"关闭", "按难度段", "按标题", "按首字母"};
         const float comboW = 168.0f * k;
         const std::string sortPreview = std::string("排序：") + kSortLabels[sortMode];
         const std::string groupPreview = std::string("分组：") + kGroupLabels[groupMode];
@@ -1221,7 +1326,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         ImGui::SetCursorScreenPos(ImVec2(listX + searchW + 30.0f * k + comboW, listTop + 4.0f * k));
         ImGui::SetNextItemWidth(comboW);
         if (ImGui::BeginCombo("##groupby", groupPreview.c_str(), ImGuiComboFlags_HeightSmall)) {
-            for (int i = 0; i < 3; ++i) {
+            for (int i = 0; i < kGroupCount; ++i) {
                 if (ImGui::Selectable(kGroupLabels[i], groupMode == i)) {
                     groupMode = i;
                 }
@@ -1283,18 +1388,36 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     static std::string lastSignature;
     static std::vector<ListRow> cachedRows;
     static bool rowsBuilt = false;
+    // Section jump panel: tapping a section header swaps the list for an index
+    // of the sections (tap one to fly there). `indexAnim` drives the open /
+    // close transition, `enterAnim` the on-entry animation (the phone slides
+    // in from the right like the reference screen).
+    static bool indexOpen = false;
+    static float indexAnim = 0.0f;
+    static float enterAnim = 0.0f;
+    static double lastFrameTime = -1.0;
+    // Animated height per row slot: the selected row grows into a card and the
+    // one it replaced shrinks back, instead of snapping.
+    static std::vector<float> slotHeights;
 
     // Sorting / grouping decides the row layout. Grouping wins over the sort
     // combo because a section's songs have to stay together.
     const int order = groupMode == kGroupDifficulty ? kOrderByDifficulty
-        : groupMode == kGroupTitle                    ? kOrderByName
-                                                      : sortMode;
+        : (groupMode == kGroupTitle || groupMode == kGroupInitial)
+            ? kOrderByName
+            : sortMode;
     const std::string listSignature = std::string(searchBuf) + "|" + std::to_string(order) + "|"
         + std::to_string(groupMode) + "|" + std::to_string(diffIndex) + "|" + std::to_string(entries.size());
     if (listSignature != lastSignature) {
         lastSignature = listSignature;
         cachedRows = buildRows(groups, visible, entries, diffIndex, order, groupMode);
         listInit = false; // the list changed shape: recentre without gliding
+        slotHeights.assign(cachedRows.size(), 0.0f);
+    }
+    // Grouping off means no section headers exist, so the panel has nothing to
+    // show any more.
+    if (groupMode == kGroupOff) {
+        indexOpen = false;
     }
     const std::vector<ListRow>& rows = cachedRows;
     const int rowCount = static_cast<int>(rows.size());
@@ -1354,12 +1477,41 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         const float base = static_cast<float>(item) * pitch;
         return item + static_cast<int>(std::lround((scroll - base) / period)) * rowCount;
     };
+    // Same, for an arbitrary row index: the cyclic copy closest to the current
+    // position, so a jump never spins the list around.
+    const auto nearestSlotOfRow = [&](int rowIndex) {
+        if (rowCount <= 0) {
+            return 0;
+        }
+        const float period = pitch * static_cast<float>(rowCount);
+        const float base = static_cast<float>(rowIndex) * pitch;
+        return rowIndex + static_cast<int>(std::lround((scroll - base) / period)) * rowCount;
+    };
 
     const bool inViewRect = io.MousePos.x >= rowX && io.MousePos.x <= rowX + listW
         && mouseY >= viewPos.y && mouseY <= viewBottom;
     // A touch contact arrives as a synthetic mouse event (SDL's touch->mouse
     // synthesis), so this one path serves mouse and finger alike.
-    const bool listHovered = dragging || (inViewRect && ImGui::IsWindowHovered());
+    // While the jump panel is up the list behind it must not react.
+    const bool listHovered = !indexOpen && (dragging || (inViewRect && ImGui::IsWindowHovered()));
+
+    // Intro animation: this function redraws every frame while the Select state
+    // is active, so a long gap since the previous frame means we just entered
+    // it (fresh start, or coming back from a song) - replay the intro then.
+    if (lastFrameTime < 0.0 || static_cast<double>(timeSec) - lastFrameTime > 0.5) {
+        enterAnim = 0.0f;
+    }
+    lastFrameTime = timeSec;
+    enterAnim = std::min(1.0f, enterAnim + frameDt / 0.38f);
+    const float indexTarget = indexOpen ? 1.0f : 0.0f;
+    indexAnim += (indexTarget - indexAnim) * (1.0f - std::exp(-frameDt * 18.0f));
+    if (std::fabs(indexTarget - indexAnim) < 0.002f) {
+        indexAnim = indexTarget;
+    }
+    const auto easeOutCubic = [](float t) {
+        const float inv = 1.0f - std::clamp(t, 0.0f, 1.0f);
+        return 1.0f - inv * inv * inv;
+    };
 
     if (!listInit && rowCount > 0) {
         if (!rowsBuilt) {
@@ -1425,11 +1577,20 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
                 // right where it stopped.
                 flingVel = std::fabs(dragVel) > 260.0f ? std::clamp(dragVel, -7000.0f, 7000.0f) : 0.0f;
                 lastInputTime = timeSec;
-                if (dragDistance < 8.0f && pressSlot > -1000000 && !slotIsHeader(pressSlot)) {
-                    // Tap: pick that row (it glides to the centre).
-                    groupIndex = rows[static_cast<size_t>(wrapSlot(pressSlot))].group;
-                    scrollTarget = static_cast<float>(pressSlot) * pitch;
-                    scrolling = false;
+                if (dragDistance < 8.0f && pressSlot > -1000000) {
+                    if (slotIsHeader(pressSlot)) {
+                        // Tapping a section head opens the jump index (tapping
+                        // it again closes it) - the official screen turns the
+                        // list into a key panel the same way.
+                        indexOpen = !indexOpen;
+                        std::printf("[select] section index %s\n", indexOpen ? "opened" : "closed");
+                        std::fflush(stdout);
+                    } else {
+                        // Tap: pick that row (it glides to the centre).
+                        groupIndex = rows[static_cast<size_t>(wrapSlot(pressSlot))].group;
+                        scrollTarget = static_cast<float>(pressSlot) * pitch;
+                        scrolling = false;
+                    }
                 }
                 pressSlot = -1000000;
             }
@@ -1508,13 +1669,28 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         const float centerY = viewCenterY + (static_cast<float>(slot) * pitch - scroll);
         if (view.header) {
             // Section header: a caption with a rule running to the right, so a
-            // grouped list reads like "あ ---" / "16-20 ---".
+            // grouped list reads like "あ ---" / "16-20 ---". It doubles as the
+            // button that turns the list into the jump panel, so it lights up
+            // on hover and carries a small chevron.
             ImFont* headFont = title != nullptr ? title : body;
             const float headSize = 22.0f * k;
-            listDl->AddText(headFont, headSize, ImVec2(rowX + 30.0f * k, centerY - headSize * 0.6f),
-                IM_COL32(255, 255, 255, 210), view.label.c_str());
+            const bool hovered = indexAnim < 0.5f && slot == hoverSlot;
+            const float headX = rowX + 30.0f * k;
+            if (hovered) {
+                listDl->AddRectFilled(ImVec2(rowX + 6.0f * k, centerY - pitch * 0.34f),
+                    ImVec2(rowX + listW, centerY + pitch * 0.34f), IM_COL32(255, 255, 255, 26), 8.0f * k);
+                listDl->AddRectFilled(ImVec2(rowX, centerY - pitch * 0.30f), ImVec2(rowX + 3.0f * k, centerY + pitch * 0.30f),
+                    IM_COL32(255, 255, 255, 220), 2.0f * k);
+            }
+            listDl->AddText(headFont, headSize, ImVec2(headX, centerY - headSize * 0.6f),
+                hovered ? IM_COL32(255, 255, 255, 255) : IM_COL32(255, 255, 255, 210), view.label.c_str());
             const float labelW = headFont->CalcTextSizeA(headSize, FLT_MAX, 0.0f, view.label.c_str()).x;
-            const float lineX = rowX + 30.0f * k + labelW + 14.0f * k;
+            const float chevX = headX + labelW + 12.0f * k;
+            const float chevA = hovered ? 220.0f : 110.0f;
+            listDl->AddTriangleFilled(ImVec2(chevX, centerY - 6.0f * k),
+                ImVec2(chevX + 11.0f * k, centerY - 6.0f * k), ImVec2(chevX + 5.5f * k, centerY + 4.0f * k),
+                IM_COL32(255, 255, 255, static_cast<int>(chevA)));
+            const float lineX = chevX + 18.0f * k;
             const float lineY = centerY;
             if (lineX < rowX + listW - 8.0f * k) {
                 listDl->AddLine(ImVec2(lineX, lineY), ImVec2(rowX + listW - 8.0f * k, lineY),
@@ -1527,7 +1703,14 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         // While the list is moving nothing is highlighted; the row that ends
         // up in the middle is picked once it stops.
         const bool isSel = slot == cardSlot;
-        const float rowH = isSel ? cardH : compactH;
+        // Animated height: a row grows into a card instead of snapping, and the
+        // one the selection left shrinks back.
+        float& rowHAnim = slotHeights[static_cast<size_t>(wrapSlot(slot))];
+        if (rowHAnim <= 0.0f) {
+            rowHAnim = compactH; // first time this slot is on screen
+        }
+        rowHAnim += ((isSel ? cardH : compactH) - rowHAnim) * (1.0f - std::exp(-frameDt * 16.0f));
+        const float rowH = rowHAnim;
         const ImVec2 p0(rowX, centerY - rowH * 0.5f);
         const ImVec2 p1(rowX + listW, centerY + rowH * 0.5f);
         // Clear / full-combo mark of one diamond slot (0 = nothing to draw).
@@ -1639,6 +1822,142 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
                     is3d ? IM_COL32(242, 200, 70, 255) : IM_COL32(90, 140, 255, 255), 4.0f * k);
                 listDl->AddText(body, 14.0f * k, ImVec2(bx + 8.0f * k, by + 3.0f * k),
                     IM_COL32(40, 36, 20, 255), mv.c_str());
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Section jump index: replaces the list while it is open. It is one key
+    // per section (the header labels, which is why tapping a header opens it),
+    // laid out as a grid; tapping a key flies the list there and closes it.
+    // Fades in rather than popping, so the swap reads as a transition.
+    // ------------------------------------------------------------------
+    if (indexAnim > 0.002f && rowCount > 0) {
+        struct SectionKey
+        {
+            std::string label;
+            int headerRow = 0;
+            int group = -1;
+        };
+        std::vector<SectionKey> keys;
+        for (int i = 0; i < rowCount; ++i) {
+            if (!rows[static_cast<size_t>(i)].header) {
+                continue;
+            }
+            int firstGroup = -1;
+            if (i + 1 < rowCount && !rows[static_cast<size_t>(i + 1)].header) {
+                firstGroup = rows[static_cast<size_t>(i + 1)].group;
+            }
+            keys.push_back({rows[static_cast<size_t>(i)].label, i, firstGroup});
+        }
+
+        const float t = easeOutCubic(indexAnim);
+        const int panelAlpha = static_cast<int>(std::clamp(t, 0.0f, 1.0f) * 255.0f);
+        const float panelW = listW + 24.0f * k;
+        const float panelH = listH;
+        const ImVec2 panelC(viewPos.x + panelW * 0.5f, viewPos.y + panelH * 0.5f);
+        // The plate itself scales up, the content just fades and lifts a little
+        // (draw lists cannot scale glyphs, so text stays at its size).
+        const float scale = 0.94f + 0.06f * t;
+        const ImVec2 b0(panelC.x - panelW * 0.5f * scale, panelC.y - panelH * 0.5f * scale);
+        const ImVec2 b1(panelC.x + panelW * 0.5f * scale, panelC.y + panelH * 0.5f * scale);
+        listDl->AddRectFilled(b0, b1, IM_COL32(22, 20, 44, panelAlpha), 14.0f * k);
+        listDl->AddRect(b0, b1, IM_COL32(255, 255, 255, static_cast<int>(40.0f * t)), 14.0f * k, 0, 2.0f * k);
+
+        const float lift = (1.0f - t) * 14.0f * k;
+        const auto fade = [&](int a) { return static_cast<int>(static_cast<float>(a) * t); };
+        ImFont* headFont = title != nullptr ? title : body;
+        listDl->AddText(headFont, 24.0f * k, ImVec2(b0.x + 22.0f * k, b0.y + 16.0f * k - lift),
+            IM_COL32(255, 255, 255, fade(235)), "段落跳转");
+        listDl->AddText(body, 15.0f * k, ImVec2(b0.x + 22.0f * k, b0.y + 48.0f * k - lift),
+            IM_COL32(178, 178, 198, fade(200)), "点击一个标题跳转");
+
+        // Close button in the panel's top-right corner.
+        const float closeD = 30.0f * k;
+        const ImVec2 closeC(b1.x - 22.0f * k - closeD * 0.5f, b0.y + 26.0f * k);
+        ImGui::SetCursorScreenPos(ImVec2(closeC.x - closeD * 0.5f, closeC.y - closeD * 0.5f));
+        ImGui::PushID("sections_close");
+        ImGui::InvisibleButton("close", ImVec2(closeD, closeD));
+        const bool closeHovered = ImGui::IsItemHovered();
+        const bool closeClicked = ImGui::IsItemClicked();
+        ImGui::PopID();
+        listDl->AddCircleFilled(closeC, closeD * 0.5f,
+            closeHovered ? IM_COL32(122, 116, 168, fade(255)) : IM_COL32(74, 68, 112, fade(210)));
+        listDl->AddLine(ImVec2(closeC.x - 6.0f * k, closeC.y - 6.0f * k),
+            ImVec2(closeC.x + 6.0f * k, closeC.y + 6.0f * k), IM_COL32(255, 255, 255, fade(230)), 2.0f * k);
+        listDl->AddLine(ImVec2(closeC.x + 6.0f * k, closeC.y - 6.0f * k),
+            ImVec2(closeC.x - 6.0f * k, closeC.y + 6.0f * k), IM_COL32(255, 255, 255, fade(230)), 2.0f * k);
+        if (closeClicked) {
+            indexOpen = false;
+        }
+
+        // Keys: a grid of the section labels. The key of the section the list is
+        // currently showing is highlighted so the panel doubles as a "you are
+        // here" indicator.
+        const float padX = 22.0f * k;
+        const float gridTop = b0.y + 76.0f * k;
+        const float gridW = panelW * scale - padX * 2.0f;
+        const float gap = 10.0f * k;
+        const int cols = std::clamp(static_cast<int>(gridW / (74.0f * k)), 3, 8);
+        const float keyW = (gridW - gap * static_cast<float>(cols - 1)) / static_cast<float>(cols);
+        const float keyH = 44.0f * k;
+        const std::string currentLabel = cardSlot < 1000000 && rowCount > 0
+            ? [&]() -> std::string {
+                  // Label of the section holding the current selection.
+                  int row = wrapSlot(cardSlot);
+                  for (int i = row; i >= 0; --i) {
+                      if (rows[static_cast<size_t>(i)].header) {
+                          return rows[static_cast<size_t>(i)].label;
+                      }
+                  }
+                  return std::string();
+              }()
+            : std::string();
+
+        const int keyCount = static_cast<int>(keys.size());
+        for (int i = 0; i < keyCount; ++i) {
+            const int col = i % cols;
+            const int rowI = i / cols;
+            const ImVec2 k0(b0.x + padX + static_cast<float>(col) * (keyW + gap),
+                gridTop + static_cast<float>(rowI) * (keyH + gap) - lift);
+            if (k0.y + keyH > b1.y - 10.0f * k) {
+                break; // no room left; the label set is bigger than the panel
+            }
+            const ImVec2 k1(k0.x + keyW, k0.y + keyH);
+            ImGui::SetCursorScreenPos(k0);
+            ImGui::PushID(i);
+            ImGui::InvisibleButton("key", ImVec2(keyW, keyH));
+            const bool hovered = ImGui::IsItemHovered();
+            const bool clicked = ImGui::IsItemClicked();
+            ImGui::PopID();
+
+            const bool active = keys[static_cast<size_t>(i)].label == currentLabel;
+            ImU32 fill = IM_COL32(58, 52, 92, fade(235));
+            if (active) {
+                fill = IM_COL32(126, 118, 208, fade(245));
+            } else if (hovered) {
+                fill = IM_COL32(92, 84, 146, fade(245));
+            }
+            listDl->AddRectFilled(k0, k1, fill, 10.0f * k);
+            if (active) {
+                listDl->AddRect(k0, k1, IM_COL32(255, 255, 255, fade(200)), 10.0f * k, 0, 2.0f * k);
+            }
+            addTextCentered(listDl, body, 19.0f * k, ImVec2((k0.x + k1.x) * 0.5f, (k0.y + k1.y) * 0.5f),
+                IM_COL32(240, 240, 250, fade(255)), keys[static_cast<size_t>(i)].label.c_str());
+
+            if (clicked && keys[static_cast<size_t>(i)].group >= 0) {
+                // Land with this section's first song in the middle, so its
+                // header ends up one row above.
+                const int slot = nearestSlotOfRow(keys[static_cast<size_t>(i)].headerRow + 1);
+                groupIndex = keys[static_cast<size_t>(i)].group;
+                scrollTarget = static_cast<float>(slot) * pitch;
+                flingVel = 0.0f;
+                dragVel = 0.0f;
+                scrolling = false;
+                lastInputTime = timeSec;
+                indexOpen = false;
+                std::printf("[select] jump to section '%s'\n", keys[static_cast<size_t>(i)].label.c_str());
+                std::fflush(stdout);
             }
         }
     }
@@ -1857,12 +2176,24 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     }
 
     // Tilt the phone: rotate every vertex the block above produced about the
-    // phone's centre. Text, images, rounded shapes - all rotate together.
+    // phone's centre. Text, images, rounded shapes - all rotate together. The
+    // same pass runs the intro animation: on entry the whole phone slides in
+    // from the right and fades up (the reference screen does the same), which
+    // is free here because every vertex is already being rewritten.
+    const float enter = easeOutCubic(enterAnim);
+    const float phoneSlide = (1.0f - enter) * 300.0f * k;
+    const int enterAlpha = static_cast<int>(std::clamp(enter, 0.0f, 1.0f) * 255.0f);
     for (int i = phoneVtxFirst; i < dl->VtxBuffer.Size; ++i) {
         ImVec2& p = dl->VtxBuffer[i].pos;
-        const float dx = p.x - tiltPivot.x;
+        const float dx = p.x + phoneSlide - tiltPivot.x;
         const float dy = p.y - tiltPivot.y;
         p = ImVec2(tiltPivot.x + dx * tiltCos - dy * tiltSin, tiltPivot.y + dx * tiltSin + dy * tiltCos);
+        if (enterAlpha < 255) {
+            ImU32& col = dl->VtxBuffer[i].col;
+            const ImU32 a = (col >> IM_COL32_A_SHIFT) & 0xFF;
+            col = (col & ~IM_COL32_A_MASK)
+                | (static_cast<ImU32>(a * static_cast<ImU32>(enterAlpha) / 255u) << IM_COL32_A_SHIFT);
+        }
     }
 
     // F5 rescan is handled by main; Enter handled above. Left/right switch

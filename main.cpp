@@ -181,6 +181,52 @@ namespace
     }
 
 #ifdef _WIN32
+    std::string wideToUtf8(const wchar_t* wide)
+    {
+        if (wide == nullptr || wide[0] == L'\0') {
+            return {};
+        }
+        const int len = WideCharToMultiByte(CP_UTF8, 0, wide, -1, nullptr, 0, nullptr, nullptr);
+        if (len <= 1) {
+            return {};
+        }
+        std::string out(static_cast<size_t>(len - 1), '\0');
+        WideCharToMultiByte(CP_UTF8, 0, wide, -1, out.data(), len, nullptr, nullptr);
+        return out;
+    }
+
+    // Path of the picture Windows is showing as the desktop wallpaper, empty
+    // when nothing usable is found. Sources in order of reliability:
+    //   1. SPI_GETDESKWALLPAPER - the documented way, works for a static
+    //      wallpaper (the usual case);
+    //   2. the HKCU value behind it - survives the SPI call being blocked;
+    //   3. %APPDATA%\Microsoft\Windows\Themes\TranscodedWallpaper - what
+    //      Windows uses for slideshows / Spotlight (a JPEG with no extension;
+    //      stb_image sniffs the content, so the missing extension is fine).
+    std::string windowsWallpaperPath()
+    {
+        wchar_t buffer[MAX_PATH * 4] = {};
+        if (SystemParametersInfoW(SPI_GETDESKWALLPAPER, static_cast<UINT>(std::size(buffer)), buffer, 0)
+            && GetFileAttributesW(buffer) != INVALID_FILE_ATTRIBUTES) {
+            return wideToUtf8(buffer);
+        }
+        DWORD size = sizeof(buffer);
+        if (RegGetValueW(HKEY_CURRENT_USER, L"Control Panel\\Desktop", L"WallPaper", RRF_RT_REG_SZ, nullptr,
+                buffer, &size) == ERROR_SUCCESS
+            && GetFileAttributesW(buffer) != INVALID_FILE_ATTRIBUTES) {
+            return wideToUtf8(buffer);
+        }
+        const char* appData = std::getenv("APPDATA");
+        if (appData != nullptr) {
+            const std::string candidate =
+                std::string(appData) + "\\Microsoft\\Windows\\Themes\\TranscodedWallpaper";
+            if (GetFileAttributesA(candidate.c_str()) != INVALID_FILE_ATTRIBUTES) {
+                return candidate;
+            }
+        }
+        return {};
+    }
+
     // Hides (or restores) the Windows touch visual feedback - the ripple /
     // circle the system draws around a touch contact - for OUR window only
     // (SetWindowFeedbackSetting, Win8+). Because it is a per-window setting,
@@ -995,6 +1041,60 @@ int main(int argc, char** argv)
     // `scores` was already loaded from userdata.json near the top of main().
     game::setSelectAssetDir(baseDir + "assets");
 
+    // ------------------------------------------------------------------
+    // Song-select backdrop: the user's desktop wallpaper, blurred, when the
+    // setting asks for it. The GL context is live here and re-loading only
+    // happens when the setting changes, so the boot stays fast for everyone
+    // who keeps the built-in gradient.
+    // ------------------------------------------------------------------
+    GLuint backdropTex = 0;
+    int backdropW = 0;
+    int backdropH = 0;
+    std::string backdropKey;
+    bool backdropReported = false;
+    auto refreshSelectBackdrop = [&]() {
+        if (userSettings.bgStyle != 1) {
+            game::setSelectBackdrop(0, 0, 0, 0.0f);
+            return;
+        }
+#ifdef _WIN32
+        const std::string path = windowsWallpaperPath();
+#else
+        const std::string path;
+#endif
+        if (path.empty()) {
+            if (!backdropReported) {
+                backdropReported = true;
+                std::printf("[bg] no desktop wallpaper found, keeping the built-in background\n");
+            }
+            game::setSelectBackdrop(0, 0, 0, 0.0f);
+            return;
+        }
+        const std::string key = path + "|" + std::to_string(userSettings.bgBlur);
+        if (key != backdropKey) {
+            std::string bgError;
+            const GLuint tex = renderer.loadBackdropTexture(path, userSettings.bgBlur, backdropW,
+                backdropH, bgError);
+            if (tex != 0) {
+                if (backdropTex != 0) {
+                    glDeleteTextures(1, &backdropTex);
+                }
+                backdropTex = tex;
+                backdropKey = key;
+                std::printf("[bg] wallpaper '%s' -> %dx%d texture (blur %.2f)\n", path.c_str(),
+                    backdropW, backdropH, static_cast<double>(userSettings.bgBlur));
+                std::fflush(stdout);
+            } else {
+                std::printf("[bg] %s\n", bgError.c_str());
+                std::fflush(stdout);
+                game::setSelectBackdrop(0, 0, 0, 0.0f);
+                return;
+            }
+        }
+        game::setSelectBackdrop(backdropTex, backdropW, backdropH, userSettings.bgDim);
+    };
+    refreshSelectBackdrop();
+
     // Official per-difficulty levels (see game::loadMusicLevels). unipjsk
     // scores ship with an empty "#PLAYLEVEL", so without this the song select
     // can only show "-" on every difficulty pad.
@@ -1363,6 +1463,43 @@ int main(int argc, char** argv)
                 if (classicSplashBox != (userSettings.splashStyle != 0)) {
                     userSettings.splashStyle = classicSplashBox ? 1 : 0;
                     persistUserData();
+                }
+                contentLeft();
+                // Song-select background: the built-in gradient or the user's
+                // desktop wallpaper (blurred + dimmed).
+                ImGui::Text("选曲背景");
+                contentLeft();
+                static int bgMode = userSettings.bgStyle;
+                ImGui::SetNextItemWidth(interior);
+                if (ImGui::Combo("##bgstyle", &bgMode, "默认渐变\0桌面壁纸\0")) {
+                    userSettings.bgStyle = bgMode;
+                    refreshSelectBackdrop();
+                    persistUserData();
+                }
+                if (userSettings.bgStyle == 1) {
+                    // Re-blurring the picture is a CPU pass over a decoded
+                    // wallpaper, so it runs when the slider is let go, not on
+                    // every frame of the drag.
+                    static bool blurPending = false;
+                    contentLeft();
+                    float bgBlurV = userSettings.bgBlur;
+                    if (ui::slider("背景模糊", &bgBlurV, 0.0f, 1.0f, 0.05f, "%.2f", interior)) {
+                        userSettings.bgBlur = bgBlurV;
+                        blurPending = true;
+                    }
+                    if (blurPending && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+                        blurPending = false;
+                        refreshSelectBackdrop();
+                        persistUserData();
+                    }
+                    contentLeft();
+                    float bgDimV = userSettings.bgDim;
+                    if (ui::slider("背景变暗", &bgDimV, 0.0f, 1.0f, 0.02f, "%.2f", interior)) {
+                        userSettings.bgDim = bgDimV;
+                        // Cheap: only the overlay drawn on top changes.
+                        game::setSelectBackdrop(backdropTex, backdropW, backdropH, bgDimV);
+                        persistUserData();
+                    }
                 }
                 contentLeft();
                 bool hideTouchBox = hideTouchFeedback;
@@ -1989,8 +2126,15 @@ int main(int argc, char** argv)
                 }
             }
 
+            // The list's sort / grouping is part of the settings, so write it
+            // back when the player changes it on the select screen.
+            const int prevSortMode = userSettings.sortMode;
+            const int prevGroupMode = userSettings.groupMode;
             const int action = game::drawSongSelect(renderer, entries, selected, windowW, windowH,
-                static_cast<float>(uiClock));
+                static_cast<float>(uiClock), userSettings.sortMode, userSettings.groupMode);
+            if (prevSortMode != userSettings.sortMode || prevGroupMode != userSettings.groupMode) {
+                persistUserData();
+            }
             // Consume the F5 request here so it cannot leak into a later frame.
             const bool wantRescan = rescanRequested || action == game::SelectRescan;
             rescanRequested = false;

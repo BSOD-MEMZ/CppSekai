@@ -89,6 +89,13 @@ class Renderer
     // GL texture id, 0 on failure. Not cached - the caller owns caching.
     GLuint loadUiTexture(const std::string& path, std::string& outError);
 
+    // Same, but decodes at full size, box-downscales it and runs a blur, so a
+    // desktop wallpaper can be used as a soft background. `blur01` is 0..1
+    // (0 = no blur). Reports the uploaded texture's pixel size (the caller
+    // needs the aspect ratio to draw it covering the screen). Not cached.
+    GLuint loadBackdropTexture(const std::string& path, float blur01, int& outW, int& outH,
+        std::string& outError);
+
     Renderer(const Renderer&) = delete;
     Renderer& operator=(const Renderer&) = delete;
 

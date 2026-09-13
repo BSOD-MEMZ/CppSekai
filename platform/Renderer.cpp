@@ -353,8 +353,147 @@ Renderer::Texture Renderer::loadTextureFromFile(const std::string& path, std::st
     return texture;
 }
 
-bool Renderer::loadSplash(const std::string& assetDir, std::string& outError)
+namespace
 {
+    // One sliding-window box pass (O(1) per pixel regardless of radius) with
+    // clamped edges. Three of these in each direction approximate a Gaussian
+    // closely enough for a background wash.
+    void boxBlurH(const std::vector<unsigned char>& src, std::vector<unsigned char>& dst, int w, int h,
+        int radius)
+    {
+        const int span = radius * 2 + 1;
+        for (int y = 0; y < h; ++y) {
+            const unsigned char* srow = src.data() + static_cast<size_t>(y) * static_cast<size_t>(w) * 4;
+            unsigned char* drow = dst.data() + static_cast<size_t>(y) * static_cast<size_t>(w) * 4;
+            int acc[4] = {0, 0, 0, 0};
+            for (int i = -radius; i <= radius; ++i) {
+                const int x = std::clamp(i, 0, w - 1);
+                for (int c = 0; c < 4; ++c) {
+                    acc[c] += srow[x * 4 + c];
+                }
+            }
+            for (int x = 0; x < w; ++x) {
+                for (int c = 0; c < 4; ++c) {
+                    drow[x * 4 + c] = static_cast<unsigned char>(acc[c] / span);
+                }
+                const int add = std::clamp(x + radius + 1, 0, w - 1);
+                const int sub = std::clamp(x - radius, 0, w - 1);
+                for (int c = 0; c < 4; ++c) {
+                    acc[c] += srow[add * 4 + c] - srow[sub * 4 + c];
+                }
+            }
+        }
+    }
+
+    void boxBlurV(const std::vector<unsigned char>& src, std::vector<unsigned char>& dst, int w, int h,
+        int radius)
+    {
+        const int span = radius * 2 + 1;
+        const size_t stride = static_cast<size_t>(w) * 4;
+        for (int x = 0; x < w; ++x) {
+            const unsigned char* scol = src.data() + static_cast<size_t>(x) * 4;
+            unsigned char* dcol = dst.data() + static_cast<size_t>(x) * 4;
+            int acc[4] = {0, 0, 0, 0};
+            for (int i = -radius; i <= radius; ++i) {
+                const int y = std::clamp(i, 0, h - 1);
+                for (int c = 0; c < 4; ++c) {
+                    acc[c] += scol[static_cast<size_t>(y) * stride + c];
+                }
+            }
+            for (int y = 0; y < h; ++y) {
+                for (int c = 0; c < 4; ++c) {
+                    dcol[static_cast<size_t>(y) * stride + c] = static_cast<unsigned char>(acc[c] / span);
+                }
+                const int add = std::clamp(y + radius + 1, 0, h - 1);
+                const int sub = std::clamp(y - radius, 0, h - 1);
+                for (int c = 0; c < 4; ++c) {
+                    acc[c] += scol[static_cast<size_t>(add) * stride + c]
+                        - scol[static_cast<size_t>(sub) * stride + c];
+                }
+            }
+        }
+    }
+} // namespace
+
+GLuint Renderer::loadBackdropTexture(const std::string& path, float blur01, int& outW, int& outH,
+    std::string& outError)
+{
+    outW = 0;
+    outH = 0;
+    int srcW = 0;
+    int srcH = 0;
+    int channels = 0;
+    stbi_uc* pixels = stbi_load(path.c_str(), &srcW, &srcH, &channels, 4);
+    if (pixels == nullptr || srcW <= 0 || srcH <= 0) {
+        outError = "failed to load background image: " + path;
+        if (pixels != nullptr) {
+            stbi_image_free(pixels);
+        }
+        return 0;
+    }
+
+    // Downscale first (box filter). A desktop wallpaper is easily 4K, the blur
+    // is the expensive part and it destroys the detail anyway, so the result
+    // is blurred from a much smaller source.
+    constexpr int kMaxSide = 1024;
+    int dstW = srcW;
+    int dstH = srcH;
+    if (std::max(srcW, srcH) > kMaxSide) {
+        const float scale = static_cast<float>(kMaxSide) / static_cast<float>(std::max(srcW, srcH));
+        dstW = std::max(1, static_cast<int>(static_cast<float>(srcW) * scale));
+        dstH = std::max(1, static_cast<int>(static_cast<float>(srcH) * scale));
+    }
+    std::vector<unsigned char> image(static_cast<size_t>(dstW) * static_cast<size_t>(dstH) * 4);
+    for (int y = 0; y < dstH; ++y) {
+        const int sy0 = y * srcH / dstH;
+        const int sy1 = std::max(sy0 + 1, (y + 1) * srcH / dstH);
+        for (int x = 0; x < dstW; ++x) {
+            const int sx0 = x * srcW / dstW;
+            const int sx1 = std::max(sx0 + 1, (x + 1) * srcW / dstW);
+            int acc[4] = {0, 0, 0, 0};
+            int count = 0;
+            for (int sy = sy0; sy < sy1; ++sy) {
+                const unsigned char* row = pixels + (static_cast<size_t>(sy) * static_cast<size_t>(srcW) + sx0) * 4;
+                for (int sx = sx0; sx < sx1; ++sx, row += 4) {
+                    acc[0] += row[0];
+                    acc[1] += row[1];
+                    acc[2] += row[2];
+                    acc[3] += row[3];
+                    ++count;
+                }
+            }
+            unsigned char* dst = image.data() + (static_cast<size_t>(y) * static_cast<size_t>(dstW) + x) * 4;
+            for (int c = 0; c < 4; ++c) {
+                dst[c] = static_cast<unsigned char>(acc[c] / std::max(1, count));
+            }
+        }
+    }
+    stbi_image_free(pixels);
+
+    const int radius = static_cast<int>(std::clamp(blur01, 0.0f, 1.0f) * 26.0f);
+    if (radius > 0) {
+        std::vector<unsigned char> scratch(image.size());
+        for (int pass = 0; pass < 3; ++pass) {
+            boxBlurH(image, scratch, dstW, dstH, radius);
+            boxBlurV(scratch, image, dstW, dstH, radius);
+        }
+    }
+
+    GLuint id = 0;
+    glGenTextures(1, &id);
+    glBindTexture(GL_TEXTURE_2D, id);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, dstW, dstH, 0, GL_RGBA, GL_UNSIGNED_BYTE, image.data());
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    outW = dstW;
+    outH = dstH;
+    return id;
+}
+
+bool Renderer::loadSplash(const std::string& assetDir, std::string& outError){
     // Only what drawStaticScene() needs for the very first frame.
     if (mBackground.id == 0) {
         mBackground = loadTextureFromFile(assetDir + "/background_overlay.png", outError);
