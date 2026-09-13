@@ -478,16 +478,23 @@ void drawDigitRun(const Canvas& c, platform::Renderer& renderer, const std::stri
 
 } // namespace
 
-bool drawResult(platform::Renderer& renderer, const ResultData& data, float elapsedSec,
-    int windowW, int windowH)
+// Canvas transform shared by the drawing code and resultContinueHitTest().
+Canvas makeCanvas(ImDrawList* dl, int windowW, int windowH)
 {
-    ImDrawList* dl = ImGui::GetBackgroundDrawList();
     Canvas c;
     c.dl = dl;
     c.scale = std::min(static_cast<float>(windowW) / kCanvasW,
         static_cast<float>(windowH) / kCanvasH);
     c.ox = (static_cast<float>(windowW) - kCanvasW * c.scale) * 0.5f;
     c.oy = (static_cast<float>(windowH) - kCanvasH * c.scale) * 0.5f;
+    return c;
+}
+
+void drawResult(platform::Renderer& renderer, const ResultData& data, float elapsedSec,
+    int windowW, int windowH)
+{
+    ImDrawList* dl = ImGui::GetBackgroundDrawList();
+    const Canvas c = makeCanvas(dl, windowW, windowH);
 
     const float t = std::max(elapsedSec, 0.0f);
     const float appear = easeOutCubic(span(t, 0.0f, 0.30f));
@@ -747,9 +754,9 @@ bool drawResult(platform::Renderer& renderer, const ResultData& data, float elap
     }
 
     // -----------------------------------------------------------------------
-    // 继续 button.
+    // 继续 button (the press itself is handled by resultContinueHitTest() in
+    // the SDL event path; here it only gets drawn, with a hover highlight).
     // -----------------------------------------------------------------------
-    bool pressed = false;
     {
         const float alpha = easeOutCubic(span(t, 2.20f, 0.35f));
         const float x0 = panelRight - kBtnW;
@@ -761,12 +768,16 @@ bool drawResult(platform::Renderer& renderer, const ResultData& data, float elap
             withAlpha(hovered ? kMintHover : kMint, alpha));
         textCentered(c, bold, kBtnTextSize, x0 + kBtnW * 0.5f, y0 + kBtnH * 0.5f,
             withAlpha(kMintText, alpha), "继续");
-        if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-            pressed = true;
-        }
     }
+}
 
-    return pressed;
+bool resultContinueHitTest(int windowW, int windowH, int x, int y)
+{
+    const Canvas c = makeCanvas(nullptr, windowW, windowH);
+    const float x0 = c.x(kCanvasW - kPanelRightInset - kBtnW);
+    const float y0 = c.y(kBtnBottom - kBtnH);
+    return static_cast<float>(x) >= x0 && static_cast<float>(x) <= x0 + c.s(kBtnW)
+        && static_cast<float>(y) >= y0 && static_cast<float>(y) <= y0 + c.s(kBtnH);
 }
 
 } // namespace game

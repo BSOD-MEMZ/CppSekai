@@ -1356,6 +1356,10 @@ int main(int argc, char** argv)
     double resultShownAt = 0.0;
     bool resultScheduled = false;
     double resultPreviousBest = 0.0;
+    // Set by the mouse / touch handlers when 继续 was pressed (see
+    // resultContinueHitTest): the result screen is not an ImGui window, so it
+    // is hit-tested in the SDL event path like the HUD pause button.
+    bool resultContinueRequested = false;
     // Set by the mouse handler when the HUD pause button was clicked, so the
     // same click is not also treated as a lane hit.
     bool pauseClickRequested = false;
@@ -1817,7 +1821,9 @@ int main(int argc, char** argv)
         audio.stopMusic();
         state = AppState::Result;
         resultShownAt = uiClock;
-        std::printf("[result] preview mode\n");
+        std::printf("[result] preview mode (reference numbers)\n");
+        std::fflush(stdout);
+        std::fflush(stdout);
     }
 
     while (running) {
@@ -1972,6 +1978,22 @@ int main(int argc, char** argv)
                     }
                     break;
                 case SDL_FINGERDOWN: {
+                    if (state == AppState::Result) {
+                        // Touch contacts only produce SDL_FINGER* events (their
+                        // synthetic mouse events carry SDL_TOUCH_MOUSEID and are
+                        // filtered out in the mouse path), so the button has to
+                        // be tested here as well.
+                        if (tapEffect.loaded()) {
+                            tapEffect.spawn(event.tfinger.x * static_cast<float>(windowW),
+                                event.tfinger.y * static_cast<float>(windowH));
+                        }
+                        const int fx = static_cast<int>(event.tfinger.x * static_cast<float>(windowW));
+                        const int fy = static_cast<int>(event.tfinger.y * static_cast<float>(windowH));
+                        if (game::resultContinueHitTest(windowW, windowH, fx, fy)) {
+                            resultContinueRequested = true;
+                        }
+                        break;
+                    }
                     // Tap feedback on the non-play screens (select, settings).
                     if (state != AppState::Play && tapEffect.loaded()) {
                         tapEffect.spawn(
@@ -2077,6 +2099,16 @@ int main(int argc, char** argv)
                         break;
                     }
                     if (event.button.button != SDL_BUTTON_LEFT && event.button.button != SDL_BUTTON_RIGHT) {
+                        break;
+                    }
+                    if (state == AppState::Result) {
+                        // 继续 button: hit-tested here (not by ImGui) so touch
+                        // and mouse share one path. No lane input afterwards.
+                        if (event.button.button == SDL_BUTTON_LEFT && !ImGui::GetIO().WantCaptureMouse
+                            && game::resultContinueHitTest(windowW, windowH, event.button.x,
+                                   event.button.y)) {
+                            resultContinueRequested = true;
+                        }
                         break;
                     }
                     // Tap feedback everywhere except the play state: there the
@@ -2771,14 +2803,18 @@ int main(int argc, char** argv)
             renderer.renderFrame(nullptr, 0, 0.85f);
 
             const float resultElapsed = static_cast<float>(uiClock - resultShownAt);
-            const bool continuePressed =
-                game::drawResult(renderer, resultData, resultElapsed, windowW, windowH);
-            if (continuePressed) {
+            game::drawResult(renderer, resultData, resultElapsed, windowW, windowH);
+            if (resultContinueRequested) {
+                std::printf("[result] continue -> song select\n");
+                std::fflush(stdout);
+                resultContinueRequested = false;
                 resultScheduled = false;
                 resultData = game::ResultData{};
                 lastSeenJudgeTime = -100.0f;
                 hudState = game::HudState{};
                 state = AppState::Select;
+                std::printf("[result] continue -> song select\n");
+                std::fflush(stdout);
             }
             // Headless check: dump the settled result screen.
             if (!screenshotPath.empty() && !wantScreenshot && resultElapsed >= 2.6f) {

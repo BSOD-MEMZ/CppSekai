@@ -384,6 +384,10 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
 4. RESULT 水印是**空心描边**（白 22% 描边 3px + 内部填背景色），不是实心灰字：
    `textOutlined()` 就是干这个的。评级字母用 `textCenteredFauxBold()` 加粗（原版是 Heavy）。
 
+**「继续」按钮走事件层命中测试**（`resultContinueHitTest()`，和 HUD 暂停按钮、开场跳过同一套）：
+结算画面不是 ImGui 窗口，触摸事件不带可用鼠标坐标，所以鼠标分支和 `SDL_FINGERDOWN`
+分支各测一次（又是"触摸屏点不到"那个经典坑）。`drawResult()` 只负责画 + 悬停高亮。
+
 **流程**：曲末（`trackDurationSec − 0.15`）切进 `AppState::Result`，停音乐、清触点，用
 `judgement.stats()` 组 `ResultData`；成绩记录在切换前就已经写盘，`resultPreviousBest`
 （= `ScoreRecord::bestScore`，新加的字段）必须在 merge **之前**取，否则永远不是新纪录。

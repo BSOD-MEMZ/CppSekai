@@ -34,9 +34,15 @@ struct ResultData
 
 // Draws the whole screen on ImGui's background draw list (call after
 // ImGui::NewFrame, before ImGui::Render). `elapsedSec` is the time since the
-// screen appeared and drives the entrance animation. Returns true when 继续
-// was pressed this frame.
-bool drawResult(platform::Renderer& renderer, const ResultData& data, float elapsedSec,
+// screen appeared and drives the entrance animation.
+void drawResult(platform::Renderer& renderer, const ResultData& data, float elapsedSec,
     int windowW, int windowH);
+
+// Hit test for the 继续 button, in *window pixel* coordinates. The press is
+// handled by the SDL event path (the same way the HUD pause button and the
+// intro's skip pill are), not by ImGui: the synthesized mouse events touch
+// contacts produce are filtered out in main.cpp, so an ImGui-only test would
+// leave the button dead on a touchscreen.
+bool resultContinueHitTest(int windowW, int windowH, int x, int y);
 
 } // namespace game
