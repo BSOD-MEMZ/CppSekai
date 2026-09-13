@@ -60,13 +60,31 @@ namespace
     struct TouchTrack
     {
         SDL_FingerID fingerId = 0;
+        // A real touch or a mouse button. Never infer this from the id's sign:
+        // the flick thresholds are different for the two (a mouse swipe is
+        // much faster than a finger), so a wrong guess makes touchscreen
+        // flicks near-impossible / mouse flicks hair-triggered.
+        bool isTouch = true;
         float lanePos = 0.0f;
+        // Where the finger last rested (updated while it is not swiping). A
+        // hold that slides sideways ends on a DIFFERENT lane than the press
+        // started on, and a flick is covered by the lane it sits on - so
+        // judging the tail flick at the press lane found nothing and the
+        // player had to lift the finger and swipe again (a fresh touch reads
+        // its lane from the current position). See flickJudge().
+        float restLanePos = 0.0f;
         int laneIndex = 0;
         float lastLanePos = 0.0f;
         float lastScreenX = 0.0f;
         float lastScreenY = 0.0f;
         double lastMoveTimeSec = 0.0;
-        bool flicked = false;
+        // When this touch last fired a flick. A finger may fire more than
+        // once: the old one-shot latch burned it for the rest of the contact,
+        // so a swipe that came a little early (or any accidental swipe during
+        // a long hold) consumed the gesture and the real flick at the hold
+        // tail was then ignored - the tail only reacted to lifting the finger
+        // and swiping again.
+        double lastFlickFireTimeSec = -1.0;
         // Swipe velocity in *screen pixels per second*, low-passed over the
         // per-event samples (touch panels report unevenly spaced jumps, and a
         // single-frame delta easily misses a fast flick). Up / right positive.
@@ -80,6 +98,25 @@ namespace
         float travelUp = 0.0f;
         float travelSide = 0.0f;
     };
+
+    // Sampling of a swipe. A touch panel reports NOTHING while the finger
+    // holds still, so the first motion event of a hold-tail flick arrives
+    // after a gap of hundreds of milliseconds. Dividing the displacement by
+    // that gap measured a fraction of the real speed and the flick never
+    // fired - which is exactly why the tail flick only registered after
+    // *lifting* the finger and swiping with a fresh touch (a new touch starts
+    // its own clock at SDL_FINGERDOWN). Clamp the sample period to a
+    // plausible flick sample instead.
+    constexpr double kFlickMaxSampleSec = 0.03;
+    // A gap longer than this means the finger was parked: restart the velocity
+    // filter so a stale speed is never blended into the new movement.
+    constexpr double kFlickIdleGapSec = 0.05;
+    // Shortest time between two flick fires from the same touch. One swipe may
+    // clear consecutive flick notes, but it must not fire on every event.
+    constexpr double kFlickRefireSec = 0.06;
+    // Below this speed (screen px/s, scaled by the window height) the finger
+    // counts as parked, so its lane is remembered as the flick's origin lane.
+    constexpr float kFlickRestSpeed = 250.0f;
 
     // Flick direction from a swipe measured in screen px/s (up / right
     // positive) plus how far the gesture actually travelled in that direction.
@@ -645,6 +682,20 @@ int main(int argc, char** argv)
 
     int windowW = std::max(320, winWidth);
     int windowH = std::max(240, winHeight);
+    // Image splash + fullscreen: the boot window must also not span the whole
+    // desktop. Windows promotes a window that covers the monitor to
+    // "fullscreen optimized" presentation, which bypasses DWM composition -
+    // the transparent splash background turns opaque black. The window is
+    // fully transparent apart from the picture (which is drawn centred at its
+    // native size), so shrinking it by a few pixels is invisible, and it goes
+    // fullscreen at the end of the boot sequence anyway.
+    if (windowMode == 2 && splashStyle == 0) {
+        SDL_Rect usable{};
+        if (SDL_GetDisplayUsableBounds(0, &usable) == 0 && usable.w > 0 && usable.h > 0) {
+            windowW = std::min(windowW, std::max(320, usable.w - 16));
+            windowH = std::min(windowH, std::max(240, usable.h - 16));
+        }
+    }
     Uint32 windowFlags = SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI;
     // windowed keeps the frame; borderless/fullscreen hide it anyway. The
     // image splash additionally forces frameless: a black title bar over the
@@ -670,7 +721,16 @@ int main(int argc, char** argv)
         std::fprintf(stderr, "SDL_CreateWindow failed: %s\n", SDL_GetError());
         return 1;
     }
-    if (windowMode == 2) {
+    // Fullscreen is entered right away for the classic splash - its dark
+    // backdrop wants the whole screen from the first frame. The image splash
+    // defers it: a window that covers the entire desktop loses the DWM
+    // per-pixel transparency (Windows fullscreen optimizations take over), so
+    // the alpha=0 clear that makes the splash background transparent turned
+    // into an opaque black one and the boot picture appeared on a black
+    // screen. The image splash therefore always runs in a plain borderless
+    // window of the chosen size and the configured mode is applied once
+    // loading is finished (see the end of the boot sequence below).
+    if (windowMode == 2 && splashStyle != 0) {
         SDL_SetWindowFullscreen(window, SDL_WINDOW_FULLSCREEN_DESKTOP);
     }
     std::printf("[window] %dx%d mode=%s\n", windowW, windowH,
@@ -975,10 +1035,18 @@ int main(int argc, char** argv)
         ImGui_ImplOpenGL3_DestroyDeviceObjects();
         SDL_GL_SetSwapInterval(1); // splash frames ran vsync-free; back to vsync
         drawSplash(1.0f, "ready");
-        // The image splash forced the window frameless (see windowFlags);
-        // restore the border for windowed mode once loading is done.
-        if (splashStyle == 0 && windowMode == 1) {
-            SDL_SetWindowBordered(window, SDL_TRUE);
+        // The image splash forced the window frameless (see windowFlags).
+        // Loading is done, so hand the window over to the configured mode:
+        // restore the frame for windowed, or finally go fullscreen (deferred
+        // on purpose - see SDL_CreateWindow above: a window covering the whole
+        // desktop cannot stay DWM-transparent, so the boot splash must never
+        // be fullscreen).
+        if (splashStyle == 0) {
+            if (windowMode == 1) {
+                SDL_SetWindowBordered(window, SDL_TRUE);
+            } else if (windowMode == 2) {
+                SDL_SetWindowFullscreen(window, SDL_WINDOW_FULLSCREEN_DESKTOP);
+            }
         }
     }
 
@@ -1385,10 +1453,27 @@ int main(int argc, char** argv)
         return vx >= rect.x && vx <= rect.x + rect.w && vy >= rect.y && vy <= rect.y + rect.h;
     };
 
+    // Judges a flick gesture, trying the lane the press started on first and
+    // the lane the finger was resting on second. The second try is what makes
+    // the tail flick of a sideways-sliding hold work: its tail note sits on
+    // the lane the hold ENDED on (the core emits a marker at the start lane
+    // carrying the end time, and a separate tap/flick event at the end lane),
+    // so a swipe at the press lane covers nothing. Before this, the only way
+    // to clear such a tail was to release the hold and swipe again, because
+    // the new touch read its lane from the current finger position.
+    auto flickJudge = [&](const TouchTrack& track, double songTime, game::FlickDir dir) -> game::Judge {
+        const float t = static_cast<float>(songTime);
+        const game::Judge result = judgement.flick(track.lanePos, t, dir, 0.8f);
+        if (result != game::Judge::None || std::fabs(track.restLanePos - track.lanePos) < 0.01f) {
+            return result;
+        }
+        return judgement.flick(track.restLanePos, t, dir, 0.8f);
+    };
+
     // Starts a tap at a window position. Returns false when the press is
     // outside the playfield (e.g. on the sky above the horizon), where the
     // inverse perspective would map it to a bogus lane.
-    auto beginPointer = [&](SDL_FingerID id, int x, int y) {
+    auto beginPointer = [&](SDL_FingerID id, int x, int y, bool isTouch) {
         const float clipX = (static_cast<float>(x) / static_cast<float>(windowW)) * 2.0f - 1.0f;
         const float clipY = 1.0f - (static_cast<float>(y) / static_cast<float>(windowH)) * 2.0f;
         const float worldY = renderer.clipToWorldY(clipY);
@@ -1405,7 +1490,9 @@ int main(int argc, char** argv)
 
         TouchTrack track;
         track.fingerId = id;
+        track.isTouch = isTouch;
         track.lanePos = lanePos;
+        track.restLanePos = lanePos;
         track.laneIndex = laneIndexFromPos(lanePos);
         track.lastLanePos = lanePos;
         track.lastScreenX = static_cast<float>(x);
@@ -1439,7 +1526,16 @@ int main(int argc, char** argv)
                 : renderer.clipToWorldX(clipX);
             const float dx = static_cast<float>(x) - track.lastScreenX;
             const float dy = static_cast<float>(y) - track.lastScreenY; // screen: down is positive
-            const double dt = now - track.lastMoveTimeSec;
+            const double rawDt = now - track.lastMoveTimeSec;
+            // See kFlickMaxSampleSec: a finger parked on a hold emits no motion
+            // events, and the gap before the first sample of the flick must not
+            // be used as the sample period - that alone made hold-tail flicks
+            // measure ~100 px/s instead of ~800 and never register.
+            const double dt = std::min(rawDt, kFlickMaxSampleSec);
+            if (rawDt > kFlickIdleGapSec) {
+                track.velUp = 0.0f;
+                track.velSide = 0.0f;
+            }
             if (dt > 0.001) {
                 // Low-pass the per-event velocity: touch panels report
                 // unevenly spaced position jumps and a single-frame delta
@@ -1465,18 +1561,28 @@ int main(int argc, char** argv)
                     track.peakSide = track.velSide;
                 }
             }
-            if (!track.flicked) {
-                const game::FlickDir dir = flickDirFrom(track.velUp, track.velSide, track.travelUp,
-                    track.travelSide, track.fingerId > 0, heightScale);
-                if (dir != game::FlickNone) {
-                    track.flicked = true;
-                    const double songTime = audio.hasMusic() ? audio.songTime() : wallSongTime();
-                    const game::Judge result =
-                        judgement.flick(track.lanePos, static_cast<float>(songTime), dir, 0.8f);
-                    if (result != game::Judge::None) {
-                        playHitSe(audio, judgement, seVolume);
-                    }
+            const game::FlickDir dir = flickDirFrom(track.velUp, track.velSide, track.travelUp,
+                track.travelSide, track.isTouch, heightScale);
+            if (dir != game::FlickNone && now - track.lastFlickFireTimeSec >= kFlickRefireSec) {
+                track.lastFlickFireTimeSec = now;
+                // Consume the gesture: resetting the travelled distance stops
+                // one continuous swipe from firing on every motion event, while
+                // the finger stays armed so a later, separate swipe fires again.
+                track.travelUp = 0.0f;
+                track.travelSide = 0.0f;
+                const double songTime = audio.hasMusic() ? audio.songTime() : wallSongTime();
+                const game::Judge result = flickJudge(track, songTime, dir);
+                if (result != game::Judge::None) {
+                    playHitSe(audio, judgement, seVolume);
                 }
+            } else if (std::abs(track.velUp) < kFlickRestSpeed * heightScale
+                && std::abs(track.velSide) < kFlickRestSpeed * heightScale) {
+                // Slow enough to count as parked: remember this lane. It is the
+                // one a flick started from - a finger following a sliding hold
+                // keeps it up to date, a swipe that is already under way does
+                // not (its velocity is high), so the value cannot drift along
+                // with the up-stroke's perspective skew.
+                track.restLanePos = lanePos;
             }
             track.lastScreenX = static_cast<float>(x);
             track.lastScreenY = static_cast<float>(y);
@@ -1583,7 +1689,12 @@ int main(int argc, char** argv)
                     if (event.key.keysym.sym == SDLK_ESCAPE) {
                         escapePressed = true;
                     } else if (event.key.keysym.sym == SDLK_f) {
-                        fullscreen = !fullscreen;
+                        // Ask the window instead of trusting a separate flag:
+                        // the mode also changes from the settings card and, for
+                        // the image splash, at the end of the boot sequence -
+                        // which used to leave the first F press doing nothing
+                        // when the game started in fullscreen.
+                        fullscreen = (SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN_DESKTOP) == 0;
                         SDL_SetWindowFullscreen(window, fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
                         if (!fullscreen) {
                             // Restore whatever chrome the current window mode uses.
@@ -1693,7 +1804,7 @@ int main(int argc, char** argv)
                     }
                     beginPointer(event.tfinger.fingerId,
                         static_cast<int>(event.tfinger.x * static_cast<float>(windowW)),
-                        static_cast<int>(event.tfinger.y * static_cast<float>(windowH)));
+                        static_cast<int>(event.tfinger.y * static_cast<float>(windowH)), true);
                     break;
                 }
                 case SDL_FINGERMOTION: {
@@ -1713,16 +1824,15 @@ int main(int argc, char** argv)
                     if (state == AppState::Play && !autoPlay && !paused) {
                         const float heightScale = static_cast<float>(windowH) / 1080.0f;
                         for (const TouchTrack& track : touches) {
-                            if (track.fingerId != event.tfinger.fingerId || track.flicked) {
+                            if (track.fingerId != event.tfinger.fingerId) {
                                 continue;
                             }
                             const game::FlickDir dir = flickDirFrom(track.peakUp, track.peakSide, track.travelUp,
-                                track.travelSide, true, heightScale);
+                                track.travelSide, track.isTouch, heightScale);
                             if (dir != game::FlickNone) {
                                 const double songTime =
                                     audio.hasMusic() ? audio.songTime() : wallSongTime();
-                                const game::Judge result = judgement.flick(
-                                    track.lanePos, static_cast<float>(songTime), dir, 0.8f);
+                                const game::Judge result = flickJudge(track, songTime, dir);
                                 if (result != game::Judge::None) {
                                     playHitSe(audio, judgement, seVolume);
                                 }
@@ -1792,7 +1902,7 @@ int main(int argc, char** argv)
                         pauseClickRequested = true;
                         break;
                     }
-                    beginPointer(pointerIdForButton(event.button.button), event.button.x, event.button.y);
+                    beginPointer(pointerIdForButton(event.button.button), event.button.x, event.button.y, false);
                     break;
                 }
                 case SDL_MOUSEMOTION: {
