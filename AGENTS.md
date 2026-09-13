@@ -208,6 +208,30 @@ bash build.sh          # 仅需 Git Bash；产物 build/cppsekai.exe + SDL2.dll 
   任务栏进度条（`ITaskbarList3`）不归这个开关管，始终在跑。
 - 游戏资源（assets/、charts/）来自公开渠道，仅限本地游玩，不要提交或分发。
 
+## 与上游还没对齐的地方（2026-09-13 盘点）
+
+对着 `D:\Dev\sekai-mmw-preview-web` 逐个查过的结论，按「值不值得做」排：
+
+1. **舞台背景生成（最大的一个）**：上游 `src/lib/overlayBackgroundGen.ts`（492 行）拿曲绘做
+   透视变形 + 遮罩合成，生成那套"两面侧屏 + 中间屏"的歌曲专属舞台背景；我们**完全没有**，
+   所以永远是默认背景。核心移植层里也没有这段（`setPreviewConfig` 的 `stageCover` /
+   `stageOpacity` / `backgroundBrightness` 三个参数上游自己也只是存着没用）。要做得把 TS
+   那套图像处理搬到 C++（CPU 处理一次 + 上传纹理），工作量中等偏大。
+2. **长条 / guide 浓度没做成设置项**：上游有 `holdAlpha`（默认 1.0）/ `guideAlpha`（0.8），
+   我们虽然把参数传了（guide 0.6）但没进设置面板。顺带一提上游后来把"长条只在头判激活后
+   才显示"（`segmentActivated`）做进了核心，我们用的是另一套（`markNoteHit` /
+   `setMissedHolds` / `setDimmedHolds`）。
+3. **核心落后上游一点**：`core/native/src/mmw_preview.cpp` 与上游现版差 24 行上游独有内容
+   （长条绘制重构、`hitEvents` 按 (time, center) `stable_sort`、trace 头显示修复）。同步会跟我们
+   的 hit 驱动改造撞车，要动就单独开一轮。
+4. **音效增益**：上游按 kind 分档（perfect/criticalTap .75、flickCritical .8、trace .82、
+   tick .92、holdLoop .7），我们只按判定档位（Good/Bad 减半）。
+5. 小事：上游有英文 AUTO 徽章 `autolive-en.png`（它自己也没用）；`noteSpeed` 默认它 10.5 我们 8.0；
+   上游还支持 MMW 谱面 Maker 的 `custom_score_json`，我们只吃 SUS。
+
+已经补齐的：HUD 的 `+N` 加分浮动、右下角 `AUTO LIVE` 徽章、判定文字用对应档位的精灵
+（上游 native 那边永远画 PERFECT，因为它是预览器）。
+
 ## 验证（不开窗口的自动检查）
 
 ```bash
