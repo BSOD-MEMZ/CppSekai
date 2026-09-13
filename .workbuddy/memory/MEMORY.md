@@ -26,6 +26,13 @@
   各自验存在）；解码+降采样到 1024+三次 box 模糊在 `Renderer::loadBackdropTexture()`，
   **只在设置开着时加载**（默认零开销），纹理由 main.cpp 持有、`setSelectBackdrop()` 交给 SongSelect，
   cover 铺满 + dim 黑罩；模糊只在滑条松手时重算。
+- **失血阴影（暗角）要"内缩边带 + 四角方块"**（2026-09-13）：只内缩边带不补角，角上就只剩
+  横向渐变、顶/底边在角附近发亮（像"没绕窗口一圈"）。每像素只允许一层（边带别重叠）。
+- **SMTC 封面必须用 Uri，不能用 StorageFile**（2026-09-13）：GetFileFromPathAsync 在本进程
+  （STA）永远停在 Started（轮询+泵消息都没用）；改 CreateUri + CreateFromUri 同步路线，
+  路径要绝对化 + 百分号编码。
+- **段索引面板是极简的 + 三个点击坑**（2026-09-13）：别用整块 InvisibleButton（抢 active id）、
+  格子矩形用半开区间（边界会被两格同时命中）、用 indexOpenAtPress 门控（按下+抬起可能同帧）。
 - **入场/过渡动画**（2026-09-13）：手机面板入场滑入+淡入挂在"手机顶点整体旋转"那趟循环里
   （位移+顶点 alpha）；`enterAnim` 靠"隔 >0.5s 才又调用一次 = 刚进来"判定；选中卡片高度按槽位
   做指数趋近（`slotHeights` 在 signature 变化时必须 assign）。

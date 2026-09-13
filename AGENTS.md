@@ -78,6 +78,19 @@ bash build.sh          # 仅需 Git Bash；产物 build/cppsekai.exe + SDL2.dll 
 - SMTC/ITaskbarList3 是手写 WinRT/COM vtable（工具链无 Windows SDK）：IID 与方法顺序来自解析
   `C:\Windows\System32\WinMetadata\Windows.Media.winmd`，解析脚本在 `.workbuddy/tools/`；
   combase.dll 相关函数全部 LoadLibrary 动态加载，无需导入库。改接口调用前先跑脚本核对槽位。
+  - `winmd_dump.py` 打印**接口方法声明顺序 = ABI 槽位**；`"~name"` 是子串匹配（versioned
+    接口名如 `ISystemMediaTransportControls2` 不好猜）。**枚举数值它不导出**（winmd 的
+    Constant 表列顺序和 ECMA 不一致，读出来会错配到相邻成员）→ 枚举值查官方文档。
+  - `winmd_guid.py` 取 IID，短名也认（它内部是 "命名空间.类型" 的表，早先只支持全名，
+    查短名一律 NOT FOUND）。
+- **SMTC 封面（put_Thumbnail）必须走 Uri，别走 StorageFile**：`StorageFile.GetFileFromPathAsync`
+  是 async 工厂，本线程是 STA，完成回调被投递到 apartment 队列 —— 实测轮询 `IAsyncInfo::get_Status`
+  （带不带消息泵都一样）永远停在 Started，1 秒超时后拿不到 StorageFile。现在用
+  `Windows.Foundation.Uri`（`IUriRuntimeClassFactory::CreateUri`，IID
+  {44A9796F-723E-4FDF-A218-033E75B0C084}）+ `RandomAccessStreamReference::CreateFromUri`
+  （IID {857309DC-3FBF-4E7D-986F-EF3B1A07A964}，statics 槽 1），全程同步。路径要先
+  `weakly_canonical` 绝对化（谱面扫描可能给相对路径）再逐字节百分号编码，保留 `file:///`
+  与盘符冒号；日志里会回读 `get_AbsoluteUri` 确认 shell 看到的是什么。
 - 窗口/帧率：`--width/--height`（默认 1280x720）、`--window borderless|windowed|fullscreen`、
   `--fps <n>`（vsync 之外的软上限，0=仅垂直同步）；调试面板（H）里可实时切换窗口模式和帧率上限。
 - 输入：触摸（SDL_Finger*）与鼠标（左/右键 = 两个指针，合成负 id）共用 main.cpp 里的
@@ -299,10 +312,21 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
   否则列表里会出现一堆叫 "master" 的歌。
   这两个值**存在 settings 里**（`sortMode` / `groupMode`），`drawSongSelect` 收 `int&`，
   调用方（main.cpp）发现变了就 `persistUserData()`；分组模式会覆盖排序（见上）。
-- **段标题可点 → 索引面板**（2026-09-13 加）：分组开着时点段标题把列表换成 key 面板
-  （`indexOpen` / `indexAnim`），点 key 用 `nearestSlotOfRow()` 飞过去（落点是"该段第一首
-  居中、标题在上一行"），并关面板；面板打开时 `listHovered` 要按 `!indexOpen` 屏蔽，
-  否则背后列表会跟着动。分组关掉时面板自动关。
+- **段标题可点 → 索引面板**（2026-09-13 加）：分组开着时点段标题把列表换成字母面板
+  （`indexOpen` / `indexAnim`），点字母用 `nearestSlotOfRow()` 飞过去（落点是"该段第一首
+  居中、标题在上一行"），点空白处恢复列表；面板打开时 `listHovered` 要按 `!indexOpen` 屏蔽，
+  否则背后列表会跟着动，列表行还要按顶点 alpha 淡出（抓 `listVtxFirst` 之后批量缩）。分组关掉时面板自动关。
+  **面板是极简的（没有底板/标题/关闭叉）**，交互全手写命中测试——这里踩过三个坑，改之前先看：
+  1) **别用整块 InvisibleButton 当背景**：它在 mouse-down 就抢走 active id，之后提交的字母
+     永远收不到点击。字母的命中测试要学列表行那样直接比坐标。
+  2) **格子矩形必须半开区间**（`>= min && < max`）：两端都 `<=` 时正好落在格子边界上的点击会
+     被相邻两个字母同时命中，一次点击跳两段。
+  3) **用"按下那一刻面板是否已打开"（`indexOpenAtPress`）门控**：一次按下+抬起可能落在同一帧，
+     列表的 release-commit（点标题开面板）会和面板的 press 处理同时吃这一次点击。
+- **失血阴影（暗角）**（`main.cpp`，`damageVignette`/`deadVignette`）：**四条边带要内缩 +
+  四个角方块用四色插值**（外角两侧是暗色、内角 0）。只内缩边带、不补角，角上就只剩横向渐变、
+  没有上下方向的压暗，看上去像"阴影没绕窗口四周"（实测角区系数 0.96 = 几乎没压暗，补角后 0.73）。
+  每像素只允许一层，别让边带互相重叠（会叠加两倍黑）。
 - **入场/过渡动画**（2026-09-13）：`enterAnim` 靠"本函数每帧都被调用，隔 >0.5s 才又调一次
   = 刚进来"判定（不用宿主通知），手机面板的入场就是挂在既有的"手机顶点整体旋转"那趟循环里
   做的（位移 + 顶点 alpha），所以别在那里加 `continue` 之类的短路。选中卡片的高度按槽位
