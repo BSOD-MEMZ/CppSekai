@@ -29,8 +29,32 @@
   否则会把管道/mintty 的输出抢走；都没有就写 `cppsekai.log`。
 - **flick 方向判定用屏幕 px/s**（阈值按 `windowH/1080` 缩放）。别退回 worldY vs lane 单位——
   两者尺度差 ~6 倍，等于要求上滑"竖直 3.6 倍"才算 flick，触摸屏上根本刷不出来。
+- **flick 手势喂进判定引擎的三条硬规矩**（2026-09-13 修，改 `movePointer` 前先读）：
+  1) **轨道要用 `flickJudge()` 两次尝试**：先 `track.lanePos`（按下时的轨道），None 再试
+     `track.restLanePos`（手指低速停留时记录的轨道）。走位 hold 的**尾判事件是终点轨道**
+     （kind 5 标记带终点时间但 center 是起点轨道，kind 2 尾判在终点轨道），
+     只按按下轨道滑 → `laneCovers` 永远落空 → 表现就是"必须松手再滑才能清"
+     （新触点从当前位置重算轨道，所以才"好使"）。
+  2) **`dt` 必须钳到 ≤30ms**：触摸屏手指静止时**一个 motion 事件都不发**，flick 第一帧的
+     `now - lastMoveTimeSec` 可能是几百 ms，不钳的话 800px/s 被算成 ~100px/s，直接刷不出来。
+     同时空档 >50ms 要清速度滤波（`kFlickIdleGapSec`）。
+  3) **不要用一次性闩锁**：旧 `track.flicked` 让整次触点只能 fire 一次，hold 途中任何提前/误触的
+     滑动都把机会用掉。改成 fire 后归零 `travelUp/Side` + 60ms 冷却，松手 last-chance 不跳过。
+  另外 `track.isTouch` 要显式记录（别用 `fingerId > 0` 猜），触摸/鼠标的阈值差一倍。
 - **autoplay 必须零 miss**：flick 尾在 `mActiveHolds` 里是故意留白等玩家滑的，`--auto` 下要
   用 `judgeHoldTail(hold, Perfect)` 兜底，否则预览会把血打空。
+- **`--test-hits` 是判定侧的回归/复现利器**：它把每条 HitEvent 按自己的 `event[1]`（音符轨道）
+  和谱面时间喂给 `judgement.tap/flick`，等价于"完美玩家"。要复现输入层 bug，临时把那一行的
+  lane 改成别的值即可（例如走位 hold 用 1.5f 复现漏判），跑完记得改回来。
+  无头跑法：`./build/cppsekai.exe --sus charts/0628_hard.sus --test-hits --window windowed
+  --screenshot <真实路径> --screenshot-time <秒>`，看 `cppsekai.log` 的 `[stats]` 行当断言。
+  **注意 `--screenshot` 给不存在的目录会静默不开跑**（进程挂着不退出）。
+- **图片开屏绝对不能是全屏窗口**（2026-09-13）：透明底靠 `ALPHA_SIZE=8` + `glClear(alpha=0)`
+  + `DwmExtendFrameIntoClientArea(-1,-1,-1,-1)`；但**覆盖整个桌面的窗口会被 Windows
+  fullscreen optimizations 接管、DWM 合成被绕过 → 透明变不透明黑**（表现："黑底 + 一张图"）。
+  所以 `windowMode==2 && splashStyle==0` 时**创建时不进全屏**，加载完在 boot 末尾再
+  `SetWindowFullscreen`；开屏窗口尺寸还要限制在 `SDL_GetDisplayUsableBounds - 16px` 内
+  （存档分辨率==显示器尺寸也会被 FSO 抓走）。经典开屏（深色底）保持创建即全屏。
 - 文档：根目录新增 **`CLI.md`**（命令行手册）。工具：`.workbuddy/tools/pngcrop.py`
   （纯 python PNG 裁剪 + 放大，工具链没有 Pillow/ffmpeg）。
 
@@ -58,8 +82,11 @@
 - **miss 的 hold**：主体继续下落（drawHoldCurves 的 missed 分支，`segmentStartScaled`
   不再钳到当前时间），tick 同步延长窗口；判定侧静默（state=2 不记分）。
 - **tick→hold 匹配必须按时间窗**（hold 走位时 tick 中心≠起点中心），无 marker 的
-  guide tick 保持 always-auto-hit。tail 标记（load 里的 holdTail flagging）仍是按中心
-  匹配——走位 hold 的尾巴可能漏标，**未修**，疑似 tails 计数偏少的隐患。
+  guide tick 保持 always-auto-hit。tail 标记（load 里的 `holdTail` flagging）仍是按**中心**
+  匹配 → 走位 hold 的尾巴（终点轨道 ≠ 起点轨道）**不会被标记**，`hold.tailIndex` 也解析不到，
+  **未修**。2026-09-13 确认后果：那条尾判按**普通 flick 音符**走（滑到就清、按住不放 180ms
+  后 auto-miss），`tails` 统计少算它、松手分级那条路不生效——行为上可接受，要彻底对齐得把
+  flagging 改成"按时间窗匹配"。同一处还是 O(n²) 扫描（每根 hold 遍历全表）。
 
 ## 资源与 git 的坑（务必记住）
 - `.gitignore` **忽略整个 `assets/`**（连同 `toolchain/`、`charts/`、`build/`）。

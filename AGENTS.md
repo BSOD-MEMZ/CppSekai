@@ -91,6 +91,16 @@ bash build.sh          # 仅需 Git Bash；产物 build/cppsekai.exe + SDL2.dll 
   HUD 贴图和 CJK 字体图集。**`loadIntroFonts()` 之后必须 `ImGui_ImplOpenGL3_DestroyDeviceObjects()`**，
   否则 GL 后端还持有 splash 用的默认字体纹理，字形 UV 错位、全部 UI 文字花屏。各阶段耗时用
   `[boot]` 日志查看；贴图级耗时设 `CPSEKAI_ASSET_TIMING=1`。
+- **图片开屏（`splashStyle==0`）期间绝对不能是全屏窗口**（2026-09-13 修）：透明底靠
+  `SDL_GL_ALPHA_SIZE=8` + `glClearColor(0,0,0,0)` + `DwmExtendFrameIntoClientArea(-1,-1,-1,-1)`
+  （SDL2 没有 `SDL_WINDOW_TRANSPARENT`，那是 SDL3）。但**覆盖整个桌面的窗口会被 Windows 的
+  fullscreen optimizations 接管、DWM 合成被绕过 → 逐像素透明失效 → 透明底变成不透明黑**
+  （症状："黑底 + 一张启动图"）。所以 `windowMode==2 && splashStyle==0` 时**创建窗口时不要进全屏**，
+  等加载完（boot 末尾 `splashShown` 那块）再 `SDL_SetWindowFullscreen`；而且开屏窗口尺寸要限制在
+  `SDL_GetDisplayUsableBounds - 16px` 内（万一存档分辨率正好等于显示器尺寸，也会被 FSO 抓走）——
+  开屏窗口除了居中那张图整体都透明，缩几像素肉眼看不出来。经典开屏（深色底）保持创建即全屏。
+  全屏切换靠 `SDL_WINDOWEVENT_SIZE_CHANGED` 把 `windowW/H` + `renderer.resize` +
+  `core_api::resize` 一起更新，所以延后切换不会留下错尺寸的视口。
 - HUD 预缩图：`loadHud()` 优先读 `assets/mmw/overlay_opt/`（存在则用，否则回退原图，删掉该目录即恢复）。
   原图很多是超大的（life 数字 1000x1333，实际只画 ~50px），解码很慢。用
   `zig c++ -O2 -Ithird_party -Ithird_party/mmw_preview/vendor .workbuddy/tools/shrink_hud.cpp -o build/shrink_hud.exe`
@@ -279,8 +289,24 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
   直接比大小，两者尺度差 ~6 倍，等于要求上滑比水平方向竖直 3.6 倍才算 flick —— 触摸屏上基本
   刷不出来。阈值按 `windowH/1080` 缩放，别写死像素。触摸还多两条：上滑锥角放宽到 ~63°，
   并要求**同方向累计位移 > 14px**（`travelUp/travelSide` 每次反向就重新计数，用来滤掉静止手指
-  的抖动）。`SDL_FINGERUP` 用 `peakUp/peakSide`（手势期间的峰值速度）而不是最后一帧速度，
+  的抖动）。  `SDL_FINGERUP` 用 `peakUp/peakSide`（手势期间的峰值速度）而不是最后一帧速度，
   短促 flick 常常在最后一个 motion 之前就结束了。
+- **flick 手势喂进判定引擎有三条硬规矩**（2026-09-13 修，改 `main.cpp::movePointer` 前必读，
+  症状都是"hold 尾 flick 在触摸屏上刷不出来 / 必须松手再滑")：
+  1. **轨道要有兜底**：`flickJudge()` 先用 `track.lanePos`（按下时算的轨道）调
+     `judgement.flick()`，返回 `None` 再用手指的**停留轨道** `track.restLanePos`
+     （低于 `kFlickRestSpeed` 时更新，所以跟走位会刷新、上滑过程中不会被透视拉偏）重试。
+     根因：**走位 hold 的尾判事件在终点轨道上**（kind 5 标记带终点时间但 center 是起点轨道，
+     kind 2 尾判另发在终点轨道）——只按按下轨道滑，`laneCovers` 永远落空。"松手再滑"之所以
+     能过，是因为新触点从当前手指位置重算了轨道。
+  2. **`dt` 上限钳到 30ms**（`kFlickMaxSampleSec`）：触摸屏手指静止时**一个 motion 事件都不发**，
+     flick 第一帧的 `now - lastMoveTimeSec` 可能是几百 ms，不钳的话 800px/s 被算成 ~100px/s。
+     空档 >50ms（`kFlickIdleGapSec`）还要清掉速度滤波，免得把陈旧速度混进去。
+  3. **不要用一次性闩锁**：旧的 `track.flicked` 让整次触点只 fire 一次，hold 途中任何提前/误触的
+     滑动都会把这次机会用掉。现在 fire 后归零 `travelUp/Side`（同一次连续滑动不会每帧都触发）
+     + 60ms 冷却（`kFlickRefireSec`），`SDL_FINGERUP` 的 last-chance 也不再跳过。
+  另外 `track.isTouch` 必须显式记录（`beginPointer(..., bool isTouch)`），别再用 `fingerId > 0`
+  猜 —— 猜错的话阈值从触摸的 500px/s 变成鼠标的 900px/s，触摸屏就废了。
 - `--auto` **只影响本次运行**：`persistUserData()` 里会看 `autoplayGiven`，命令行给的 autoplay
   不再写回 `userdata.json`（以前跑一次预览会把 AUTOPLAY 永久打开）。`--screenshot` 模式干脆
   完全不写 `userdata.json`。
