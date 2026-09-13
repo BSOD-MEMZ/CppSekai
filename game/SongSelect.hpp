@@ -156,12 +156,15 @@ void loadMusicLevels(const std::string& path);
 // Level of `difficulty` ("EASY".."MASTER") for a song id, 0 when unknown.
 int musicLevel(int musicId, const std::string& difficulty);
 
-// Official song readings, for "sort by name" and the aiueo grouping. Accepts
-// the game's own musics.json (an array of objects with "id" and
-// "pronunciation", the fields unipjsk ships) or a plain {"75": "よんぴき..."}
-// map. Songs without an entry fall back to their title. May be called more
-// than once; later entries win.
-void loadMusicPronunciations(const std::string& path);
+// Official song readings and titles from the game's musics.json: the reading
+// drives "sort by name" and the aiueo grouping, the title fills in charts whose
+// #TITLE is empty (every unipjsk export). Accepts the verbatim table (an array
+// of objects with "id" / "pronunciation" / "title") or a compact map, either
+// {"75": "よんぴき..."} (readings only) or
+// {"75": {"kana": "...", "title": "..."}}. Songs without an entry fall back to
+// whatever the chart itself carries. May be called more than once; later
+// entries win.
+void loadMusicMaster(const std::string& path);
 
 // Recursively collects *.sus under dir (bounded depth). Entries are sorted
 // by title then file name.

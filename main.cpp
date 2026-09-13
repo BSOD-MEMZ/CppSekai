@@ -1165,15 +1165,16 @@ int main(int argc, char** argv)
         }
     }
 
-    // Official readings (musics.json "pronunciation"): "sort by name" and the
-    // aiueo grouping use them, so a katakana/kanji title still lands in the
-    // right row. Optional - a missing file just means title-based sorting.
+    // Official readings + titles (musics.json): "sort by name" and the aiueo
+    // grouping use the reading, and the title fills in charts whose #TITLE is
+    // empty (unipjsk writes none, so the list would read "0018 master").
+    // Optional - a missing file just means title-based sorting.
     for (const std::string& candidate :
         {baseDir + "musics.json", baseDir + "..\\musics.json", std::string("musics.json")}) {
         std::ifstream probe(candidate, std::ios::binary);
         if (probe.good()) {
             probe.close();
-            game::loadMusicPronunciations(candidate);
+            game::loadMusicMaster(candidate);
             break;
         }
     }
@@ -1710,6 +1711,40 @@ int main(int argc, char** argv)
         return vx >= rect.x && vx <= rect.x + rect.w && vy >= rect.y && vy <= rect.y + rect.h;
     };
 
+    // Press inside the HUD pause button zone. Returns true when the press was
+    // consumed (so it must never also count as a lane hit).
+    //
+    // Deliberately shared by the mouse path, the touch-synthesized mouse path
+    // and the finger path: the earlier copy-pasted versions were what made the
+    // button behave differently per input device. Note this runs *before* the
+    // "ignore input while paused / playing a preview" guards - the button is
+    // not lane input and has to work wherever the HUD is on screen (including
+    // autoplay previews, whose HUD is drawn the same way).
+    auto hudPausePress = [&](int x, int y) -> bool {
+        if (state != AppState::Play || !isPauseButton(x, y)) {
+            return false;
+        }
+        if (paused || pauseDialogOpen || countdownActive) {
+            std::printf("[pause] press ignored (paused=%d dialog=%d countdown=%d)\n",
+                paused ? 1 : 0, pauseDialogOpen ? 1 : 0, countdownActive ? 1 : 0);
+            std::fflush(stdout);
+            return true;
+        }
+        const double pressSongTime = audio.hasMusic() ? audio.songTime() : wallSongTime();
+        const float visibility = game::openingPlayfieldVisibility(
+            static_cast<float>(pressSongTime + leadInSec), session.intro.hasContent);
+        if (visibility <= 0.0f) {
+            // The HUD is not drawn yet (opening card): the press lands on
+            // empty screen, so there is nothing to react to. Say so, otherwise
+            // a "dead" button is invisible in the log.
+            std::printf("[pause] press ignored (HUD hidden behind the opening card)\n");
+            std::fflush(stdout);
+            return true;
+        }
+        pauseClickRequested = true;
+        return true;
+    };
+
     // Judges a flick gesture, trying the lane the press started on first and
     // the lane the finger was resting on second. The second try is what makes
     // the tail flick of a sideways-sliding hold work: its tail note sits on
@@ -1999,9 +2034,10 @@ int main(int argc, char** argv)
                         // the player drop a new .sus in and pick it up without
                         // restarting (the empty-state hint promises F5).
                         rescanRequested = true;
-                    } else if (state == AppState::Play && event.key.keysym.sym == SDLK_SPACE && !autoPlay
+                    } else if (state == AppState::Play && event.key.keysym.sym == SDLK_SPACE
                         && !countdownActive) {
-                        // Space opens the pause dialog (same as the HUD button).
+                        // Space opens the pause dialog (same as the HUD button,
+                        // previews included).
                         if (!pauseDialogOpen) {
                             paused = true;
                             audio.pause();
@@ -2064,6 +2100,12 @@ int main(int argc, char** argv)
                             event.tfinger.y * static_cast<float>(windowH));
                         break;
                     }
+                    // HUD pause button (not lane input): handled before the
+                    // paused / autoplay guards, exactly like the mouse path.
+                    if (hudPausePress(static_cast<int>(event.tfinger.x * static_cast<float>(windowW)),
+                            static_cast<int>(event.tfinger.y * static_cast<float>(windowH)))) {
+                        break;
+                    }
                     if (paused || state != AppState::Play) {
                         break;
                     }
@@ -2094,21 +2136,6 @@ int main(int argc, char** argv)
                     }
                     if (autoPlay) {
                         break;
-                    }
-                    // HUD pause button: same hit-test the mouse path uses -
-                    // without it the button was mouse-only and a touchscreen
-                    // could never open the pause dialog.
-                    {
-                        const int fx = static_cast<int>(event.tfinger.x * static_cast<float>(windowW));
-                        const int fy = static_cast<int>(event.tfinger.y * static_cast<float>(windowH));
-                        const double currentSongTime =
-                            audio.hasMusic() ? audio.songTime() : wallSongTime();
-                        const float visibility = game::openingPlayfieldVisibility(
-                            static_cast<float>(currentSongTime + leadInSec), session.intro.hasContent);
-                        if (visibility > 0.0f && isPauseButton(fx, fy)) {
-                            pauseClickRequested = true;
-                            break;
-                        }
                     }
                     beginPointer(event.tfinger.fingerId,
                         static_cast<int>(event.tfinger.x * static_cast<float>(windowW)),
@@ -2157,8 +2184,12 @@ int main(int argc, char** argv)
                 // ------------------------------------------------------
                 case SDL_MOUSEBUTTONDOWN: {
                     // Synthetic event from a touch (hint above): the finger
-                    // path already handled it, do not double-process.
+                    // path already handled it, do not double-process. Some
+                    // touch stacks only ever deliver this synthetic mouse
+                    // event though, so the HUD buttons are still honoured here
+                    // (setting the same request twice is harmless).
                     if (event.button.which == SDL_TOUCH_MOUSEID) {
+                        hudPausePress(event.button.x, event.button.y);
                         break;
                     }
                     if (event.button.button != SDL_BUTTON_LEFT && event.button.button != SDL_BUTTON_RIGHT) {
@@ -2207,17 +2238,16 @@ int main(int argc, char** argv)
                             break;
                         }
                     }
+                    // HUD pause button (see hudPausePress): checked before the
+                    // "no input while paused / autoplaying" guards so the
+                    // button behaves the same in a preview as in a real run.
+                    if (hudPausePress(event.button.x, event.button.y)) {
+                        break;
+                    }
                     if (autoPlay || paused || state != AppState::Play) {
                         break;
                     }
                     if (ImGui::GetIO().WantCaptureMouse) {
-                        break;
-                    }
-                    const double songTime = audio.hasMusic() ? audio.songTime() : wallSongTime();
-                    const float visibility = game::openingPlayfieldVisibility(
-                        static_cast<float>(songTime + leadInSec), session.intro.hasContent);
-                    if (visibility > 0.0f && isPauseButton(event.button.x, event.button.y)) {
-                        pauseClickRequested = true;
                         break;
                     }
                     beginPointer(pointerIdForButton(event.button.button), event.button.x, event.button.y, false);
@@ -2503,23 +2533,6 @@ int main(int argc, char** argv)
                 }
             }
 
-            // Record CLEAR / FULL COMBO once the song is played to the end.
-            // Autoplay previews must never touch the records.
-            if (!autoPlay && !session.scoreRecorded && trackDurationSec > 1.0 && songTime >= trackDurationSec - 0.25) {
-                session.scoreRecorded = true;
-                const auto& st = judgement.stats();
-                const bool fullCombo = st.miss == 0;
-                const std::string key = game::scoreKey(session.entry);
-                // Keep the old best for the result screen's 最高得分 / 新纪录!
-                // before the merge below overwrites it.
-                resultPreviousBest = scores[key].bestScore;
-                scores[key] = game::mergeScore(scores[key], true, fullCombo, st.score);
-                game::applyScores(entries, scores);
-                persistUserData();
-                std::printf("[score] %s cleared%s (%s)\n", key.c_str(),
-                    fullCombo ? " (full combo)" : "", userDataFile.c_str());
-            }
-
             // ----------------------------------------------------------
             // Song finished -> result screen. The music is cut here (the
             // chart keeps running past the last note while the track plays
@@ -2529,7 +2542,37 @@ int main(int argc, char** argv)
                 && songTime >= (resultAtSec > 0.0 ? resultAtSec : trackDurationSec - 0.15);
             if (resultDue && !resultScheduled) {
                 resultScheduled = true;
-                resultData = buildResultData(session.intro, session.entry, judgement.stats(),
+                const auto& st = judgement.stats();
+                // Record CLEAR / FULL COMBO right here, not a moment earlier:
+                // this is the first point where the run is really over, so the
+                // life bar has seen the last of the chart's auto-misses (their
+                // window runs past the final note), and it is the exact
+                // snapshot the result screen below draws.
+                //
+                // CLEAR = got through the song alive. Ending with the life bar
+                // at 0 is a failed live and must not leave a clear mark - this
+                // is why every song played to the end used to come back
+                // cleared. A full combo needs the run to count in the first
+                // place: hold breaks drain life without a MISS, so miss == 0
+                // alone can still end at 0 life.
+                if (!autoPlay && !session.scoreRecorded && songTime >= trackDurationSec - 0.25) {
+                    session.scoreRecorded = true;
+                    const bool cleared = st.life > 0.0f;
+                    const bool fullCombo = cleared && st.miss == 0;
+                    const std::string key = game::scoreKey(session.entry);
+                    // Keep the old best for the result screen's 最高得分 /
+                    // 新纪录! before the merge below overwrites it.
+                    resultPreviousBest = scores[key].bestScore;
+                    scores[key] = game::mergeScore(scores[key], cleared, fullCombo, st.score);
+                    game::applyScores(entries, scores);
+                    persistUserData();
+                    std::printf("[score] %s %s%s (life=%.0f/%.0f) (%s)\n", key.c_str(),
+                        cleared ? "cleared" : "failed", fullCombo ? " (full combo)" : "",
+                        static_cast<double>(st.life), static_cast<double>(game::kMaxLife),
+                        userDataFile.c_str());
+                    std::fflush(stdout);
+                }
+                resultData = buildResultData(session.intro, session.entry, st,
                     resultPreviousBest, judgement.chartRating());
                 audio.setHoldLoop(false, false, 0.0f);
                 audio.stopMusic();
@@ -2742,7 +2785,7 @@ int main(int argc, char** argv)
             // here so the same click never also counts as a lane hit.
             if (pauseClickRequested) {
                 pauseClickRequested = false;
-                if (!autoPlay && !pauseDialogOpen) {
+                if (!pauseDialogOpen) {
                     paused = true;
                     audio.pause();
                     pauseDialogOpen = true;

@@ -261,6 +261,40 @@ namespace
         if (difficulty == "ETERNAL") return IM_COL32(241, 192, 79, alpha);
         return IM_COL32(120, 130, 160, alpha);
     }
+
+    // -----------------------------------------------------------------
+    // Official master table (musics.json): the reading (sorting / grouping)
+    // and the title. unipjsk's SUS exports leave #TITLE empty, so the title
+    // fallback is what keeps the list from reading "0018 master" everywhere.
+    // -----------------------------------------------------------------
+    std::map<int, std::string> gMusicKana;
+    std::map<int, std::string> gMusicTitles;
+
+    void storeKana(int musicId, const std::string& kana)
+    {
+        if (musicId > 0 && !kana.empty()) {
+            gMusicKana[musicId] = kana;
+        }
+    }
+
+    void storeTitle(int musicId, const std::string& title)
+    {
+        if (musicId > 0 && !title.empty()) {
+            gMusicTitles[musicId] = title;
+        }
+    }
+
+    std::string pronunciationFor(int musicId)
+    {
+        const auto it = gMusicKana.find(musicId);
+        return it == gMusicKana.end() ? std::string() : it->second;
+    }
+
+    std::string titleFor(int musicId)
+    {
+        const auto it = gMusicTitles.find(musicId);
+        return it == gMusicTitles.end() ? std::string() : it->second;
+    }
 } // namespace
 
 std::string gSelectAssetDir; // set via setSelectAssetDir()
@@ -453,6 +487,11 @@ void resolveSidecars(ChartEntry& entry)
         entry.title = sideField("title");
     }
     if (entry.title.empty()) {
+        // unipjsk SUS files ship an empty #TITLE: take the official name from
+        // the master table before falling back to the file name.
+        entry.title = titleFor(entry.musicId);
+    }
+    if (entry.title.empty()) {
         entry.title = prettyFileName(stem);
     }
     entry.displayName = entry.title;
@@ -537,6 +576,9 @@ std::vector<ChartEntry> scanChartFolder(const std::string& dir)
         }
         if (item.title.empty()) {
             item.title = sideField("title");
+        }
+        if (item.title.empty()) {
+            item.title = titleFor(item.musicId); // official name (see above)
         }
         item.artist = field("ARTIST");
         if (item.artist.empty()) {
@@ -676,25 +718,12 @@ namespace
     }
 
     // -----------------------------------------------------------------
-    // Official song readings (musics.json "pronunciation"). Sorted and
-    // grouped by these, so "ウミユリ海底譚" lands under う / あ行 instead of
-    // somewhere random in the code point order. Songs without an entry fall
-    // back to their title.
+    // Official song readings / titles (musics.json, see the storeKana /
+    // storeTitle helpers above): sorted and grouped by the reading, so
+    // "ウミユリ海底譚" lands under う / あ行 instead of somewhere random in the
+    // code point order, and titled from the master table when the chart file
+    // carries no name of its own.
     // -----------------------------------------------------------------
-    std::map<int, std::string> gMusicKana;
-
-    void storeKana(int musicId, const std::string& kana)
-    {
-        if (musicId > 0 && !kana.empty()) {
-            gMusicKana[musicId] = kana;
-        }
-    }
-
-    std::string pronunciationFor(int musicId)
-    {
-        const auto it = gMusicKana.find(musicId);
-        return it == gMusicKana.end() ? std::string() : it->second;
-    }
 
     // Folds katakana to hiragana (and ASCII to lower case) in place, so a
     // reading and a katakana title compare in the same order.
@@ -1136,7 +1165,7 @@ int musicLevel(int musicId, const std::string& difficulty)
     return tableLevel(musicId, diffIndexOf(difficulty));
 }
 
-void loadMusicPronunciations(const std::string& path)
+void loadMusicMaster(const std::string& path)
 {
     std::error_code ec;
     if (path.empty() || !fs::exists(path, ec)) {
@@ -1160,16 +1189,21 @@ void loadMusicPronunciations(const std::string& path)
                 continue;
             }
             const int musicId = row.value("id", 0);
-            const std::string kana = row.value("pronunciation", std::string{});
-            storeKana(musicId, kana);
+            storeKana(musicId, row.value("pronunciation", std::string{}));
+            storeTitle(musicId, row.value("title", std::string{}));
         }
         return;
     }
-    // Compact form: { "75": "ほしをつなぐ..." }.
+    // Compact form: { "75": "ほしをつなぐ..." } for the reading only, or
+    // { "75": { "kana": "...", "title": "..." } } when both are wanted.
     if (doc.is_object()) {
         for (auto it = doc.begin(); it != doc.end(); ++it) {
+            const int musicId = std::atoi(it.key().c_str());
             if (it.value().is_string()) {
-                storeKana(std::atoi(it.key().c_str()), it.value().get<std::string>());
+                storeKana(musicId, it.value().get<std::string>());
+            } else if (it.value().is_object()) {
+                storeKana(musicId, it.value().value("kana", it.value().value("pronunciation", std::string{})));
+                storeTitle(musicId, it.value().value("title", std::string{}));
             }
         }
     }

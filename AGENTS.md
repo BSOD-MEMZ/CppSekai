@@ -323,7 +323,7 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
   「按难度段（1-5 / 6-10 / … / 36+）」「按读音（あ/か/さ…/A-Z 逐字母/#）」「按首字
   （A-Z / 0-9 / あ い う…，用 initialLabel()）」。
   名称排序和读音分组用的是**官方读音**（`musics.json` 的 `pronunciation`，main.cpp 里
-  `loadMusicPronunciations()` 载入，`foldForSort()` 把片假名折成平假名、ASCII 转小写），
+  `loadMusicMaster()` 载入，`foldForSort()` 把片假名折成平假名、ASCII 转小写），
   所以「ウミユリ海底譚」落在 あ 行、片假名标题也能正确排序；官方 715 首的读音**全是假名**
   （`Tell Your World` = てるゆあわーるど → た 行），所以逐字母段只对**没有读音的自制谱**
   生效（那时退回用标题当 key）。汉字开头且没有读音的会落进「その他」（按字节序排在最后）。
@@ -331,6 +331,10 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
   `initialLabel()` 是「首字」级的（逐假名 + 逐字母）。
   注意 `#TITLE` 里写的是难度名（有些 unipjsk 导出写 `#TITLE "master"`）时要当空处理，
   否则列表里会出现一堆叫 "master" 的歌。
+- **曲名回填**：unipjsk 导出的 SUS `#TITLE` 是空的，旧的回落是 `prettyFileName()`，于是整张
+  列表都叫「0018 master」。现在 `musics.json` 的 `title` 也一起进主表（`storeTitle()` /
+  `titleFor()`），`scanChartFolder()` 与 `resolveSidecars()` 的回落顺序是
+  **SUS `#TITLE` → sidecar `title` → 官方 `title` → 文件名**。顺带选曲搜索框也能搜到真曲名了。
   这两个值**存在 settings 里**（`sortMode` / `groupMode`），`drawSongSelect` 收 `int&`，
   调用方（main.cpp）发现变了就 `persistUserData()`；分组模式会覆盖排序（见上）。
 - **段标题可点 → 索引面板**（2026-09-13 加）：分组开着时点段标题把列表换成字母面板
@@ -418,13 +422,34 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
 分支各测一次（又是"触摸屏点不到"那个经典坑）。`drawResult()` 只负责画 + 悬停高亮。
 
 **流程**：曲末（`trackDurationSec − 0.15`）切进 `AppState::Result`，停音乐、清触点，用
-`judgement.stats()` 组 `ResultData`；成绩记录在切换前就已经写盘，`resultPreviousBest`
+`judgement.stats()` 组 `ResultData`；成绩记录就在这个切换块里写盘（**不要**提前到
+`trackDuration − 0.25` 那种更早的位置：曲子尾部还剩没判完的 note，自动 MISS 的窗口会
+越过谱面末尾，那时读到的血量偏高，摔死的曲子会被记成 CLEAR）。`resultPreviousBest`
 （= `ScoreRecord::bestScore`，新加的字段）必须在 merge **之前**取，否则永远不是新纪录。
+- **CLEAR 的判定 = 打完时血量 > 0**（`st.life > 0`）：血量归零 = 失败，只留最高分、不打
+  CLEAR。FULL COMBO 还要额外要求 `cleared`——长条中途断扣血但不计 MISS，`miss == 0` 也可能
+  掉到 0 血。`--result-at`（调试，中途切结算）不写成绩。
 点「继续」（或 ESC）回选曲。调试：`--result-preview`（启动即进，用参考图的样例数字）、
 `--result-at <sec>`（跑到指定秒数切）。
 
 ## 平台 / 输入相关的坑（2026-09-12）
 
+- **HUD 暂停按钮只有一条判定路径**（2026-09-13 整理）：`isPauseButton()`（虚拟坐标命中）之上
+  包了个 `hudPausePress(x, y)`，鼠标分支、`SDL_TOUCH_MOUSEID` 的合成鼠标分支、`SDL_FINGERDOWN`
+  分支都调它，命中即 `break`（不再当击打）。之前三处各写一份、条件还不一样：
+  - 它**故意排在**「paused / autoPlay 就不收输入」和 `WantCaptureMouse` 检查**之前**——
+    暂停键不是击打输入，HUD 画在哪它就该在哪能用（自动预览 `--auto` 也照样能暂停，HUD 和
+    真局是一模一样的）。设置卡片在左上、暂停区在右上，永远不会重叠，所以可以绕过 ImGui 的
+    捕获检查。`SPACE` 同理。
+  - `SDL_TOUCH_MOUSEID` 的合成鼠标事件以前被无条件丢掉（指望 finger 分支处理），但有些触摸栈
+    只发这一个事件 → 按钮全死。现在这条分支也会喂给 `hudPausePress()`。
+  - 被忽略时打一行 `[pause] press ignored (...)`（开场卡期间 HUD 根本没画，也会说一句），
+    否则「按钮没反应」在日志里完全隐形。
+- 想验证这类"点了没反应"，用 `.workbuddy/tools/winsend.c`（`zig cc` 编译成 `build/winsend.exe`）：
+  它按窗口标题找 HWND 并 PostMessage 真鼠标消息，`winsend CppSekai move X Y` + `click X Y`
+  （**客户区**坐标）。配合 `--screenshot` 跑一局、中途在另一个 shell 里点一下，就能在没有交互
+  会话的情况下测真实输入。2026-09-13 就是用这套确认暂停键本身没问题（1280x720 下中心 ≈
+  `1222,41`）。
 - **exe 是 Windows 子系统**（`build.sh` 里的 `-Wl,--subsystem,windows`）：双击不出 cmd 窗口。
   `main()` 开头用 `AttachConsole(ATTACH_PARENT_PROCESS)` 接管父控制台，但只在
   `GetStdHandle(STD_OUTPUT_HANDLE)` 无效时才 `freopen("CONOUT$")` —— 否则会把 mintty / 管道的
