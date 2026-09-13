@@ -48,3 +48,7 @@
 - 2026-09-13 曲名从 musics.json 回填（unipjsk 的 #TITLE 是空的）；CLEAR 改成打完血量 > 0
   （记录点必须放在结算切换块里）；HUD 暂停键三路输入合并成 hudPausePress() 并放到
   paused/autoPlay 检查之前。真实输入回归用 `build/winsend.exe`（PostMessage 鼠标消息）。
+- 2026-09-13 HUD 补上分数 `+N` 浮动与 `AUTO LIVE` 徽章；UI 组件尺寸收小；多歌手（演唱版本）
+  切换（数据 `music-vocals.json`，音频就是 `charts/<assetbundleName>.mp3`）；新增独立谱面
+  下载器 `build/chartdl.exe`（`downloader/`，winhttp LoadLibrary + ImGui 默认皮肤）。
+  与上游未对齐的清单见 `AGENTS.md`（最大一块是舞台背景生成 overlayBackgroundGen.ts）。
