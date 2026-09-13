@@ -222,6 +222,26 @@ tio.AddMouseWheelEvent(0.0f, -2.0f);           // 滚轮两格
 （`tails` 是被判定的长条尾数，`breaks` 是中途松手断连数；完全不输入时 miss 应为音符数、
 `breaks` 为 0、血量掉到 0。若长条开始没打上，整条只算开始那一个 MISS。）
 
+**驱动 UI（没有交互会话时）**：`.workbuddy/tools/winsend.c` 编译成 `build/winsend.exe`
+（`zig cc -O2 .workbuddy/tools/winsend.c -o build/winsend.exe`），按标题子串找到窗口后用
+`PostMessage` 送输入，所以能在 `--screenshot` 跑着的时候点按：
+
+```bash
+./build/cppsekai.exe --window windowed --width 1920 --height 1080 \
+    --screenshot sel.png --screenshot-time 7 >/dev/null 2>&1 &
+./build/winsend.exe CppSekai click 210 469      # 客户端坐标，点第一个段标题
+./build/winsend.exe CppSekai key 27             # VK_ESC
+./build/winsend.exe CppSekai move 300 500       # 只移动（测 hover）
+```
+
+配合 `.workbuddy/tools/pngcrop.py` 的 `read_png()` 做**像素断言**（比肉眼看图可靠，
+而且这个模型看不了图）：比如背景区均值、某个 UI 色的像素计数、两次截图同一区域的哈希
+是否变化。`--screenshot` 的图是 RGBA8 非交错 PNG，`read_png()` 只吃这种格式。
+注意 ① `sleep` 在这个 bash 里没有，用 `python -c "import time;time.sleep(4)"`；
+② 后台起进程后 `cppsekai.log` 一时删不掉（还占着句柄），先 `mv` 走再跑；
+③ 壁纸/选曲这类界面动画都在 0.4s 内结束，要在中间帧抓图得临时把时长调大
+（抓完记得改回来）。
+
 `--test-restart` 在 `--restart-at` 秒走「放弃 → 载入下一首」的完整流程（第二次
 `loadMusic()`），是那个「放弃后选新曲卡死」的回归用例：跑不到 12s 的截图就是卡死了。
 
@@ -269,13 +289,33 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
   回落到官方 `music-levels.json` 表，所以切难度时整列数字会一起变，颜色也跟着变
   （`kDiffColors[diffIndex]`）。手机面板里未选中的难度是**空心圆**（无底色填充）。
 - **排序 / 分组**（搜索框右边的两个 combobox）：排序有「按名称」「按难度」，分组有「关闭」
-  「按难度段（1-5 / 6-10 / … / 36+）」「按标题（あ/か/さ…/A-Z 0-9/その他）」。
+  「按难度段（1-5 / 6-10 / … / 36+）」「按标题（あ/か/さ…/A-Z 0-9/その他）」「按首字母
+  （A-Z / 0-9 / あ い う…，用 initialLabel()）」。
   名称排序和标题分组用的是**官方读音**（`musics.json` 的 `pronunciation`，main.cpp 里
   `loadMusicPronunciations()` 载入，`foldForSort()` 把片假名折成平假名、ASCII 转小写），
   所以「ウミユリ海底譚」落在 あ 行、片假名标题也能正确排序；没有读音的（自制谱）退回用标题
   本身当 key（汉字会被排到所有假名之后 → 落进「その他」）。
   注意 `#TITLE` 里写的是难度名（有些 unipjsk 导出写 `#TITLE "master"`）时要当空处理，
   否则列表里会出现一堆叫 "master" 的歌。
+  这两个值**存在 settings 里**（`sortMode` / `groupMode`），`drawSongSelect` 收 `int&`，
+  调用方（main.cpp）发现变了就 `persistUserData()`；分组模式会覆盖排序（见上）。
+- **段标题可点 → 索引面板**（2026-09-13 加）：分组开着时点段标题把列表换成 key 面板
+  （`indexOpen` / `indexAnim`），点 key 用 `nearestSlotOfRow()` 飞过去（落点是"该段第一首
+  居中、标题在上一行"），并关面板；面板打开时 `listHovered` 要按 `!indexOpen` 屏蔽，
+  否则背后列表会跟着动。分组关掉时面板自动关。
+- **入场/过渡动画**（2026-09-13）：`enterAnim` 靠"本函数每帧都被调用，隔 >0.5s 才又调一次
+  = 刚进来"判定（不用宿主通知），手机面板的入场就是挂在既有的"手机顶点整体旋转"那趟循环里
+  做的（位移 + 顶点 alpha），所以别在那里加 `continue` 之类的短路。选中卡片的高度按槽位
+  （`slotHeights`，索引是 `wrapSlot(slot)`）做指数趋近——`slotHeights` 必须在 `listSignature`
+  变化时 `assign(rowCount, 0)`，否则越界。
+- **选曲背景可以是桌面壁纸**（2026-09-13）：`bgStyle/bgBlur/bgDim` 三个设置项，壁纸路径见
+  `windowsWallpaperPath()`（SPI_GETDESKWALLPAPER → 注册表 HKCU\Control Panel\Desktop\WallPaper
+  → `%APPDATA%\Microsoft\Windows\Themes\TranscodedWallpaper`，都要 `GetFileAttributesW` 验存在，
+  后两个兜 slideshow/Spotlight）。解码 + 降采样 + 三次 box 模糊都在
+  `Renderer::loadBackdropTexture()`（1024 上限、滑动窗口 O(1)/像素），**只在设置开着时才加载**，
+  纹理由 main.cpp 持有并通过 `game::setSelectBackdrop(tex,w,h,dim)` 交给 SongSelect 画
+  （cover 铺满 + dim 黑罩）。模糊只在滑条松手时重算，拖动期间别重算（CPU pass）。
+
 
 ## 平台 / 输入相关的坑（2026-09-12）
 

@@ -14,9 +14,21 @@
   滚轮/拖拽/惯性/吸附都只改它；`scrolling` 期间**不高亮也不换曲**，停手 0.20s 才把中间那行提交为
   选中。**行是无限序列的 slot（`wrapSlot()` 取模），滚过最后一首接第一首**，不要加 clamp。
   点击在松手时判定、位移<8px 才算点击。触摸复用 SDL 的 touch→mouse 合成，别另写手指滚动路径。
-- **排序 / 分组**：搜索框右边两个 combobox（按名称/按难度；关闭/按难度段/按标题）。名称排序与
+- **排序 / 分组**：搜索框右边两个 combobox（按名称/按难度；关闭/按难度段/按标题/**按首字母**）。名称排序与
   标题分组用 musics.json 的 `pronunciation`（片假名折平假名），没有读音的谱退回标题本身。
-  行结构 `ListRow{header,song}` 由 `buildRows()` 生成，按 signature 缓存。
+  行结构 `ListRow{header,song}` 由 `buildRows()` 生成，按 signature 缓存。这两个值**存进 settings**
+  （`sortMode`/`groupMode`，drawSongSelect 收 `int&`，调用方变更时写盘）。
+- **段标题可点 → 索引面板**（2026-09-13）：分组开着时点段标题把列表换成 key 面板
+  （`indexOpen`/`indexAnim`，底板缩放+淡入），点 key 用 `nearestSlotOfRow()` 飞过去并关面板。
+  面板开着时要 `listHovered = !indexOpen && ...`，否则背后列表会跟着滚。
+- **选曲背景可用桌面壁纸**（2026-09-13）：`bgStyle/bgBlur/bgDim`；路径三级回退
+  （SPI_GETDESKWALLPAPER → HKCU\Control Panel\Desktop\WallPaper → Themes\TranscodedWallpaper，
+  各自验存在）；解码+降采样到 1024+三次 box 模糊在 `Renderer::loadBackdropTexture()`，
+  **只在设置开着时加载**（默认零开销），纹理由 main.cpp 持有、`setSelectBackdrop()` 交给 SongSelect，
+  cover 铺满 + dim 黑罩；模糊只在滑条松手时重算。
+- **入场/过渡动画**（2026-09-13）：手机面板入场滑入+淡入挂在"手机顶点整体旋转"那趟循环里
+  （位移+顶点 alpha）；`enterAnim` 靠"隔 >0.5s 才又调用一次 = 刚进来"判定；选中卡片高度按槽位
+  做指数趋近（`slotHeights` 在 signature 变化时必须 assign）。
 - **列表前导等级跟当前选中难度走**（`levelForDifficulty()`，缺谱面文件时回落官方定数表）；
   手机面板未选中的难度是空心圆；「歌曲等级」牌子压在等级圆上沿。
 - **trace（kind 3，绿色竹节）按"覆盖"判定**：按住那条轨道就 PERFECT，没有尾判、头不用重按
