@@ -45,3 +45,6 @@
 - 2026-09-13 设置卡片加「系统」页（失焦自动暂停 / SMTC 汇报开关），页签内容移进裁剪 child；
   选曲分组改成「按读音」（假名行级 + 英文逐字母）。多歌手切换：上游没有，官方数据
   `musicVocals.json` 有，unipjsk 只给一个版本音频——见当日日志。
+- 2026-09-13 曲名从 musics.json 回填（unipjsk 的 #TITLE 是空的）；CLEAR 改成打完血量 > 0
+  （记录点必须放在结算切换块里）；HUD 暂停键三路输入合并成 hudPausePress() 并放到
+  paused/autoPlay 检查之前。真实输入回归用 `build/winsend.exe`（PostMessage 鼠标消息）。
