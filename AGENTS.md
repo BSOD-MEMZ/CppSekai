@@ -369,20 +369,35 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
 | COMBO | 标签中心 951，数字右对齐 1225 | 同左 |
 | 继续按钮 | 320×79，mint #77EDDD，深色字 | 右端 = 面板右缘，底 1039 |
 
-**排印上的三个坑：**
+**能复用素材就别画**（用户提的，2026-09-13 改）：原素材都在 `assets/mmw/overlay/` 里，
+用上之后连形状都不用猜：
+
+| 元素 | 素材 | 用法 |
+|---|---|---|
+| 评级大字（S/A/B/C/D） | `score/rank/chr/<x>.png` | HUD 早就注册成 `rank_char_<x>`，结算牌直接画 |
+| SCORERANK 字样 | `score/rank/txt/jp/<x>.png` | 新注册成 `rank_jp_<x>`（HUD 分数面板用的 en 版不动） |
+| PERFECT～MISS | `judge/v3/<1..5>.png` | 就是判定文字那 5 张，PERFECT 自带彩虹渐变，颜色/字形全对 |
+| 结算 BGM | `assets/ost/BGM_LIVE_RESULT_2.mp3` | `AudioEngine::startResultBgm()` 流式循环 |
+
+**这些精灵自带一圈发光边**，文件尺寸比实际字形大：所以 `drawSpriteInk()` 是**按 ink 框
+定位**的（`drawSpriteInkCentered` 同理）。每个 sprite 的 ink 框都是量出来的，写死在
+`judgeSprite[]` / 调用处：
+`judge/v3/1..5` = ink 起点 +16～17、高 47～50；`rank/chr/a` = 224×266 里 solid 219×256
+（+3+2）；`rank/txt/jp/a` = 1000×130 里 solid 952×114（+26+8）。
+量法：`magick <png> -channel A -threshold 55% +channel -trim -format "%wx%h+%X+%Y" info:`
+
+**排印上的几个坑：**
 
 1. **字号必须乘 `c.scale`**。ImGui 的 `AddText(font, size, ...)` 的 size 是**像素**，不是
    虚拟单位。1920x1080 时 scale=1 看不出问题，1366x768 下所有文字会大 1.4 倍、评级字母
    直接冲出牌子——踩过一次，`game/Result.cpp` 里所有文字助手都在内部乘了 scale。
-2. **数字不要用字体，用精灵**：`score/digit/<d>.png`（33×44）是游戏自己的记分数字体，
-   `combo/p<d>.png`（116×150）是 combo 数字。结果画面里这些数字比精灵**横向压扁约 18%**
-   （`kDigitSqueeze = 0.82`）——不压的话每个数字都偏宽、行总宽对不上。
-3. **拉丁标签用哪个字体**：原版的 UI 字体「字宽/字高 ≈ 0.83」。微软雅黑 Bold 是 0.83 ✓，
-   Arial Narrow Bold 只有 0.65（太窄）。所以**标签走 `boldFont()`（msyhbd.ttc）**，
-   只有 RESULT 水印（0.64）和刻度字母用 `condensedFont()`（ARIALNB）。字宽还不够时用
-   `textTracked()` 的 tracking 补——判定行 PERFECT 是 46px + tracking 3.2，正好 169 宽。
-4. RESULT 水印是**空心描边**（白 22% 描边 3px + 内部填背景色），不是实心灰字：
-   `textOutlined()` 就是干这个的。评级字母用 `textCenteredFauxBold()` 加粗（原版是 Heavy）。
+2. **只有 8 位总得分用记分精灵**（`score/digit/<d>.png`，并横向压 18%：`kDigitSqueeze`）。
+   判定行计数和 COMBO 都是**普通字体**（原版就是 UI 字，只是大小不同），用
+   `drawFontDigits()` 画，而且要走**窄体** `condensedFont()`（数字的宽高比 0.59 才对得上
+   雅黑 Bold 的 0.62 偏宽）；文字标签才用 `boldFont()`（雅黑的字宽/字高 0.83 才和原版一致，
+   Arial Narrow Bold 的 0.65 太窄）。字宽差一点时用 `textTracked()` 的 tracking 补。
+3. RESULT 水印是**空心描边**（白 22% 描边 3px + 内部填背景色），不是实心灰字：
+   `textOutlined()` 就是干这个的。
 
 **「继续」按钮走事件层命中测试**（`resultContinueHitTest()`，和 HUD 暂停按钮、开场跳过同一套）：
 结算画面不是 ImGui 窗口，触摸事件不带可用鼠标坐标，所以鼠标分支和 `SDL_FINGERDOWN`

@@ -112,6 +112,16 @@ class AudioEngine
     void stopPreview();
     bool previewActive() const { return mPreviewActive; }
 
+    // ---- Result screen BGM ----------------------------------------------
+    // The result screen loops the game's own result track (assets/ost). It is
+    // independent of the chart music - that one has already been stopped - and
+    // streams from disk, so entering the screen costs no decode time.
+    // Safe to call every frame with the same path. A missing file reports an
+    // error and leaves the screen silent.
+    bool startResultBgm(const std::string& path, float volume, std::string& outError);
+    void stopResultBgm();
+    bool resultBgmActive() const { return mResultBgmActive; }
+
     // Hold loop SE: starts a looping voice while a hold is active, stops it
     // (with a short fade handled by calling code each frame) when not. Uses
     // the last pooled voice of the two hold-loop kinds, so one-shots are
@@ -139,6 +149,11 @@ class AudioEngine
     double mPreviewEndSec = 0.0;
     bool mPreviewLoaded = false;
     ma_sound mPreviewSound{}; // streaming; separate from the pre-decoded gameplay music
+
+    bool mResultBgmActive = false;
+    bool mResultBgmLoaded = false;
+    std::string mResultBgmPath;
+    ma_sound mResultBgm{}; // streaming, looping
 
     bool mStarted = false;
     bool mMusicStarted = false;

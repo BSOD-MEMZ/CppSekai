@@ -611,6 +611,9 @@ bool Renderer::loadHud(const std::string& overlayDir, std::string& outError)
     for (const char* rank : {"d", "c", "b", "a", "s"}) {
         add(std::string("rank_char_") + rank, std::string("score/rank/chr/") + rank + ".png");
         add(std::string("rank_txt_") + rank, std::string("score/rank/txt/en/") + rank + ".png");
+        // The result screen prints the jp wordmark (the game ships one per
+        // language); the in-game HUD score panel keeps the en one.
+        add(std::string("rank_jp_") + rank, std::string("score/rank/txt/jp/") + rank + ".png");
     }
 
     // Score digits: "0-9", "n"(?) and plus sign come in normal + shadow sets.

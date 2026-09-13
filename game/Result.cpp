@@ -42,15 +42,9 @@ constexpr ImU32 kDigitGray = IM_COL32(144, 162, 174, 255);
 constexpr ImU32 kDigitPink = IM_COL32(255, 118, 170, 255);
 constexpr ImU32 kWhite = IM_COL32(255, 255, 255, 255);
 constexpr ImU32 kNewRecord = IM_COL32(244, 143, 249, 255);
-constexpr ImU32 kRankGlyph = IM_COL32(225, 138, 255, 255);
-constexpr ImU32 kRankLabel = IM_COL32(240, 112, 240, 255);
 constexpr ImU32 kMint = IM_COL32(119, 237, 221, 255);
 constexpr ImU32 kMintHover = IM_COL32(140, 245, 231, 255);
 constexpr ImU32 kMintText = IM_COL32(47, 70, 90, 255);
-constexpr ImU32 kGreat = IM_COL32(238, 153, 255, 255);
-constexpr ImU32 kGood = IM_COL32(118, 204, 255, 255);
-constexpr ImU32 kBad = IM_COL32(120, 255, 188, 255);
-constexpr ImU32 kMiss = IM_COL32(225, 225, 225, 255);
 
 // ---------------------------------------------------------------------------
 // Layout, in 1920x1080 virtual units.
@@ -90,9 +84,10 @@ constexpr float kPlateRightInset = 55.0f;
 constexpr float kPlateTop = -20.0f;
 constexpr float kPlateBottom = 175.0f;
 constexpr float kPlateRound = 10.0f;
-constexpr float kRankGlyphSize = 205.0f;
-constexpr float kRankGlyphCenterY = 77.0f;
-constexpr float kRankLabelSize = 17.0f;
+// Ink sizes (not file sizes) of the two plate sprites, scaled to match the
+// reference: the letter 108x126, the wordmark 81x9.7.
+constexpr float kRankGlyphInkH = 126.0f;
+constexpr float kRankLabelInkH = 9.8f;
 constexpr float kRankLabelCenterY = 160.0f;
 
 // Song card.
@@ -141,16 +136,26 @@ constexpr float kTagW = 372.0f;
 constexpr float kTagH = 55.0f;
 constexpr float kTagRound = 18.0f;
 constexpr float kRowLabelX = 472.0f;
-constexpr float kRowLabelSize = 46.0f;
-constexpr float kRowLabelTracking = 3.2f;
+// The rows reuse the game's own judgement words (judge/v3/<1..5>.png, the
+// same sprites the in-game judge text uses - PERFECT even carries the rainbow
+// gradient). Only their solid ink matters: the sprites have a glow margin and
+// were measured with ImageMagick, see kJudgeSprite below.
+constexpr float kRowLabelInkH = 30.0f;
 constexpr float kRowNumberRight = 785.0f;
-constexpr float kRowNumberH = 29.7f;
+// The digits of the rows and the combo are the condensed face: its numerals
+// match the reference's ink proportions (0.59 wide/high) than the heavy CJK
+// face does (0.62).
+constexpr float kRowNumberFontSize = 40.0f;
+// Digits sit slightly above the centre of ImGui's line box; nudge them back
+// down so their ink is centred on the row.
+constexpr float kDigitBaselineNudge = 0.08f;
 constexpr float kRowNumberAdvance = 19.75f;
 constexpr float kComboLabelCenterX = 951.0f;
 constexpr float kComboLabelSize = 38.0f;
 constexpr float kComboLabelTracking = 0.5f;
+// The combo count is the plain UI face too, just larger than the row counts.
 constexpr float kComboRight = 1225.0f;
-constexpr float kComboDigitH = 52.0f;
+constexpr float kComboFontSize = 72.0f;
 constexpr float kComboAdvance = 38.33f;
 
 // The official result screen draws the score / combo numerals about 18%
@@ -222,21 +227,6 @@ ImU32 lerpColor(ImU32 a, ImU32 b, float t)
     };
     return channel(IM_COL32_R_SHIFT) | channel(IM_COL32_G_SHIFT) | channel(IM_COL32_B_SHIFT)
         | (static_cast<ImU32>(255) << IM_COL32_A_SHIFT);
-}
-
-// The PERFECT row is the only multi-colour one in the reference: mint at the
-// left, then light blue, lilac and pale yellow at the right.
-ImU32 perfectRamp(float t)
-{
-    const float u = clamp01(t);
-    if (u < 0.35f) {
-        return lerpColor(IM_COL32(126, 247, 228, 255), IM_COL32(172, 205, 255, 255), u / 0.35f);
-    }
-    if (u < 0.62f) {
-        return lerpColor(IM_COL32(172, 205, 255, 255), IM_COL32(227, 194, 251, 255),
-            (u - 0.35f) / 0.27f);
-    }
-    return lerpColor(IM_COL32(227, 194, 251, 255), IM_COL32(255, 252, 211, 255), (u - 0.62f) / 0.38f);
 }
 
 std::string utf8Glyph(const std::string& text, std::size_t& cursor)
@@ -392,28 +382,6 @@ void textOutlined(const Canvas& c, ImFont* font, float size, float vx, float cen
     c.dl->AddText(font, px, base, bgColorAt(vx, centerVy), text.c_str());
 }
 
-// Faux-bold: stamping the glyph around a small circle fattens its strokes,
-// which is how the reference's very heavy SCORERANK letter is approximated.
-void textCenteredFauxBold(const Canvas& c, ImFont* font, float size, float cx, float cy, ImU32 col,
-    const std::string& text, float thickness)
-{
-    if (font == nullptr || text.empty()) {
-        return;
-    }
-    const float px = size * c.scale;
-    const float w = font->CalcTextSizeA(px, FLT_MAX, 0.0f, text.c_str()).x;
-    const float top = textTopForCenterPx(font, px, c.y(cy), text);
-    const ImVec2 base(c.x(cx) - w * 0.5f, top);
-    const float r = c.s(thickness);
-    const int steps = 8;
-    for (int i = 0; i < steps; ++i) {
-        const float a = (static_cast<float>(i) / steps) * 6.2831853f;
-        c.dl->AddText(font, px, ImVec2(base.x + std::cos(a) * r, base.y + std::sin(a) * r), col,
-            text.c_str());
-    }
-    c.dl->AddText(font, px, base, col, text.c_str());
-}
-
 void addRoundedRect(const Canvas& c, float vx, float vy, float vw, float vh, float vround,
     ImU32 fill)
 {
@@ -440,11 +408,66 @@ void addSparkle(const Canvas& c, float vx, float vy, float radius, ImU32 col)
     c.dl->AddTriangleFilled(right, iDown, iUp, col);
 }
 
-// Draws a right-aligned run of pjsk numeral sprites (score/digit, combo/p*).
+// Draws an overlay sprite so that its *solid* (non-glowing) part lands on the
+// given box. The pjsk word/letter sprites carry a soft glow margin, so their
+// file size is bigger than the visible glyphs; the ink box of every sprite
+// used here was measured with ImageMagick (`-channel A -threshold 55% -trim`)
+// and is passed in `inkX/inkY/inKW/inkH` in the sprite's own pixels.
+void drawSpriteInk(const Canvas& c, const platform::Renderer::HudSprite* sprite, float inkX,
+    float inkY, float inkW, float inkH, float boxX, float boxCenterY, float boxH, ImU32 tint)
+{
+    if (sprite == nullptr || sprite->id == 0 || inkH <= 0.0f || boxH <= 0.0f) {
+        return;
+    }
+    const float scale = boxH / inkH;
+    const float w = static_cast<float>(sprite->width) * scale;
+    const float h = static_cast<float>(sprite->height) * scale;
+    const float x = boxX - inkX * scale;
+    const float y = boxCenterY - (inkY + inkH * 0.5f) * scale;
+    c.dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(sprite->id)),
+        c.p(x, y), c.p(x + w, y + h), ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), tint);
+}
+
+// Same, but centred horizontally on `centerX` instead of left-aligned.
+void drawSpriteInkCentered(const Canvas& c, const platform::Renderer::HudSprite* sprite, float inkX,
+    float inkY, float inkW, float inkH, float centerX, float centerY, float boxH, ImU32 tint)
+{
+    // inkW/inkH are in the sprite's own pixels, so the half width has to go
+    // through the same scale as the draw itself.
+    const float scale = boxH / inkH;
+    drawSpriteInk(c, sprite, inkX, inkY, inkW, inkH, centerX - inkW * scale * 0.5f, centerY, boxH, tint);
+}
+
+// Right-aligned run of plain-font digits. The reference's judge counts and
+// the combo read-out are the ordinary UI face (only the 8-digit score uses
+// the game's own score numerals), so they are drawn as text - leading zeros
+// gray, the rest white, each glyph centred in its own fixed slot.
+void drawFontDigits(const Canvas& c, ImFont* font, float size, const std::string& text,
+    float rightVx, float centerVy, float advance, ImU32 gray, ImU32 main, float alpha)
+{
+    const int count = static_cast<int>(text.size());
+    if (font == nullptr || count == 0) {
+        return;
+    }
+    std::size_t firstSignificant = 0;
+    while (firstSignificant < text.size() && text[firstSignificant] == '0') {
+        ++firstSignificant;
+    }
+    const float px = size * c.scale;
+    const float top = textTopForCenterPx(font, px, c.y(centerVy), text);
+    for (int i = 0; i < count; ++i) {
+        const std::string glyph(1, text[static_cast<std::size_t>(i)]);
+        const float w = font->CalcTextSizeA(px, FLT_MAX, 0.0f, glyph.c_str()).x;
+        const float slotCenterX = rightVx - (static_cast<float>(count - i) - 0.5f) * advance;
+        const ImU32 col = withAlpha(static_cast<std::size_t>(i) < firstSignificant ? gray : main, alpha);
+        c.dl->AddText(font, px, ImVec2(c.x(slotCenterX) - w * 0.5f, top), col, glyph.c_str());
+    }
+}
+
+// Draws a right-aligned run of pjsk score numerals (score/digit/*).
 // Leading zeros go gray and the significant digits take `main` - the rule the
-// reference follows for the score, the high score, the combo and every judge
-// row count. `digitH` is the glyph height, `advance` the slot pitch; both come
-// straight from the reference measurements.
+// reference follows for the score and the high score. `digitH` is the glyph
+// height, `advance` the slot pitch; both come straight from the reference.
 void drawDigitRun(const Canvas& c, platform::Renderer& renderer, const std::string& spritePrefix,
     const std::string& text, float rightVx, float centerVy, float digitH, float advance,
     ImU32 gray, ImU32 main, float alpha)
@@ -660,16 +683,17 @@ void drawResult(platform::Renderer& renderer, const ResultData& data, float elap
         const float s = 0.80f + 0.20f * pop;
         addRoundedRect(c, plateCenterX - kPlateWidth * 0.5f * s, plateCenterY - ph * 0.5f * s,
             kPlateWidth * s, ph * s, kPlateRound, withAlpha(kPlateFill, pop));
-        // scoreRankAndBar() returns a lower-case letter; the plate shows it
-        // upper-case like the official screen.
+        // Everything on the plate is the game's own art: score/rank/chr/<x>.png
+        // for the big letter (224x266, solid 219x256 at +3+2) and
+        // score/rank/txt/jp/<x>.png for the SCORERANK wordmark (1000x130,
+        // solid 952x114 at +26+8). Placed by their *ink* boxes so the glow
+        // margin does not shift them.
         const char letter = rank.rank >= 'a' && rank.rank <= 's' ? rank.rank : 'd';
-        const std::string rankText(1, static_cast<char>(std::toupper(static_cast<unsigned char>(letter))));
-        textCenteredFauxBold(c, bold, kRankGlyphSize * s, plateCenterX,
-            plateCenterY + (kRankGlyphCenterY - plateCenterY) * s, withAlpha(kRankGlyph, pop),
-            rankText, 2.2f);
-        textCentered(c, bold, kRankLabelSize * s, plateCenterX,
-            plateCenterY + (kRankLabelCenterY - plateCenterY) * s, withAlpha(kRankLabel, pop),
-            "SCORERANK");
+        const std::string rankKey(1, letter);
+        drawSpriteInkCentered(c, renderer.hud("rank_char_" + rankKey), 3.0f, 2.0f, 219.0f, 256.0f,
+            plateCenterX, plateCenterY, kRankGlyphInkH * s, withAlpha(kWhite, pop));
+        drawSpriteInkCentered(c, renderer.hud("rank_jp_" + rankKey), 26.0f, 8.0f, 952.0f, 114.0f,
+            plateCenterX, kRankLabelCenterY, kRankLabelInkH * s, withAlpha(kWhite, pop));
     }
 
     // -----------------------------------------------------------------------
@@ -711,16 +735,30 @@ void drawResult(platform::Renderer& renderer, const ResultData& data, float elap
     {
         struct Row
         {
-            const char* label;
             int value;
-            ImU32 color;
         };
         const Row rows[5] = {
-            {"PERFECT", data.perfect, kWhite},
-            {"GREAT", data.great, kGreat},
-            {"GOOD", data.good, kGood},
-            {"BAD", data.bad, kBad},
-            {"MISS", data.miss, kMiss},
+            {data.perfect},
+            {data.great},
+            {data.good},
+            {data.bad},
+            {data.miss},
+        };
+        // Solid-ink boxes of judge/v3/<1..5>.png (measured with ImageMagick),
+        // one per row: PERFECT GREAT GOOD BAD MISS.
+        struct JudgeSprite
+        {
+            float inkX;
+            float inkY;
+            float inkW;
+            float inkH;
+        };
+        const JudgeSprite judgeSprite[5] = {
+            {17.0f, 16.0f, 277.0f, 49.0f},
+            {16.0f, 16.0f, 206.0f, 49.0f},
+            {16.0f, 16.0f, 185.0f, 50.0f},
+            {17.0f, 17.0f, 128.0f, 47.0f},
+            {17.0f, 16.0f, 150.0f, 49.0f},
         };
         for (int i = 0; i < 5; ++i) {
             const float alpha = easeOutCubic(span(t, 1.85f + static_cast<float>(i) * 0.07f, 0.35f));
@@ -730,25 +768,24 @@ void drawResult(platform::Renderer& renderer, const ResultData& data, float elap
             const float cy = kRowFirstCenterY + static_cast<float>(i) * kRowPitch;
             addRoundedRect(c, kTagX, cy - kTagH * 0.5f, kTagW, kTagH, kTagRound,
                 withAlpha(kTagFill, alpha));
-            if (i == 0) {
-                textTracked(c, bold, kRowLabelSize, kRowLabelX, cy, kWhite, rows[i].label,
-                    kRowLabelTracking, perfectRamp);
-            } else {
-                textTracked(c, bold, kRowLabelSize, kRowLabelX, cy, withAlpha(rows[i].color, alpha),
-                    rows[i].label, kRowLabelTracking, nullptr);
-            }
+            // Label: the game's own judgement word (rainbow PERFECT included).
+            const JudgeSprite& js = judgeSprite[i];
+            drawSpriteInk(c, renderer.hud("judge_" + std::to_string(i + 1)), js.inkX, js.inkY,
+                js.inkW, js.inkH, kRowLabelX, cy, kRowLabelInkH, withAlpha(kWhite, alpha));
             char value[16];
             std::snprintf(value, sizeof(value), "%04d", rows[i].value);
-            drawDigitRun(c, renderer, "digit_", value, kRowNumberRight, cy, kRowNumberH,
-                kRowNumberAdvance, kDigitGray, kWhite, alpha);
+            drawFontDigits(c, cond, kRowNumberFontSize, value, kRowNumberRight,
+                cy + kRowNumberFontSize * kDigitBaselineNudge, kRowNumberAdvance, kDigitGray, kWhite,
+                alpha);
 
             if (i == 0) {
                 textCenteredTracked(c, bold, kComboLabelSize, kComboLabelCenterX, cy,
                     withAlpha(kWhite, alpha), "COMBO", kComboLabelTracking);
                 char combo[16];
                 std::snprintf(combo, sizeof(combo), "%04d", data.maxCombo);
-                drawDigitRun(c, renderer, "combo_digit_n_", combo, kComboRight, cy, kComboDigitH,
-                    kComboAdvance, kDigitGray, kWhite, alpha);
+                drawFontDigits(c, cond, kComboFontSize, combo, kComboRight,
+                    cy + kComboFontSize * kDigitBaselineNudge, kComboAdvance, kDigitGray, kWhite,
+                    alpha);
             }
         }
     }

@@ -44,6 +44,7 @@ void AudioEngine::shutdown()
         mCountdownSeLoaded = false;
     }
     stopPreview();
+    stopResultBgm();
     if (mEngineInitialized) {
         ma_engine_uninit(&mEngine);
         mEngineInitialized = false;
@@ -284,6 +285,45 @@ void AudioEngine::stopPreview()
     }
     mPreviewActive = false;
     mPreviewPath.clear();
+}
+
+bool AudioEngine::startResultBgm(const std::string& path, float volume, std::string& outError)
+{
+    if (mResultBgmActive && mResultBgmLoaded && mResultBgmPath == path) {
+        return true; // already looping exactly this track
+    }
+    stopResultBgm();
+    if (path.empty()) {
+        return true; // no result track shipped: stay silent
+    }
+    // Stream (like the song-select preview): the result screen appears right
+    // after gameplay, and a full decode would stall that transition.
+    if (ma_sound_init_from_file(&mEngine, path.c_str(), MA_SOUND_FLAG_STREAM, nullptr, nullptr,
+            &mResultBgm)
+        != MA_SUCCESS) {
+        outError = "failed to load result bgm: " + path;
+        mResultBgmPath.clear();
+        return false;
+    }
+    mResultBgmLoaded = true;
+    mResultBgmPath = path;
+    ma_sound_set_volume(&mResultBgm, volume);
+    ma_sound_set_looping(&mResultBgm, MA_TRUE);
+    ma_sound_start(&mResultBgm);
+    mResultBgmActive = true;
+    std::printf("[audio] result bgm looping %s\n", path.c_str());
+    return true;
+}
+
+void AudioEngine::stopResultBgm()
+{
+    if (mResultBgmLoaded) {
+        ma_sound_stop(&mResultBgm);
+        ma_sound_uninit(&mResultBgm);
+        mResultBgmLoaded = false;
+    }
+    mResultBgmActive = false;
+    mResultBgmPath.clear();
 }
 
 void AudioEngine::update()

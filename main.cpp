@@ -393,6 +393,7 @@ namespace
         platform::AudioEngine& audio, game::JudgementEngine& judgement, float noteSpeed, std::string& error)
     {
         audio.stopMusic();
+        audio.stopResultBgm();
         judgement.reset();
         s_hitPublishCursor = 0;
         core_api::clearHitNotes();
@@ -966,6 +967,8 @@ int main(int argc, char** argv)
     const std::string overlayDir = baseDir + "assets\\mmw\\overlay";
     const std::string fontDir = baseDir + "assets\\mmw\\font";
     const std::string seDir = baseDir + "assets\\se";
+    // The result screen loops the game's own result track (see game/Result.cpp).
+    const std::string resultBgmPath = baseDir + "assets\\ost\\BGM_LIVE_RESULT_2.mp3";
     const std::string fxDir = baseDir + "assets\\fx";
     // Where the charts live: next to the exe when packaged, otherwise the
     // project's charts/ one level up (the usual build/ layout).
@@ -2197,6 +2200,7 @@ int main(int argc, char** argv)
             } else if (state == AppState::Result || (state == AppState::Play && susPath.empty())) {
                 // back to the song list
                 audio.stopMusic();
+                audio.stopResultBgm();
                 audio.setHoldLoop(false, false, 0.0f);
                 touches.clear();
                 std::fill(std::begin(keyHeld), std::end(keyHeld), false);
@@ -2803,8 +2807,15 @@ int main(int argc, char** argv)
             renderer.renderFrame(nullptr, 0, 0.85f);
 
             const float resultElapsed = static_cast<float>(uiClock - resultShownAt);
+            // Looping result track; a no-op while it is already playing, and
+            // silence when the file is not shipped.
+            if (!audio.resultBgmActive()) {
+                audio.startResultBgm(resultBgmPath, 0.85f, error);
+                error.clear();
+            }
             game::drawResult(renderer, resultData, resultElapsed, windowW, windowH);
             if (resultContinueRequested) {
+                audio.stopResultBgm();
                 std::printf("[result] continue -> song select\n");
                 std::fflush(stdout);
                 resultContinueRequested = false;
