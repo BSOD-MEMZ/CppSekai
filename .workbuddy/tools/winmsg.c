@@ -103,11 +103,28 @@ int main(int argc, char** argv)
         std::fprintf(stderr, "window not found: %ls (pid %lu)\n", classBuffer, pid);
         return 1;
     }
-    const int ctrlId = count > 1 ? std::atoi(rest[1]) : 0;
+    // "click" takes coordinates, not a control id, so it must not be looked up.
+    const int ctrlId = count > 1 && std::strcmp(verb, "click") != 0 ? std::atoi(rest[1]) : 0;
     HWND control = ctrlId != 0 ? GetDlgItem(hwnd, ctrlId) : hwnd;
 
     if (std::strcmp(verb, "alive") == 0) {
         std::printf("window %p alive, pid %lu\n", static_cast<void*>(hwnd), pid);
+        return 0;
+    }
+    if (std::strcmp(verb, "click") == 0) {
+        // Real mouse press/release in *client* coordinates, so an ImGui-based UI
+        // (which reads SDL's mouse events rather than WM_CHAR) can be driven.
+        const int x = count > 1 ? std::atoi(rest[1]) : 0;
+        const int y = count > 2 ? std::atoi(rest[2]) : 0;
+        const LPARAM pos = MAKELPARAM(x, y);
+        std::printf("click (%d,%d) -> %p\n", x, y, static_cast<void*>(hwnd));
+        std::fflush(stdout);
+        PostMessageW(hwnd, WM_MOUSEMOVE, 0, pos);
+        PostMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, pos);
+        Sleep(60);
+        PostMessageW(hwnd, WM_LBUTTONUP, 0, pos);
+        Sleep(60);
+        std::printf("done, window alive=%d\n", IsWindow(hwnd));
         return 0;
     }
     if (control == nullptr) {
@@ -158,8 +175,6 @@ int main(int argc, char** argv)
         return 0;
     }
     if (std::strcmp(verb, "click") == 0) {
-        // Real mouse press/release in *client* coordinates, so an ImGui-based
-        // UI (which reads SDL's mouse events, not WM_CHAR) can be driven.
         const int x = count > 1 ? std::atoi(rest[1]) : 0;
         const int y = count > 2 ? std::atoi(rest[2]) : 0;
         const LPARAM pos = MAKELPARAM(x, y);
