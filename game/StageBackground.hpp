@@ -15,8 +15,10 @@ namespace game
 // `bggenDir` is the folder holding base.png / bottom.png / center_cover.png /
 // center_mask.png / side_cover.png / side_mask.png / windows.png (all the same
 // size). `jacketPath` is any image stb_image can read. Returns RGBA8 pixels
-// (outWidth x outHeight, the plate's own size) or an empty vector when the
-// assets or the jacket are missing.
+// (outWidth x outHeight) or an empty vector when the assets or the jacket are
+// missing. The plate is square (plate width x plate width, upstream
+// renderToSquareBackground): the world background quad is square, so a
+// 2048x1168 plate uploaded as-is would be stretched vertically.
 std::vector<std::uint8_t> buildStageBackground(const std::string& bggenDir,
     const std::string& jacketPath, int& outWidth, int& outHeight);
 } // namespace game

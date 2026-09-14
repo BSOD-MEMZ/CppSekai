@@ -27,8 +27,8 @@ namespace
     // Where the jacket goes, in the room plate's pixel space. Copied verbatim
     // from the upstream generator (it measures them off the plate). Only the
     // "normal" screens are used: the mirror quads target the mirrored playfield
-    // layout, which we do not have, and the whole plate is visible at once here
-    // (upstream tiles it into a square and scrolls).
+    // layout, which we do not have. The plate is wrapped into a square
+    // afterwards (toSquareBackground) - upstream does not scroll it.
     constexpr Point kSideLeft[4] = {{566, 161}, {1183, 134}, {633, 731}, {1226, 682}};
     constexpr Point kSideRight[4] = {{966, 104}, {1413, 72}, {954, 525}, {1390, 524}};
     constexpr Point kCenterNormal[4] = {{824, 227}, {1224, 227}, {833, 608}, {1216, 608}};
@@ -290,6 +290,49 @@ namespace
         overlayImage(target, projected, static_cast<int>(minX), static_cast<int>(minY));
         return target;
     }
+
+    // Tiles the composed plate into a square (upstream
+    // renderToSquareBackground in overlayBackgroundGen.ts, also present in the
+    // upstream native player as composeOverlayBackgroundV3's last step).
+    //
+    // This step is not cosmetic: the world-space background quad is a SQUARE on
+    // screen (worldBackgroundWidth/Height are both backgroundSize virtual px),
+    // and the default plate background_overlay.png is 2048x2048. The bggen plate
+    // is only 2048x1168 (aspect 1.75), so uploading it as-is stretches it
+    // vertically by 2048/1168 ~= 1.75x. Wrapping it into a square with the plate
+    // centred and the surroundings tiled keeps the pixels square.
+    Image toSquareBackground(const Image& rendered, int size)
+    {
+        const int outSize = std::max(1, size);
+        Image out = makeImage(outSize, outSize);
+        if (rendered.width <= 0 || rendered.height <= 0) {
+            return out;
+        }
+        const int centerX = (outSize - rendered.width) / 2;
+        const int centerY = (outSize - rendered.height) / 2;
+        auto wrap = [](int value, int mod) {
+            const int m = std::max(1, mod);
+            int r = value % m;
+            if (r < 0) {
+                r += m;
+            }
+            return r;
+        };
+
+        for (int y = 0; y < outSize; ++y) {
+            const int sourceY = wrap(y - centerY, rendered.height);
+            for (int x = 0; x < outSize; ++x) {
+                const int sourceX = wrap(x - centerX, rendered.width);
+                const std::size_t src = (static_cast<std::size_t>(sourceY) * rendered.width + sourceX) * 4;
+                const std::size_t dst = (static_cast<std::size_t>(y) * outSize + x) * 4;
+                for (int c = 0; c < 4; ++c) {
+                    out.pixels[dst + c] = rendered.pixels[src + c];
+                }
+            }
+        }
+        overlayImage(out, rendered, centerX, centerY);
+        return out;
+    }
 } // namespace
 
 std::vector<std::uint8_t> buildStageBackground(const std::string& bggenDir, const std::string& jacketPath,
@@ -342,8 +385,11 @@ std::vector<std::uint8_t> buildStageBackground(const std::string& bggenDir, cons
     overlayImage(base, maskedCenter, 0, 0);
     overlayImage(base, bottom, 0, 0);
 
-    outWidth = base.width;
-    outHeight = base.height;
-    return std::move(base.pixels);
+    // The world quad is square (see toSquareBackground), so the plate has to be
+    // square too or it gets stretched vertically.
+    Image square = toSquareBackground(base, base.width);
+    outWidth = square.width;
+    outHeight = square.height;
+    return std::move(square.pixels);
 }
 } // namespace game
