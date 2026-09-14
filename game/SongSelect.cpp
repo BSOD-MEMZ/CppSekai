@@ -1,6 +1,7 @@
 // CppSekai - song select screen (see SongSelect.hpp).
 #include "SongSelect.hpp"
 
+#include "Hud.hpp"
 #include "Intro.hpp"
 #include "Ui.hpp"
 
@@ -356,6 +357,7 @@ void applyScores(std::vector<ChartEntry>& entries, const std::map<std::string, S
         const auto it = scores.find(scoreKey(e));
         e.cleared = it != scores.end() && it->second.cleared;
         e.fullCombo = it != scores.end() && it->second.fullCombo;
+        e.bestScore = it != scores.end() ? it->second.bestScore : 0.0;
     }
 }
 
@@ -1080,6 +1082,94 @@ namespace
     {
         const ImVec2 ts = font->CalcTextSizeA(size, FLT_MAX, 0.0f, text);
         dl->AddText(font, size, ImVec2(center.x - ts.x * 0.5f, center.y - ts.y * 0.5f), col, text);
+    }
+
+    // Left-aligned twin of addTextCentered: `pos.x` is the left edge, `pos.y`
+    // the vertical centre (the reference song panel left-aligns its metadata).
+    void addTextLeft(ImDrawList* dl, ImFont* font, float size, const ImVec2& pos, ImU32 col, const char* text)
+    {
+        const ImVec2 ts = font->CalcTextSizeA(size, FLT_MAX, 0.0f, text);
+        dl->AddText(font, size, ImVec2(pos.x, pos.y - ts.y * 0.5f), col, text);
+    }
+
+    // Drops whole UTF-8 characters off the end until `text` + "…" fits maxW.
+    // Used by the song panel, where the title / artist / vocal lines must not
+    // run under the score-rank badge on the right.
+    std::string ellipsize(ImFont* font, float size, const std::string& text, float maxW)
+    {
+        if (maxW <= 0.0f || font->CalcTextSizeA(size, FLT_MAX, 0.0f, text.c_str()).x <= maxW) {
+            return text;
+        }
+        std::string out = text;
+        while (!out.empty()) {
+            size_t cut = out.size() - 1;
+            while (cut > 0 && (static_cast<unsigned char>(out[cut]) & 0xC0u) == 0x80u) {
+                --cut;
+            }
+            out.erase(cut);
+            const std::string candidate = out + "…";
+            if (font->CalcTextSizeA(size, FLT_MAX, 0.0f, candidate.c_str()).x <= maxW) {
+                return candidate;
+            }
+        }
+        return "…";
+    }
+
+    // Chart level fed to the score-rank thresholds. Same priority as the play
+    // screen (main.cpp): the official level table first, then the chart's own
+    // #PLAYLEVEL / sidecar, then the upstream overlay player's hard-coded 26.
+    // Keeping it identical is what makes the badge agree with the SCORE RANK
+    // the HUD shows during the run.
+    float chartRatingFor(const ChartEntry& entry)
+    {
+        int level = musicLevel(entry.musicId, entry.difficulty);
+        if (level <= 0) {
+            level = std::atoi(entry.level.c_str());
+        }
+        return level > 0 ? static_cast<float>(level) : 26.0f;
+    }
+
+    // The best-score badge the reference phone panel puts on the right of the
+    // song info: a translucent white disc with the game's own
+    // score/rank/chr/<x>.png letter in it (d/c/b/a/s, each PNG pre-coloured),
+    // or "--" while the chart has no record at all.
+    void drawBestScoreBadge(ImDrawList* dl, platform::Renderer& renderer, ImFont* font,
+        double bestScore, float chartRating, float diameter, float centerX, float centerY)
+    {
+        const ImVec2 center(centerX, centerY);
+        const float radius = diameter * 0.5f;
+        const bool played = bestScore > 0.0;
+        // Measured off the reference: white over the panel at ~32% (a plain
+        // white disc reads the same there), dimmer when there is no record.
+        dl->AddCircleFilled(center, radius, played ? IM_COL32(255, 255, 255, 82) : IM_COL32(255, 255, 255, 52), 48);
+
+        if (!played) {
+            const char* dashes = "--";
+            const float size = diameter * 0.5f;
+            const ImVec2 ts = font->CalcTextSizeA(size, FLT_MAX, 0.0f, dashes);
+            dl->AddText(font, size, ImVec2(center.x - ts.x * 0.5f, center.y - ts.y * 0.5f),
+                IM_COL32(226, 226, 240, 200), dashes);
+            return;
+        }
+
+        const ScoreRank rank = scoreRankAndBar(bestScore, chartRating);
+        const char letter = rank.rank >= 'a' && rank.rank <= 's' ? rank.rank : 'd';
+        const auto* glyph = renderer.hud(std::string("rank_char_") + letter);
+        if (glyph == nullptr || glyph->id == 0) {
+            return;
+        }
+        // score/rank/chr/<x>.png is 224x266 with the letter's ink 185x242 at
+        // +20+16; the reference draws that ink 0.686 of the badge across, so
+        // the whole PNG is drawn a little larger and shifted by the ink offset.
+        constexpr float kInkH = 242.0f / 266.0f;
+        constexpr float kInkCx = 112.5f / 224.0f;
+        constexpr float kInkCy = 137.0f / 266.0f;
+        const float imgH = diameter * 0.686f / kInkH;
+        const float imgW = imgH * (static_cast<float>(glyph->width) / static_cast<float>(glyph->height));
+        const float imgCx = center.x + (0.5f - kInkCx) * imgW;
+        const float imgCy = center.y + (0.5f - kInkCy) * imgH;
+        dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(glyph->id)),
+            ImVec2(imgCx - imgW * 0.5f, imgCy - imgH * 0.5f), ImVec2(imgCx + imgW * 0.5f, imgCy + imgH * 0.5f));
     }
 
     // Cached textures from assets/select (phone frame, buttons, indicators).
@@ -2346,13 +2436,32 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         // Title / artist / vocal. Everything below is laid out in flow: the
         // vocal chip row is conditional, and the old fixed fractions let the
         // difficulty circles land on top of it.
+        //
+        // The metadata is left-aligned to the panel's content box (the same box
+        // the difficulty row below occupies) and the song's best-score rank
+        // badge sits on the right of the block - that is how the reference
+        // phone panel lays this area out. The lines are clipped to the room
+        // left over for them so they can never run under the badge.
+        //
+        // Panel content width: the difficulty pads below use it, and the
+        // credits / chips have to stay inside it (a 5-singer セカイver line
+        // is easily wider than the phone screen).
+        const float panelW = 336.0f * k;
+        const float contentL = cx - panelW * 0.5f;
+        const float contentR = cx + panelW * 0.5f;
+        const float badgeD = 64.0f * k;
+        const float textMaxW = contentR - contentL - badgeD - 12.0f * k;
+
         float ty = j0.y + jh + phoneH * 0.022f;
+        const float metaTop = ty;
         if (title != nullptr) {
-            addTextCentered(dl, title, 26.0f * k, ImVec2(cx, ty + 13.0f * k), white, group.title.c_str());
+            const std::string text = ellipsize(title, 26.0f * k, group.title, textMaxW);
+            addTextLeft(dl, title, 26.0f * k, ImVec2(contentL, ty + 13.0f * k), white, text.c_str());
         }
         ty += 46.0f * k;
         if (!item.artist.empty()) {
-            addTextCentered(dl, body, 17.0f * k, ImVec2(cx, ty), grayText, item.artist.c_str());
+            const std::string text = ellipsize(body, 17.0f * k, item.artist, textMaxW);
+            addTextLeft(dl, body, 17.0f * k, ImVec2(contentL, ty), grayText, text.c_str());
             ty += 31.0f * k;
         }
         // Vocal versions: only when the song actually ships more than one
@@ -2390,29 +2499,31 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
                 }
             }
 
-            // Panel content width: the difficulty pads below use it, and the
-            // credits / chips have to stay inside it (a 5-singer セカイver line
-            // is easily wider than the phone screen).
-            const float panelW = 336.0f * k;
+            // The "Vo." line shrinks first and is then ellipsized, so a
+            // 5-singer セカイver line still fits next to the badge.
             if (!vocalText.empty()) {
                 std::string vo = "Vo. " + vocalText;
                 float voSize = 15.0f * k;
                 ImVec2 ts = body->CalcTextSizeA(voSize, FLT_MAX, 0.0f, vo.c_str());
-                if (ts.x > panelW) {
-                    voSize = voSize * (panelW / ts.x);
-                    ts = body->CalcTextSizeA(voSize, FLT_MAX, 0.0f, vo.c_str());
+                if (ts.x > textMaxW) {
+                    voSize *= textMaxW / ts.x;
                 }
-                while (ts.x > panelW && vo.size() > 4) {
-                    vo.erase(vo.size() - 2, 1); // drop a char, keep the ellipsis
-                    ts = body->CalcTextSizeA(voSize, FLT_MAX, 0.0f, (vo + "…").c_str());
-                    if (ts.x <= panelW) {
-                        vo += "…";
-                        break;
-                    }
-                }
-                addTextCentered(dl, body, voSize, ImVec2(cx, ty), grayText, vo.c_str());
+                vo = ellipsize(body, voSize, vo, textMaxW);
+                addTextLeft(dl, body, voSize, ImVec2(contentL, ty), grayText, vo.c_str());
                 ty += 29.0f * k;
             }
+            // Best-score rank badge: right-aligned to the content box and
+            // centred on the metadata block that just ended. In the reference
+            // it straddles the artist and Vo. rows, which is where centring on
+            // the whole block lands anyway. Clamped so it can never reach down
+            // into the vocal chip row (only possible for a song that has no
+            // artist and no singers line).
+            const float blockMid = (metaTop + ty) * 0.5f;
+            const float badgeCy = versions.size() > 1
+                ? std::min(blockMid, ty - badgeD * 0.5f - 4.0f * k)
+                : blockMid;
+            drawBestScoreBadge(dl, renderer, body, item.bestScore, chartRatingFor(item), badgeD,
+                contentR - badgeD * 0.5f, badgeCy);
 
             if (versions.size() > 1) {
                 // Chip row, centred. Width comes from the label so "バーチャル"

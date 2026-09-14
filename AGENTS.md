@@ -373,6 +373,19 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
 - 前导等级圆显示的是**当前选中难度**的定数（`levelForDifficulty()`）：该难度没有谱面文件时
   回落到官方 `music-levels.json` 表，所以切难度时整列数字会一起变，颜色也跟着变
   （`kDiffColors[diffIndex]`）。手机面板里未选中的难度是**空心圆**（无底色填充）。
+- **手机面板的元数据块是左对齐的**（2026-09-14 按官方截图改）：曲名 / 歌手 / `Vo.` 三行
+  统一从内容框左缘 `contentL = cx - panelW/2` 起排，和下面那排难度圆的左缘对齐
+  （`addTextLeft()`；原来是 `addTextCentered()`）。右侧放**最好成绩的评级徽章**
+  （`drawBestScoreBadge()`）：半透明白圆盘（实测原版约 32% 白）+ 游戏自带的
+  `score/rank/chr/<x>.png` 字母（224x266，字形实心 185x242 在 +20+16，
+  原版把字形画到徽章直径的 0.686）。直径 `64*k`（≈ 难度圆的 1.06 倍，量出来的），
+  右缘贴内容框右缘、竖直居中于元数据块——原版就是压着歌手/`Vo.` 两行中间，
+  而按整块居中算出来的落点和它只差几像素。**没打过**（`bestScore <= 0`）时画暗一档的圆盘 + `--`。
+  徽章取的是**当前选中难度**那条谱面的最好成绩，`ChartEntry::bestScore` 由 `applyScores()`
+  从 `userdata.json` 灌进来（`cleared`/`fullCombo` 之外新增的第三个字段）；
+  等级用 `chartRatingFor()`，取值顺序**故意和 main.cpp 的 `setChartRating()` 一致**
+  （官方等级表 → 谱面自带 level → 26），这样徽章和演奏中 HUD 的 SCORE RANK 永远一致。
+  三行文字都用 `ellipsize()` 截到 `textMaxW = 内容框宽 - 徽章直径 - 12k`，绝不会钻到徽章底下。
 - **排序 / 分组**（搜索框右边的两个 combobox）：排序有「按名称」「按难度」，分组有「关闭」
   「按难度段（1-5 / 6-10 / … / 36+）」「按读音（あ/か/さ…/A-Z 逐字母/#）」「按首字
   （A-Z / 0-9 / あ い う…，用 initialLabel()）」。

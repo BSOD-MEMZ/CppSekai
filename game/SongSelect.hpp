@@ -38,9 +38,12 @@ struct ChartEntry
     // Set from the sidecar JSON ("fillerSec" / "offset"), otherwise detected.
     double audioStartSec = 0.0;
 
-    // Best result for this chart, loaded from scores.json next to the exe.
+    // Best result for this chart, loaded from userdata.json next to the exe.
     bool cleared = false;
     bool fullCombo = false;
+    // Highest score reached on this chart, 0 when it was never cleared. The
+    // song select turns it into the score-rank badge next to the song info.
+    double bestScore = 0.0;
 };
 
 // Persisted play results, keyed by the chart's file name (e.g.
