@@ -1641,10 +1641,13 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     if (groupMode < 0 || groupMode >= kGroupCount) {
         groupMode = 0;
     }
+    const float comboW = 168.0f * k;
+    const float comboX0 = listX + searchW + 18.0f * k;
+    const float comboGap = 12.0f * k;
+    const float headerRowY = listTop + 4.0f * k;
     {
         const char* kSortLabels[2] = {"按名称", "按难度"};
         const char* kGroupLabels[kGroupCount] = {"关闭", "按难度段", "按读音", "按首字"};
-        const float comboW = 168.0f * k;
         const std::string sortPreview = std::string("排序：") + kSortLabels[sortMode];
         const std::string groupPreview = std::string("分组：") + kGroupLabels[groupMode];
         ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(58, 52, 92, 235));
@@ -1658,7 +1661,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 12.0f * k);
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(14.0f * k, 8.0f * k));
         ImGui::PushFont(body, 17.0f * k);
-        ImGui::SetCursorScreenPos(ImVec2(listX + searchW + 18.0f * k, listTop + 4.0f * k));
+        ImGui::SetCursorScreenPos(ImVec2(comboX0, headerRowY));
         ImGui::SetNextItemWidth(comboW);
         if (ImGui::BeginCombo("##sortby", sortPreview.c_str(), ImGuiComboFlags_HeightSmall)) {
             for (int i = 0; i < 2; ++i) {
@@ -1668,7 +1671,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             }
             ImGui::EndCombo();
         }
-        ImGui::SetCursorScreenPos(ImVec2(listX + searchW + 30.0f * k + comboW, listTop + 4.0f * k));
+        ImGui::SetCursorScreenPos(ImVec2(comboX0 + comboW + comboGap, headerRowY));
         ImGui::SetNextItemWidth(comboW);
         if (ImGui::BeginCombo("##groupby", groupPreview.c_str(), ImGuiComboFlags_HeightSmall)) {
             for (int i = 0; i < kGroupCount; ++i) {
@@ -1681,6 +1684,48 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         ImGui::PopFont();
         ImGui::PopStyleVar(2);
         ImGui::PopStyleColor(8);
+    }
+
+    // Rescan button, in the same row as the selectors. F5 has always done this
+    // but nothing on screen said so; a chart dropped into charts/ while the
+    // game is running is exactly what a player reaches for.
+    {
+        const float rowH = 36.0f * k;
+        const float btnW = 104.0f * k;
+        const float btnX = comboX0 + (comboW + comboGap) * 2.0f + 4.0f * k;
+        const ImU32 fg = IM_COL32(238, 238, 248, 255);
+        ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(58, 52, 92, 235));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(76, 68, 118, 245));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(90, 80, 138, 255));
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, rowH * 0.5f);
+        ImGui::SetCursorScreenPos(ImVec2(btnX, headerRowY));
+        if (ImGui::Button("##rescan", ImVec2(btnW, rowH))) {
+            action = SelectRescan;
+        }
+        const bool hovered = ImGui::IsItemHovered();
+        ImGui::PopStyleVar();
+        ImGui::PopStyleColor(3);
+        if (hovered) {
+            ImGui::SetTooltip("重新扫描 charts/ 目录（快捷键 F5）");
+        }
+
+        // Circular arrow, drawn by hand so no icon asset is needed: an open
+        // ring plus a solid head at its end.
+        const ImVec2 c(btnX + 24.0f * k, headerRowY + rowH * 0.5f);
+        const float radius = 8.0f * k;
+        dl->PathArcTo(c, radius, 0.45f, 5.10f, 28);
+        dl->PathStroke(fg, 0, 2.0f * k);
+        const float headAngle = 5.10f;
+        const ImVec2 tip(c.x + std::cos(headAngle) * (radius + 3.5f * k),
+            c.y + std::sin(headAngle) * (radius + 3.5f * k));
+        const ImVec2 base(c.x + std::cos(headAngle) * (radius - 3.0f * k),
+            c.y + std::sin(headAngle) * (radius - 3.0f * k));
+        const ImVec2 wingA(base.x + std::cos(headAngle + 2.3f) * 5.0f * k,
+            base.y + std::sin(headAngle + 2.3f) * 5.0f * k);
+        const ImVec2 wingB(base.x + std::cos(headAngle - 2.3f) * 5.0f * k,
+            base.y + std::sin(headAngle - 2.3f) * 5.0f * k);
+        dl->AddTriangleFilled(tip, wingA, wingB, fg);
+        addTextLeft(dl, body, 17.0f * k, ImVec2(c.x + 16.0f * k, c.y), fg, "刷新");
     }
 
     // Groups matching the search filter.

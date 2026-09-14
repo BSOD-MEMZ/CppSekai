@@ -66,6 +66,10 @@
 - 2026-09-13 歌曲专属舞台背景 `game/StageBackground.cpp`（移植上游 overlayBackgroundGen.ts，
   开歌生成一次 ~1.1s，`--dump-stage-bg` 导出）；选曲预览音乐跟着演唱版本走（切版本接着
   当前位置播）。
+- 2026-09-14 三条：**文本/路径编码规则**（Windows 上 `fs::path` 窄端 = 本地 ACP，别拿它转 UTF-8，
+  下载器搜索框打假名崩就是这个；游戏侧 `SongSelect.cpp` 还有同样隐患没清）；
+  **贴图尺寸策略**（`loadTextureFromFile` 的 maxDim/cropHeight，素材不动，`CPSEKAI_TEX_RAW=1` 关掉做 A/B）；
+  选曲列表头部加了刷新按钮（= F5）。细节都在 AGENTS.md。
 - 2026-09-14 舞台背景两处补齐：合成完必须 `toSquareBackground()` 铺成 2048x2048
   （上游 `renderToSquareBackground`）——背景四边形在屏幕上是正方形，而 bggen 板只有
   2048x1168，直接上传会被纵向拉 1.75 倍；以及补上 `MORPH_*_MIRROR` 那组下半部分屏的

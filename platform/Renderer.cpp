@@ -136,6 +136,26 @@ namespace
 
     constexpr int FLOATS_PER_VERTEX = 9;
 
+    // ---------------------------------------------------------------------
+    // Texture size policy (2026-09-14). The game's own art is authored for
+    // phones at 2-4x what this renderer ever draws, and the decode buffer plus
+    // the GL allocation dominate the process's memory. Each value is the
+    // longest side kept; shrinking is by whole powers of two, so nothing is
+    // resampled at a non-integer ratio. `loadTextureFromFile` applies them
+    // after decode - the assets on disk are never modified.
+    // ---------------------------------------------------------------------
+    // stage.png is 2048x2840 but the quad only samples its top 2048x1176 rows
+    // (the sprite rect in buildStaticVertices); the rest is pure waste.
+    constexpr int kStageKeepRows = 1176;
+    // 2048x2048 room plate, washed out behind the stage and the note lane.
+    constexpr int kBackgroundMaxDim = 1024;
+    // Soft additive hit glow - resolution is invisible.
+    constexpr int kEffectMaxDim = 512;
+    // Full-screen gradient for the song-select / opening card.
+    constexpr int kGradientMaxDim = 640;
+    // 366x488 life digits, drawn at roughly 30px.
+    constexpr int kLifeDigitMaxDim = 128;
+
     constexpr int BLEND_NORMAL = 0;
     constexpr int BLEND_ADDITIVE = 1;
 
@@ -331,7 +351,71 @@ bool Renderer::createPrograms(std::string& outError)
     return mEffectProgram != 0;
 }
 
-Renderer::Texture Renderer::loadTextureFromFile(const std::string& path, std::string& outError)
+namespace
+{
+    // CPSEKAI_TEX_RAW=1 keeps every texture at its decoded size. A/B switch for
+    // the size policy (same binary, two runs) and an escape hatch if some piece
+    // of art ever comes out too soft.
+    bool keepRawTextures()
+    {
+        static const bool raw = std::getenv("CPSEKAI_TEX_RAW") != nullptr;
+        return raw;
+    }
+
+    // Running total handed to GL, so the effect of the size policy can be read
+    // off the log instead of guessed from the process's RSS.
+    std::size_t& textureBytes()
+    {
+        static std::size_t total = 0;
+        return total;
+    }
+
+    // Alpha-weighted box downscale (premultiplied, so antialiased edges do not
+    // darken) by an integer factor. Returns empty when the factor is not whole,
+    // which is all the caller ever asks for: limits are powers of two.
+    std::vector<unsigned char> shrinkRgba(const unsigned char* src, int srcW, int srcH, int outW, int outH)
+    {
+        std::vector<unsigned char> out;
+        if (src == nullptr || srcW <= 0 || srcH <= 0 || outW <= 0 || outH <= 0
+            || srcW % outW != 0 || srcH % outH != 0) {
+            return out;
+        }
+        const int fx = srcW / outW;
+        const int fy = srcH / outH;
+        const int count = fx * fy;
+        out.assign(static_cast<std::size_t>(outW) * outH * 4, 0);
+        for (int y = 0; y < outH; ++y) {
+            unsigned char* dst = out.data() + static_cast<std::size_t>(y) * outW * 4;
+            for (int x = 0; x < outW; ++x) {
+                unsigned acc[4] = {0, 0, 0, 0}; // premultiplied rgb, then alpha
+                for (int sy = 0; sy < fy; ++sy) {
+                    const unsigned char* row =
+                        src + (static_cast<std::size_t>(y * fy + sy) * srcW + x * fx) * 4;
+                    for (int sx = 0; sx < fx; ++sx) {
+                        const unsigned alpha = row[sx * 4 + 3];
+                        acc[0] += row[sx * 4 + 0] * alpha / 255u;
+                        acc[1] += row[sx * 4 + 1] * alpha / 255u;
+                        acc[2] += row[sx * 4 + 2] * alpha / 255u;
+                        acc[3] += alpha;
+                    }
+                }
+                const unsigned alpha = acc[3] / static_cast<unsigned>(count);
+                if (alpha == 0) {
+                    continue; // already zeroed
+                }
+                unsigned char* pixel = dst + x * 4;
+                pixel[0] = static_cast<unsigned char>(acc[0] / static_cast<unsigned>(count) * 255u / alpha);
+                pixel[1] = static_cast<unsigned char>(acc[1] / static_cast<unsigned>(count) * 255u / alpha);
+                pixel[2] = static_cast<unsigned char>(acc[2] / static_cast<unsigned>(count) * 255u / alpha);
+                pixel[3] = static_cast<unsigned char>(alpha);
+            }
+        }
+        return out;
+    }
+} // namespace
+
+Renderer::Texture Renderer::loadTextureFromFile(const std::string& path, std::string& outError,
+    int maxDim, int cropHeight)
 {
     Texture texture;
     int channels = 0;
@@ -341,14 +425,64 @@ Renderer::Texture Renderer::loadTextureFromFile(const std::string& path, std::st
         return texture;
     }
 
+    // The game's own art is much bigger than what is ever drawn: a 366x488 life
+    // digit is shown at ~30px, and stage.png carries 1664 rows no quad samples.
+    // The decode buffer plus the GL allocation are a large part of the process's
+    // memory, so keep only what the renderer can use. Nothing is written back to
+    // the assets, so the originals stay pristine.
+    if (keepRawTextures()) {
+        maxDim = 0;
+        cropHeight = 0;
+    }
+
+    // 1. Crop: everything below `cropHeight` is never sampled, so drop it. This
+    //    row copy is exact - the UVs are derived from the texture size, and the
+    //    sprite rects the renderer uses already point at the kept region.
+    const int fullHeight = texture.height;
+    const int keepHeight = cropHeight > 0 ? std::min(cropHeight, fullHeight) : fullHeight;
+    std::vector<stbi_uc> cropped;
+    const stbi_uc* source = pixels;
+    int sourceWidth = texture.width;
+    int sourceHeight = fullHeight;
+    if (keepHeight != fullHeight) {
+        cropped.assign(pixels, pixels + static_cast<std::size_t>(texture.width) * keepHeight * 4);
+        source = cropped.data();
+        sourceHeight = keepHeight;
+    }
+
+    // 2. Downscale by the largest whole power of two that still leaves the
+    //    longer side at or above `maxDim`: the aspect ratio stays exact and the
+    //    filter is a plain average instead of a resample.
+    int outWidth = sourceWidth;
+    int outHeight = sourceHeight;
+    std::vector<stbi_uc> scaled;
+    if (maxDim > 0) {
+        int factor = 1;
+        while (std::max(sourceWidth, sourceHeight) / (factor * 2) >= maxDim
+            && sourceWidth % (factor * 2) == 0 && sourceHeight % (factor * 2) == 0) {
+            factor *= 2;
+        }
+        if (factor > 1) {
+            scaled = shrinkRgba(source, sourceWidth, sourceHeight, sourceWidth / factor, sourceHeight / factor);
+            if (!scaled.empty()) {
+                outWidth = sourceWidth / factor;
+                outHeight = sourceHeight / factor;
+            }
+        }
+    }
+    const stbi_uc* upload = scaled.empty() ? source : scaled.data();
+    texture.width = outWidth;
+    texture.height = outHeight;
+
     glGenTextures(1, &texture.id);
     glBindTexture(GL_TEXTURE_2D, texture.id);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, texture.width, texture.height, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, texture.width, texture.height, 0, GL_RGBA, GL_UNSIGNED_BYTE, upload);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glBindTexture(GL_TEXTURE_2D, 0);
+    textureBytes() += static_cast<std::size_t>(texture.width) * texture.height * 4;
     stbi_image_free(pixels);
     return texture;
 }
@@ -497,13 +631,15 @@ bool Renderer::loadSplash(const std::string& assetDir, std::string& outError){
     // Only what drawStaticScene() needs for the very first frame.
     mDefaultBackgroundPath = assetDir + "/background_overlay.png";
     if (mBackground.id == 0) {
-        mBackground = loadTextureFromFile(mDefaultBackgroundPath, outError);
+        mBackground = loadTextureFromFile(mDefaultBackgroundPath, outError, kBackgroundMaxDim);
         if (mBackground.id == 0) {
             return false;
         }
     }
     if (mStage.id == 0) {
-        mStage = loadTextureFromFile(assetDir + "/stage.png", outError);
+        // Only the top `kStageKeepRows` rows are sampled, and the UVs are
+        // derived from the texture size, so cropping keeps the mapping exact.
+        mStage = loadTextureFromFile(assetDir + "/stage.png", outError, 0, kStageKeepRows);
         if (mStage.id == 0) {
             return false;
         }
@@ -517,13 +653,15 @@ bool Renderer::loadAssets(const std::string& assetDir, std::string& outError)
 {
     mDefaultBackgroundPath = assetDir + "/background_overlay.png";
     if (mBackground.id == 0) {
-        mBackground = loadTextureFromFile(mDefaultBackgroundPath, outError);
+        mBackground = loadTextureFromFile(mDefaultBackgroundPath, outError, kBackgroundMaxDim);
         if (mBackground.id == 0) {
             return false;
         }
     }
     if (mStage.id == 0) {
-        mStage = loadTextureFromFile(assetDir + "/stage.png", outError);
+        // Only the top `kStageKeepRows` rows are sampled, and the UVs are
+        // derived from the texture size, so cropping keeps the mapping exact.
+        mStage = loadTextureFromFile(assetDir + "/stage.png", outError, 0, kStageKeepRows);
         if (mStage.id == 0) {
             return false;
         }
@@ -540,12 +678,15 @@ bool Renderer::loadAssets(const std::string& assetDir, std::string& outError)
     if (mTouchLine.id == 0) {
         return false;
     }
-    mEffect = loadTextureFromFile(assetDir + "/effect.png", outError);
+    mEffect = loadTextureFromFile(assetDir + "/effect.png", outError, kEffectMaxDim);
     if (mEffect.id == 0) {
         return false;
     }
 
     buildStaticVertices();
+    std::printf("[tex] %.1f MB uploaded%s\n", textureBytes() / 1048576.0,
+        keepRawTextures() ? " (raw, CPSEKAI_TEX_RAW=1)" : "");
+    std::fflush(stdout);
     return true;
 }
 
@@ -576,13 +717,13 @@ bool Renderer::loadHud(const std::string& overlayDir, std::string& outError)
         std::fclose(probe);
         return true;
     };
-    auto add = [&](const std::string& key, const std::string& relativePath) {
+    auto add = [&](const std::string& key, const std::string& relativePath, int maxDim = 0) {
         std::string path = optDir + "/" + relativePath;
         if (!fileExists(path)) {
             path = overlayDir + "/" + relativePath;
         }
         const auto t0 = std::chrono::steady_clock::now();
-        const Texture texture = loadTextureFromFile(path, outError);
+        const Texture texture = loadTextureFromFile(path, outError, maxDim);
         const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
         static const bool traceTextures = std::getenv("CPSEKAI_ASSET_TIMING") != nullptr;
         if (traceTextures && ms > 15.0) {
@@ -623,8 +764,8 @@ bool Renderer::loadHud(const std::string& overlayDir, std::string& outError)
     for (int d = 0; d <= 9; ++d) {
         add("digit_" + std::to_string(d), "score/digit/" + std::to_string(d) + ".png");
         add("digit_s" + std::to_string(d), "score/digit/s" + std::to_string(d) + ".png");
-        add("life_digit_" + std::to_string(d), "life/v3/digit/" + std::to_string(d) + ".png");
-        add("life_digit_s" + std::to_string(d), "life/v3/digit/s" + std::to_string(d) + ".png");
+        add("life_digit_" + std::to_string(d), "life/v3/digit/" + std::to_string(d) + ".png", kLifeDigitMaxDim);
+        add("life_digit_s" + std::to_string(d), "life/v3/digit/s" + std::to_string(d) + ".png", kLifeDigitMaxDim);
         add("combo_digit_n_" + std::to_string(d), "combo/p" + std::to_string(d) + ".png");
         add("combo_digit_b_" + std::to_string(d), "combo/b" + std::to_string(d) + ".png");
     }
@@ -634,8 +775,8 @@ bool Renderer::loadHud(const std::string& overlayDir, std::string& outError)
     add("digit_n", "score/digit/n.png");
     add("digit_sn", "score/digit/sn.png");
 
-    add("effect_hit", "../effect.png");
-    add("start_grad", "start_grad.png");
+    add("effect_hit", "../effect.png", kEffectMaxDim);
+    add("start_grad", "start_grad.png", kGradientMaxDim);
 
     outError.clear();
     return !mHudSprites.empty();

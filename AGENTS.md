@@ -68,6 +68,25 @@ main.cpp          # SDL2 窗口、事件循环、输入映射、ImGui HUD、截�
   全局 `gLog` 是日志字符串数组，控件句柄得另起名（`gLogList`）。
   `--list` / `--download` 是给脚本和回归用的无界面模式。日志同时进 stdout 和 `chartdl.log`
   （GUI 从资源管理器启动时 stdout 是黑洞）。
+  **文本一律走 `toUtf8()` / `windowTextW()`，路径一律留 `std::wstring`**（2026-09-14 修崩溃）：
+  之前 `windowText()` 把用户输的 UTF-8 塞进 `fs::path` 再 `.string()` 取回来，而 Windows 上
+  `fs::path` 内部是宽字符、窄的那一端是**本地 ANSI 代码页**（日文机 Shift-JIS / 中文机 cp936）。
+  在搜索框里打一个假名必崩：假名 UTF-8 是 `E3 81 82`，前两字节正好是合法 SJIS 双字节字、
+  第三字节是孤立引导字节 → libc++ 抛 `filesystem_error: __char_to_wide: Illegal byte sequence`
+  → 没人接 → `std::terminate` → `abort()`。WER 里长这样：`chartdl.exe` / `ucrtbase.dll` /
+  `0xc0000409` / 异常数据 `7`（FAST_FAIL_FATAL_APP_EXIT）/ `EventType=BEX64`。
+  同样的坑：`path.string()`、`fs::path(<UTF-8 窄串>)`。**别用** `.string()`，要文本用
+  `pathText()`（= `toUtf8(path.native())`）。**游戏本体还没清干净**：`game/SongSelect.cpp` 仍在用
+  `path.string()` / `fs::path(窄串)` 来回倒 `susPath`，谱面文件名里一旦有 ACP 表示不了的字符
+  （中文/emoji 的自制谱、非日文区路径），扫描时会抛同一个 `filesystem_error` → 启动即崩。
+  要修得先决定 `ChartEntry::susPath` 的编码约定（现在是"扫描时 ACP 窄串、用时再 ACP 转回去"）。
+- `.workbuddy/tools/winmsg.c` → `build/winmsg.exe`：按窗口类名（+ `--pid` 指定实例）给控件
+  发消息的无头驱动小工具，也是上面那个崩溃的复现器。用法：
+  `winmsg.exe <class> list|alive|gettext <id>|settext <id> <utf8>|char <id> <hex>|click <x> <y> [--pid N]`。
+  编译（不进 build.sh）：
+  `zig c++ -x c++ -std=c++20 -O2 -s .workbuddy/tools/winmsg.c -luser32 -limm32 -o build/winmsg.exe`。
+  注意 `GetWindowText` **读不到别的进程的控件文本**（跨进程只拿得到窗口标题），别拿 `gettext`
+  当功能验证；`char` 走的是 WM_CHAR，ImGui 那类读 SDL 事件的界面要用 `click`。
 - `.workbuddy/tools/gen_music_vocals.py` → `music-vocals.json`：从官方的 musicVocals +
   gameCharacters 表生成演唱版本表（`asset` 就是 unipjsk 的音频目录名）。
 - `.workbuddy/tools/winsend.c` → `build/winsend.exe`：按窗口标题 PostMessage 真鼠标消息，
@@ -130,6 +149,18 @@ bash build.sh          # 仅需 Git Bash；产物 build/cppsekai.exe + SDL2.dll 
   HUD 贴图和 CJK 字体图集。**`loadIntroFonts()` 之后必须 `ImGui_ImplOpenGL3_DestroyDeviceObjects()`**，
   否则 GL 后端还持有 splash 用的默认字体纹理，字形 UV 错位、全部 UI 文字花屏。各阶段耗时用
   `[boot]` 日志查看；贴图级耗时设 `CPSEKAI_ASSET_TIMING=1`。
+- **贴图尺寸策略**（2026-09-14）：官方素材是按手机 2~4 倍分辨率出的，直接 `stbi_load` 后原样
+  上传，解码缓冲 + GL 分配就占掉进程内存的一大块。`Renderer::loadTextureFromFile(path, err,
+  maxDim, cropHeight)` 在解码后按**整二次幂**缩（比例精确、滤波就是平均值）或裁掉用不到的行；
+  数值集中在 `Renderer.cpp` 顶部的 `kStageKeepRows` / `kBackgroundMaxDim` / `kEffectMaxDim` /
+  `kGradientMaxDim` / `kLifeDigitMaxDim` 一处。**素材文件不动**，所以换台机器/重下资源照样能用。
+  - `stage.png` 是 2048x2840，但 `buildStaticVertices` 的 sprite 矩形只取上面 2048x1176 ——
+    `kStageKeepRows` 就是裁这个（UV 是按纹理尺寸算的，裁完映射不变），省 13MB。
+  - 上传总量记在 `[tex] N MB uploaded` 这行日志里；`CPSEKAI_TEX_RAW=1` 关掉全部压缩（同一个
+    二进制跑两次就是干净的 A/B，进程内存实测 -65MB 左右）。
+  - 自动化对照：**两次独立运行的截图本身就有噪声**（音符区 raw-vs-raw 平均差 41、raw-vs-opt 54，
+    全图 20.4 vs 18.8），所以别拿单帧 diff 当回归标准；看 HUD / LIFE / COMBO 这类确定性区域
+    （实测逐像素一致）就够了。
 - **图片开屏（`splashStyle==0`）期间绝对不能是全屏窗口**（2026-09-13 修）：透明底靠
   `SDL_GL_ALPHA_SIZE=8` + `glClearColor(0,0,0,0)` + `DwmExtendFrameIntoClientArea(-1,-1,-1,-1)`
   （SDL2 没有 `SDL_WINDOW_TRANSPARENT`，那是 SDL3）。但**覆盖整个桌面的窗口会被 Windows 的
@@ -386,6 +417,10 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
   等级用 `chartRatingFor()`，取值顺序**故意和 main.cpp 的 `setChartRating()` 一致**
   （官方等级表 → 谱面自带 level → 26），这样徽章和演奏中 HUD 的 SCORE RANK 永远一致。
   三行文字都用 `ellipsize()` 截到 `textMaxW = 内容框宽 - 徽章直径 - 12k`，绝不会钻到徽章底下。
+- **刷新按钮**（2026-09-14）：列表头部、两个 combobox 右边那颗深色胶囊（环形箭头 + “刷新”，
+  图标是 `dl` 手画的弧 + 三角箭头，不需要素材），点了返回 `SelectRescan`，和 F5 走同一条路。
+  悬停有 tooltip 写着 F5。注意**重扫之后 main.cpp 会把选中项重置成第一首**（F5 一直是这行为），
+  要改成保留当前曲目得动 `main.cpp` 那处 `selected = entries.empty() ? -1 : 0`。
 - **排序 / 分组**（搜索框右边的两个 combobox）：排序有「按名称」「按难度」，分组有「关闭」
   「按难度段（1-5 / 6-10 / … / 36+）」「按读音（あ/か/さ…/A-Z 逐字母/#）」「按首字
   （A-Z / 0-9 / あ い う…，用 initialLabel()）」。

@@ -229,6 +229,40 @@ bool get(const std::string& url, const std::function<bool(const char*, size_t, l
 } // namespace http
 
 // ---------------------------------------------------------------------------
+// Text / path conversion. Everything the UI shows or compares is UTF-8, every
+// path stays native (UTF-16).
+//
+// Text must NEVER be routed through std::filesystem::path to get UTF-8 out of
+// it: path's narrow form on Windows is the *ANSI code page* (Shift-JIS / cp936
+// on a Japanese or Chinese machine) and libc++ throws filesystem_error on any
+// byte sequence that is not valid ANSI. That is what used to kill this tool
+// when a kana was typed into the search box - the kana's UTF-8 is E3 81 82,
+// whose first two bytes are a valid Shift-JIS char and whose third is a lone
+// lead byte, so the conversion failed inside windowText() and the uncaught
+// exception ended the process (0xc0000409 in ucrtbase, via std::terminate).
+// ---------------------------------------------------------------------------
+std::string toUtf8(const std::wstring& text)
+{
+    if (text.empty()) {
+        return {};
+    }
+    const int length = static_cast<int>(text.size());
+    const int size = WideCharToMultiByte(CP_UTF8, 0, text.c_str(), length, nullptr, 0, nullptr, nullptr);
+    std::string utf8(static_cast<std::size_t>(std::max(0, size)), '\0');
+    if (size > 0) {
+        WideCharToMultiByte(CP_UTF8, 0, text.c_str(), length, utf8.data(), size, nullptr, nullptr);
+    }
+    return utf8;
+}
+
+// Path as UTF-8 text, for logs and notes. path::string() would narrow through
+// the ANSI code page instead, which throws on anything it cannot represent.
+std::string pathText(const fs::path& path)
+{
+    return toUtf8(path.native());
+}
+
+// ---------------------------------------------------------------------------
 // Song data (musics.json / music-vocals.json / music-levels.json)
 // ---------------------------------------------------------------------------
 struct VocalVersion
@@ -581,12 +615,12 @@ void worker()
         const fs::path path = gJobs[index].path;
         std::error_code ec;
         fs::create_directories(path.parent_path(), ec);
-        const fs::path partPath = path.string() + ".part";
+        const fs::path partPath = path.native() + L".part";
         std::ofstream out(partPath, std::ios::binary);
         if (!out) {
             std::lock_guard<std::mutex> lock(gJobMutex);
             gJobs[index].state = JobState::Failed;
-            gJobs[index].note = "cannot write " + partPath.string();
+            gJobs[index].note = "cannot write " + pathText(partPath);
             continue;
         }
         std::string error;
@@ -613,11 +647,11 @@ void worker()
             std::error_code renameEc;
             fs::remove(path, renameEc);
             fs::rename(partPath, path, renameEc);
-            logLine("[ok]   " + path.filename().string());
+            logLine("[ok]   " + pathText(path.filename()));
         } else {
             std::error_code removeEc;
             fs::remove(partPath, removeEc);
-            logLine("[fail] " + path.filename().string() + "  " + error);
+            logLine("[fail] " + pathText(path.filename()) + "  " + error);
         }
     }
     gRunning.store(false);
@@ -740,25 +774,25 @@ namespace
     std::size_t gLogShown = 0;   // log lines already appended to the listbox
     double gGuiStartSec = 0.0;   // for --screenshot-time
 
-    std::string gOutDir;
+    // Output directory in the native Windows form (UTF-16). Keeping it narrow
+    // would mean converting it back with fs::path(), which uses the ANSI code
+    // page and mangles (or rejects) any non-ASCII character.
+    std::wstring gOutDir;
 
-    fs::path wideToPath(const std::wstring& text)
-    {
-        const int size = WideCharToMultiByte(CP_UTF8, 0, text.c_str(), -1, nullptr, 0, nullptr, nullptr);
-        std::string utf8(static_cast<std::size_t>(std::max(0, size - 1)), '\0');
-        if (size > 1) {
-            WideCharToMultiByte(CP_UTF8, 0, text.c_str(), -1, utf8.data(), size, nullptr, nullptr);
-        }
-        return fs::path(utf8);
-    }
-
-    std::string windowText(HWND control)
+    // Raw text of a control (UTF-16), no conversion at all.
+    std::wstring windowTextW(HWND control)
     {
         const int length = GetWindowTextLengthW(control);
         std::wstring buffer(static_cast<std::size_t>(std::max(0, length)) + 1, L'\0');
         GetWindowTextW(control, buffer.data(), length + 1);
-        buffer.resize(static_cast<std::size_t>(length));
-        return std::string(wideToPath(buffer).string());
+        buffer.resize(static_cast<std::size_t>(std::max(0, length)));
+        return buffer;
+    }
+
+    // Same, as UTF-8: what the user typed, compared against the UTF-8 song data.
+    std::string windowText(HWND control)
+    {
+        return toUtf8(windowTextW(control));
     }
 
     void setStatus(const std::string& text)
@@ -913,7 +947,7 @@ namespace
                     hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdLog)), nullptr, nullptr);
                 SendMessageW(gLogList, WM_SETFONT, reinterpret_cast<WPARAM>(gFont), TRUE);
 
-                SetWindowTextW(gOutDirEdit, widen(gOutDir).c_str());
+                SetWindowTextW(gOutDirEdit, gOutDir.c_str());
                 SetTimer(hwnd, 1, 150, nullptr);
                 return 0;
             }
@@ -969,7 +1003,7 @@ namespace
                     if (item != nullptr) {
                         wchar_t path[MAX_PATH] = {};
                         if (SHGetPathFromIDListW(item, path)) {
-                            gOutDir.assign(wideToPath(path).string());
+                            gOutDir.assign(path);
                             SetWindowTextW(gOutDirEdit, path);
                         }
                         CoTaskMemFree(item);
@@ -977,8 +1011,7 @@ namespace
                     return 0;
                 }
                 if (id == kIdOpenDir) {
-                    std::wstring dir = widen(gOutDir);
-                    ShellExecuteW(hwnd, L"open", dir.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+                    ShellExecuteW(hwnd, L"open", gOutDir.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
                     return 0;
                 }
                 if (id == kIdCheckAll) {
@@ -1009,7 +1042,7 @@ namespace
                     if (gRunning.load()) {
                         return 0;
                     }
-                    gOutDir.assign(windowText(gOutDirEdit));
+                    gOutDir = windowTextW(gOutDirEdit);
                     Request request;
                     for (int d = 0; d < 5; ++d) {
                         request.diffs[d] =
@@ -1254,7 +1287,7 @@ namespace
 
     int runGui(fs::path outDir, const std::string& screenshotPath, double screenshotTime)
     {
-        gOutDir = outDir.string();
+        gOutDir = outDir.native();
         loadData();
         if (!gDataError.empty()) {
             appendLog(std::string("[data] ") + gDataError);

@@ -116,7 +116,12 @@ class Renderer
     };
 
     bool createPrograms(std::string& outError);
-    Texture loadTextureFromFile(const std::string& path, std::string& outError);
+    // `maxDim` (0 = keep) caps the longer side, shrinking by whole powers of
+    // two; `cropHeight` (0 = keep) drops everything below that row. Both are
+    // applied right after decode so oversized game art does not hold on to
+    // memory it is never drawn from (see the definition for the numbers).
+    Texture loadTextureFromFile(const std::string& path, std::string& outError, int maxDim = 0,
+        int cropHeight = 0);
     void drawVertices(const Texture& texture, const std::vector<float>& vertices, bool effectPass, int blendMode);
     void buildStaticVertices();
     void drawStaticScene(float backgroundBrightness, float playfieldVisibility);
