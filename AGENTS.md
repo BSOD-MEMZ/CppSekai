@@ -149,18 +149,21 @@ bash build.sh          # 仅需 Git Bash；产物 build/cppsekai.exe + SDL2.dll 
   HUD 贴图和 CJK 字体图集。**`loadIntroFonts()` 之后必须 `ImGui_ImplOpenGL3_DestroyDeviceObjects()`**，
   否则 GL 后端还持有 splash 用的默认字体纹理，字形 UV 错位、全部 UI 文字花屏。各阶段耗时用
   `[boot]` 日志查看；贴图级耗时设 `CPSEKAI_ASSET_TIMING=1`。
-- **贴图尺寸策略**（2026-09-14）：官方素材是按手机 2~4 倍分辨率出的，直接 `stbi_load` 后原样
-  上传，解码缓冲 + GL 分配就占掉进程内存的一大块。`Renderer::loadTextureFromFile(path, err,
-  maxDim, cropHeight)` 在解码后按**整二次幂**缩（比例精确、滤波就是平均值）或裁掉用不到的行；
-  数值集中在 `Renderer.cpp` 顶部的 `kStageKeepRows` / `kBackgroundMaxDim` / `kEffectMaxDim` /
-  `kGradientMaxDim` / `kLifeDigitMaxDim` 一处。**素材文件不动**，所以换台机器/重下资源照样能用。
-  - `stage.png` 是 2048x2840，但 `buildStaticVertices` 的 sprite 矩形只取上面 2048x1176 ——
-    `kStageKeepRows` 就是裁这个（UV 是按纹理尺寸算的，裁完映射不变），省 13MB。
-  - 上传总量记在 `[tex] N MB uploaded` 这行日志里；`CPSEKAI_TEX_RAW=1` 关掉全部压缩（同一个
-    二进制跑两次就是干净的 A/B，进程内存实测 -65MB 左右）。
+- **贴图尺寸策略（2026-09-14 傍晚已回滚）**：一度用 `loadTextureFromFile(path, err, maxDim,
+  cropHeight)` 把官方素材按整二次幂缩 / 裁行（`kStageKeepRows` / `kBackgroundMaxDim` /
+  `kEffectMaxDim` / `kGradientMaxDim` / `kLifeDigitMaxDim` 这些常量还留在 `Renderer.cpp` 顶部），
+  但缩/裁之后的纹理尺寸和调用方自己维护的 sprite 矩形对不上，**画面上精灵整体错位**。现在
+  `keepRawTextures()` 默认返回 true，所有贴图按解码尺寸上传（日志 `[tex] N MB uploaded (full size)`，
+  53.2MB）；**只有** `CPSEKAI_TEX_RAW=0` 才重新启用旧限制（仅用于量内存）。素材文件一如既往不动。
   - 自动化对照：**两次独立运行的截图本身就有噪声**（音符区 raw-vs-raw 平均差 41、raw-vs-opt 54，
     全图 20.4 vs 18.8），所以别拿单帧 diff 当回归标准；看 HUD / LIFE / COMBO 这类确定性区域
     （实测逐像素一致）就够了。
+- **选曲背景漂浮形状**（2026-09-14）：移植 pjsk.moe 网页背景（BackgroundPattern 组件，chunk
+  `1lvqppbmv_p-9.js`）：3 层共 34 个形状（80% 三角形 / 20% 圆），mulberry32(0x9e3779b9) 生成、
+  每次运行完全一致；颜色为 miku 青 / cyan / pink / yellow / 白，三角形点位 `10,0 0,100 100,85`
+  叠 `scale()` `skewX()` `rotate()`，large-faint(60~95px, a=.08~.13) 占 2/3、small-bold
+  (22~38px, a=.30~.48) 占 1/3。滚动列表时按层系数 **-0.30 / -0.16 / -0.07** 做视差
+  （`drawBgShapes()`，`game/SongSelect.cpp`，位移对齐到进屏时的 scroll 并 clamp ±900px）。
 - **图片开屏（`splashStyle==0`）期间绝对不能是全屏窗口**（2026-09-13 修）：透明底靠
   `SDL_GL_ALPHA_SIZE=8` + `glClearColor(0,0,0,0)` + `DwmExtendFrameIntoClientArea(-1,-1,-1,-1)`
   （SDL2 没有 `SDL_WINDOW_TRANSPARENT`，那是 SDL3）。但**覆盖整个桌面的窗口会被 Windows 的

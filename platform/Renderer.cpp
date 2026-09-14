@@ -353,13 +353,16 @@ bool Renderer::createPrograms(std::string& outError)
 
 namespace
 {
-    // CPSEKAI_TEX_RAW=1 keeps every texture at its decoded size. A/B switch for
-    // the size policy (same binary, two runs) and an escape hatch if some piece
-    // of art ever comes out too soft.
+    // Textures are uploaded at their decoded size: the 2026-09-14 shrink/crop
+    // policy put several sprites visibly off their rects (the callers keep
+    // their own sprite rectangles, so a cropped/scaled texture no longer lines
+    // up with them), so it is off by default again. The old limits are still
+    // compiled in - CPSEKAI_TEX_RAW=0 turns them back on for a memory
+    // measurement - but nothing in the shipping path uses them.
     bool keepRawTextures()
     {
-        static const bool raw = std::getenv("CPSEKAI_TEX_RAW") != nullptr;
-        return raw;
+        const char* env = std::getenv("CPSEKAI_TEX_RAW");
+        return env == nullptr || std::string(env) != "0";
     }
 
     // Running total handed to GL, so the effect of the size policy can be read
@@ -685,7 +688,7 @@ bool Renderer::loadAssets(const std::string& assetDir, std::string& outError)
 
     buildStaticVertices();
     std::printf("[tex] %.1f MB uploaded%s\n", textureBytes() / 1048576.0,
-        keepRawTextures() ? " (raw, CPSEKAI_TEX_RAW=1)" : "");
+        keepRawTextures() ? " (full size)" : " (shrunk, CPSEKAI_TEX_RAW=0)");
     std::fflush(stdout);
     return true;
 }

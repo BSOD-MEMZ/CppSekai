@@ -1066,6 +1066,164 @@ namespace
             IM_COL32(25, 25, 40, 200), 1.5f);
     }
 
+    // ------------------------------------------------------------------
+    // Floating background shapes, ported from the pjsk.moe background
+    // pattern (BackgroundPattern component, chunk 1lvqppbmv_p-9.js):
+    // three layers of mainly triangles (80% triangles / 20% circles),
+    // laid out by a mulberry32 stream so the field is identical on every
+    // run, then offset by a per-layer parallax factor while the song list
+    // scrolls (-0.30 / -0.16 / -0.07 of the scroll distance).
+    // ------------------------------------------------------------------
+    struct BgShape
+    {
+        int layer = 1;
+        float leftPct = 0.0f;
+        float topPct = 0.0f;
+        float size = 0.0f;     // svg viewBox is 100x100, mapped to `size` px
+        float opacity = 1.0f;
+        float rotate = 0.0f;   // degrees
+        float skewX = 0.0f;    // degrees
+        float scaleX = 1.0f;
+        float scaleY = 1.0f;
+        float phase = 0.0f;    // slow idle-float offset
+        unsigned char r = 255;
+        unsigned char g = 255;
+        unsigned char b = 255;
+        bool circle = false;
+        bool outline = false;
+    };
+
+    // mulberry32, the exact stream the web component seeds with 0x9e3779b9.
+    struct Mulberry32
+    {
+        std::uint32_t state = 0x9e3779b9u;
+
+        float next()
+        {
+            state += 0x6d2b79f5u;
+            std::uint32_t t = state;
+            t = (t ^ (t >> 15)) * (1u | t);
+            t = (t + (t ^ (t >> 7)) * (61u | t)) ^ t;
+            return static_cast<float>(t ^ (t >> 14)) / 4294967296.0f;
+        }
+
+        float range(float lo, float hi) { return lo + next() * (hi - lo); }
+    };
+
+    const std::vector<BgShape>& bgShapes()
+    {
+        static const std::vector<BgShape> shapes = [] {
+            // pjsk.moe palette: theme (miku teal) / cyan / pink / yellow / white.
+            static const unsigned char kColors[5][3] = {
+                {51, 204, 187}, {119, 238, 227}, {255, 117, 168}, {255, 229, 138}, {255, 255, 255}};
+            const int kCount[3] = {14, 12, 8};             // shapes per layer
+            const float kSize[3][2] = {{8, 14}, {7, 12}, {6, 10}};      // circles only
+            const float kOpacity[3][2] = {{.1f, .18f}, {.14f, .24f}, {.2f, .32f}};
+
+            std::vector<BgShape> out;
+            Mulberry32 rng;
+            // The web code mirrors every other leftPct around the centre so the
+            // field is not clustered on one side.
+            float pairLeft = -1.0f;
+            auto leftPct = [&]() {
+                if (pairLeft >= 0.0f) {
+                    const float v = pairLeft;
+                    pairLeft = -1.0f;
+                    return v;
+                }
+                const float r = 2.0f * rng.next() - 1.0f;
+                const float t = 50.0f + (r < 0.0f ? -1.0f : 1.0f) * std::pow(std::fabs(r), 0.6f) * 50.0f;
+                pairLeft = 100.0f - t;
+                return t;
+            };
+            for (int layer = 1; layer <= 3; ++layer) {
+                for (int i = 0; i < kCount[layer - 1]; ++i) {
+                    BgShape s;
+                    s.layer = layer;
+                    const unsigned char* c = kColors[static_cast<int>(rng.next() * 5.0f) % 5];
+                    s.r = c[0];
+                    s.g = c[1];
+                    s.b = c[2];
+                    s.leftPct = leftPct();
+                    s.topPct = rng.next() * 100.0f;
+                    s.phase = rng.next() * 6.2831853f;
+                    if (rng.next() < 0.8f) {
+                        // Triangle: 2/3 large faint, 1/3 small bold.
+                        const bool large = rng.next() < 0.67f;
+                        s.size = large ? rng.range(60.0f, 95.0f) : rng.range(22.0f, 38.0f);
+                        s.opacity = large ? rng.range(0.08f, 0.13f) : rng.range(0.30f, 0.48f);
+                        s.rotate = (2.0f * rng.next() - 1.0f) * 50.0f;
+                        s.skewX = (rng.next() < 0.5f ? -1.0f : 1.0f) * (6.0f + 12.0f * rng.next());
+                        s.scaleX = 0.38f + 0.16f * rng.next();
+                        s.scaleY = s.scaleX * (1.3f + 0.4f * rng.next());
+                        s.outline = rng.next() < 0.5f;
+                    } else {
+                        s.circle = true;
+                        s.size = rng.range(kSize[layer - 1][0], kSize[layer - 1][1]);
+                        s.opacity = rng.range(kOpacity[layer - 1][0], kOpacity[layer - 1][1]);
+                    }
+                    out.push_back(s);
+                }
+            }
+            return out;
+        }();
+        return shapes;
+    }
+
+    void drawBgShapes(ImDrawList* dl, float w, float h, float k, double timeSec, float scroll)
+    {
+        // Parallax is relative to where the list was when the screen opened, so
+        // the field is already in place on entry. Clamped, because the song list
+        // is endless and sliding the art off-screen entirely would just look
+        // empty.
+        static float base = 0.0f;
+        static bool haveBase = false;
+        if (!haveBase) {
+            base = scroll;
+            haveBase = true;
+        }
+        const float rel = std::clamp(scroll - base, -900.0f, 900.0f);
+
+        for (const BgShape& s : bgShapes()) {
+            const float factor = s.layer == 1 ? 0.30f : (s.layer == 2 ? 0.16f : 0.07f);
+            const float floatY = std::sin(static_cast<float>(timeSec) * 0.35f + s.phase) * 9.0f * k;
+            const float cx = s.leftPct * 0.01f * w;
+            const float cy = s.topPct * 0.01f * h - factor * rel + floatY;
+            const float size = s.size * k;
+            if (cx < -size || cx > w + size || cy < -size || cy > h + size) {
+                continue;
+            }
+            const int alpha = static_cast<int>(std::clamp(s.opacity, 0.0f, 1.0f) * 255.0f);
+            const ImU32 col = IM_COL32(s.r, s.g, s.b, alpha);
+            if (s.circle) {
+                dl->AddCircleFilled(ImVec2(cx, cy), size * 0.5f, col, 20);
+                continue;
+            }
+            // svg polygon "10,0 0,100 100,85" with
+            // translate(50 50) scale() skewX() rotate() translate(-50 -50).
+            static const float kPts[3][2] = {{10.0f, 0.0f}, {0.0f, 100.0f}, {100.0f, 85.0f}};
+            const float rad = s.rotate * 0.017453292f;
+            const float cosR = std::cos(rad);
+            const float sinR = std::sin(rad);
+            const float tanSkew = std::tan(s.skewX * 0.017453292f);
+            ImVec2 pts[3];
+            for (int i = 0; i < 3; ++i) {
+                float px = kPts[i][0] - 50.0f;
+                float py = kPts[i][1] - 50.0f;
+                const float rx = px * cosR - py * sinR;
+                const float ry = px * sinR + py * cosR;
+                px = (rx + ry * tanSkew) * s.scaleX + 50.0f;
+                py = ry * s.scaleY + 50.0f;
+                pts[i] = ImVec2(cx + (px * 0.01f - 0.5f) * size, cy + (py * 0.01f - 0.5f) * size);
+            }
+            if (s.outline) {
+                dl->AddPolyline(pts, 3, col, ImDrawFlags_Closed, std::max(1.2f, 1.4f * k));
+            } else {
+                dl->AddTriangleFilled(pts[0], pts[1], pts[2], col);
+            }
+        }
+    }
+
     // Rounded jacket image, or a purple placeholder when there is none.
     void addJacket(ImDrawList* dl, GLuint tex, const ImVec2& pmin, const ImVec2& pmax, float rounding)
     {
@@ -1809,6 +1967,10 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     if (groupMode == kGroupOff) {
         indexOpen = false;
     }
+
+    // Floating shape field: drawn on the parent draw list here, i.e. above the
+    // backdrop but below the list child window.
+    drawBgShapes(dl, w, h, k, timeSec, scroll);
     const std::vector<ListRow>& rows = cachedRows;
     const int rowCount = static_cast<int>(rows.size());
 

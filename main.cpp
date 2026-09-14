@@ -2135,9 +2135,16 @@ int main(int argc, char** argv)
                     if (event.key.repeat != 0) {
                         break;
                     }
+                    // A focused ImGui text field (the song-search box) owns the
+                    // keyboard: typing "f" used to toggle fullscreen in the
+                    // middle of a search ("h" the debug panel). WantTextInput is
+                    // the narrow check - WantCaptureKeyboard is always true
+                    // here, because the HUD lives in an invisible fullscreen
+                    // window.
+                    const bool typingText = ImGui::GetIO().WantTextInput;
                     if (event.key.keysym.sym == SDLK_ESCAPE) {
                         escapePressed = true;
-                    } else if (event.key.keysym.sym == SDLK_f) {
+                    } else if (!typingText && event.key.keysym.sym == SDLK_f) {
                         // Ask the window instead of trusting a separate flag:
                         // the mode also changes from the settings card and, for
                         // the image splash, at the end of the boot sequence -
@@ -2149,7 +2156,7 @@ int main(int argc, char** argv)
                             // Restore whatever chrome the current window mode uses.
                             SDL_SetWindowBordered(window, windowMode == 1 ? SDL_TRUE : SDL_FALSE);
                         }
-                    } else if (event.key.keysym.sym == SDLK_h) {
+                    } else if (!typingText && event.key.keysym.sym == SDLK_h) {
                         showDebug = !showDebug;
                     } else if (event.key.keysym.sym == SDLK_F5 && state == AppState::Select) {
                         // The chart folder is scanned once at startup; this lets
