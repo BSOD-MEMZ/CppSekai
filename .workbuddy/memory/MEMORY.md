@@ -64,5 +64,9 @@
   条尾巴被当普通 tap → 按住反而 MISS）；核心换谱时清 missed/dimmedHoldKeys（同一首歌
   跨局撞车 → autoplay 预览把上一局漏的长条画成掉落）。
 - 2026-09-13 歌曲专属舞台背景 `game/StageBackground.cpp`（移植上游 overlayBackgroundGen.ts，
-  开歌生成一次 ~330ms，`--dump-stage-bg` 导出）；选曲预览音乐跟着演唱版本走（切版本接着
+  开歌生成一次 ~1.1s，`--dump-stage-bg` 导出）；选曲预览音乐跟着演唱版本走（切版本接着
   当前位置播）。
+- 2026-09-14 舞台背景两处补齐：合成完必须 `toSquareBackground()` 铺成 2048x2048
+  （上游 `renderToSquareBackground`）——背景四边形在屏幕上是正方形，而 bggen 板只有
+  2048x1168，直接上传会被纵向拉 1.75 倍；以及补上 `MORPH_*_MIRROR` 那组下半部分屏的
+  **暗倒影**（掩码在那里有 alpha，不是"另一种布局"）。详见 AGENTS.md「与上游还没对齐」第 1 条。
