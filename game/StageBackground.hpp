@@ -8,9 +8,10 @@ namespace game
 {
 // Builds the song's own stage backdrop ("bggen v3", ported from the upstream
 // preview's src/lib/overlayBackgroundGen.ts): the jacket is projected into the
-// side screens and the centre screens of the room plate, masked by the screen
-// glass, and the room + windows + bottom overlays are composited on top - so
-// every song performs on a stage made of its own jacket, exactly like the game.
+// side screens and the centre screens of the room plate, plus their dim
+// reflections in the screens below the stage, masked by the screen glass, and
+// the room + windows + bottom overlays are composited on top - so every song
+// performs on a stage made of its own jacket, exactly like the game.
 //
 // `bggenDir` is the folder holding base.png / bottom.png / center_cover.png /
 // center_mask.png / side_cover.png / side_mask.png / windows.png (all the same

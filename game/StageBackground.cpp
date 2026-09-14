@@ -25,13 +25,19 @@ namespace
     };
 
     // Where the jacket goes, in the room plate's pixel space. Copied verbatim
-    // from the upstream generator (it measures them off the plate). Only the
-    // "normal" screens are used: the mirror quads target the mirrored playfield
-    // layout, which we do not have. The plate is wrapped into a square
-    // afterwards (toSquareBackground) - upstream does not scroll it.
-    constexpr Point kSideLeft[4] = {{566, 161}, {1183, 134}, {633, 731}, {1226, 682}};
-    constexpr Point kSideRight[4] = {{966, 104}, {1413, 72}, {954, 525}, {1390, 524}};
-    constexpr Point kCenterNormal[4] = {{824, 227}, {1224, 227}, {833, 608}, {1216, 608}};
+    // from the upstream generator (it measures them off the plate). The
+    // "normal" quads are the four screens in the upper half of the plate; the
+    // "mirror" ones are their dim reflections in the screens below the stage
+    // (side_mask / center_mask do have alpha there, just at 50% / 75%, so they
+    // are meant to be composited - they are not a separate playfield layout).
+    // The plate is wrapped into a square afterwards (toSquareBackground);
+    // upstream does not scroll it.
+    constexpr std::array<Point, 4> kSideLeft{{{566, 161}, {1183, 134}, {633, 731}, {1226, 682}}};
+    constexpr std::array<Point, 4> kSideRight{{{966, 104}, {1413, 72}, {954, 525}, {1390, 524}}};
+    constexpr std::array<Point, 4> kCenterNormal{{{824, 227}, {1224, 227}, {833, 608}, {1216, 608}}};
+    constexpr std::array<Point, 4> kSideLeftMirror{{{633, 1071}, {1256, 1045}, {598, 572}, {1197, 569}}};
+    constexpr std::array<Point, 4> kSideRightMirror{{{954, 1122}, {1393, 1167}, {942, 702}, {1366, 717}}};
+    constexpr std::array<Point, 4> kCenterMirror{{{830, 1017}, {1214, 1017}, {833, 676}, {1216, 676}}};
 
     Image loadImage(const std::string& path)
     {
@@ -358,21 +364,25 @@ std::vector<std::uint8_t> buildStageBackground(const std::string& bggenDir, cons
         return {};
     }
 
+    // A layer is the whole plate with one quad's jacket projected into it; the
+    // order below is the upstream one (normal screens first, then the dim
+    // reflections, then the glass on top).
+    const auto projectInto = [&](Image& layer, const std::array<Point, 4>& quad) {
+        overlayImage(layer, morph(cover, quad, base.width, base.height), 0, 0);
+    };
+
     // Side screens: both side quads into one layer, then the glass on top.
     Image sideJackets = makeImage(base.width, base.height);
-    overlayImage(sideJackets, morph(cover, {{kSideLeft[0], kSideLeft[1], kSideLeft[2], kSideLeft[3]}},
-                                base.width, base.height),
-        0, 0);
-    overlayImage(sideJackets, morph(cover, {{kSideRight[0], kSideRight[1], kSideRight[2], kSideRight[3]}},
-                                base.width, base.height),
-        0, 0);
+    projectInto(sideJackets, kSideLeft);
+    projectInto(sideJackets, kSideRight);
+    projectInto(sideJackets, kSideLeftMirror);
+    projectInto(sideJackets, kSideRightMirror);
     overlayImage(sideJackets, sideCover, 0, 0);
 
     // Centre screen.
     Image center = makeImage(base.width, base.height);
-    overlayImage(center, morph(cover, {{kCenterNormal[0], kCenterNormal[1], kCenterNormal[2], kCenterNormal[3]}},
-                             base.width, base.height),
-        0, 0);
+    projectInto(center, kCenterNormal);
+    projectInto(center, kCenterMirror);
     overlayImage(center, centerCover, 0, 0);
 
     const Image maskedSide = applyAlphaMask(sideJackets, sideMask);
