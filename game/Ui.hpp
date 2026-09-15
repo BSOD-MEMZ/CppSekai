@@ -84,13 +84,19 @@ ImTextureID& closeTexture();
 // chip. Missing (0) is fine: the chip falls back to a drawn note.
 void setLevelIconTexture(ImTextureID texture);
 
-// Player level chip, the one piece of the account that is always on screen:
-// rounded dark pill, [icon][等级][NN], sized from `unit` (= pixels per 1080p
-// layout unit, i.e. the song select's `k` / the result screen's scale).
+// Player level chip, the one piece of the account that is always on screen.
+// Rounded dark pill, [exp fill][note icon][等级][NN]. `expRatio` (0..1) is the
+// progress towards the next rank and is what the green block at the pill's left
+// end is - an exp bar, not an icon plate (see `level.png` usage: the note sprite
+// is drawn straight on top of whatever the fill leaves behind).
+// The height is 33 `unit`, i.e. exactly what a ui::combo of the same unit is
+// tall (17u glyph + 8u frame padding), so the chip lines up with the song
+// select's 排序 / 分组 boxes. `unit` is pixels per 1080p layout unit (the song
+// select's `k` / the result screen's scale).
 // `anchor` is the chip's top-left, or its top-right when `alignRight` is set.
 // Returns the drawn rect (x, y, w, h in screen pixels) for hit tests.
 ImVec4 playerLevelChip(ImDrawList* dl, ImFont* font, ImVec2 anchor, int rank, float unit,
-    bool alignRight = false);
+    bool alignRight = false, float expRatio = 0.0f);
 
 // Thin "exp towards the next rank" bar: dark groove + teal fill, `ratio` 0..1.
 void expBar(ImDrawList* dl, ImVec2 pos, float width, float unit, float ratio);

@@ -3131,10 +3131,15 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     // Player level chip, top right like the official screen. Drawn after the
     // tilt pass on purpose: the phone block is rotated about its own centre,
     // this is not part of it.
+    //
+    // It lines up with the 排序 / 分组 combos: same height (33k) and same top
+    // edge, which is what the official top bar does with its own widgets.
     bool& profileOpen = gProfileOpen; // module state, so --profile can force it
     if (account != nullptr) {
-        const ImVec2 chipAnchor(w - 26.0f * k, 20.0f * k);
-        const ImVec4 chip = ui::playerLevelChip(dl, body, chipAnchor, account->rank, k, true);
+        const double need = game::expToNextRank(account->rank);
+        const float expRatio = need > 0.0 ? static_cast<float>(account->exp / need) : 1.0f;
+        const ImVec2 chipAnchor(w - 26.0f * k, headerRowY);
+        const ImVec4 chip = ui::playerLevelChip(dl, body, chipAnchor, account->rank, k, true, expRatio);
         const ImVec2 mouse = ImGui::GetIO().MousePos;
         const bool hot = !profileOpen && mouse.x >= chip.x && mouse.x <= chip.x + chip.z
             && mouse.y >= chip.y && mouse.y <= chip.y + chip.w;
@@ -3202,8 +3207,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             // part that moves when a song is played.
             const double need = game::expToNextRank(account->rank);
             char rankLine[64];
-            std::snprintf(rankLine, sizeof(rankLine), "%d  (到下一级 %d / %d)", account->rank,
-                static_cast<int>(account->exp), static_cast<int>(need));
+            std::snprintf(rankLine, sizeof(rankLine), "%d", account->rank);
             char playLine[64];
             std::snprintf(playLine, sizeof(playLine), "%d 次   平均 %.0f", account->plays,
                 account->plays > 0 ? account->totalScore / account->plays : 0.0);
@@ -3213,6 +3217,22 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
                 {"游玩 / 平均分", playLine},
             };
             ui::infoRows(rows, interior);
+
+            // The chip on the song select already carries this as its green fill,
+            // but there it is a few pixels wide - the card is where the exact
+            // number gets a full-width bar of its own.
+            const float expRatio = need > 0.0
+                ? static_cast<float>(account->exp / need)
+                : 1.0f;
+            left(12.0f * s);
+            const ImVec2 barPos = ImGui::GetCursorScreenPos();
+            ImGui::Dummy(ImVec2(interior, 12.0f * s));
+            ui::expBar(ImGui::GetWindowDrawList(), barPos, interior, s, expRatio);
+            left(6.0f * s);
+            char expLine[64];
+            std::snprintf(expLine, sizeof(expLine), "到下一级 %d / %d EXP",
+                static_cast<int>(account->exp), static_cast<int>(need));
+            ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(ui::kNotePink), "%s", expLine);
 
             ImGui::PopItemWidth();
             ImGui::PopFont();

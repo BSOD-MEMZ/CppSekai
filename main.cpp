@@ -271,7 +271,8 @@ namespace
             "                [--show-pause-dialog] [--test-restart] [--restart-at <sec>]\n"
             "                [--result-preview] [--result-at <sec>] [--help]\n"
             "                [--confirm-flash [<sec>]] [--settings] [--settings-tab <n>]\n"
-            "                [--profile] [--player <name[:org]>] [--player-rank <n>]\n\n"
+            "                [--profile] [--player <name[:org]>] [--player-rank <n>]\n"
+            "                [--player-exp <0..1>]\n\n"
 
             "No --sus: opens the song select screen (scans --charts, then charts/ next\n"
             "to the exe, then the charts/ of the parent folder).\n"
@@ -299,8 +300,10 @@ namespace
             "--settings [--settings-tab <0-4>]: open the settings card at boot on the\n"
             "          given page (0 演奏 / 1 画面 / 2 判定 / 3 系统 / 4 账户).\n"
             "--profile: open the player profile card (the level chip's card) at boot.\n"
-            "--player <name[:org]> / --player-rank <n>: seed the local account for\n"
-            "          headless checks; memory only, userdata.json is not touched.\n"
+            "--player <name[:org]> / --player-rank <n> / --player-exp <0..1>: seed the\n"
+            "          local account for headless checks (--player-exp = how far into the\n"
+            "          current rank, i.e. the level chip's green progress bar); memory\n"
+            "          only, userdata.json is not touched.\n"
             "Mouse   : left/right button = tap a lane (hold = long note),\n"
             "          drag up/left/right = flick (direction must match the\n"
             "          note arrow; see the strict-Flick setting). Right button\n"
@@ -627,6 +630,7 @@ int main(int argc, char** argv)
     std::string playerSpec;        // --player 昵称[:组织]
     bool playerSpecGiven = false;
     int playerRankGiven = -1;      // --player-rank
+    double playerExpGiven = -1.0;  // --player-exp: fraction towards the next rank
     int selectMusicId = 0;         // --select-id: preselect this song id in the list
     bool testRestart = false; // debug: replay "give up -> pick another song"
     double restartAtSec = 8.0;
@@ -761,6 +765,10 @@ int main(int argc, char** argv)
             }
         } else if (arg == "--player-rank" && i + 1 < utf8Argc) {
             playerRankGiven = std::max(1, std::atoi(utf8Argv[++i]));
+        } else if (arg == "--player-exp" && i + 1 < utf8Argc) {
+            // Fraction of the way to the next rank (the chip's green fill), for
+            // screenshot runs - e.g. --player-exp 0.35.
+            playerExpGiven = std::clamp(std::atof(utf8Argv[++i]), 0.0, 1.0);
         } else if (arg == "--test-restart") {
             // Debug: at --restart-at seconds, give the running song up and
             // start the next chart (the sequence that used to hang on the
@@ -878,6 +886,9 @@ int main(int argc, char** argv)
     if (playerRankGiven > 0) {
         account.rank = playerRankGiven;
         account.exp = 0.0;
+    }
+    if (playerExpGiven >= 0.0) {
+        account.exp = playerExpGiven * game::expToNextRank(account.rank);
     }
     if (!speedGiven) {
         noteSpeed = userSettings.noteSpeed;

@@ -807,8 +807,9 @@ void drawResult(platform::Renderer& renderer, const ResultData& data, float elap
 
     // -----------------------------------------------------------------------
     // Player level (the account). The chip is the same component the song
-    // select draws, so the two screens cannot drift apart; the bar under it is
-    // this run's progress towards the next rank.
+    // select draws, so the two screens cannot drift apart - including the exp
+    // bar, which is the green block growing out of the chip's left end, not a
+    // separate widget. The line under it is where this run's EXP is spelled out.
     //
     // It sits on the free right-hand area below the strip panel - the phone
     // layout fills that with the character, the 16:9 one does not.
@@ -819,15 +820,15 @@ void drawResult(platform::Renderer& renderer, const ResultData& data, float elap
             const int vtxFirst = dl->VtxBuffer.Size;
             const float right = kCanvasW - kPlateRightInset;
             const float chipY = kPanelBottom + 62.0f + (1.0f - alpha) * 12.0f;
-            ui::playerLevelChip(dl, bold, ImVec2(c.x(right), c.y(chipY)), data.playerRank, c.scale,
-                true);
-
-            constexpr float kBarW = 232.0f;
-            const float barY = chipY + 76.0f;
             const float ratio = data.playerExpNeed > 0.0
                 ? static_cast<float>(data.playerExp / data.playerExpNeed)
                 : 1.0f;
-            ui::expBar(dl, ImVec2(c.x(right - kBarW), c.y(barY)), c.s(kBarW), c.scale, ratio);
+            ui::playerLevelChip(dl, bold, ImVec2(c.x(right), c.y(chipY)), data.playerRank, c.scale,
+                true, ratio);
+
+            // Chip box in canvas units (see ui::playerLevelChip: 158 x 33).
+            constexpr float kChipW = 158.0f;
+            constexpr float kChipH = 33.0f;
 
             char buf[64];
             ImU32 col = kMint;
@@ -840,7 +841,7 @@ void drawResult(platform::Renderer& renderer, const ResultData& data, float elap
                 std::snprintf(buf, sizeof(buf), "%d / %d", static_cast<int>(data.playerExp),
                     static_cast<int>(data.playerExpNeed));
             }
-            textCentered(c, bold, 23.0f, right - kBarW * 0.5f, barY + 28.0f, col, buf);
+            textCentered(c, bold, 23.0f, right - kChipW * 0.5f, chipY + kChipH + 18.0f, col, buf);
 
             // Fade the whole block in by rewriting the alpha of the vertices it
             // just added (the chip has no alpha parameter of its own).
