@@ -43,6 +43,15 @@ void AudioEngine::shutdown()
         ma_sound_uninit(&mCountdownSe);
         mCountdownSeLoaded = false;
     }
+    for (int kind = 0; kind < UiSeCount; ++kind) {
+        if (!mUiSeLoaded[kind]) {
+            continue;
+        }
+        for (auto& voice : mUiSe[kind]) {
+            ma_sound_uninit(&voice);
+        }
+        mUiSeLoaded[kind] = false;
+    }
     stopPreview();
     stopResultBgm();
     if (mEngineInitialized) {
@@ -112,7 +121,57 @@ bool AudioEngine::loadSe(const std::string& dir, std::string& outError)
     } else {
         std::printf("[audio] no countdown SE (%s)\n", countdownPath.c_str());
     }
+
+    // Menu / dialog sound effects (see the UiSe enum).
+    loadUiSe(dir);
     return true;
+}
+
+void AudioEngine::loadUiSe(const std::string& dir)
+{
+    static const char* kFiles[UiSeCount] = {
+        "click.mp3",
+        "select.mp3",
+        "level_choose.mp3",
+        "window_open.mp3",
+        "window_close.mp3",
+    };
+    for (int kind = 0; kind < UiSeCount; ++kind) {
+        const std::string path = dir + "/" + kFiles[kind];
+        int loaded = 0;
+        for (int voice = 0; voice < UI_SE_POOL; ++voice) {
+            if (ma_sound_init_from_file(&mEngine, path.c_str(), MA_SOUND_FLAG_DECODE, nullptr, nullptr,
+                    &mUiSe[kind][voice])
+                != MA_SUCCESS) {
+                break;
+            }
+            ++loaded;
+        }
+        if (loaded == UI_SE_POOL) {
+            mUiSeLoaded[kind] = true;
+            continue;
+        }
+        // Missing file: leave the slot silent (the packager may not ship the
+        // assets) and release whatever did come up so nothing leaks.
+        for (int voice = 0; voice < loaded; ++voice) {
+            ma_sound_uninit(&mUiSe[kind][voice]);
+        }
+        std::printf("[audio] no UI SE (%s)\n", path.c_str());
+    }
+}
+
+void AudioEngine::playUiSe(UiSe kind, float volume)
+{
+    const int index = static_cast<int>(kind);
+    if (index < 0 || index >= UiSeCount || !mUiSeLoaded[index]) {
+        return;
+    }
+    ma_sound& sound = mUiSe[index][mUiSeNext[index]];
+    mUiSeNext[index] = (mUiSeNext[index] + 1) % UI_SE_POOL;
+    ma_sound_stop(&sound);
+    ma_sound_seek_to_pcm_frame(&sound, 0);
+    ma_sound_set_volume(&sound, std::max(0.0f, volume));
+    ma_sound_start(&sound);
 }
 
 void AudioEngine::start(double leadInSec)

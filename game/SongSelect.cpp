@@ -1865,6 +1865,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, rowH * 0.5f);
         ImGui::SetCursorScreenPos(ImVec2(btnX, headerRowY));
         if (ImGui::Button("##rescan", ImVec2(btnW, rowH))) {
+            ui::se(ui::SeClick);
             action = SelectRescan;
         }
         const bool hovered = ImGui::IsItemHovered();
@@ -2111,6 +2112,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     if (rowCount > 0) {
         // Wheel: one notch = one row.
         if (listHovered && io.MouseWheel != 0.0f) {
+            ui::se(ui::SeSelect);
             scrollTarget -= io.MouseWheel * pitch;
             flingVel = 0.0f;
             scrolling = true;
@@ -2121,6 +2123,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
             const SongGroup& g = groups[static_cast<size_t>(rows[static_cast<size_t>(hoverRow)].group)];
             if (g.idx[diffIndex] >= 0) {
+                ui::se(ui::SeClick);
                 action = g.idx[diffIndex];
             }
         }
@@ -2156,11 +2159,15 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
                         // Tapping a section head opens the jump index (tapping
                         // it again closes it) - the official screen turns the
                         // list into a key panel the same way.
+                        ui::se(ui::SeClick);
                         indexOpen = !indexOpen;
                         std::printf("[select] section index %s\n", indexOpen ? "opened" : "closed");
                         std::fflush(stdout);
                     } else {
                         // Tap: pick that row (it glides to the centre).
+                        if (rows[static_cast<size_t>(wrapSlot(pressSlot))].group != groupIndex) {
+                            ui::se(ui::SeSelect);
+                        }
                         groupIndex = rows[static_cast<size_t>(wrapSlot(pressSlot))].group;
                         scrollTarget = static_cast<float>(pressSlot) * pitch;
                         scrolling = false;
@@ -2553,6 +2560,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             if (hitLetter && hovered && clicked && keys[static_cast<size_t>(i)].group >= 0) {
                 // Land with this section's first song in the middle, so its
                 // header ends up one row above.
+                ui::se(ui::SeSelect);
                 const int slot = nearestSlotOfRow(keys[static_cast<size_t>(i)].headerRow + 1);
                 groupIndex = keys[static_cast<size_t>(i)].group;
                 scrollTarget = static_cast<float>(slot) * pitch;
@@ -2590,9 +2598,11 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             lastInputTime = timeSec;
         };
         if (ImGui::IsKeyPressed(ImGuiKey_DownArrow) || ImGui::IsKeyPressed(ImGuiKey_GamepadDpadDown)) {
+            ui::se(ui::SeSelect);
             moveTo(1);
         }
         if (ImGui::IsKeyPressed(ImGuiKey_UpArrow) || ImGui::IsKeyPressed(ImGuiKey_GamepadDpadUp)) {
+            ui::se(ui::SeSelect);
             moveTo(-1);
         }
         if (ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter)) {
@@ -2814,6 +2824,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
                     ImGui::PopID();
                     const bool active = static_cast<int>(i) == (choice < 0 ? 0 : choice);
                     if (clicked) {
+                        ui::se(ui::SeClick);
                         vocalChoiceBySong[item.musicId] = static_cast<int>(i);
                         vocalIndex = static_cast<int>(i);
                     }
@@ -2845,6 +2856,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             if (avail) {
                 ImGui::InvisibleButton("diff", ImVec2(dcD, dcD));
                 if (ImGui::IsItemClicked()) {
+                    ui::se(ui::SeLevelChoose);
                     diffIndex = d;
                     selected = group.idx[d];
                 }
@@ -2892,6 +2904,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             *confirmCenter = tiltPoint(ImVec2(cx, (okA.y + okB.y) * 0.5f));
         }
         if (okPressed) {
+            ui::se(ui::SeClick);
             action = selected;
         }
 
@@ -2924,6 +2937,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
                     ImVec2(c.x - iw * 0.5f, c.y - ih * 0.5f), ImVec2(c.x + iw * 0.5f, c.y + ih * 0.5f));
             }
             if (pressed) {
+                ui::se(ui::SeClick);
                 if (i == 0) {
                     // Shuffle: jump to a random (different) song.
                     if (!groups.empty()) {

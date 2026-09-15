@@ -6,6 +6,7 @@
 #include "Ui.hpp"
 
 #include "Intro.hpp"
+#include "platform/Audio.hpp"
 #include "platform/Renderer.hpp"
 
 #include <algorithm>
@@ -15,6 +16,48 @@
 
 namespace ui
 {
+// ----------------------------------------------------------------------
+// UI sound requests (see SeKind in Ui.hpp). One flag per sound; flushSe()
+// plays the highest one that was asked for this frame.
+// ----------------------------------------------------------------------
+namespace
+{
+    platform::AudioEngine* gSeAudio = nullptr;
+    float gSeVolume = 0.8f;
+    constexpr int kSeKindCount = 5; // ui::SeKind, in priority order
+    bool gSeRequest[kSeKindCount] = {};
+} // namespace
+
+void bindSe(platform::AudioEngine* audio, float volume)
+{
+    gSeAudio = audio;
+    gSeVolume = std::clamp(volume, 0.0f, 1.0f);
+}
+
+void se(SeKind kind)
+{
+    if (gSeAudio == nullptr) {
+        return;
+    }
+    const int index = static_cast<int>(kind);
+    if (index >= 0 && index < kSeKindCount) {
+        gSeRequest[index] = true;
+    }
+}
+
+void flushSe()
+{
+    int pick = -1;
+    for (int i = 0; i < kSeKindCount; ++i) {
+        if (gSeRequest[i]) {
+            pick = i; // highest priority wins
+        }
+        gSeRequest[i] = false;
+    }
+    if (pick >= 0 && gSeAudio != nullptr) {
+        gSeAudio->playUiSe(static_cast<platform::AudioEngine::UiSe>(pick), gSeVolume);
+    }
+}
 namespace
 {
     ImU32 withAlpha(ImU32 col, float alpha)
@@ -45,6 +88,7 @@ namespace
         bool open = false;         // target state
         bool wasOpen = false;      // for reopening (reset drag)
         bool ended = false;        // close anim finished; next call reopens
+        bool soundOpen = false;    // the entrance sound was already played
         ImVec2 drag{0.0f, 0.0f};   // accumulated header-drag offset
     };
 
@@ -52,6 +96,16 @@ namespace
     {
         static std::unordered_map<ImGuiID, CardState> states;
         return states[ImGui::GetID(id)];
+    }
+
+    // Starts closing a card: window_close is reported here (same frame as the
+    // press that dismissed it, so it outranks that press's click) and the
+    // bookkeeping is cleared so beginCard does not report a second one.
+    void requestClose(CardState& st)
+    {
+        st.open = false;
+        st.soundOpen = false;
+        se(SeWindowClose);
     }
 
     // ------------------------------------------------------------------
@@ -111,6 +165,14 @@ bool beginCard(const char* id, ImVec2* center, ImVec2* size, bool showClose, boo
         st.drag = ImVec2(0.0f, 0.0f);
     }
     st.open = open;
+    // Dialog sounds: the entrance one fires when the card is (re)opened, and a
+    // plain open=false from the caller (H key, a state change) is caught here.
+    if (open && !st.soundOpen) {
+        st.soundOpen = true;
+        se(SeWindowOpen);
+    } else if (!open && st.soundOpen) {
+        requestClose(st);
+    }
     st.t = std::clamp(st.t + (open ? 1.0f : -1.0f) * ImGui::GetIO().DeltaTime / kAnimSec, 0.0f, 1.0f);
     const float k = easeInOut(st.t);
 
@@ -197,6 +259,11 @@ bool beginCard(const char* id, ImVec2* center, ImVec2* size, bool showClose, boo
             ImVec2(closeHi.x - inset, closeHi.y - inset), ImVec2(0, 0), ImVec2(1, 1),
             withAlpha(IM_COL32(255, 255, 255, 255), (hovered ? 0.55f : 1.0f) * k));
         headerRight = closeLo.x - 2.0f * s;
+        if (clicked) {
+            // Dismissing via the X closes the card right away, so the close
+            // sound replaces the click instead of queueing up behind it.
+            requestClose(st);
+        }
         if (closeClicked != nullptr) {
             *closeClicked = clicked;
         }
@@ -259,6 +326,7 @@ int tabBar(const char* id, const std::vector<std::string>& tabs, int* active, fl
         const bool hovered = ImGui::IsItemHovered();
         const float hov = animToggle(ImGui::GetItemID() ^ 0x51u, hovered && !isActive, 14.0f);
         if (ImGui::IsItemClicked()) {
+            se(SeClick);
             result = static_cast<int>(i);
             *active = result;
         }
@@ -324,6 +392,9 @@ bool slider(const char* id, float* value, float minV, float maxV, float step, co
     ImGui::InvisibleButton("##track", ImVec2(trackX1 - trackX0 + thumbR * 2.0f, thumbR * 4.0f));
     const bool trackHot = ImGui::IsItemHovered() || ImGui::IsItemActive();
     if (ImGui::IsItemActive()) {
+        if (ImGui::IsItemActivated()) {
+            se(SeClick);
+        }
         const float mx = ImGui::GetIO().MousePos.x;
         const float t = std::clamp((mx - trackX0) / std::max(1.0f, trackX1 - trackX0), 0.0f, 1.0f);
         const float v = minV + (maxV - minV) * t;
@@ -343,6 +414,9 @@ bool slider(const char* id, float* value, float minV, float maxV, float step, co
         const bool held = ImGui::IsItemActive();
         const bool hovered = ImGui::IsItemHovered();
         const ImGuiID btnKey = ImGui::GetItemID();
+        if (clicked) {
+            se(SeClick);
+        }
         ImGui::SetCursorScreenPos(ImVec2(0.0f, 0.0f));
         ImU32 fill = kDarkBtn;
         // Hover / press blend rather than snap, so the row does not flicker when
@@ -426,6 +500,9 @@ bool capsuleButton(const char* label, const ImVec2& sizeIn, bool primary)
     const bool clicked = ImGui::IsItemClicked();
     const bool hovered = ImGui::IsItemHovered();
     const bool held = ImGui::IsItemActive();
+    if (clicked) {
+        se(SeClick);
+    }
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImGuiID btnKey = ImGui::GetItemID();
@@ -489,6 +566,7 @@ bool combo(const char* id, const char* preview, const std::vector<std::string>& 
             if (ImGui::Selectable(items[i].c_str(), *index == i)) {
                 *index = i;
                 changed = true;
+                se(SeClick);
             }
         }
         ImGui::EndCombo();
@@ -577,6 +655,9 @@ bool checkBox(const char* label, bool* value, float rowWidth)
     if (clicked && value != nullptr) {
         *value = !*value;
     }
+    if (clicked) {
+        se(SeClick);
+    }
     const bool checked = value != nullptr && *value;
 
     const ImGuiID boxKey = ImGui::GetItemID();
@@ -641,6 +722,9 @@ bool stepper(const char* id, float* value, const std::vector<float>& deltas, con
         const bool hovered = ImGui::IsItemHovered();
         const bool held = ImGui::IsItemActive();
         const ImGuiID key = ImGui::GetItemID();
+        if (clicked) {
+            se(SeClick);
+        }
         ImU32 f = mixColor(fill, IM_COL32(240, 240, 247, 255), animToggle(key ^ 0x41u, hovered, 16.0f));
         f = mixColor(f, IM_COL32(214, 214, 228, 255), animToggle(key ^ 0x42u, held, 28.0f));
         dl->AddRectFilled(ImVec2(lo.x, lo.y + 2.0f * s), ImVec2(hi.x, hi.y + 2.0f * s),
@@ -734,7 +818,6 @@ int messageDialog(platform::Renderer& renderer, const char* id, const char* titl
     if (closeClicked) {
         st.open = false; // animate out; caller sees -2 when done
     }
-
     ImGui::SetCursorScreenPos(ImVec2(center.x - size.x * 0.5f + 30.0f * s, center.y - size.y * 0.5f + 20.0f * s));
     cardTitle(title, size.x - 60.0f * s);
 
@@ -747,7 +830,9 @@ int messageDialog(platform::Renderer& renderer, const char* id, const char* titl
         ImGui::SetCursorScreenPos(ImVec2(x, y));
         if (capsuleButton(buttons[i].c_str(), ImVec2(btnW, btnH), isPrimary)) {
             result = static_cast<int>(i);
-            st.open = false; // button dismisses the dialog
+            // A button dismisses the dialog: window_close wins over the click
+            // the capsule just queued, so only one sound is heard.
+            requestClose(st);
         }
         x += btnW + gap;
     }

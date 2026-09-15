@@ -673,6 +673,27 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
   命令行参数 > userdata.json > 内置默认（`*Given` 标志记录哪些来自命令行）。
   **它被 .gitignore 忽略**（个人成绩，不是源码）。`--screenshot` 模式不会写这个文件。
 
+## UI 音效（2026-09-15，`ui::se` / `ui::flushSe`）
+
+- 素材在 `assets/se/`：`click.mp3`（任意组件按下）、`select.mp3`（选曲列表每动一格）、
+  `level_choose.mp3`（难度按钮）、`window_open.mp3` / `window_close.mp3`（卡片 / 弹窗）。
+  `AudioEngine::loadUiSe` 在 `loadSe` 末尾加载（每种 3 个声部），**缺文件只打印一行日志**，
+  不报错——所以精简包 / 无素材时界面照样能跑，只是没声音。
+- 播放**不在按下瞬间**：组件只 `ui::se(...)` 记一个请求，主循环帧尾调一次 `ui::flushSe()`
+  （`main.cpp` 里紧挨 `ImGui::Render()` 之前），由它挑**本帧最高优先级**的那一个播。
+  `ui::SeKind` 的顺序 = 优先级（click < select < level_choose < window_open < window_close），
+  必须和 `platform::AudioEngine::UiSe` 一一对应（目前直接 static_cast）。
+- 为什么要这么绕：**`window_open.mp3` 里本身就混了 click 声**。按下的那一帧弹窗同时开，
+  如果 click 也播就成了双击；同一帧里更高的那个（open/close）把 click 顶掉，正好对上官方手感。
+  所以"按下就开窗 / 关窗"的地方**只报 click 就够了**，不用额外屏蔽。
+- 开 / 关音的触发点在 `beginCard` 里（按 `CardState::soundOpen` 每局只响一次）；关音走
+  `requestClose(st)`，它顺手清 `soundOpen`，这样点 X / 点按钮的那一帧就响 close、下一帧不会
+  再响一次。X 的 `*closeClicked` 语义没变。
+- 接好的地方：`game/Ui.cpp` 全部组件（滑杆、勾选框、stepper、combo、卡片 X）、
+  `main.cpp` 的 HUD 暂停键、`game/SongSelect.cpp` 的滚轮 / 方向键 / 拖拽落点 / 分区字母 /
+  演唱版本 chip / 难度按钮 / 确定 / 随机 / 设置 / 重扫。**拖拽连续滚动只在落点响**（按格响只给
+  滚轮和键盘，否则 fling 会连成一片噪音）。
+
 ## 待办（按优先级）
 
 1. hold 音效循环（SeHoldLoop 未接）与 SE kind 区分（当前键盘全播一个音）

@@ -39,11 +39,31 @@ class AudioEngine
         SeHoldLoopCritical,
     };
 
+    // Menu / dialog sound effects (assets/se: click, select, level_choose,
+    // window_open, window_close). Ordered by priority: when two are requested in
+    // the same frame the later one wins, so a click that opens a dialog is
+    // swallowed by the window_open (that file already has a click baked in) and
+    // a dialog that closes plays window_close instead of the click that
+    // dismissed it. Keep this order in sync with ui::SeKind.
+    enum UiSe
+    {
+        UiSeClick = 0,
+        UiSeSelect,
+        UiSeLevelChoose,
+        UiSeWindowOpen,
+        UiSeWindowClose,
+        UiSeCount,
+    };
+    static constexpr int UI_SE_POOL = 3;
+
     bool init(std::string& outError);
     void shutdown();
 
     bool loadMusic(const std::string& path, std::string& outError);
     bool loadSe(const std::string& dir, std::string& outError);
+    // Loads the UI sound effects. Missing files just leave those slots silent.
+    void loadUiSe(const std::string& dir);
+    void playUiSe(UiSe kind, float volume);
 
     // Starts the internal clock at songTime = -leadInSec; update() then starts
     // the music itself once the clock reaches 0.
@@ -143,6 +163,10 @@ class AudioEngine
     SeBank mSe{};
     bool mHoldLoopPlaying = false;
     int mHoldLoopKind = -1;
+
+    std::array<std::array<ma_sound, UI_SE_POOL>, UiSeCount> mUiSe{};
+    std::array<int, UiSeCount> mUiSeNext = {};
+    std::array<bool, UiSeCount> mUiSeLoaded = {};
 
     bool mCountdownSeLoaded = false;
     ma_sound mCountdownSe{};

@@ -22,10 +22,34 @@
 namespace platform
 {
 class Renderer;
+class AudioEngine;
 }
 
 namespace ui
 {
+// ---- UI sound effects --------------------------------------------------
+// Every widget reports what the player did; the requests are resolved once per
+// frame by flushSe() (called from the main loop), which plays the single
+// highest-priority sound of that frame. That is what keeps a click from
+// doubling up with the dialog it opened: window_open.mp3 already contains a
+// click, so the click is dropped. Order matters - later = stronger.
+enum SeKind
+{
+    SeClick = 0,   // any UI component press
+    SeSelect,      // song list moved one slot / a section jump
+    SeLevelChoose, // difficulty button
+    SeWindowOpen,  // a card / dialog appeared
+    SeWindowClose, // a card / dialog started closing
+};
+
+// Wires the component library to the audio engine (call once after audio init).
+// Nothing is played until this is called, so headless builds stay silent.
+void bindSe(platform::AudioEngine* audio, float volume = 0.8f);
+// Queues one sound for this frame (see the priority note above).
+void se(SeKind kind);
+// Plays the winning request and clears the queue. Once per frame, after all UI.
+void flushSe();
+
 // pjsk palette.
 // Fullscreen dim behind dialogs. Kept light (~33%) on purpose: the stage and
 // the notes stay readable while paused.

@@ -1175,6 +1175,9 @@ int main(int argc, char** argv)
         std::fprintf(stderr, "warning: SE load failed: %s\n", error.c_str());
         error.clear();
     }
+    // UI sound effects (click / select / level_choose / window_open / close).
+    // Requests are queued by the widgets and resolved once per frame below.
+    ui::bindSe(&audio, 0.8f);
     bootLog("audio");
     drawSplash(0.92f, "loading audio");
 
@@ -1964,6 +1967,9 @@ int main(int argc, char** argv)
             return true;
         }
         pauseClickRequested = true;
+        // The pause dialog opens on the same frame, so its window_open sound
+        // outranks this click (that file already carries a click).
+        ui::se(ui::SeClick);
         return true;
     };
 
@@ -3373,6 +3379,10 @@ int main(int argc, char** argv)
             }
         }
 
+        // One sound per frame: the widgets queued their requests while the
+        // frame was drawn, resolve them now (a dialog opening swallows the
+        // click that opened it).
+        ui::flushSe();
         ImGui::Render();
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 

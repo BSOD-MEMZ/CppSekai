@@ -348,7 +348,8 @@ sidecar JSON 支持的字段：`title` `artist` `lyricist` `composer` `arranger`
 ## 7.4 发布 / 打包
 
 ```bash
-bash package.sh            # -> dist/CppSekai-<日期>/  + 同名 .zip（约 2.7 MB）
+bash package.sh              # -> dist/CppSekai-<日期>/ + 同名 .zip（约 66 MB / 51 MB，自带素材）
+bash package.sh --no-assets  # 精简包（约 2.7 MB，用户侧跑 setup.sh 拉素材）
 ```
 
 打出来的东西就是发 Release 该传的全部文件：
@@ -358,18 +359,20 @@ bash package.sh            # -> dist/CppSekai-<日期>/  + 同名 .zip（约 2.7
 | `cppsekai.exe` / `chartdl.exe` | 游戏本体 + 谱面下载器（图标和版本信息已嵌进 exe，由 `app.rc` 提供） |
 | `SDL2.dll` | 唯一的运行时依赖（**必须和 exe 同目录**） |
 | `icon.png` | 运行时窗口 / 任务栏图标（exe 里已有一份，这张是运行时读的） |
+| `assets/` | 贴图 / 字体 / UI 音效 / 开屏图。**默认打包**（游戏启动就从 `<exe>/assets` 读，不带跑不起来）；`--no-assets` 则不带 |
 | `musics.json` `music-vocals.json` `music-levels.json` | 官方**事实数据**：曲名 / 读音 / 定数 / 演唱版本表。缺了也能开，但曲名会退化成文件名、分组排序失效 |
-| `setup.sh` | 用户跑一次 `bash setup.sh --assets-only` 拉取贴图与音效 |
+| `setup.sh` | 精简包用：用户跑一次 `bash setup.sh --assets-only` 拉取贴图与音效 |
 | `README.md` `SETUP.md` `COPYRIGHT.md` `LICENSE` | 说明与许可（AGPL-3.0-only，发二进制必须附带） |
 | `charts/`（空目录 + 说明） | 谱面放这里，或用 chartdl 下载 |
 
-**不要上传**（COPYRIGHT.md 第二节明确禁止）：
+**不要上传**：
 
-- `assets/`、`charts/`、`Drafts/` —— 全是官方素材 / 官方谱面音频，仓库里跟源码一起托管已经是"先 commit 后加规则"的历史遗留，**发布二进制时不能再带**
+- `charts/`、`Drafts/` —— 官方谱面音频，仓库里跟源码一起托管已经是"先 commit 后加规则"的历史遗留，**发布二进制时不能再带**；谱面一律用 `chartdl.exe` 下
 - `toolchain/`（编译器）、`build/`（中间产物）、`userdata.json`（个人成绩与设置）、`*.log`
 
-也就是说：发布包**不自带素材**，用户第一次运行时先跑 `bash setup.sh --assets-only`
-（从上游 AGPL 仓库拉 `assets/mmw`），谱面用 `chartdl.exe` 下。README 与 `charts/放谱面到这里.txt` 里都写了。
+`assets/` 是官方美术 / 音频（COPYRIGHT.md 第一节）。默认塞进 Release 是为了**开箱即用**
+（解压双击就能玩，只要再用 chartdl 下谱面）；在意再分发就用 `--no-assets`，
+用户侧跑 `bash setup.sh --assets-only`。
 
 ## 7.5 谱面下载器（`chartdl.exe`，单独的小程序）
 
