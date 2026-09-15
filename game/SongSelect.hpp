@@ -5,6 +5,8 @@
 
 #include "platform/Renderer.hpp"
 
+#include "imgui.h" // ImVec2 in drawSongSelect's out-parameter
+
 #include <map>
 #include <string>
 #include <vector>
@@ -82,6 +84,10 @@ struct UserSettings
     float perfectMs = 40.0f;
     float greatMs = 90.0f;
     float goodMs = 140.0f;
+    // Life a run starts with (100..1000; kMaxLife is 1000 and the HUD bar measures
+    // against it, so a lower value simply starts the bar part-filled). Pushed to
+    // the judgement engine, which seeds its stats from it on every reset.
+    float initialLife = 1000.0f;
     bool strictFlick = true;
     // Autoplay chart preview (all-PERFECT run, AUTO judge text, no records).
     bool autoplay = false;
@@ -254,9 +260,12 @@ enum SelectAction
 // version currently picked for the selected song, so the caller can point the
 // entry at that audio before starting. -1 = the song has no chooser at all.
 // `uiScale` scales the whole 1080p canvas this screen is laid out on (1.0 =
-// exactly fit the window, see UserSettings::uiScale).
+// exactly fit the window, see UserSettings::uiScale). `confirmCenter` receives
+// the on-screen centre of the 确定 button, which main.cpp uses as the origin of
+// the white confirm flash (the button is drawn tilted, so this is the tilted
+// position, not the layout one).
 int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& entries, int& selected,
     int windowW, int windowH, float timeSec, int& sortMode, int& groupMode, int& vocalIndex,
-    float uiScale = 1.0f);
+    float uiScale = 1.0f, ImVec2* confirmCenter = nullptr);
 
 } // namespace game

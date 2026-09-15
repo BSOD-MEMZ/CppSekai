@@ -61,6 +61,10 @@ void JudgementEngine::load(const float* packed, int count)
     mMissedHoldKeys.clear();
     mHitEventIndices.clear();
     mStats = JudgementStats{};
+    // Loading a chart wipes the stats just like reset() does, so the configured
+    // starting life has to be seeded here too - this is the one that runs last
+    // when a session starts (reset() then load()).
+    mStats.life = std::clamp(mInitialLife, 1.0f, kMaxLife);
     mLoaded = true;
 
     // Score-able notes: taps, flicks, traces, hold starts and hold tails.
@@ -237,6 +241,10 @@ void JudgementEngine::reset()
     mMissedHoldKeys.clear();
     mHitEventIndices.clear();
     mStats = JudgementStats{};
+    // Settings > 判定 > 初始血量: a smaller pool makes the clear harder (the bar and
+    // the clear check both measure against kMaxLife, so the run simply starts
+    // part-filled).
+    mStats.life = std::clamp(mInitialLife, 1.0f, kMaxLife);
     mComboFactor = 1.0;
 }
 

@@ -417,6 +417,7 @@ void loadUserData(const std::string& path, UserSettings& settings,
             settings.perfectMs = s.value("perfectMs", settings.perfectMs);
             settings.greatMs = s.value("greatMs", settings.greatMs);
             settings.goodMs = s.value("goodMs", settings.goodMs);
+            settings.initialLife = s.value("initialLife", settings.initialLife);
             settings.strictFlick = s.value("strictFlick", settings.strictFlick);
             settings.autoplay = s.value("autoplay", settings.autoplay);
             settings.autoPauseOnBlur = s.value("autoPauseOnBlur", settings.autoPauseOnBlur);
@@ -436,6 +437,8 @@ void loadUserData(const std::string& path, UserSettings& settings,
     settings.perfectMs = std::clamp(settings.perfectMs, 10.0f, 100.0f);
     settings.greatMs = std::max(settings.greatMs, settings.perfectMs + 10.0f);
     settings.goodMs = std::max(settings.goodMs, settings.greatMs + 10.0f);
+    // 100 = one MISS from failing, 1000 = kMaxLife (the default).
+    settings.initialLife = std::clamp(settings.initialLife, 100.0f, 1000.0f);
     settings.windowWidth = std::clamp(settings.windowWidth, 320, 7680);
     settings.windowHeight = std::clamp(settings.windowHeight, 240, 4320);
     settings.bgStyle = std::clamp(settings.bgStyle, 0, 1);
@@ -471,6 +474,7 @@ void saveUserData(const std::string& path, const UserSettings& settings,
         {"perfectMs", settings.perfectMs},
         {"greatMs", settings.greatMs},
         {"goodMs", settings.goodMs},
+        {"initialLife", settings.initialLife},
         {"strictFlick", settings.strictFlick},
         {"autoplay", settings.autoplay},
         {"autoPauseOnBlur", settings.autoPauseOnBlur},
@@ -1642,7 +1646,7 @@ void loadMusicVocals(const std::string& path)
 
 int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& entries, int& selected,
     int windowW, int windowH, float timeSec, int& sortMode, int& groupMode, int& vocalIndex,
-    float uiScale)
+    float uiScale, ImVec2* confirmCenter)
 {
     int action = SelectNone;
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
@@ -2882,6 +2886,11 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         ImGui::PopID();
         dl->AddRectFilled(okA, okB, okHovered ? ui::kPrimaryHover : ui::kPrimary, okH * 0.5f);
         addTextCentered(dl, body, 22.0f * k, ImVec2(cx, (okA.y + okB.y) * 0.5f), ui::kBtnText, "确定");
+        // Where the button actually lands on screen (it is tilted with the phone),
+        // so main.cpp can start the confirm flash from it.
+        if (confirmCenter != nullptr) {
+            *confirmCenter = tiltPoint(ImVec2(cx, (okA.y + okB.y) * 0.5f));
+        }
         if (okPressed) {
             action = selected;
         }

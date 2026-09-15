@@ -158,6 +158,25 @@ bash build.sh          # 仅需 Git Bash；产物 build/cppsekai.exe + SDL2.dll 
   系统会把窗口位图拉伸（糊），同时 `SDL_WINDOW_ALLOW_HIGHDPI` 因为没有感知而没有实际作用。
   要改就得同时动 manifest 和 SDL hint，并且窗口的物理尺寸语义会跟着变（高 DPI 下窗口变小），
   所以一直是"记录在案、没动"。
+- **两个全屏转场（都在 `main.cpp` 末尾，画在 foreground draw list 上）**：
+  - **确定 → 白光**：点「确定」**不立刻** `startSession`，而是先起白光（
+    `confirmFlashOrigin` 由 `drawSongSelect` 的 `confirmCenter` 出参给出，是**倾斜后**的
+    按钮中心），0.28s 扩散 + 0.16s 全白 + 0.55s 褪去。`startSession` 在白光铺满那一刻才调，
+    于是**加载谱面 / 音频 / 生成舞台底板（实测 ~1.0s）全部发生在白屏后面**。时间轴用
+    `min(frameDelta, 0.05)` 累加，否则卡顿那一帧的 delta 会把褪色直接跳过去。
+  - **曲末 → 渐暗**：`songEndBlackout` 在 `songTime` 进入 `effectiveEnd - 1.2s` 时升到 1
+    （`effectiveEnd` 就是结算触发用的那个时刻，`--result-at` 调试覆盖也算），结算画面里再用
+    0.6s 把它降回 0。实测：t=7.4s 亮度 33.8 → 7.95s 2.9（纯黑）→ 8.6s 80.4（结算页）。
+- **初始血量**（`UserSettings::initialLife`，100..1000）：`JudgementEngine::setInitialLife()` 存一份，
+  **`reset()` 和 `load()` 两处都要种一次** —— 两者都会 `mStats = JudgementStats{}`，而一次开局
+  reset() 之后紧跟 load()，只改 reset() 的话会被 load() 覆盖回 1000（这个坑实测过一次）。
+- **env 诊断**：`CPSEKAI_UI_TRACE=1` 打 `[ui] tab N view=… used=… scrollMax=…`（设置页签高度，
+  用来判断"内容挤不下"是没撑开还是被裁掉）和 `[ui] confirm button at x,y`（无头点确定用的坐标，
+  1920x1080 下是 1623,783）。注意 **`--screenshot` 会把 stdout 重定向到 `cppsekai.log`**，
+  所以这类日志要从日志文件里读。
+- **设置卡片的内容是可滚动的**（画面页实测 `used=866 > view=642`）：child 里去掉了
+  `ImGuiWindowFlags_NoScrollbar`，首行用 `SetCursorPos`（**窗口内坐标**）而不是
+  `SetCursorScreenPos`，否则滚动时第一行会被钉住不动。
 - **`AudioEngine::loadMusic()` 必须先 `ma_sound_uninit` 掉上一首**：miniaudio 的
   `ma_sound_init_from_file` 内部会 `MA_ZERO_OBJECT(pSound)`，对已经初始化的 ma_sound 再 init
   会把它在引擎资源表里的节点丢掉，之后引擎遍历到坏节点直接假死。表现就是「打到一半点放弃、

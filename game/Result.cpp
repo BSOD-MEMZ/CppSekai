@@ -545,9 +545,14 @@ void drawResult(platform::Renderer& renderer, const ResultData& data, float elap
     // -----------------------------------------------------------------------
     // Background: diagonal navy -> purple wash, the faint collage pattern and
     // the giant RESULT watermark.
+    //
+    // The wash is deliberately not opaque: the stage plate that
+    // renderer.renderFrame() drew below (the song's own backdrop, or the default
+    // room) is supposed to stay visible through it. At 255 it buried the plate
+    // completely; 0.7 keeps the screen readable and lets it read through.
     // -----------------------------------------------------------------------
     {
-        const int a = static_cast<int>(appear * 255.0f);
+        const int a = static_cast<int>(appear * 255.0f * 0.70f);
         dl->AddRectFilledMultiColor(c.p(0.0f, 0.0f), c.p(kCanvasW, kCanvasH), IM_COL32(46, 47, 74, a),
             IM_COL32(47, 47, 78, a), IM_COL32(74, 62, 124, a), IM_COL32(48, 48, 72, a));
     }

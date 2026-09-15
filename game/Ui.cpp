@@ -467,13 +467,24 @@ bool combo(const char* id, const char* preview, const std::vector<std::string>& 
     ImGui::PushID(id);
     const ImGuiID key = ImGui::GetID("##combo");
     // ImGui rebuilds the popup from scratch on every frame it is open, so an
-    // eased 0..1 is what turns "it appeared" into "it faded in".
+    // eased 0..1 is what turns "it appeared" into "it slid in". The value is read
+    // *before* BeginCombo, so on the frame the popup opens it is still 0 and the
+    // popup starts offset, then settles - that is the animation.
+    //
+    // Deliberately no alpha: pushing ImGuiStyleVar_Alpha around BeginCombo made
+    // the *closed* combo translucent too (t stays 0 while closed), which is how
+    // this ended up looking permanently washed out.
     const float t = animValue(key, ImGui::IsPopupOpen("##combo", ImGuiPopupFlags_None) ? 1.0f : 0.0f,
-        30.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.3f + 0.7f * t);
+        14.0f);
     ImGui::SetNextItemWidth(width);
     bool changed = false;
     if (ImGui::BeginCombo("##combo", preview, flags | ImGuiComboFlags_NoArrowButton)) {
+        // Slide the popup down into place. ImGui re-anchors it under the combo on
+        // every frame (SetNextWindowPos with ImGuiCond_Always inside
+        // BeginComboPopup), so this offset is recomputed from the anchor and
+        // cannot drift.
+        const ImVec2 popupPos = ImGui::GetWindowPos();
+        ImGui::SetWindowPos(ImVec2(popupPos.x, popupPos.y - (1.0f - t) * 14.0f * s));
         for (int i = 0; i < static_cast<int>(items.size()); ++i) {
             if (ImGui::Selectable(items[i].c_str(), *index == i)) {
                 *index = i;
@@ -482,7 +493,6 @@ bool combo(const char* id, const char* preview, const std::vector<std::string>& 
         }
         ImGui::EndCombo();
     }
-    ImGui::PopStyleVar();
     // Own chevron: the built-in one is painted inside the widget and cannot be
     // animated, so it is suppressed above and drawn here instead - it rotates as
     // the list opens and back when it closes.

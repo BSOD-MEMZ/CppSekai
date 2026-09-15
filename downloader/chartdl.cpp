@@ -943,9 +943,9 @@ namespace
 
     // Fills the list from gSongs, keeping the current search filter and the
     // check state of the songs that stay visible.
-    // Marks the column the list is sorted by: the native header arrow (needs
-    // comctl32 v6, which chartdl.manifest asks for) plus a text marker, since the
-    // arrow is easy to miss and does not appear at all without a theme.
+    // Marks the column the list is sorted by with the header's own sort arrow
+    // (HDF_SORTUP/DOWN, needs comctl32 v6 - chartdl.manifest asks for it). No text
+    // marker: the arrow is the native affordance and keeps the titles readable.
     //
     // Written straight to the header control: the ListView keeps its own copy of
     // the column text and (under v6) does not push a later LVM_SETCOLUMN through
@@ -957,21 +957,13 @@ namespace
             return;
         }
         for (int i = 0; i < kColumnCount; ++i) {
-            const bool sorted = i == gSortColumn;
-            std::wstring title = kColumnTitles[i];
-            if (sorted) {
-                title += gSortAscending ? L" ▲" : L" ▼";
-            }
             HDITEMW item{};
             item.mask = HDI_FORMAT;
             if (Header_GetItem(header, i, &item) == FALSE) {
                 continue;
             }
-            item.mask = HDI_TEXT | HDI_FORMAT;
-            item.pszText = const_cast<wchar_t*>(title.c_str());
-            item.cchTextMax = static_cast<int>(title.size());
             item.fmt &= ~(HDF_SORTUP | HDF_SORTDOWN);
-            if (sorted) {
+            if (i == gSortColumn) {
                 item.fmt |= gSortAscending ? HDF_SORTUP : HDF_SORTDOWN;
             }
             Header_SetItem(header, i, &item);

@@ -127,6 +127,15 @@ class JudgementEngine
     void load(const float* packed, int count);
     void reset();
 
+    // Life the next session starts with (settings > 判定 > 初始血量). reset() - which
+    // runs per session - seeds the stats from it, so push it before a chart loads.
+    // Clamped to 1..kMaxLife: the HUD bar and the clear check both use kMaxLife.
+    void setInitialLife(float life)
+    {
+        mInitialLife = life > 1.0f ? (life < kMaxLife ? life : kMaxLife) : 1.0f;
+    }
+    [[nodiscard]] float initialLife() const { return mInitialLife; }
+
     // Advances auto-miss / hold tracking. Call once per frame with chart time.
     void update(float songTimeSec);
 
@@ -240,6 +249,7 @@ class JudgementEngine
 
     // Score model (see kTeamPower above).
     float mChartRating = kDefaultChartRating;
+    float mInitialLife = kMaxLife;
     double mWeightedNoteCount = 1.0;
     double mComboFactor = 1.0;
 

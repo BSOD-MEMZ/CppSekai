@@ -1182,6 +1182,13 @@ int main(int argc, char** argv)
     // Judgement
     // ------------------------------------------------------------------
     game::JudgementEngine judgement;
+    // Starting life is a user setting (settings > 判定 > 初始血量) and the engine
+    // seeds every session from its own copy on reset(), so it is pushed once here
+    // and again whenever the slider moves.
+    judgement.setInitialLife(userSettings.initialLife);
+    std::printf("[settings] initialLife setting=%.0f engine=%.0f\n", userSettings.initialLife,
+        judgement.initialLife());
+    std::fflush(stdout);
 
     // Apply the persisted judgement settings before anything is judged.
     {
@@ -1505,6 +1512,28 @@ int main(int argc, char** argv)
     game::ResultData resultData;
     double resultShownAt = 0.0;
     bool resultScheduled = false;
+
+    // -----------------------------------------------------------------------
+    // Screen transitions (both drawn on the foreground draw list, see the end of
+    // the frame loop).
+    // -----------------------------------------------------------------------
+    // Confirm: a white burst out of the 确定 button that fills the screen while the
+    // next song is being loaded. Loading the chart, its audio and its generated
+    // stage plate takes over a second, and a frozen frame is exactly what this
+    // hides - the session is only started once the screen is fully white.
+    constexpr float kConfirmExpand = 0.28f; // burst grows from the button
+    constexpr float kConfirmHold = 0.16f;   // fully white, session loads here
+    constexpr float kConfirmFade = 0.55f;   // white lifts off over the intro
+    bool confirmFlashActive = false;
+    float confirmFlashTime = 0.0f;
+    ImVec2 confirmFlashOrigin{0.0f, 0.0f};
+    bool confirmStartPending = false;
+    game::ChartEntry confirmPendingEntry;
+    ImVec2 selectConfirmCenter{0.0f, 0.0f}; // filled by drawSongSelect each frame
+    // Song end: as the track runs out the screen goes black, and the result screen
+    // fades that black back off. One value drives both halves.
+    constexpr float kSongEndFadeSec = 1.2f;
+    float songEndBlackout = 0.0f;
     double resultPreviousBest = 0.0;
     // Set by the mouse / touch handlers when 继续 was pressed (see
     // resultContinueHitTest): the result screen is not an ImGui window, so it
@@ -1610,12 +1639,21 @@ int main(int argc, char** argv)
             const float contentTop = ImGui::GetCursorScreenPos().y;
             const float contentBottom = cardCenter.y + cardSize.y * 0.5f - 74.0f * s;
             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+            // The tab scrolls when it is taller than the card (画面 has plenty of
+            // rows). Not ImGuiWindowFlags_NoScrollbar any more, and the bar is
+            // styled for the light card instead of ImGui's dark default.
+            ImGui::PushStyleColor(ImGuiCol_ScrollbarBg, IM_COL32(226, 226, 236, 150));
+            ImGui::PushStyleColor(ImGuiCol_ScrollbarGrab, IM_COL32(152, 152, 174, 220));
+            ImGui::PushStyleColor(ImGuiCol_ScrollbarGrabHovered, IM_COL32(126, 126, 152, 240));
+            ImGui::PushStyleColor(ImGuiCol_ScrollbarGrabActive, IM_COL32(106, 106, 132, 255));
             ImGui::SetCursorScreenPos(ImVec2(cardCenter.x - cardSize.x * 0.5f, contentTop));
             ImGui::BeginChild("##tabcontent",
                 ImVec2(cardSize.x, std::max(40.0f * s, contentBottom - contentTop)),
-                ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoScrollbar);
+                ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground);
             ImGui::PopStyleVar();
-            ImGui::SetCursorScreenPos(ImVec2(cardCenter.x - cardSize.x * 0.5f + padX, contentTop + tabSlide));
+            // Window-local coordinates: an absolute screen y here would pin the
+            // first row in place while the rest of the tab scrolls under it.
+            ImGui::SetCursorPos(ImVec2(padX, tabSlide));
 
             if (tab == 0) {
                 // 演奏: audio offset + note speed.
@@ -1789,6 +1827,20 @@ int main(int argc, char** argv)
                 static bool strictFlick = judgement.strictFlick();
                 ui::checkBox("严格 Flick 方向", &strictFlick, interior);
                 judgement.setStrictFlick(strictFlick);
+                // Starting life. The engine seeds every session's stats from its own
+                // copy on reset(), so pushing it here (and once at boot) is enough.
+                float life = judgement.initialLife();
+                contentLeft();
+                ImGui::Text("初始血量");
+                contentLeft();
+                if (ui::slider("initlife", &life, 100.0f, 1000.0f, 50.0f, "%.0f", interior)) {
+                    const float next = std::clamp(life, 100.0f, 1000.0f);
+                    if (next != userSettings.initialLife) {
+                        userSettings.initialLife = next;
+                        judgement.setInitialLife(next);
+                        persistUserData();
+                    }
+                }
                 if (windowsChanged) {
                     game::JudgementWindows windows;
                     windows.perfectMs = perfect;
@@ -1827,9 +1879,20 @@ int main(int argc, char** argv)
             // End on an item: the checkbox helper leaves the cursor at the row
             // bottom with a bare SetCursorScreenPos, which trips ImGui's
             // "don't extend the parent with SetCursorPos" check when the child
-            // is the last window in the frame.
-            ImGui::Dummy(ImVec2(1.0f, 1.0f));
+            // is the last window in the frame. The extra height also keeps the
+            // last row off the card edge and inside the scroll range.
+            ImGui::Dummy(ImVec2(1.0f, 14.0f * s));
+            // Diagnostic (CPSEKAI_UI_TRACE=1): how tall this tab really is against
+            // the view. `used` past `view` means rows are being drawn below the
+            // child and clipped - which is what "the settings do not fit" looks
+            // like, and what a scrollbar has to cover.
+            if (std::getenv("CPSEKAI_UI_TRACE") != nullptr) {
+                std::printf("[ui] tab %d view=%.0f used=%.0f scrollMax=%.0f\n", tab,
+                    ImGui::GetWindowHeight(), ImGui::GetCursorPosY(), ImGui::GetScrollMaxY());
+                std::fflush(stdout);
+            }
             ImGui::EndChild();
+            ImGui::PopStyleColor(4);
             ImGui::PopFont();
             ImGui::PopStyleVar(2);
             ImGui::PopStyleColor(5);
@@ -2545,7 +2608,14 @@ int main(int argc, char** argv)
             const int prevGroupMode = userSettings.groupMode;
             const int action = game::drawSongSelect(renderer, entries, selected, windowW, windowH,
                 static_cast<float>(uiClock), userSettings.sortMode, userSettings.groupMode,
-                selectedVocal, userSettings.uiScale);
+                selectedVocal, userSettings.uiScale, &selectConfirmCenter);
+            // Diagnostic (CPSEKAI_UI_TRACE=1): where the 确定 button landed, in
+            // window pixels - what an input-driving script has to click.
+            if (std::getenv("CPSEKAI_UI_TRACE") != nullptr) {
+                std::printf("[ui] confirm button at %.0f,%.0f (window %dx%d)\n", selectConfirmCenter.x,
+                    selectConfirmCenter.y, windowW, windowH);
+                std::fflush(stdout);
+            }
             if (prevSortMode != userSettings.sortMode || prevGroupMode != userSettings.groupMode) {
                 persistUserData();
             }
@@ -2557,21 +2627,14 @@ int main(int argc, char** argv)
                 // goes in (the entries themselves are const here).
                 game::ChartEntry playEntry = entries[static_cast<size_t>(action)];
                 game::applyVocalVersion(playEntry, game::availableVocals(playEntry), selectedVocal);
-                if (startSession(session, playEntry, renderer, audio, judgement, noteSpeed, error)) {
-                    loadedCoverPath = session.entry.coverPath;
-                    announceTrack();
-                    touches.clear();
-                    std::fill(std::begin(keyHeld), std::end(keyHeld), false);
-                    lanePress.fill(0.0f);
-                    paused = false;
-                    resultScheduled = false;
-                    resultData = game::ResultData{};
-                    state = AppState::Play;
-                    beginSessionClock();
-                } else {
-                    std::fprintf(stderr, "%s\n", error.c_str());
-                    error.clear();
-                }
+                // Kick off the white burst instead of loading right here: the load
+                // is what stalls, so it runs later, once the screen is white (see
+                // the confirm-flash block below).
+                confirmPendingEntry = playEntry;
+                confirmStartPending = true;
+                confirmFlashActive = true;
+                confirmFlashTime = 0.0f;
+                confirmFlashOrigin = selectConfirmCenter;
             } else if (action == game::SelectSettings) {
                 showDebug = true;
             } else if (wantRescan) {
@@ -2749,6 +2812,21 @@ int main(int argc, char** argv)
                     }
                     ++testCursor;
                 }
+            }
+
+            // Fade to black as the track runs out; the result screen inherits this
+            // value and lifts it (see the transition overlays at the end of the
+            // frame). Starting a little before the end means the hand-over happens
+            // on a black screen instead of a hard cut.
+            //
+            // Measured against the same end the result triggers on (including the
+            // --result-at debug override), so the fade always leads into the switch.
+            const double effectiveEnd = resultAtSec > 0.0 ? resultAtSec : trackDurationSec - 0.15;
+            if (trackDurationSec > 1.0) {
+                const float fadeFrom = static_cast<float>(effectiveEnd) - kSongEndFadeSec;
+                const float u = std::clamp((static_cast<float>(songTime) - fadeFrom) / kSongEndFadeSec,
+                    0.0f, 1.0f);
+                songEndBlackout = std::max(songEndBlackout, u);
             }
 
             // ----------------------------------------------------------
@@ -3204,6 +3282,96 @@ int main(int argc, char** argv)
         // PJSK style tap feedback, always on top of whatever is on screen.
         tapEffect.update(frameDelta);
         tapEffect.draw();
+
+        // --- Confirm flash: expand -> hold (the session loads here) -> fade -----
+        // Runs in every state: it starts in Select and has to keep animating while
+        // the intro card is already up.
+        if (confirmFlashActive) {
+            // Clamped: the loading stall lands inside one frame's delta, and the
+            // timeline has to keep its shape across it (the frame the load happens
+            // in simply takes a little longer, and the white covers it).
+            confirmFlashTime += std::min(frameDelta, 0.05f);
+            if (confirmStartPending && confirmFlashTime >= kConfirmExpand) {
+                confirmStartPending = false;
+                if (startSession(session, confirmPendingEntry, renderer, audio, judgement, noteSpeed,
+                        error)) {
+                    loadedCoverPath = session.entry.coverPath;
+                    announceTrack();
+                    touches.clear();
+                    std::fill(std::begin(keyHeld), std::end(keyHeld), false);
+                    lanePress.fill(0.0f);
+                    paused = false;
+                    resultScheduled = false;
+                    resultData = game::ResultData{};
+                    songEndBlackout = 0.0f;
+                    state = AppState::Play;
+                    beginSessionClock();
+                } else {
+                    std::fprintf(stderr, "%s\n", error.c_str());
+                    error.clear();
+                    confirmFlashActive = false; // nothing to reveal: drop the white
+                }
+            }
+            if (!confirmStartPending
+                && confirmFlashTime >= kConfirmExpand + kConfirmHold + kConfirmFade) {
+                confirmFlashActive = false;
+            }
+        }
+
+        // --- Transition overlays (foreground: above every screen) ---------------
+        {
+            ImDrawList* fg = ImGui::GetForegroundDrawList();
+            const float w = static_cast<float>(windowW);
+            const float h = static_cast<float>(windowH);
+            // Song end: the result screen takes the black over and lifts it.
+            if (state == AppState::Result) {
+                songEndBlackout = std::max(0.0f, songEndBlackout - frameDelta / 0.6f);
+            }
+            if (songEndBlackout > 0.002f) {
+                fg->AddRectFilled(ImVec2(0.0f, 0.0f), ImVec2(w, h),
+                    IM_COL32(0, 0, 0, static_cast<int>(std::clamp(songEndBlackout, 0.0f, 1.0f) * 255.0f)));
+            }
+            if (confirmFlashActive) {
+                const float t = confirmFlashTime;
+                float cover = 1.0f;
+                float alpha = 1.0f;
+                if (t < kConfirmExpand) {
+                    const float u = t / kConfirmExpand;
+                    cover = 1.0f - (1.0f - u) * (1.0f - u) * (1.0f - u);
+                } else {
+                    const float f = t - kConfirmExpand - kConfirmHold;
+                    if (f > 0.0f) {
+                        alpha = 1.0f - std::clamp(f / kConfirmFade, 0.0f, 1.0f);
+                    }
+                }
+                if (alpha > 0.002f) {
+                    const int a = static_cast<int>(alpha * 255.0f);
+                    const ImVec2 o = confirmFlashOrigin;
+                    // Far corner: the disc has to reach it to fill the screen.
+                    const float farX = std::max(o.x, w - o.x);
+                    const float farY = std::max(o.y, h - o.y);
+                    const float radius = std::sqrt(farX * farX + farY * farY) * 1.06f;
+                    // Rays first: they are what makes it read as light rather than
+                    // as a growing circle.
+                    const int rays = 16;
+                    for (int i = 0; i < rays; ++i) {
+                        const float ang =
+                            (6.2831853f / static_cast<float>(rays)) * static_cast<float>(i) + 0.21f;
+                        const float len = radius * (0.5f + 1.1f * cover);
+                        const float spread = radius * (0.012f + 0.010f * static_cast<float>(i % 3));
+                        const ImVec2 dir(std::cos(ang), std::sin(ang));
+                        const ImVec2 side(-dir.y, dir.x);
+                        fg->AddTriangleFilled(ImVec2(o.x, o.y),
+                            ImVec2(o.x + dir.x * len + side.x * spread, o.y + dir.y * len + side.y * spread),
+                            ImVec2(o.x + dir.x * len - side.x * spread, o.y + dir.y * len - side.y * spread),
+                            IM_COL32(255, 255, 255, static_cast<int>(static_cast<float>(a) * 0.5f)));
+                    }
+                    // Glow + the disc that ends up covering the screen.
+                    fg->AddCircleFilled(o, radius * cover * 0.55f, IM_COL32(255, 255, 255, a), 48);
+                    fg->AddCircleFilled(o, radius * cover * 1.02f + 1.0f, IM_COL32(255, 255, 255, a), 64);
+                }
+            }
+        }
 
         ImGui::Render();
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
