@@ -98,8 +98,10 @@ main.cpp          # SDL2 窗口、事件循环、输入映射、ImGui HUD、截�
   唯一能看高 DPI 布局的手段。
   **资源分家**：图标 + 版本信息在 `resources.rc`，`app.rc` / `chartdl.rc` 各自 `#include` 它再加
   自己的清单 —— 下载器要 DPI 感知、游戏不要，共用一份 `.res` 做不到。
-  `--screenshot` 抓图前会先 `RedrawWindow(…RDW_ALLCHILDREN)` 强制重绘，否则被冻住的子控件
-  （比如排序后的表头）会被拍成旧的。
+  `--screenshot` 抓图前会先 `RedrawWindow(…RDW_ALLCHILDREN)` 强制重绘，并且
+  **`PrintWindow` 必须带 `PW_CLIENTONLY`** —— 位图是按客户区大小开的，不带它的话 PrintWindow
+  会把整窗（含标题栏）渲染进去，于是顶部 ~30px 变成标题栏、客户区底部被截掉，**图上每个 y 都偏了
+  约 30px**（我就是拿偏移后的坐标去对表头，白绕了两轮）。
   **文本一律走 `toUtf8()` / `windowTextW()`，路径一律留 `std::wstring`**（2026-09-14 修崩溃）：
   之前 `windowText()` 把用户输的 UTF-8 塞进 `fs::path` 再 `.string()` 取回来，而 Windows 上
   `fs::path` 内部是宽字符、窄的那一端是**本地 ANSI 代码页**（日文机 Shift-JIS / 中文机 cp936）。

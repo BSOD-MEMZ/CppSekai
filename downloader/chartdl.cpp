@@ -1506,7 +1506,12 @@ namespace
         void* bits = nullptr;
         HBITMAP bitmap = CreateDIBSection(memDc, &info, DIB_RGB_COLORS, &bits, nullptr, 0);
         HGDIOBJ old = SelectObject(memDc, bitmap);
-        PrintWindow(hwnd, memDc, PW_RENDERFULLCONTENT);
+        // PW_CLIENTONLY matters: the bitmap is client-sized, and without it
+        // PrintWindow renders the *whole* window (title bar included) into it, so
+        // the top ~30 px came out as the caption and the bottom of the client area
+        // was cut off - which also shifted every y coordinate a screenshot check
+        // measures against.
+        PrintWindow(hwnd, memDc, PW_CLIENTONLY | PW_RENDERFULLCONTENT);
 
         std::vector<unsigned char> rgba(static_cast<std::size_t>(width) * height * 4);
         const auto* source = static_cast<const unsigned char*>(bits);
