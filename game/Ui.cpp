@@ -53,6 +53,39 @@ namespace
         static std::unordered_map<ImGuiID, CardState> states;
         return states[ImGui::GetID(id)];
     }
+
+    // ------------------------------------------------------------------
+    // Animation helpers. Each widget owns one eased value in a map keyed by
+    // its ImGui id. The easing is a plain exponential approach towards the
+    // target - frame-rate independent (the step is derived from DeltaTime) and
+    // it can never overshoot, so nothing ends up looking like it wobbles.
+    // ------------------------------------------------------------------
+    float animValue(ImGuiID key, float target, float rate)
+    {
+        static std::unordered_map<ImGuiID, float> values;
+        float& v = values[key];
+        const float dt = std::min(ImGui::GetIO().DeltaTime, 0.1f);
+        v += (target - v) * (1.0f - std::exp(-rate * dt));
+        if (std::fabs(target - v) < 0.0015f) {
+            v = target; // snap, so nothing keeps repainting for a 0.1% change
+        }
+        return v;
+    }
+
+    // Shorthand for the usual "0 at rest, 1 while hovered / held".
+    float animToggle(ImGuiID key, bool on, float rate = 18.0f)
+    {
+        return animValue(key, on ? 1.0f : 0.0f, rate);
+    }
+
+    ImU32 mixColor(ImU32 a, ImU32 b, float t)
+    {
+        const float k = std::clamp(t, 0.0f, 1.0f);
+        const ImVec4 ca = ImGui::ColorConvertU32ToFloat4(a);
+        const ImVec4 cb = ImGui::ColorConvertU32ToFloat4(b);
+        return ImGui::ColorConvertFloat4ToU32(ImVec4(ca.x + (cb.x - ca.x) * k, ca.y + (cb.y - ca.y) * k,
+            ca.z + (cb.z - ca.z) * k, ca.w + (cb.w - ca.w) * k));
+    }
 } // namespace
 
 float scale()
@@ -213,22 +246,29 @@ int tabBar(const char* id, const std::vector<std::string>& tabs, int* active, fl
     ImGui::PushID(id);
     for (size_t i = 0; i < tabs.size(); ++i) {
         const bool isActive = static_cast<int>(i) == *active;
+        // The selected tab slides up out of the row and the colours cross-fade
+        // instead of snapping. Inactive tabs sit a bit lower (bottom aligned).
+        const float act = animToggle(ImGui::GetID(tabs[i].c_str()), isActive, 15.0f);
         const float x0 = pos.x + static_cast<float>(i) * tabW;
-        // Inactive tabs sit a bit lower and are shorter (bottom aligned).
-        const float y0 = isActive ? pos.y : pos.y + 8.0f * s;
+        const float y0 = pos.y + (1.0f - act) * 8.0f * s;
         const ImVec2 lo(x0 + 4.0f * s, y0);
         const ImVec2 hi(x0 + tabW - 4.0f * s, pos.y + tabH);
 
         ImGui::SetCursorScreenPos(lo);
         ImGui::InvisibleButton(tabs[i].c_str(), ImVec2(hi.x - lo.x, hi.y - lo.y));
+        const bool hovered = ImGui::IsItemHovered();
+        const float hov = animToggle(ImGui::GetItemID() ^ 0x51u, hovered && !isActive, 14.0f);
         if (ImGui::IsItemClicked()) {
             result = static_cast<int>(i);
             *active = result;
         }
         ImGui::SetCursorScreenPos(ImVec2(0.0f, 0.0f));
 
-        const ImU32 fill = isActive ? kCardBg : kTabIdle;
-        const ImU32 textColor = isActive ? kTitleText : IM_COL32(125, 125, 148, 255);
+        constexpr ImU32 kTabHover = IM_COL32(238, 238, 246, 255);
+        ImU32 fill = mixColor(kTabIdle, kCardBg, act);
+        fill = mixColor(fill, kTabHover, hov);
+        const ImU32 textColor = mixColor(
+            mixColor(IM_COL32(125, 125, 148, 255), kTitleText, act), kTitleText, hov * 0.7f);
         dl->AddRectFilled(lo, hi, fill, radius, ImDrawFlags_RoundCornersTop);
         const ImVec2 ts = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, tabs[i].c_str());
         dl->AddText(font, fontSize,
@@ -277,12 +317,12 @@ bool slider(const char* id, float* value, float minV, float maxV, float step, co
     const float thumbX = trackX0 + (trackX1 - trackX0) * frac;
     dl->AddRectFilled(ImVec2(trackX0, trackY - trackH * 0.5f), ImVec2(trackX1, trackY + trackH * 0.5f),
         kPrimary, trackH * 0.5f);
-    dl->AddCircleFilled(ImVec2(thumbX, trackY), thumbR + 2.0f * s, IM_COL32(150, 150, 170, 60));
-    dl->AddCircleFilled(ImVec2(thumbX, trackY), thumbR, kWhiteBtn);
 
-    // Drag the thumb.
+    // Drag the thumb. The thumb itself is drawn further down, after the buttons,
+    // so its hover growth is already known by the time it is painted.
     ImGui::SetCursorScreenPos(ImVec2(trackX0 - thumbR, trackY - thumbR * 2.0f));
     ImGui::InvisibleButton("##track", ImVec2(trackX1 - trackX0 + thumbR * 2.0f, thumbR * 4.0f));
+    const bool trackHot = ImGui::IsItemHovered() || ImGui::IsItemActive();
     if (ImGui::IsItemActive()) {
         const float mx = ImGui::GetIO().MousePos.x;
         const float t = std::clamp((mx - trackX0) / std::max(1.0f, trackX1 - trackX0), 0.0f, 1.0f);
@@ -301,11 +341,14 @@ bool slider(const char* id, float* value, float minV, float maxV, float step, co
         ImGui::InvisibleButton(label, ImVec2(btnSize, btnSize));
         const bool clicked = ImGui::IsItemClicked();
         const bool held = ImGui::IsItemActive();
+        const bool hovered = ImGui::IsItemHovered();
+        const ImGuiID btnKey = ImGui::GetItemID();
         ImGui::SetCursorScreenPos(ImVec2(0.0f, 0.0f));
         ImU32 fill = kDarkBtn;
-        if (held) {
-            fill = IM_COL32(72, 72, 86, 255);
-        }
+        // Hover / press blend rather than snap, so the row does not flicker when
+        // the pointer sweeps across the two buttons.
+        fill = mixColor(fill, IM_COL32(96, 96, 114, 255), animToggle(btnKey ^ 0x32u, hovered, 18.0f));
+        fill = mixColor(fill, IM_COL32(72, 72, 86, 255), animToggle(btnKey ^ 0x33u, held, 26.0f));
         dl->AddRectFilled(lo, hi, fill, btnRadius);
         // White glyph.
         const float c = btnSize * 0.5f;
@@ -327,6 +370,13 @@ bool slider(const char* id, float* value, float minV, float maxV, float step, co
         *value = std::min(maxV, *value + step);
         changed = true;
     }
+
+    // Thumb last: it swells a little while the row is hovered or dragged.
+    const float hot = animToggle(ImGui::GetID("##thumb"), trackHot, 16.0f);
+    const float thumbScale = 1.0f + 0.16f * hot;
+    dl->AddCircleFilled(ImVec2(thumbX, trackY), (thumbR + 2.0f * s) * thumbScale,
+        IM_COL32(150, 150, 170, static_cast<int>(60.0f + 60.0f * hot)));
+    dl->AddCircleFilled(ImVec2(thumbX, trackY), thumbR * thumbScale, kWhiteBtn);
     ImGui::PopID();
     ImGui::SetCursorScreenPos(ImVec2(pos.x, pos.y + rowH));
     return changed;
@@ -378,13 +428,22 @@ bool capsuleButton(const char* label, const ImVec2& sizeIn, bool primary)
     const bool held = ImGui::IsItemActive();
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImGuiID btnKey = ImGui::GetItemID();
+    const float hov = animToggle(btnKey ^ 0x11u, hovered, 16.0f);
+    const float press = animToggle(btnKey ^ 0x12u, held, 28.0f);
+    // The capsule grows a hair on hover and gives a little while pressed.
+    const float grow = 1.0f + 0.02f * hov - 0.03f * press;
+    if (grow != 1.0f) {
+        const ImVec2 mid((lo.x + hi.x) * 0.5f, (lo.y + hi.y) * 0.5f);
+        const float hw = (hi.x - lo.x) * 0.5f * grow;
+        const float hh = (hi.y - lo.y) * 0.5f * grow;
+        lo = ImVec2(mid.x - hw, mid.y - hh);
+        hi = ImVec2(mid.x + hw, mid.y + hh);
+    }
     const float radius = (hi.y - lo.y) * 0.5f;
     ImU32 fill = primary ? kPrimary : kWhiteBtn;
-    if (held) {
-        fill = primary ? kPrimaryPress : kWhitePress;
-    } else if (hovered) {
-        fill = primary ? kPrimaryHover : kWhiteHover;
-    }
+    fill = mixColor(fill, primary ? kPrimaryHover : kWhiteHover, hov);
+    fill = mixColor(fill, primary ? kPrimaryPress : kWhitePress, press);
     dl->AddRectFilled(ImVec2(lo.x, lo.y + 3.0f * s), ImVec2(hi.x, hi.y + 3.0f * s), IM_COL32(150, 150, 170, 60),
         radius); // soft shadow
     dl->AddRectFilled(lo, hi, fill, radius);
@@ -395,6 +454,54 @@ bool capsuleButton(const char* label, const ImVec2& sizeIn, bool primary)
     dl->AddText(font, fontSize,
         ImVec2((lo.x + hi.x - textSize.x) * 0.5f, (lo.y + hi.y - textSize.y) * 0.5f), kBtnText, label);
     return clicked;
+}
+
+bool combo(const char* id, const char* preview, const std::vector<std::string>& items, int* index,
+    float width, ImGuiComboFlags flags, float scaleHint)
+{
+    if (index == nullptr) {
+        return false;
+    }
+    const float s = scaleHint > 0.0f ? scaleHint : scale();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImGui::PushID(id);
+    const ImGuiID key = ImGui::GetID("##combo");
+    // ImGui rebuilds the popup from scratch on every frame it is open, so an
+    // eased 0..1 is what turns "it appeared" into "it faded in".
+    const float t = animValue(key, ImGui::IsPopupOpen("##combo", ImGuiPopupFlags_None) ? 1.0f : 0.0f,
+        30.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.3f + 0.7f * t);
+    ImGui::SetNextItemWidth(width);
+    bool changed = false;
+    if (ImGui::BeginCombo("##combo", preview, flags | ImGuiComboFlags_NoArrowButton)) {
+        for (int i = 0; i < static_cast<int>(items.size()); ++i) {
+            if (ImGui::Selectable(items[i].c_str(), *index == i)) {
+                *index = i;
+                changed = true;
+            }
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::PopStyleVar();
+    // Own chevron: the built-in one is painted inside the widget and cannot be
+    // animated, so it is suppressed above and drawn here instead - it rotates as
+    // the list opens and back when it closes.
+    const ImVec2 lo = ImGui::GetItemRectMin();
+    const ImVec2 hi = ImGui::GetItemRectMax();
+    const ImVec2 mid(hi.x - 13.0f * s, (lo.y + hi.y) * 0.5f);
+    const float r = 5.5f * s;
+    const float ang = t * 3.14159265f; // 0 = pointing down, pi = pointing up
+    const float ca = std::cos(ang);
+    const float sa = std::sin(ang);
+    auto rot = [&](float x, float y) {
+        return ImVec2(mid.x + x * ca - y * sa, mid.y + x * sa + y * ca);
+    };
+    const ImVec2 a = rot(-r, -r * 0.45f);
+    const ImVec2 b = rot(r, -r * 0.45f);
+    const ImVec2 c = rot(0.0f, r * 0.62f);
+    dl->AddTriangleFilled(a, b, c, mixColor(IM_COL32(120, 120, 140, 255), kTitleText, t));
+    ImGui::PopID();
+    return changed;
 }
 
 void caption(const char* text, float sizePx, ImU32 color, float rowWidth)
@@ -452,25 +559,32 @@ bool checkBox(const char* label, bool* value, float rowWidth)
     }
     const bool checked = value != nullptr && *value;
 
-    ImU32 fill = checked ? kCheckPink : kWhiteBtn;
-    if (hovered && !checked) {
-        fill = IM_COL32(255, 235, 243, 255);
-    }
+    const ImGuiID boxKey = ImGui::GetItemID();
+    const float tick = animValue(boxKey ^ 0x21u, checked ? 1.0f : 0.0f, 20.0f);
+    const float hov = animToggle(boxKey ^ 0x22u, hovered && !checked, 16.0f);
+    ImU32 fill = mixColor(kWhiteBtn, IM_COL32(255, 235, 243, 255), hov);
+    fill = mixColor(fill, kCheckPink, tick);
     // Radius follows the box: the old 10px corner was tuned for a 32px box and
     // looked round-shouldered once the box shrank to 24.
     const float radius = boxSize * 0.26f;
     dl->AddRectFilled(ImVec2(boxLo.x, boxLo.y + 2.0f * s), ImVec2(boxHi.x, boxHi.y + 2.0f * s),
         IM_COL32(150, 150, 170, 50), radius); // shadow
     dl->AddRectFilled(boxLo, boxHi, fill, radius);
-    if (checked) {
-        // White check: two thick segments.
-        const ImVec2 c1(boxLo.x + boxSize * 0.22f, boxLo.y + boxSize * 0.52f);
-        const ImVec2 c2(boxLo.x + boxSize * 0.44f, boxLo.y + boxSize * 0.74f);
-        const ImVec2 c3(boxLo.x + boxSize * 0.80f, boxLo.y + boxSize * 0.28f);
-        dl->AddPolyline(std::initializer_list<ImVec2>{c1, c2, c3}.begin(), 3, IM_COL32(255, 255, 255, 255),
-            0, 4.0f * s);
-    } else {
-        dl->AddRect(boxLo, boxHi, kDivider, radius, 0, 2.0f * s);
+    if (tick > 0.02f) {
+        // White check: two thick segments, growing out of the middle of the box
+        // as the state flips (and fading with it).
+        const float grow = 0.5f + 0.5f * tick;
+        const ImVec2 mid((boxLo.x + boxHi.x) * 0.5f, (boxLo.y + boxHi.y) * 0.5f);
+        auto scaled = [&](float x, float y) {
+            return ImVec2(mid.x + (x - mid.x) * grow, mid.y + (y - mid.y) * grow);
+        };
+        const ImVec2 pts[3] = {scaled(boxLo.x + boxSize * 0.22f, boxLo.y + boxSize * 0.52f),
+            scaled(boxLo.x + boxSize * 0.44f, boxLo.y + boxSize * 0.74f),
+            scaled(boxLo.x + boxSize * 0.80f, boxLo.y + boxSize * 0.28f)};
+        dl->AddPolyline(pts, 3, withAlpha(IM_COL32(255, 255, 255, 255), tick), 0, 4.0f * s);
+    }
+    if (tick < 0.99f) {
+        dl->AddRect(boxLo, boxHi, withAlpha(kDivider, 1.0f - tick), radius, 0, 2.0f * s);
     }
     dl->AddText(font, fontSize, ImVec2(boxHi.x + gap, boxLo.y + (boxSize - textSize.y) * 0.5f), kBodyText, label);
     ImGui::SetCursorScreenPos(ImVec2(pos.x, pos.y + boxSize + 8.0f * s));
@@ -506,12 +620,9 @@ bool stepper(const char* id, float* value, const std::vector<float>& deltas, con
         const bool clicked = ImGui::IsItemClicked();
         const bool hovered = ImGui::IsItemHovered();
         const bool held = ImGui::IsItemActive();
-        ImU32 f = fill;
-        if (held) {
-            f = IM_COL32(214, 214, 228, 255);
-        } else if (hovered) {
-            f = IM_COL32(240, 240, 247, 255);
-        }
+        const ImGuiID key = ImGui::GetItemID();
+        ImU32 f = mixColor(fill, IM_COL32(240, 240, 247, 255), animToggle(key ^ 0x41u, hovered, 16.0f));
+        f = mixColor(f, IM_COL32(214, 214, 228, 255), animToggle(key ^ 0x42u, held, 28.0f));
         dl->AddRectFilled(ImVec2(lo.x, lo.y + 2.0f * s), ImVec2(hi.x, hi.y + 2.0f * s),
             IM_COL32(150, 150, 170, 50), btnH * 0.5f); // shadow
         dl->AddRectFilled(lo, hi, f, btnH * 0.5f);

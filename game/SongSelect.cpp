@@ -1821,24 +1821,15 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         ImGui::PushFont(body, 17.0f * k);
         ImGui::SetCursorScreenPos(ImVec2(comboX0, headerRowY));
         ImGui::SetNextItemWidth(comboW);
-        if (ImGui::BeginCombo("##sortby", sortPreview.c_str(), ImGuiComboFlags_HeightSmall)) {
-            for (int i = 0; i < 2; ++i) {
-                if (ImGui::Selectable(kSortLabels[i], sortMode == i)) {
-                    sortMode = i;
-                }
-            }
-            ImGui::EndCombo();
-        }
+        // ui::combo is the same popup plus a fade-in and a rotating chevron;
+        // `k` is handed over because this screen has its own px-per-unit scale.
+        const std::vector<std::string> sortItems{kSortLabels[0], kSortLabels[1]};
+        ui::combo("##sortby", sortPreview.c_str(), sortItems, &sortMode, comboW,
+            ImGuiComboFlags_HeightSmall, k);
         ImGui::SetCursorScreenPos(ImVec2(comboX0 + comboW + comboGap, headerRowY));
-        ImGui::SetNextItemWidth(comboW);
-        if (ImGui::BeginCombo("##groupby", groupPreview.c_str(), ImGuiComboFlags_HeightSmall)) {
-            for (int i = 0; i < kGroupCount; ++i) {
-                if (ImGui::Selectable(kGroupLabels[i], groupMode == i)) {
-                    groupMode = i;
-                }
-            }
-            ImGui::EndCombo();
-        }
+        const std::vector<std::string> groupItems(kGroupLabels, kGroupLabels + kGroupCount);
+        ui::combo("##groupby", groupPreview.c_str(), groupItems, &groupMode, comboW,
+            ImGuiComboFlags_HeightSmall, k);
         ImGui::PopFont();
         ImGui::PopStyleVar(2);
         ImGui::PopStyleColor(8);

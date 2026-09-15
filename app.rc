@@ -34,3 +34,9 @@ BEGIN
         VALUE "Translation", 0x0804, 1200
     END
 END
+
+// Application manifest (RT_MANIFEST = 24, CREATEPROCESS_MANIFEST_RESOURCE_ID = 1).
+// Declares the Common Controls 6.0 dependency, so the downloader's native
+// widgets come up themed instead of in the flat Windows 95 style. Details in
+// app.manifest next to this file.
+1 24 "app.manifest"

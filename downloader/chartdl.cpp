@@ -42,6 +42,7 @@
 #include <functional>
 #include <map>
 #include <mutex>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -292,6 +293,10 @@ const char* kDiffNames[5] = {"easy", "normal", "hard", "expert", "master"};
 
 std::vector<Song> gSongs;
 std::string gDataError;
+// How many rows in musics.json were dropped because their id was already taken.
+// Reported on the log so a broken table is visible instead of silently "just
+// working" (see loadData).
+int gDuplicateIds = 0;
 
 std::string id4(int id)
 {
@@ -342,6 +347,12 @@ void loadData()
     if (!readJson("musics.json", musics) || !musics.is_array()) {
         return;
     }
+    // One id = one row. Every file name the downloader builds comes from the id
+    // ("0374_normal.sus"), so a duplicated id would list the same song twice and
+    // point two jobs at the same path. The upstream tables have shipped one id
+    // twice, so the later copy is dropped here - and counted, so the log says it
+    // instead of hiding the problem.
+    std::set<int> seenIds;
     for (const auto& row : musics) {
         if (!row.is_object()) {
             continue;
@@ -356,6 +367,10 @@ void loadData()
         song.jacket = row.value("assetbundleName", std::string{});
         song.fillerSec = row.value("fillerSec", 0.0);
         if (song.id > 0 && !song.title.empty()) {
+            if (!seenIds.insert(song.id).second) {
+                ++gDuplicateIds;
+                continue;
+            }
             gSongs.push_back(std::move(song));
         }
     }
@@ -848,9 +863,15 @@ namespace
         ListView_DeleteAllItems(gList);
         gRowSong.clear();
 
+        // Second guard on top of loadData's: whatever ended up in gSongs, one id
+        // gets exactly one row here.
+        std::set<int> listedIds;
         for (std::size_t i = 0; i < gSongs.size(); ++i) {
             const Song& song = gSongs[i];
             if (!matchesFilter(song, filter)) {
+                continue;
+            }
+            if (!listedIds.insert(song.id).second) {
                 continue;
             }
             wchar_t id[16];
@@ -1292,6 +1313,9 @@ namespace
         if (!gDataError.empty()) {
             appendLog(std::string("[data] ") + gDataError);
         }
+        if (gDuplicateIds > 0) {
+            appendLog("[data] dropped " + std::to_string(gDuplicateIds) + " duplicate song id(s)");
+        }
 
         WNDCLASSEXW windowClass{};
         windowClass.cbSize = sizeof(windowClass);
@@ -1419,6 +1443,9 @@ int main(int argc, char** argv)
         std::fprintf(stderr, "[data] %s\n", gDataError.c_str());
     }
     note("[data] " + std::to_string(gSongs.size()) + " songs");
+    if (gDuplicateIds > 0) {
+        note("[data] dropped " + std::to_string(gDuplicateIds) + " duplicate song id(s)");
+    }
     InitCommonControls();
 
     auto difficultyMask = [&](bool mask[5]) {

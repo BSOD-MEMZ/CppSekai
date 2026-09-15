@@ -106,6 +106,14 @@ bool checkBox(const char* label, bool* value, float rowWidth = 0.0f);
 bool stepper(const char* id, float* value, const std::vector<float>& deltas,
     const char* fmt = "%.2f", float rowWidth = 0.0f);
 
+// Themed combo box: ImGui's popup plus an eased fade-in and a chevron that
+// rotates while the list is open. `index` is read and written; returns true
+// when the selection changed. `scaleHint` > 0 replaces the module scale, for
+// callers that lay out in their own px-per-unit space (the song-select screen
+// uses its own `k`).
+bool combo(const char* id, const char* preview, const std::vector<std::string>& items, int* index,
+    float width, ImGuiComboFlags flags = ImGuiComboFlags_HeightSmall, float scaleHint = 0.0f);
+
 // Complete dialog: centered card, close X, left title + rule, and a row of
 // capsule buttons (primary flags select the mint ones). Animates in/out.
 // Returns:

@@ -30,7 +30,12 @@ game/Judgement.*  # 判定引擎（本项目新增，判定逻辑都在这）
                   # （kTeamPower 等常量见 Judgement.hpp），血量 1000 起，整音 MISS -80、长条中断 -40。
 game/Ui.*         # pjsk 风格弹窗组件库：beginCard（缩放入/出场动画 + 标题栏拖动）、
                   # tabBar、slider（深色±按钮+薄荷轨道）、infoRows、capsuleButton、
-                  # cardTitle、checkBox、stepper、messageDialog（-3=动画中 -2=关闭完成）
+                  # cardTitle、checkBox、stepper、messageDialog（-3=动画中 -2=关闭完成）、
+                  # combo（= BeginCombo + 淡入 + 自绘旋转箭头；最后一个参数 scaleHint 用来
+                  # 适配调用方自己的 px-per-unit，比如选曲界面的 k）。动画统一走文件顶部的
+                  # animValue / animToggle（按 ImGuiID 存一个"指数逼近"值：步长由 DeltaTime
+                  # 推出、帧率无关、不会过冲）+ mixColor 颜色插值 —— 页签上滑、胶囊/stepper
+                  # 悬停放大与按压回弹、对勾从中心长出、滑杆把手放大、combo 箭头 180° 翻转。
 game/Result.*     # 结算画面（PRESENT/RESULT）：参考原版截图 1:1 复刻，全部画在 ImGui
                   # background draw list 上的 1920x1080 虚拟画布（和 HUD 同一套 px/py/ps 变换）。
                   # 左半边（RESULT 水印、曲目卡、得分、判定行）用参考截图的绝对 x；
@@ -68,6 +73,15 @@ main.cpp          # SDL2 窗口、事件循环、输入映射、ImGui HUD、截�
   全局 `gLog` 是日志字符串数组，控件句柄得另起名（`gLogList`）。
   `--list` / `--download` 是给脚本和回归用的无界面模式。日志同时进 stdout 和 `chartdl.log`
   （GUI 从资源管理器启动时 stdout 是黑洞）。
+  **界面绑 Common Controls v6**：`app.manifest` 声明 `Microsoft.Windows.Common-Controls
+  6.0.0.0` 依赖，`app.rc` 以 RT_MANIFEST（24）id 1 嵌进 `build/app.res`（游戏 exe 共用同一份）。
+  没有它进程会绑到 System32 那套 5.82 兼容实现，ListView / 按钮 / 进度条全是 Win95 平面样式。
+  验证：起一个实例后看它加载的 `comctl32.dll` 路径是不是
+  `C:\Windows\WinSxS\amd64_microsoft.windows.common-controls_*_6.0.*\COMCTL32.dll`
+  （**别信 FileVersion**，那里显示 5.82 是 MUI 资源的旧版本号，路径才是判据）。
+  **歌曲表按 id 去重**：下载路径里的 `0374_normal.sus` 全由 id 拼出来，所以同 id 出现两条
+  记录既会重复列一行、又会让两个任务抢同一个输出路径。`loadData()` 用 set 丢掉后来的重复
+  id，`rebuildList()` 再兜一层，丢掉的条数写进日志（`dropped N duplicate song id(s)`）。
   **文本一律走 `toUtf8()` / `windowTextW()`，路径一律留 `std::wstring`**（2026-09-14 修崩溃）：
   之前 `windowText()` 把用户输的 UTF-8 塞进 `fs::path` 再 `.string()` 取回来，而 Windows 上
   `fs::path` 内部是宽字符、窄的那一端是**本地 ANSI 代码页**（日文机 Shift-JIS / 中文机 cp936）。
