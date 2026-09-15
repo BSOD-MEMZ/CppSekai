@@ -114,6 +114,17 @@ bool stepper(const char* id, float* value, const std::vector<float>& deltas,
 bool combo(const char* id, const char* preview, const std::vector<std::string>& items, int* index,
     float width, ImGuiComboFlags flags = ImGuiComboFlags_HeightSmall, float scaleHint = 0.0f);
 
+// Eased 0..1 value for a caller-owned id: approaches `target` with a step taken
+// from DeltaTime (frame-rate independent) and never overshoots - the same easing
+// the built-in components use. For screens that draw their own widgets (song list
+// rows, the section index) and want their hover / selection blends to match the
+// rest of the UI. The id space is private to this module, so plain constants such
+// as `0x4a552000u + index` work fine as keys.
+float anim(ImGuiID id, bool target, float rate = 18.0f);
+
+// Linear RGBA blend of two IM_COL32 colours, t clamped to 0..1.
+ImU32 mix(ImU32 from, ImU32 to, float t);
+
 // Complete dialog: centered card, close X, left title + rule, and a row of
 // capsule buttons (primary flags select the mint ones). Animates in/out.
 // Returns:

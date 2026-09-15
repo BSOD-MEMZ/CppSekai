@@ -36,6 +36,10 @@ game/Ui.*         # pjsk 风格弹窗组件库：beginCard（缩放入/出场动
                   # animValue / animToggle（按 ImGuiID 存一个"指数逼近"值：步长由 DeltaTime
                   # 推出、帧率无关、不会过冲）+ mixColor 颜色插值 —— 页签上滑、胶囊/stepper
                   # 悬停放大与按压回弹、对勾从中心长出、滑杆把手放大、combo 箭头 180° 翻转。
+                  # `ui::anim(id, target, rate)` / `ui::mix(from, to, t)` 把同一套缓动对外
+                  # 暴露，给屏幕自绘的部件用：选曲列表行、分组标题条、跳转面板字母、右下角
+                  # 圆形按钮（随机/设置）的悬停淡入都走它。id 空间是本模块私有的常量，
+                  # `0x4a55x000u + index` 这种写法就行，不必去凑 ImGui 的 ID 栈。
 game/Result.*     # 结算画面（PRESENT/RESULT）：参考原版截图 1:1 复刻，全部画在 ImGui
                   # background draw list 上的 1920x1080 虚拟画布（和 HUD 同一套 px/py/ps 变换）。
                   # 左半边（RESULT 水印、曲目卡、得分、判定行）用参考截图的绝对 x；

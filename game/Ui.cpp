@@ -504,6 +504,16 @@ bool combo(const char* id, const char* preview, const std::vector<std::string>& 
     return changed;
 }
 
+float anim(ImGuiID id, bool target, float rate)
+{
+    return animToggle(id, target, rate);
+}
+
+ImU32 mix(ImU32 from, ImU32 to, float t)
+{
+    return mixColor(from, to, t);
+}
+
 void caption(const char* text, float sizePx, ImU32 color, float rowWidth)
 {
     const float s = scale();

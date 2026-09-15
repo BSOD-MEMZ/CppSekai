@@ -2235,18 +2235,22 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             ImFont* headFont = title != nullptr ? title : body;
             const float headSize = 22.0f * k;
             const bool hovered = indexAnim < 0.5f && slot == hoverSlot;
+            // Same eased hover as the song rows, so the plate, the left marker bar
+            // and the chevron all come up together.
+            const float headHot = ui::anim(0x4a551000u + static_cast<ImGuiID>(slot + 0x100000), hovered, 18.0f);
             const float headX = rowX + 30.0f * k;
-            if (hovered) {
+            if (headHot > 0.01f) {
                 listDl->AddRectFilled(ImVec2(rowX + 6.0f * k, centerY - pitch * 0.34f),
-                    ImVec2(rowX + listW, centerY + pitch * 0.34f), IM_COL32(255, 255, 255, 26), 8.0f * k);
+                    ImVec2(rowX + listW, centerY + pitch * 0.34f),
+                    IM_COL32(255, 255, 255, static_cast<int>(26.0f * headHot)), 8.0f * k);
                 listDl->AddRectFilled(ImVec2(rowX, centerY - pitch * 0.30f), ImVec2(rowX + 3.0f * k, centerY + pitch * 0.30f),
-                    IM_COL32(255, 255, 255, 220), 2.0f * k);
+                    IM_COL32(255, 255, 255, static_cast<int>(220.0f * headHot)), 2.0f * k);
             }
             listDl->AddText(headFont, headSize, ImVec2(headX, centerY - headSize * 0.6f),
-                hovered ? IM_COL32(255, 255, 255, 255) : IM_COL32(255, 255, 255, 210), view.label.c_str());
+                ui::mix(IM_COL32(255, 255, 255, 210), IM_COL32(255, 255, 255, 255), headHot), view.label.c_str());
             const float labelW = headFont->CalcTextSizeA(headSize, FLT_MAX, 0.0f, view.label.c_str()).x;
             const float chevX = headX + labelW + 12.0f * k;
-            const float chevA = hovered ? 220.0f : 110.0f;
+            const float chevA = 110.0f + 110.0f * headHot;
             listDl->AddTriangleFilled(ImVec2(chevX, centerY - 6.0f * k),
                 ImVec2(chevX + 11.0f * k, centerY - 6.0f * k), ImVec2(chevX + 5.5f * k, centerY + 4.0f * k),
                 IM_COL32(255, 255, 255, static_cast<int>(chevA)));
@@ -2345,8 +2349,13 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             // Compact row: no card fill - the entries are separated by a thin
             // translucent rule, like the reference UI. The rule under the row
             // above the card would land inside the card, so it is skipped.
-            if (slot == hoverSlot) {
-                listDl->AddRectFilled(p0, p1, IM_COL32(255, 255, 255, 20), 8.0f * k);
+            // Hover tint eases in - and, keyed by the slot, eases out again on the
+            // row the pointer just left instead of vanishing.
+            const float rowHot = ui::anim(0x4a552000u + static_cast<ImGuiID>(slot + 0x100000),
+                slot == hoverSlot, 20.0f);
+            if (rowHot > 0.01f) {
+                listDl->AddRectFilled(p0, p1, IM_COL32(255, 255, 255, static_cast<int>(20.0f * rowHot)),
+                    8.0f * k);
             }
             if (slot != cardSlot - 1) {
                 const float ruleY = centerY + pitch * 0.5f;
@@ -2494,11 +2503,14 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
 
             const bool active = keys[static_cast<size_t>(i)].label == currentLabel;
             ImFont* letterFont = title != nullptr ? title : body;
-            const float size = (active ? 34.0f : 30.0f) * k * (0.88f + 0.12f * lt);
-            const int alpha = static_cast<int>((hovered || active ? 255.0f : 205.0f) * lt);
+            // Hover eases the letter up in size and brightness; the section the
+            // list is currently in stays hard on even when the pointer is away.
+            const float hot = ui::anim(0x4a553000u + static_cast<ImGuiID>(i), hovered, 20.0f);
+            const float on = active ? 1.0f : hot;
+            const float size = (active ? 34.0f : 30.0f) * k * (0.88f + 0.12f * lt) * (1.0f + 0.06f * hot);
+            const int alpha = static_cast<int>((205.0f + 50.0f * on) * lt);
             addTextCentered(listDl, letterFont, size, pos,
-                active ? IM_COL32(255, 255, 255, alpha)
-                       : (hovered ? IM_COL32(255, 255, 255, alpha) : IM_COL32(232, 232, 244, alpha)),
+                ui::mix(IM_COL32(232, 232, 244, alpha), IM_COL32(255, 255, 255, alpha), on),
                 keys[static_cast<size_t>(i)].label.c_str());
             if (active) {
                 // A short bar under the current section instead of a box.
@@ -2854,13 +2866,15 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             ImGui::InvisibleButton("iconbtn", ImVec2(ibD, ibD));
             const bool pressed = ImGui::IsItemClicked();
             const bool hovered = ImGui::IsItemHovered();
+            const float hot = ui::anim(ImGui::GetItemID() ^ 0x71u, hovered, 18.0f);
             ImGui::PopID();
-            dl->AddCircleFilled(c, ibD * 0.5f,
-                hovered ? IM_COL32(122, 116, 168, 255) : IM_COL32(74, 68, 112, 255));
+            // The disc swells a little and brightens as the pointer comes over it.
+            dl->AddCircleFilled(c, ibD * 0.5f * (1.0f + 0.06f * hot),
+                ui::mix(IM_COL32(74, 68, 112, 255), IM_COL32(122, 116, 168, 255), hot));
             const char* texName = i == 0 ? "shufflebutton" : "musicsetting";
             const GLuint tex = selectTex(renderer, texName);
             if (tex != 0) {
-                float iw = ibD * 0.62f;
+                float iw = ibD * 0.62f * (1.0f + 0.06f * hot);
                 float ih = iw;
                 // keep each image's own aspect
                 if (i == 0) {
