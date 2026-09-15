@@ -114,6 +114,14 @@ class AudioEngine
 
     void playSe(SeKind kind, float volume);
 
+    // ---- Master BGM volume (0..1, the settings card's BGM slider) --------
+    // Scales every *music* voice: the gameplay track, the song select preview
+    // and the result BGM. The engine owns the value (rather than callers
+    // passing it around) so it also applies at load time: set it once at
+    // startup, before the first loadMusic / startPreview / startResultBgm.
+    void setBgmVolume(float volume);
+    float bgmVolume() const { return mBgmVolume; }
+
     // One-shot countdown beep (assets/se/count_down.mp3), played by the
     // resume countdown. A missing file just disables it.
     void playCountdownSe(float volume);
@@ -186,6 +194,7 @@ class AudioEngine
     bool mStarted = false;
     bool mMusicStarted = false;
     bool mPaused = false;
+    float mBgmVolume = 1.0f; // master volume for every music voice
     double mLeadInSec = 0.0;
     double mMusicStartPosSec = 0.0; // music file position that is chart time 0
     double mUserOffsetSec = 0.0;    // manual fine tune, added to the above

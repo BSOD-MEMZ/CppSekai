@@ -269,7 +269,8 @@ namespace
             "                [--width <px>] [--height <px>] [--window <mode>] [--fps <n>]\n"
             "                [--judge-sheet] [--judge-frame <n>] [--test-hits]\n"
             "                [--show-pause-dialog] [--test-restart] [--restart-at <sec>]\n"
-            "                [--result-preview] [--result-at <sec>] [--help]\n\n"
+            "                [--result-preview] [--result-at <sec>] [--help]\n"
+            "                [--confirm-flash [<sec>]] [--settings-tab <n>]\n\n"
 
             "No --sus: opens the song select screen (scans --charts, then charts/ next\n"
             "to the exe, then the charts/ of the parent folder).\n"
@@ -292,6 +293,8 @@ namespace
             "--result-preview: jump straight to the result screen at boot (debug; uses\n"
             "                  the reference screenshot's numbers for pixel checks).\n"
             "--result-at <sec>: show the result screen once the chart reaches <sec>.\n"
+            "--confirm-flash [<sec>]: play the 确定 white burst in the song list (debug;\n"
+            "                        no song is loaded).\n"
             "Mouse   : left/right button = tap a lane (hold = long note),\n"
             "          drag up/left/right = flick (direction must match the\n"
             "          note arrow; see the strict-Flick setting). Right button\n"
@@ -611,6 +614,10 @@ int main(int argc, char** argv)
     double restartAtSec = 8.0;
     bool resultPreview = false; // debug: boot straight into the result screen
     double resultAtSec = -1.0;  // debug: show the result at this chart time
+    // Debug: fire the 确定 white burst on its own, without starting a song -
+    // the only way to inspect that transition from a --screenshot run.
+    bool confirmFlashShot = false;
+    double confirmFlashAtSec = 1.0;
     int winWidth = 1366;
     int winHeight = 768;
     float uiScaleArg = 1.0f;      // --ui-scale: song-select / result zoom
@@ -731,6 +738,13 @@ int main(int argc, char** argv)
             resultPreview = true;
         } else if (arg == "--result-at" && i + 1 < utf8Argc) {
             resultAtSec = std::atof(utf8Argv[++i]);
+        } else if (arg == "--confirm-flash") {
+            // Debug: play the 确定 burst on its own in the song list (no song
+            // is loaded, so nothing depends on the timing of a real click).
+            confirmFlashShot = true;
+            if (i + 1 < utf8Argc && utf8Argv[i + 1][0] != '-') {
+                confirmFlashAtSec = std::atof(utf8Argv[++i]);
+            }
         } else if (arg == "--title" && i + 1 < utf8Argc) {
             gCardMetadata.title = utf8Argv[++i];
         } else if (arg == "--lyricist" && i + 1 < utf8Argc) {
@@ -777,7 +791,7 @@ int main(int argc, char** argv)
     };
 
     SDL_SetMainReady();
-    if (SDL_Init(SDL_INIT_VIDEO) != 0) {
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER) != 0) {
         std::fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
         return 1;
     }
@@ -1175,9 +1189,13 @@ int main(int argc, char** argv)
         std::fprintf(stderr, "warning: SE load failed: %s\n", error.c_str());
         error.clear();
     }
+    // Music master volume from the settings (BGM slider). Set before the first
+    // loadMusic / startPreview so the very first track already obeys it.
+    audio.setBgmVolume(userSettings.bgmVolume);
     // UI sound effects (click / select / level_choose / window_open / close).
-    // Requests are queued by the widgets and resolved once per frame below.
-    ui::bindSe(&audio, 0.8f);
+    // Requests are queued by the widgets and resolved once per frame below; the
+    // base gain is scaled by the same SE volume the hit sounds use.
+    ui::bindSe(&audio, 0.8f * seVolume);
     bootLog("audio");
     drawSplash(0.92f, "loading audio");
 
@@ -1525,12 +1543,17 @@ int main(int argc, char** argv)
     // stage plate takes over a second, and a frozen frame is exactly what this
     // hides - the session is only started once the screen is fully white.
     constexpr float kConfirmExpand = 0.28f; // burst grows from the button
-    constexpr float kConfirmHold = 0.16f;   // fully white, session loads here
-    constexpr float kConfirmFade = 0.55f;   // white lifts off over the intro
+    constexpr float kConfirmHold = 0.16f;   // brightest, session loads here
+    constexpr float kConfirmFade = 0.75f;   // the glow lifts off over the intro
+    // Peak brightness of the flash. Deliberately below 1: a frame of solid
+    // white is a cut, not light (the old 1.0 + flat 50% ray triangles is what
+    // read as "hard and untransparent").
+    constexpr float kConfirmPeak = 0.88f;
     bool confirmFlashActive = false;
     float confirmFlashTime = 0.0f;
     ImVec2 confirmFlashOrigin{0.0f, 0.0f};
     bool confirmStartPending = false;
+    bool confirmFlashShotFired = false;
     game::ChartEntry confirmPendingEntry;
     ImVec2 selectConfirmCenter{0.0f, 0.0f}; // filled by drawSongSelect each frame
     // Song end: as the track runs out the screen goes black, and the result screen
@@ -1659,7 +1682,7 @@ int main(int argc, char** argv)
             ImGui::SetCursorPos(ImVec2(padX, tabSlide));
 
             if (tab == 0) {
-                // 演奏: audio offset + note speed.
+                // 演奏: audio offset + note speed + the two volume sliders.
                 contentLeft();
                 ImGui::Text("音频偏移");
                 static float offsetMs = static_cast<float>(gUserOffsetSec * 1000.0);
@@ -1674,6 +1697,28 @@ int main(int argc, char** argv)
                 if (ui::slider("speed", &speed, 1.0f, 12.0f, 0.1f, "%.1f", interior)) {
                     noteSpeed = speed;
                     core_api::setPreviewConfig(0, 1, 1, 1, 0, 0, noteSpeed, 1.0f, 0.6f, 0.0f, 1.0f, 0.85f);
+                }
+                contentLeft();
+                ImGui::Text("BGM 音量");
+                float bgmPct = userSettings.bgmVolume * 100.0f;
+                contentLeft();
+                if (ui::slider("bgmvol", &bgmPct, 0.0f, 100.0f, 5.0f, "%.0f%%", interior)) {
+                    userSettings.bgmVolume = std::clamp(bgmPct / 100.0f, 0.0f, 1.0f);
+                    // Takes effect immediately: the chart track, the select
+                    // preview and the result BGM all read this master.
+                    audio.setBgmVolume(userSettings.bgmVolume);
+                    persistUserData();
+                }
+                contentLeft();
+                ImGui::Text("音效音量");
+                float sePct = seVolume * 100.0f;
+                contentLeft();
+                if (ui::slider("sevol", &sePct, 0.0f, 100.0f, 5.0f, "%.0f%%", interior)) {
+                    seVolume = std::clamp(sePct / 100.0f, 0.0f, 1.0f);
+                    // Hit SE read `seVolume` directly; the UI clicks are bound
+                    // with their own base gain, so re-bind them here.
+                    ui::bindSe(&audio, 0.8f * seVolume);
+                    persistUserData();
                 }
             } else if (tab == 1) {
                 // 画面: resolution + window mode + frame rate.
@@ -2151,6 +2196,44 @@ int main(int argc, char** argv)
         std::fflush(stdout);
     }
 
+    // -----------------------------------------------------------------------
+    // Game controller (Xbox pad). Menus and dialogs only - the play screen
+    // deliberately ignores it (a pad cannot play a 12-lane chart). Every press
+    // is turned into the key press the keyboard would send, so the existing
+    // arrow / Enter / Escape handling drives the song select, the settings card
+    // and the pause dialog without a second input path per screen.
+    // One press = one short pulse: the key goes down now and is released on the
+    // next frame, which is what ImGui reads as a clean press.
+    // -----------------------------------------------------------------------
+    SDL_GameController* pad = nullptr;
+    const Uint32 padWindowId = SDL_GetWindowID(window);
+    constexpr Sint16 kPadDeadZone = 12000; // stick dead zone (~37% of 32767)
+    std::vector<SDL_Scancode> padReleaseQueue; // pulses to release next frame
+    bool padDirHeld[4] = {false, false, false, false};
+    Uint32 padDirNext[4] = {0, 0, 0, 0};
+    bool padPrevA = false;
+    bool padPrevB = false;
+    bool padPrevY = false;
+    bool padPrevStart = false;
+    bool padPrevBack = false;
+    auto openPad = [&]() {
+        if (pad != nullptr) {
+            return;
+        }
+        for (int i = 0; i < SDL_NumJoysticks(); ++i) {
+            if (SDL_IsGameController(i) == SDL_FALSE) {
+                continue;
+            }
+            pad = SDL_GameControllerOpen(i);
+            if (pad != nullptr) {
+                std::printf("[pad] %s connected (menu navigation)\n", SDL_GameControllerName(pad));
+                std::fflush(stdout);
+                return;
+            }
+        }
+    };
+    openPad();
+
     while (running) {
         const Uint64 nowCounter = SDL_GetPerformanceCounter();
         lastFrameDeltaSec = static_cast<double>(nowCounter - lastFrameCounter) / static_cast<double>(perfFreq);
@@ -2191,6 +2274,30 @@ int main(int argc, char** argv)
                 case SDL_QUIT:
                     running = false;
                     break;
+                case SDL_CONTROLLERDEVICEADDED:
+                    // Hot-plug: opening the first game controller. The joystick
+                    // index SDL hands us here is a *device* index, which is what
+                    // SDL_GameControllerOpen wants (the instance id comes with
+                    // the removal event below).
+                    openPad();
+                    break;
+                case SDL_CONTROLLERDEVICEREMOVED: {
+                    if (pad != nullptr) {
+                        SDL_Joystick* js = SDL_GameControllerGetJoystick(pad);
+                        if (js != nullptr && SDL_JoystickInstanceID(js) == event.cdevice.which) {
+                            std::printf("[pad] %s disconnected\n", SDL_GameControllerName(pad));
+                            std::fflush(stdout);
+                            SDL_GameControllerClose(pad);
+                            pad = nullptr;
+                            for (int i = 0; i < 4; ++i) {
+                                padDirHeld[i] = false;
+                            }
+                            padPrevA = padPrevB = padPrevY = padPrevStart = padPrevBack = false;
+                            openPad(); // another pad may still be around
+                        }
+                    }
+                    break;
+                }
                 case SDL_WINDOWEVENT:
                     if (event.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
                         windowW = event.window.data1;
@@ -2541,6 +2648,113 @@ int main(int argc, char** argv)
             }
         }
 
+        // ------------------------------------------------------------------
+        // Game controller: turn the pad into key presses (see the note above
+        // the main loop). Runs after the SDL event pump, so a pulse lands in
+        // the queue and is consumed by ImGui at the start of the next frame.
+        // ------------------------------------------------------------------
+        // Release whatever pulsed last frame.
+        if (!padReleaseQueue.empty()) {
+            for (SDL_Scancode sc : padReleaseQueue) {
+                SDL_Event up{};
+                up.type = SDL_KEYUP;
+                up.key.type = SDL_KEYUP;
+                up.key.state = SDL_RELEASED;
+                up.key.keysym.scancode = sc;
+                up.key.keysym.sym = SDL_GetKeyFromScancode(sc);
+                up.key.windowID = padWindowId;
+                SDL_PushEvent(&up);
+            }
+            padReleaseQueue.clear();
+        }
+        if (pad != nullptr) {
+            SDL_GameControllerUpdate();
+            auto pulse = [&](SDL_Scancode sc) {
+                SDL_Event down{};
+                down.type = SDL_KEYDOWN;
+                down.key.type = SDL_KEYDOWN;
+                down.key.state = SDL_PRESSED;
+                down.key.repeat = 0;
+                down.key.keysym.scancode = sc;
+                down.key.keysym.sym = SDL_GetKeyFromScancode(sc);
+                down.key.windowID = padWindowId;
+                SDL_PushEvent(&down);
+                padReleaseQueue.push_back(sc);
+            };
+            auto pressed = [&](SDL_GameControllerButton button, bool& prev) {
+                const bool down = SDL_GameControllerGetButton(pad, button) != 0;
+                const bool edge = down && !prev;
+                prev = down;
+                return edge;
+            };
+
+            // Directions: D-pad or left stick, with auto-repeat while held.
+            {
+                const Sint16 lx = SDL_GameControllerGetAxis(pad, SDL_CONTROLLER_AXIS_LEFTX);
+                const Sint16 ly = SDL_GameControllerGetAxis(pad, SDL_CONTROLLER_AXIS_LEFTY);
+                const bool dir[4] = {
+                    SDL_GameControllerGetButton(pad, SDL_CONTROLLER_BUTTON_DPAD_UP) != 0 || ly < -kPadDeadZone,
+                    SDL_GameControllerGetButton(pad, SDL_CONTROLLER_BUTTON_DPAD_DOWN) != 0 || ly > kPadDeadZone,
+                    SDL_GameControllerGetButton(pad, SDL_CONTROLLER_BUTTON_DPAD_LEFT) != 0 || lx < -kPadDeadZone,
+                    SDL_GameControllerGetButton(pad, SDL_CONTROLLER_BUTTON_DPAD_RIGHT) != 0 || lx > kPadDeadZone,
+                };
+                const SDL_Scancode dirKey[4] = {SDL_SCANCODE_UP, SDL_SCANCODE_DOWN, SDL_SCANCODE_LEFT,
+                    SDL_SCANCODE_RIGHT};
+                const Uint32 nowMs = SDL_GetTicks();
+                for (int i = 0; i < 4; ++i) {
+                    if (!dir[i]) {
+                        padDirHeld[i] = false;
+                        continue;
+                    }
+                    // First repeat is slow, the ones after it fast - the usual
+                    // keyboard feel for a list that can hold hundreds of songs.
+                    if (!padDirHeld[i] || nowMs >= padDirNext[i]) {
+                        pulse(dirKey[i]);
+                        padDirNext[i] = nowMs + (padDirHeld[i] ? 110u : 400u);
+                    }
+                    padDirHeld[i] = true;
+                }
+            }
+
+            // A = 确定 / start the song / continue;  START = settings card in the
+            // song list, pause dialog while playing;  Y = rescan (F5);
+            // B / BACK = dismiss a dialog or leave a screen. B deliberately does
+            // nothing in the song list: Escape quits the game there.
+            if (pressed(SDL_CONTROLLER_BUTTON_A, padPrevA)) {
+                if (state == AppState::Result) {
+                    resultContinueRequested = true;
+                } else {
+                    pulse(SDL_SCANCODE_RETURN);
+                }
+            }
+            if (pressed(SDL_CONTROLLER_BUTTON_START, padPrevStart)) {
+                if (state == AppState::Play && !pauseDialogOpen && !countdownActive) {
+                    // Same as the HUD pause button / Space: the dialog appears
+                    // and its window_open sound plays.
+                    paused = true;
+                    audio.pause();
+                    pauseDialogOpen = true;
+                } else if (state == AppState::Result) {
+                    resultContinueRequested = true;
+                } else if (state != AppState::Play) {
+                    pulse(SDL_SCANCODE_H); // settings card
+                }
+            }
+            if (pressed(SDL_CONTROLLER_BUTTON_B, padPrevB)) {
+                if (showDebug) {
+                    pulse(SDL_SCANCODE_H); // close the settings card
+                } else if (pauseDialogOpen || state == AppState::Result) {
+                    pulse(SDL_SCANCODE_ESCAPE);
+                }
+            }
+            if (pressed(SDL_CONTROLLER_BUTTON_BACK, padPrevBack) && state != AppState::Select) {
+                pulse(SDL_SCANCODE_ESCAPE);
+            }
+            if (pressed(SDL_CONTROLLER_BUTTON_Y, padPrevY) && state == AppState::Select) {
+                pulse(SDL_SCANCODE_F5); // re-scan charts/
+            }
+        }
+
         if (state == AppState::Play && paused && !countdownActive) {
             SDL_Delay(16);
         }
@@ -2651,9 +2865,20 @@ int main(int argc, char** argv)
                 std::printf("[select] %d chart(s)\n", static_cast<int>(entries.size()));
             }
 
+            // Debug (--confirm-flash): play the 确定 burst on its own, so a
+            // --screenshot run can inspect the transition (nothing is loaded).
+            if (confirmFlashShot && !confirmFlashShotFired && uiClock >= confirmFlashAtSec) {
+                confirmFlashShotFired = true;
+                confirmFlashActive = true;
+                confirmFlashTime = 0.0f;
+                confirmFlashOrigin = selectConfirmCenter;
+                std::printf("[ui] confirm flash at %.0f,%.0f (debug)\n", selectConfirmCenter.x,
+                    selectConfirmCenter.y);
+                std::fflush(stdout);
+            }
+
             // Settings card, opened from the musicsetting button (or H).
             drawSettingsCard();
-
             // Headless check: dump the song list shortly after startup. An
             // explicit --screenshot-time overrides the default 1.2s here as
             // well, which is how a scroll / animation is let to settle first.
@@ -3339,42 +3564,85 @@ int main(int argc, char** argv)
             }
             if (confirmFlashActive) {
                 const float t = confirmFlashTime;
+                // Cover grows with a smoothstep (no hard arrival), and the
+                // brightness envelope never reaches pure white - a 100% opaque
+                // frame reads as a cut, not as light.
                 float cover = 1.0f;
-                float alpha = 1.0f;
                 if (t < kConfirmExpand) {
                     const float u = t / kConfirmExpand;
-                    cover = 1.0f - (1.0f - u) * (1.0f - u) * (1.0f - u);
-                } else {
-                    const float f = t - kConfirmExpand - kConfirmHold;
-                    if (f > 0.0f) {
-                        alpha = 1.0f - std::clamp(f / kConfirmFade, 0.0f, 1.0f);
-                    }
+                    cover = u * u * (3.0f - 2.0f * u);
+                }
+                float alpha = kConfirmPeak;
+                if (t > kConfirmExpand + kConfirmHold) {
+                    const float f =
+                        std::clamp((t - kConfirmExpand - kConfirmHold) / kConfirmFade, 0.0f, 1.0f);
+                    const float inv = 1.0f - f;
+                    alpha *= inv * inv * (3.0f - 2.0f * inv); // smoothstep out: slow, soft tail
                 }
                 if (alpha > 0.002f) {
-                    const int a = static_cast<int>(alpha * 255.0f);
                     const ImVec2 o = confirmFlashOrigin;
                     // Far corner: the disc has to reach it to fill the screen.
                     const float farX = std::max(o.x, w - o.x);
                     const float farY = std::max(o.y, h - o.y);
                     const float radius = std::sqrt(farX * farX + farY * farY) * 1.06f;
-                    // Rays first: they are what makes it read as light rather than
-                    // as a growing circle.
-                    const int rays = 16;
-                    for (int i = 0; i < rays; ++i) {
-                        const float ang =
-                            (6.2831853f / static_cast<float>(rays)) * static_cast<float>(i) + 0.21f;
-                        const float len = radius * (0.5f + 1.1f * cover);
-                        const float spread = radius * (0.012f + 0.010f * static_cast<float>(i % 3));
-                        const ImVec2 dir(std::cos(ang), std::sin(ang));
-                        const ImVec2 side(-dir.y, dir.x);
-                        fg->AddTriangleFilled(ImVec2(o.x, o.y),
-                            ImVec2(o.x + dir.x * len + side.x * spread, o.y + dir.y * len + side.y * spread),
-                            ImVec2(o.x + dir.x * len - side.x * spread, o.y + dir.y * len - side.y * spread),
-                            IM_COL32(255, 255, 255, static_cast<int>(static_cast<float>(a) * 0.5f)));
+                    // Rays: the "light" read. Each one is a degenerate quad -
+                    // two coincident vertices in the button, two at the tip -
+                    // so ImGui can blend it from bright to fully transparent
+                    // along its length. (The old version was an opaque-ish
+                    // triangle at a flat 50% alpha, and that flat, hard-edged
+                    // wedge is exactly what looked wrong.) They also step back
+                    // as the disc comes up, so they never fight with it.
+                    const float rayFade = std::clamp(1.0f - cover * 1.3f, 0.0f, 1.0f);
+                    if (rayFade > 0.01f) {
+                        const int rays = 12;
+                        const int rayA = static_cast<int>(alpha * rayFade * 150.0f);
+                        const ImU32 colIn = IM_COL32(255, 255, 255, rayA);
+                        const ImU32 colOut = IM_COL32(255, 255, 255, 0);
+                        // ImGui 1.92 has no gradient triangle helper, so the
+                        // ray is written straight into the vertex buffer: two
+                        // coincident centre vertices (bright) + two tip
+                        // vertices (transparent) = one soft wedge.
+                        const ImVec2 uv = ImGui::GetFontTexUvWhitePixel();
+                        for (int i = 0; i < rays; ++i) {
+                            const float ang =
+                                (6.2831853f / static_cast<float>(rays)) * static_cast<float>(i) + 0.21f;
+                            const float len = radius * (0.42f + 0.9f * cover);
+                            const float spread = radius * (0.006f + 0.005f * static_cast<float>(i % 3));
+                            const ImVec2 dir(std::cos(ang), std::sin(ang));
+                            const ImVec2 side(-dir.y, dir.x);
+                            const ImVec2 tipA(o.x + dir.x * len + side.x * spread,
+                                o.y + dir.y * len + side.y * spread);
+                            const ImVec2 tipB(o.x + dir.x * len - side.x * spread,
+                                o.y + dir.y * len - side.y * spread);
+                            fg->PrimReserve(6, 4);
+                            const ImDrawIdx base = static_cast<ImDrawIdx>(fg->VtxBuffer.Size);
+                            fg->PrimWriteVtx(o, uv, colIn);
+                            fg->PrimWriteVtx(o, uv, colIn);
+                            fg->PrimWriteVtx(tipA, uv, colOut);
+                            fg->PrimWriteVtx(tipB, uv, colOut);
+                            fg->PrimWriteIdx(base);
+                            fg->PrimWriteIdx(static_cast<ImDrawIdx>(base + 1));
+                            fg->PrimWriteIdx(static_cast<ImDrawIdx>(base + 2));
+                            fg->PrimWriteIdx(base);
+                            fg->PrimWriteIdx(static_cast<ImDrawIdx>(base + 2));
+                            fg->PrimWriteIdx(static_cast<ImDrawIdx>(base + 3));
+                        }
                     }
-                    // Glow + the disc that ends up covering the screen.
-                    fg->AddCircleFilled(o, radius * cover * 0.55f, IM_COL32(255, 255, 255, a), 48);
-                    fg->AddCircleFilled(o, radius * cover * 1.02f + 1.0f, IM_COL32(255, 255, 255, a), 64);
+                    // The disc that ends up covering the screen: stacked
+                    // concentric circles, outer first, each adding a little
+                    // opacity - the accumulation is the radial gradient, so the
+                    // light has no rim at all and the centre still goes solid
+                    // enough to hide the session load underneath it.
+                    const float rOuter = radius * cover * 1.02f + 1.0f;
+                    if (rOuter > 1.0f) {
+                        constexpr int kRings = 16;
+                        const int ringA = static_cast<int>(alpha * 255.0f * 0.18f);
+                        for (int i = kRings - 1; i >= 0; --i) {
+                            const float u = static_cast<float>(i) / static_cast<float>(kRings - 1);
+                            fg->AddCircleFilled(o, rOuter * (0.18f + 0.82f * u),
+                                IM_COL32(255, 255, 255, ringA), 64);
+                        }
+                    }
                 }
             }
         }

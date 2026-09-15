@@ -82,7 +82,25 @@ bool AudioEngine::loadMusic(const std::string& path, std::string& outError)
         return false;
     }
     mMusicLoaded = true;
+    ma_sound_set_volume(&mMusic, mBgmVolume);
     return true;
+}
+
+void AudioEngine::setBgmVolume(float volume)
+{
+    mBgmVolume = std::clamp(volume, 0.0f, 1.0f);
+    // Every music voice keeps its own mix gain (the preview and the result
+    // track sit a little lower than the chart track), so the master is applied
+    // by re-multiplying those base gains here.
+    if (mMusicLoaded) {
+        ma_sound_set_volume(&mMusic, mBgmVolume);
+    }
+    if (mPreviewLoaded) {
+        ma_sound_set_volume(&mPreviewSound, 0.85f * mBgmVolume);
+    }
+    if (mResultBgmLoaded) {
+        ma_sound_set_volume(&mResultBgm, 0.85f * mBgmVolume);
+    }
 }
 
 bool AudioEngine::loadSe(const std::string& dir, std::string& outError)
@@ -324,7 +342,7 @@ bool AudioEngine::startPreview(const std::string& path, std::string& outError, b
     // new clip so a carried offset can never seek past its end).
     const double seekSec =
         std::clamp(mPreviewStartSec + carriedSec, mPreviewStartSec, mPreviewEndSec - 1.0);
-    ma_sound_set_volume(&mPreviewSound, 0.85f);
+    ma_sound_set_volume(&mPreviewSound, 0.85f * mBgmVolume);
     ma_sound_seek_to_pcm_frame(&mPreviewSound, static_cast<ma_uint64>(seekSec * sampleRate()));
     ma_sound_start(&mPreviewSound);
     mPreviewActive = true;
@@ -383,7 +401,7 @@ bool AudioEngine::startResultBgm(const std::string& path, float volume, std::str
     }
     mResultBgmLoaded = true;
     mResultBgmPath = path;
-    ma_sound_set_volume(&mResultBgm, volume);
+    ma_sound_set_volume(&mResultBgm, volume * mBgmVolume);
     ma_sound_set_looping(&mResultBgm, MA_TRUE);
     ma_sound_start(&mResultBgm);
     mResultBgmActive = true;

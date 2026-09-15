@@ -694,6 +694,40 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
   演唱版本 chip / 难度按钮 / 确定 / 随机 / 设置 / 重扫。**拖拽连续滚动只在落点响**（按格响只给
   滚轮和键盘，否则 fling 会连成一片噪音）。
 
+## 手柄 / 音量 / 结算配色（2026-09-15）
+
+- **XBOX 手柄**（`main.cpp` 主循环前的 `openPad` + 帧首的映射块）：只做菜单，
+  **不参与打歌**（12 轨的东西手柄打不了）。实现方式是**把手柄按键翻译成键盘按键**，
+  用 `SDL_PushEvent` 塞回 SDL 队列（`SDL_INIT_GAMECONTROLLER` 已加进 `SDL_Init`）——
+  于是选曲/设置/弹窗**原本就有的方向键 / Enter / Escape 逻辑**直接生效，不用给每个
+  画面再写一条输入路径。要点：
+  - 一次按压 = **一个脉冲**：本帧压 KEYDOWN，下一帧补 KEYUP（`padReleaseQueue`）。
+    ImGui 对同帧 down+up 的识别不可靠，拆两帧最稳；方向键按住时按 400/110ms 自动重复。
+  - 映射：方向/左摇杆 = 方向键（左摇杆死区 12000），A = Enter（确定 / 开始 / 结算继续），
+    START = 选曲里开设置卡（H）、演奏中开暂停弹窗、结算页继续，Y = F5 重扫，
+    B / BACK = 关弹窗（B 只在有卡/弹窗时发 Escape —— 选曲界面按 Escape 会退出游戏）。
+  - 热插拔：`SDL_CONTROLLERDEVICEADDED/REMOVED` 里开关（注意 ADDED 给的是 device index、
+    REMOVED 给的是 instance id，两者不能混用）。
+  - 已验证：合成按键这条路是通的（`SDL_PushEvent(KEYDOWN)` 能把设置卡打开，截图确认）。
+    真手柄的按键映射还需要人手试一遍。
+- **音量**（设置 → 演奏页签）：`BGM 音量` = `UserSettings::bgmVolume`（存 userdata.json），
+  走 `AudioEngine::setBgmVolume`，它是引擎侧的主音量，**同时**缩放谱面音轨 / 选曲试听
+  （0.85 基准）/ 结算 BGM（0.85 基准），所以一定要在第一次 `loadMusic` **之前**设一次；
+  `音效音量` = 老 `seVolume`，判定音本来就按它播，UI 音是 `ui::bindSe(&audio, 0.8f * seVolume)`
+  —— 改滑杆时要**重新 bind**，否则 UI 音量不跟。
+- **结算画面难度配色**：`difficultyColor()`（`SongSelect.hpp` 公开，选曲徽章和结算共用）
+  现在同时给**难度胶囊**和**曲绘边框**上色。原来是写死的 `kPink`，因为参考截图是 EXPERT 的，
+  于是打 EASY 也是红的。
+- **确定键光效**（`main.cpp` 的 confirmFlash 块）：原来是一圈**平的 50% 白三角**（硬边、
+  没有衰减）+ 两层满 alpha 的实心圆。现在：峰值亮度 `kConfirmPeak = 0.88`（不到纯白，
+  纯白帧看着像"切一刀"而不是光）、射线改成**顶点级渐变**（ImGui 1.92 没有
+  `AddTriangleFilledMultiColor`，用 `PrimReserve/PrimWriteVtx/PrimWriteIdx` 手写：
+  两个重合的中心顶点亮、两个尖端顶点 alpha 0），跟着 cover 一起淡出；
+  全屏圆改成 16 层同心圆**叠加**出径向渐变（外圈只有 ~0.18 alpha，边缘不再是硬圆）。
+  调试：`--confirm-flash [<sec>]` 单独放一次这个特效（不加载歌曲），配 `--screenshot` 看帧。
+  实测（1280x720，按钮中心 1083,521）：年龄 0.06s 时射线方向 280px=187 / 420px=179 / 850px=153、
+  射线之间 121（有渐变、向外衰减）；0.32s 时中心 244、四角 ~140（不再是全屏死白）。
+
 ## 待办（按优先级）
 
 1. hold 音效循环（SeHoldLoop 未接）与 SE kind 区分（当前键盘全播一个音）

@@ -14,6 +14,7 @@
 
 #include "game/Hud.hpp"
 #include "game/Intro.hpp"
+#include "game/SongSelect.hpp" // difficultyColor()
 
 #include "imgui.h"
 
@@ -35,7 +36,6 @@ constexpr ImU32 kPanelFill = IM_COL32(255, 255, 255, 150); // white @ ~59%
 constexpr ImU32 kTagFill = IM_COL32(255, 255, 255, 16);    // judge row plate
 constexpr ImU32 kPlateFill = IM_COL32(50, 50, 76, 255);    // SCORERANK plate
 constexpr ImU32 kTrackFill = IM_COL32(50, 50, 76, 255);    // score bar track
-constexpr ImU32 kPink = IM_COL32(255, 69, 119, 255);       // jacket / EXPERT
 constexpr ImU32 kDarkPill = IM_COL32(68, 68, 102, 255);    // 歌曲等级 pill
 constexpr ImU32 kCardTitle = IM_COL32(68, 69, 100, 255);
 constexpr ImU32 kDigitGray = IM_COL32(144, 162, 174, 255);
@@ -602,9 +602,12 @@ void drawResult(platform::Renderer& renderer, const ResultData& data, float elap
     // -----------------------------------------------------------------------
     {
         const float alpha = cardIn;
+        // The jacket ring is the difficulty colour too (it was sampled off an
+        // EXPERT capture, so it used to be red for every difficulty).
+        const ImU32 diffFill = difficultyColor(data.difficulty);
         const float jy = kJacketY + (1.0f - cardIn) * 6.0f;
         addRoundedRect(c, kJacketX, jy, kJacketSize, kJacketSize, kJacketRound,
-            withAlpha(kPink, alpha));
+            withAlpha(diffFill, alpha));
         const platform::Renderer::HudSprite* cover = renderer.cover();
         if (cover != nullptr && cover->id != 0) {
             const float inset = kJacketBorder;
@@ -617,16 +620,18 @@ void drawResult(platform::Renderer& renderer, const ResultData& data, float elap
         textTracked(c, bold, kTitleSize, kCardTextX, kTitleCenterY, withAlpha(kCardTitle, alpha),
             data.title, 1.0f, nullptr);
 
-        // Difficulty capsule butted against the dark level capsule.
+        // Difficulty capsule butted against the dark level capsule. Its colour
+        // is the *actual* difficulty's (EASY green ... MASTER purple) - it used
+        // to be a fixed pink, so an EASY clear still showed an EXPERT-red pill.
         const float pillY = kPillTop + (1.0f - cardIn) * 6.0f;
         const float round = kPillHeight * 0.5f;
         addRoundedRect(c, kCardTextX, pillY, kExpertPillW + kDiffPillW, kPillHeight, round,
             withAlpha(kDarkPill, alpha));
         addRoundedRect(c, kCardTextX, pillY, kExpertPillW, kPillHeight, round,
-            withAlpha(kPink, alpha));
-        // Square off the pink capsule's right end where it meets the dark one.
+            withAlpha(diffFill, alpha));
+        // Square off the coloured capsule's right end where it meets the dark one.
         dl->AddRectFilled(c.p(kCardTextX + kExpertPillW - round, pillY),
-            c.p(kCardTextX + kExpertPillW, pillY + kPillHeight), withAlpha(kPink, alpha));
+            c.p(kCardTextX + kExpertPillW, pillY + kPillHeight), withAlpha(diffFill, alpha));
         textCenteredTracked(c, bold, kPillTextSize, kCardTextX + kExpertPillW * 0.5f,
             pillY + kPillHeight * 0.5f, withAlpha(kWhite, alpha), data.difficulty, kPillTracking);
 

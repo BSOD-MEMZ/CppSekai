@@ -69,7 +69,8 @@ struct ScoreRecord
 struct UserSettings
 {
     float noteSpeed = 8.0f;
-    float seVolume = 0.8f;
+    float seVolume = 0.8f;   // hit / UI sound effects
+    float bgmVolume = 1.0f;  // music: chart track, select preview, result BGM
     double offsetSec = 0.0; // audio offset; the UI shows it in ms
     double leadInSec = 6.0;
     int windowMode = 1; // 0=borderless 1=windowed 2=fullscreen
@@ -222,6 +223,12 @@ void loadMusicLevels(const std::string& path);
 
 // Level of `difficulty` ("EASY".."MASTER") for a song id, 0 when unknown.
 int musicLevel(int musicId, const std::string& difficulty);
+
+// pjsk difficulty colour (EASY green / NORMAL blue / HARD orange / EXPERT red /
+// MASTER purple / APPEND / ETERNAL), with `alpha`. Unknown difficulties fall
+// back to a neutral slate. Shared by the song select badges and the result
+// screen's difficulty capsule, which has to follow the actual difficulty.
+ImU32 difficultyColor(const std::string& difficulty, int alpha = 255);
 
 // Official song readings and titles from the game's musics.json: the reading
 // drives "sort by name" and the aiueo grouping, the title fills in charts whose

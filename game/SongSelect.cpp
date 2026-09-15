@@ -253,14 +253,7 @@ namespace
 
     ImU32 difficultyBadgeColor(const std::string& difficulty, int alpha)
     {
-        if (difficulty == "EASY") return IM_COL32(75, 207, 138, alpha);
-        if (difficulty == "NORMAL") return IM_COL32(90, 140, 255, alpha);
-        if (difficulty == "HARD") return IM_COL32(242, 150, 77, alpha);
-        if (difficulty == "EXPERT") return IM_COL32(239, 90, 102, alpha);
-        if (difficulty == "MASTER") return IM_COL32(181, 91, 255, alpha);
-        if (difficulty == "APPEND") return IM_COL32(179, 162, 255, alpha);
-        if (difficulty == "ETERNAL") return IM_COL32(241, 192, 79, alpha);
-        return IM_COL32(120, 130, 160, alpha);
+        return difficultyColor(difficulty, alpha);
     }
 
     // -----------------------------------------------------------------
@@ -406,6 +399,7 @@ void loadUserData(const std::string& path, UserSettings& settings,
             const nlohmann::json& s = doc["settings"];
             settings.noteSpeed = s.value("noteSpeed", settings.noteSpeed);
             settings.seVolume = s.value("seVolume", settings.seVolume);
+            settings.bgmVolume = s.value("bgmVolume", settings.bgmVolume);
             settings.offsetSec = s.value("offsetSec", settings.offsetSec);
             settings.leadInSec = s.value("leadInSec", settings.leadInSec);
             settings.windowMode = s.value("windowMode", settings.windowMode);
@@ -463,6 +457,7 @@ void saveUserData(const std::string& path, const UserSettings& settings,
     doc["settings"] = {
         {"noteSpeed", settings.noteSpeed},
         {"seVolume", settings.seVolume},
+        {"bgmVolume", settings.bgmVolume},
         {"offsetSec", settings.offsetSec},
         {"leadInSec", settings.leadInSec},
         {"windowMode", settings.windowMode},
@@ -1446,6 +1441,32 @@ void loadMusicLevels(const std::string& path)
 int musicLevel(int musicId, const std::string& difficulty)
 {
     return tableLevel(musicId, diffIndexOf(difficulty));
+}
+
+ImU32 difficultyColor(const std::string& difficulty, int alpha)
+{
+    if (difficulty == "EASY") {
+        return IM_COL32(75, 207, 138, alpha);
+    }
+    if (difficulty == "NORMAL") {
+        return IM_COL32(90, 140, 255, alpha);
+    }
+    if (difficulty == "HARD") {
+        return IM_COL32(242, 150, 77, alpha);
+    }
+    if (difficulty == "EXPERT") {
+        return IM_COL32(239, 90, 102, alpha);
+    }
+    if (difficulty == "MASTER") {
+        return IM_COL32(181, 91, 255, alpha);
+    }
+    if (difficulty == "APPEND") {
+        return IM_COL32(179, 162, 255, alpha);
+    }
+    if (difficulty == "ETERNAL") {
+        return IM_COL32(241, 192, 79, alpha);
+    }
+    return IM_COL32(120, 130, 160, alpha);
 }
 
 void loadMusicMaster(const std::string& path)
@@ -2997,6 +3018,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow)) {
             for (int d = diffIndex - 1; d >= 0; --d) {
                 if (groups[static_cast<size_t>(groupIndex)].idx[d] >= 0) {
+                    ui::se(ui::SeLevelChoose);
                     diffIndex = d;
                     selected = groups[static_cast<size_t>(groupIndex)].idx[d];
                     break;
@@ -3006,6 +3028,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         if (ImGui::IsKeyPressed(ImGuiKey_RightArrow)) {
             for (int d = diffIndex + 1; d < kDiffCount; ++d) {
                 if (groups[static_cast<size_t>(groupIndex)].idx[d] >= 0) {
+                    ui::se(ui::SeLevelChoose);
                     diffIndex = d;
                     selected = groups[static_cast<size_t>(groupIndex)].idx[d];
                     break;

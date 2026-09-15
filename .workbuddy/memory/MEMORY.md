@@ -21,9 +21,9 @@
 
 ## 发布 / 打包
 - `bash package.sh [版本]` → `dist/CppSekai-<日期>/` + zip（~2.7MB）。
-  **不发** assets / charts / toolchain（官方素材，COPYRIGHT.md 禁止分发）；
-  发 exe + SDL2.dll + icon.png + 三张官方事实数据表 + 文档 + LICENSE(AGPL 全文) + setup.sh。
-  用户侧流程：`bash setup.sh --assets-only` 拉素材 → chartdl.exe 下谱面。
+  **默认带 assets**（2026-09-15 起，解压即玩，66MB / zip 51MB）；`--no-assets` 出旧的
+  精简包（exe + SDL2.dll + icon.png + 三张官方事实数据表 + 文档 + LICENSE + setup.sh），
+  用户侧 `bash setup.sh --assets-only` 拉素材 → chartdl.exe 下谱面。charts / toolchain 一律不发。
   详见 README「7.4 发布 / 打包」。
 - 图标：`app.rc`（`zig rc` 编译资源，id 1）+ 运行时 `SDL_SetWindowIcon(icon.png)`；
   改 id 要同步改 chartdl 的 `LoadImageW(MAKEINTRESOURCE(1))`。

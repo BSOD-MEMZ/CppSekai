@@ -72,7 +72,7 @@ cppsekai [--sus <file.sus>] [--bgm <audio>] [--charts <dir>] [--cover <image>]
          [--show-pause-dialog] [--settings] [--settings-tab <0-3>]
          [--select-id <musicId>] [--select-vocal <n>] [--dump-events <n>]
          [--test-restart] [--restart-at <sec>]
-         [--result-preview] [--result-at <sec>] [--help]
+         [--result-preview] [--result-at <sec>] [--confirm-flash [<sec>]] [--help]
 ```
 
 ### 4.1 内容 / 对齐
@@ -127,6 +127,7 @@ cppsekai [--sus <file.sus>] [--bgm <audio>] [--charts <dir>] [--cover <image>]
 | `--test-restart` `--restart-at <sec>` | 走到指定秒数执行「放弃 → 换一首」——回归测「打到一半重选曲卡死」那个 bug |
 | `--result-at <sec>` | 谱面走到指定秒数就切到**结算画面**（用真实判定数据），不用等整首歌放完 |
 | `--result-preview` | 启动即进结算画面，且用参考截图的样例数字（940021 / PERFECT 634 …），专门用来跟原版截图做像素对比 |
+| `--confirm-flash [<sec>]` | 在选曲界面单独放一次「确定」的白色爆发光效（默认 1.0s 处，**不加载歌曲**），配合 `--screenshot` 抓爆发过程 |
 | `--help` / `-h` | 打印用法并退出 |
 
 ---
@@ -220,6 +221,15 @@ cppsekai [--sus <file.sus>] [--bgm <audio>] [--charts <dir>] [--cover <image>]
 | `F5` | 重新扫描谱面目录 |
 | `H` | 设置面板 |
 | `ESC` | 退出 |
+| 手柄方向键 / 左摇杆 | 上/下一首（按住会连续） |
+| 手柄 `←` `→` | 换难度 |
+| 手柄 `A` | 开打（等同 `Enter`） |
+| 手柄 `Y` | 重新扫描（等同 `F5`） |
+| 手柄 `START` | 设置面板（等同 `H`） |
+
+> 手柄只做菜单：演奏画面**不吃手柄输入**（12 轨的东西手柄打不了）。实现上是把手柄按键
+> 翻译成键盘按键塞回 SDL 队列，所以上面这些键怎么走，手柄就怎么走。详见 AGENTS.md
+> 的「手柄 / 音量 / 结算配色」。
 
 > 「按名称」和「按标题分组」用的是官方读音（`musics.json` 的 `pronunciation`）：片假名标题
 > 会折成平假名再排序，所以「ウミユリ海底譚」落在 **あ行**。没有读音的谱（自制谱）退回用标题
