@@ -365,7 +365,8 @@ namespace
     // Snapshot handed to the result screen when a chart ends. Filled from the
     // judgement stats + the record that was stored for this chart.
     game::ResultData buildResultData(const game::IntroInfo& intro, const game::ChartEntry& entry,
-        const game::JudgementStats& stats, double previousBest, float chartRating)
+        const game::JudgementStats& stats, double previousBest, float chartRating,
+        const game::AccountData& account, int expGain, int rankUps)
     {
         game::ResultData data;
         data.title = !intro.title.empty() ? intro.title : entry.title;
@@ -390,6 +391,13 @@ namespace
         data.miss = stats.miss;
         data.maxCombo = stats.maxCombo;
         data.chartRating = chartRating;
+        // Player rank: read *after* addPlayerExp(), so the chip already shows
+        // the rank this score earned.
+        data.playerRank = account.rank;
+        data.playerExp = account.exp;
+        data.playerExpNeed = game::expToNextRank(account.rank);
+        data.expGain = expGain;
+        data.rankUps = rankUps;
         return data;
     }
 
@@ -609,6 +617,10 @@ int main(int argc, char** argv)
     bool showPauseDialogShot = false; // headless check: force the pause dialog open
     bool showSettingsShot = false; // headless check: force the settings card open
     int settingsTabShot = -1;      // headless check: which settings tab to show
+    bool profileShot = false;      // headless check: force the profile card open
+    std::string playerSpec;        // --player 昵称[:组织]
+    bool playerSpecGiven = false;
+    int playerRankGiven = -1;      // --player-rank
     int selectMusicId = 0;         // --select-id: preselect this song id in the list
     bool testRestart = false; // debug: replay "give up -> pick another song"
     double restartAtSec = 8.0;
@@ -639,6 +651,9 @@ int main(int argc, char** argv)
     bool heightGiven = false;
     game::UserSettings userSettings;
     std::map<std::string, game::ScoreRecord> scores;
+    // Local, offline account: nickname / school plus the pjsk player rank. Only
+    // ever shown in the level chip, the profile card and 设置 -> 账户.
+    game::AccountData account;
     // Vocal version picked in the song select for the song under the cursor
     // (index into game::availableVocals(); -1 = the song has no switcher).
     // Written by drawSongSelect, read when a song is started.
@@ -724,6 +739,22 @@ int main(int argc, char** argv)
             showSettingsShot = true;
         } else if (arg == "--settings-tab" && i + 1 < utf8Argc) {
             settingsTabShot = std::atoi(utf8Argv[++i]);
+        } else if (arg == "--profile") {
+            // Headless check: open the account's profile card on the song
+            // select, so a --screenshot run can look at it (the card normally
+            // appears when the level chip is clicked).
+            profileShot = true;
+        } else if (arg == "--player") {
+            // Headless check: seed the account (昵称:组织) without touching
+            // userdata.json - the profile card and the settings tab need
+            // something to show in a screenshot run. Applied *after* the file
+            // is read, so it overrides what is on disk.
+            if (i + 1 < utf8Argc) {
+                playerSpec = utf8Argv[++i];
+                playerSpecGiven = true;
+            }
+        } else if (arg == "--player-rank" && i + 1 < utf8Argc) {
+            playerRankGiven = std::max(1, std::atoi(utf8Argv[++i]));
         } else if (arg == "--test-restart") {
             // Debug: at --restart-at seconds, give the running song up and
             // start the next chart (the sequence that used to hang on the
@@ -830,7 +861,18 @@ int main(int argc, char** argv)
         }
     }
     const std::string userDataFile = game::userDataPath(baseDir);
-    game::loadUserData(userDataFile, userSettings, scores);
+    game::loadUserData(userDataFile, userSettings, scores, account);
+    // --player / --player-rank override what the file just loaded (headless
+    // checks: they must never write a fixture into the player's own save).
+    if (playerSpecGiven) {
+        const size_t sep = playerSpec.find(':');
+        account.name = sep == std::string::npos ? playerSpec : playerSpec.substr(0, sep);
+        account.org = sep == std::string::npos ? std::string() : playerSpec.substr(sep + 1);
+    }
+    if (playerRankGiven > 0) {
+        account.rank = playerRankGiven;
+        account.exp = 0.0;
+    }
     if (!speedGiven) {
         noteSpeed = userSettings.noteSpeed;
     }
@@ -1228,6 +1270,16 @@ int main(int argc, char** argv)
     // `scores` was already loaded from userdata.json near the top of main().
     game::setSelectAssetDir(baseDir + "assets");
 
+    // Player level chip glyph (assets/select/level.png). Missing is harmless:
+    // the chip falls back to a drawn note.
+    if (const GLuint levelIcon = renderer.loadUiTexture(baseDir + "assets\\select\\level.png", error);
+        levelIcon != 0) {
+        ui::setLevelIconTexture(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(levelIcon)));
+    } else {
+        std::printf("[ui] no level icon (%s)\n", error.c_str());
+        error.clear();
+    }
+
     // ------------------------------------------------------------------
     // Song-select backdrop: the user's desktop wallpaper, blurred, when the
     // setting asks for it. The GL context is live here and re-loading only
@@ -1459,6 +1511,9 @@ int main(int argc, char** argv)
     bool running = true;
     bool fullscreen = false;
     bool showDebug = showSettingsShot; // H / the musicsetting button on the song select
+    if (profileShot) {
+        game::debugOpenProfileCard(true);
+    }
     Uint64 perfFreq = SDL_GetPerformanceFrequency();
     Uint64 perfStart = SDL_GetPerformanceCounter();
 
@@ -1519,7 +1574,7 @@ int main(int argc, char** argv)
         userSettings.greatMs = w.greatMs;
         userSettings.goodMs = w.goodMs;
         userSettings.strictFlick = judgement.strictFlick();
-        game::saveUserData(userDataFile, userSettings, scores);
+        game::saveUserData(userDataFile, userSettings, scores, account);
     };
 
     // HUD / hit feedback state (shared with the input handlers below).
@@ -1561,6 +1616,10 @@ int main(int argc, char** argv)
     constexpr float kSongEndFadeSec = 1.2f;
     float songEndBlackout = 0.0f;
     double resultPreviousBest = 0.0;
+    // Player rank bookkeeping for the run that is currently ending: what the
+    // score granted and how many ranks it rolled over (see the result screen).
+    int resultExpGain = 0;
+    int resultRankUps = 0;
     // Set by the mouse / touch handlers when 继续 was pressed (see
     // resultContinueHitTest): the result screen is not an ImGui window, so it
     // is hit-tested in the SDL event path like the HUD pause button.
@@ -1625,7 +1684,8 @@ int main(int argc, char** argv)
 
             static int tab = settingsTabShot >= 0 ? settingsTabShot : 0;
             ui::tabBar("settings-tabs",
-                {std::string("演奏"), std::string("画面"), std::string("判定"), std::string("系统")},
+                {std::string("演奏"), std::string("画面"), std::string("判定"), std::string("系统"),
+                    std::string("账户")},
                 &tab, interior);
 
             // ImGui::Text starts each line at the window's left edge
@@ -1900,7 +1960,7 @@ int main(int argc, char** argv)
                     windows.badMs = windows.missAfterMs;
                     judgement.setWindows(windows);
                 }
-            } else {
+            } else if (tab == 3) {
                 // 系统: how the game behaves towards Windows and the desktop.
                 contentLeft();
                 bool autoPauseBox = userSettings.autoPauseOnBlur;
@@ -1923,6 +1983,64 @@ int main(int argc, char** argv)
                     }
                     persistUserData();
                 }
+            } else {
+                // 账户: the local profile. Nothing here leaves the machine, and
+                // none of it is drawn during play - see game/AccountData.
+                // ImGui::InputText wants a mutable char buffer, so the three
+                // fields are mirrored once (the account is already loaded from
+                // disk by the time this first runs) and written back on change.
+                static char nameBuf[64] = {};
+                static char orgBuf[96] = {};
+                static char noteBuf[160] = {};
+                static bool bufReady = false;
+                if (!bufReady) {
+                    bufReady = true;
+                    std::snprintf(nameBuf, sizeof(nameBuf), "%s", account.name.c_str());
+                    std::snprintf(orgBuf, sizeof(orgBuf), "%s", account.org.c_str());
+                    std::snprintf(noteBuf, sizeof(noteBuf), "%s", account.note.c_str());
+                }
+
+                contentLeft();
+                ImGui::Text("昵称");
+                contentLeft();
+                ImGui::SetNextItemWidth(interior);
+                if (ImGui::InputText("##pname", nameBuf, sizeof(nameBuf))) {
+                    account.name = nameBuf;
+                    persistUserData();
+                }
+                contentLeft();
+                ImGui::Text("学校 / 组织");
+                contentLeft();
+                ImGui::SetNextItemWidth(interior);
+                if (ImGui::InputText("##porg", orgBuf, sizeof(orgBuf))) {
+                    account.org = orgBuf;
+                    persistUserData();
+                }
+                contentLeft();
+                ImGui::Text("个性签名");
+                contentLeft();
+                ImGui::SetNextItemWidth(interior);
+                if (ImGui::InputText("##pnote", noteBuf, sizeof(noteBuf))) {
+                    account.note = noteBuf;
+                    persistUserData();
+                }
+                contentLeft();
+                ImGui::Text("只存在本机 userdata.json，");
+                contentLeft();
+                ImGui::Text("平时不显示；点选曲右上角的等级牌可查看。");
+
+                const double need = game::expToNextRank(account.rank);
+                char lvLine[64];
+                std::snprintf(lvLine, sizeof(lvLine), "%d", account.rank);
+                char expLine[64];
+                std::snprintf(expLine, sizeof(expLine), "%d / %d",
+                    static_cast<int>(account.exp), static_cast<int>(need));
+                contentLeft();
+                std::vector<std::pair<std::string, std::string>> accRows = {
+                    {"等级", lvLine},
+                    {"本级经验", expLine},
+                };
+                ui::infoRows(accRows, interior);
             }
             // End on an item: the checkbox helper leaves the cursor at the row
             // bottom with a bare SetCursorScreenPos, which trips ImGui's
@@ -2167,7 +2285,7 @@ int main(int argc, char** argv)
     // diffed against it. The song metadata still comes from the loaded chart.
     if (resultPreview) {
         resultData = buildResultData(session.intro, session.entry, judgement.stats(), 0.0,
-            judgement.chartRating());
+            judgement.chartRating(), account, 0, 0);
         if (resultData.title.empty()) {
             resultData.title = "1000年生きてる";
         }
@@ -2828,7 +2946,7 @@ int main(int argc, char** argv)
             const int prevGroupMode = userSettings.groupMode;
             const int action = game::drawSongSelect(renderer, entries, selected, windowW, windowH,
                 static_cast<float>(uiClock), userSettings.sortMode, userSettings.groupMode,
-                selectedVocal, userSettings.uiScale, &selectConfirmCenter);
+                selectedVocal, userSettings.uiScale, &selectConfirmCenter, &account);
             // Diagnostic (CPSEKAI_UI_TRACE=1): where the 确定 button landed, in
             // window pixels - what an input-driving script has to click.
             if (std::getenv("CPSEKAI_UI_TRACE") != nullptr) {
@@ -3082,6 +3200,10 @@ int main(int argc, char** argv)
                 // cleared. A full combo needs the run to count in the first
                 // place: hold breaks drain life without a MISS, so miss == 0
                 // alone can still end at 0 life.
+                // Fresh each run: an autoplay preview never banks exp, and the
+                // result screen must not show the previous song's gain.
+                resultExpGain = 0;
+                resultRankUps = 0;
                 if (!autoPlay && !session.scoreRecorded && songTime >= trackDurationSec - 0.25) {
                     session.scoreRecorded = true;
                     const bool cleared = st.life > 0.0f;
@@ -3091,16 +3213,29 @@ int main(int argc, char** argv)
                     // 新纪录! before the merge below overwrites it.
                     resultPreviousBest = scores[key].bestScore;
                     scores[key] = game::mergeScore(scores[key], cleared, fullCombo, st.score);
+                    // Player rank: an official live grants the score-rank
+                    // multiplier (we have no live-bonus system, so it is not
+                    // multiplied again). Same score-rank call the result screen
+                    // makes, so the badge and the exp can never disagree.
+                    const game::ScoreRank sr = game::scoreRankAndBar(st.score, judgement.chartRating());
+                    resultExpGain = game::scoreRankExp(sr.rank);
+                    resultRankUps = game::addPlayerExp(account, resultExpGain);
+                    ++account.plays;
+                    account.totalScore += st.score;
                     game::applyScores(entries, scores);
                     persistUserData();
                     std::printf("[score] %s %s%s (life=%.0f/%.0f) (%s)\n", key.c_str(),
                         cleared ? "cleared" : "failed", fullCombo ? " (full combo)" : "",
                         static_cast<double>(st.life), static_cast<double>(game::kMaxLife),
                         userDataFile.c_str());
+                    std::printf("[rank] %c +%d exp -> rank %d (%d/%d)%s\n", sr.rank, resultExpGain,
+                        account.rank, static_cast<int>(account.exp),
+                        static_cast<int>(game::expToNextRank(account.rank)),
+                        resultRankUps > 0 ? " (rank up)" : "");
                     std::fflush(stdout);
                 }
                 resultData = buildResultData(session.intro, session.entry, st,
-                    resultPreviousBest, judgement.chartRating());
+                    resultPreviousBest, judgement.chartRating(), account, resultExpGain, resultRankUps);
                 audio.setHoldLoop(false, false, 0.0f);
                 audio.stopMusic();
                 touches.clear();

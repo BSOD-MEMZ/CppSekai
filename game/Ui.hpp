@@ -80,6 +80,21 @@ float scale();
 void setCloseTexture(ImTextureID texture);
 ImTextureID& closeTexture();
 
+// Registers assets/select/level.png - the little note glyph of the player level
+// chip. Missing (0) is fine: the chip falls back to a drawn note.
+void setLevelIconTexture(ImTextureID texture);
+
+// Player level chip, the one piece of the account that is always on screen:
+// rounded dark pill, [icon][等级][NN], sized from `unit` (= pixels per 1080p
+// layout unit, i.e. the song select's `k` / the result screen's scale).
+// `anchor` is the chip's top-left, or its top-right when `alignRight` is set.
+// Returns the drawn rect (x, y, w, h in screen pixels) for hit tests.
+ImVec4 playerLevelChip(ImDrawList* dl, ImFont* font, ImVec2 anchor, int rank, float unit,
+    bool alignRight = false);
+
+// Thin "exp towards the next rank" bar: dark groove + teal fill, `ratio` 0..1.
+void expBar(ImDrawList* dl, ImVec2 pos, float width, float unit, float ratio);
+
 // Card scaffold: fullscreen dim + rounded card. The card scales in when it
 // appears, scales out when `open` turns false, and can be dragged by its
 // header strip. On return `center`/`size` hold the *animated* geometry -

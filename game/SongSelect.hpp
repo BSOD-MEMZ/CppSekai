@@ -60,6 +60,48 @@ struct ScoreRecord
     double bestScore = 0.0;
 };
 
+// ---------------------------------------------------------------------------
+// Account: a local, offline profile plus the pjsk player rank.
+//
+// Nothing here is sent anywhere - it is a player card for the UI. The name and
+// the school/organisation are deliberately *not* on screen during normal play:
+// the only thing that is always visible is the level chip (top right of the
+// song select and on the result screen). The profile itself shows up on demand
+// (clicking the chip) and in 设置 -> 账户.
+struct AccountData
+{
+    std::string name; // 昵称
+    std::string org;  // 学校 / 组织
+    std::string note; // 个性签名
+
+    int rank = 1;
+    // Exp banked towards the *next* rank, i.e. addPlayerExp() already rolled
+    // the excess over. rank 1 / exp 0 is a fresh account.
+    double exp = 0.0;
+    int plays = 0;             // runs played to the end (no autoplay)
+    double totalScore = 0.0;   // sum of those runs' scores
+};
+
+// ---- Player rank ----------------------------------------------------------
+// Curve taken from the official game (Sekaipedia "Player Rank"). There, a live
+// grants `m_score * m_bonus`, and the exp a rank needs grows in bands. We have
+// no live-bonus system, so a run grants exactly the score-rank multiplier and
+// the curve is used as-is.
+//
+// Exp needed to go from `rank` to `rank + 1`. Bands: rank 1 is the tutorial
+// hand-out, then a flat 8010, +500 per rank up to 12, +1000 up to 15 and +480
+// from there on. Above kMaxPlayerRank the cap holds (0 = no next rank).
+constexpr int kMaxPlayerRank = 900;
+double expToNextRank(int rank);
+
+// Score rank ('d' / 'c' / 'b' / 'a' / 's', as produced by
+// game::scoreRankAndBar) -> the exp an official live would grant for it.
+int scoreRankExp(char rank);
+
+// Banks `amount` exp and rolls the rank over as often as it needs to.
+// Returns the number of ranks gained (0 = none).
+int addPlayerExp(AccountData& account, double amount);
+
 // Settings + play results are persisted together in one userdata.json; see
 // UserSettings / loadUserData below.
 
@@ -127,14 +169,16 @@ struct UserSettings
 // build. exeDir must end with a path separator.
 std::string userDataPath(const std::string& exeDir);
 
-// Reads settings + scores. A legacy flat scores.json (a bare map, no
+// Reads settings + scores + account. A legacy flat scores.json (a bare map, no
 // "settings"/"scores" wrapper) is still accepted, so an old file migrates.
-// Missing keys keep the defaults already in `settings`.
+// Missing keys keep the defaults already in `settings` / `account` - which is
+// also what an existing userdata.json (written before the account existed)
+// ends up as: defaults, no error.
 void loadUserData(const std::string& path, UserSettings& settings,
-    std::map<std::string, ScoreRecord>& scores);
+    std::map<std::string, ScoreRecord>& scores, AccountData& account);
 
 void saveUserData(const std::string& path, const UserSettings& settings,
-    const std::map<std::string, ScoreRecord>& scores);
+    const std::map<std::string, ScoreRecord>& scores, const AccountData& account);
 
 // Records the result of one chart (merges with the existing record) and
 // returns the merged record. `score` only ever raises the stored best.
@@ -273,6 +317,10 @@ enum SelectAction
 // position, not the layout one).
 int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& entries, int& selected,
     int windowW, int windowH, float timeSec, int& sortMode, int& groupMode, int& vocalIndex,
-    float uiScale = 1.0f, ImVec2* confirmCenter = nullptr);
+    float uiScale = 1.0f, ImVec2* confirmCenter = nullptr, const AccountData* account = nullptr);
+
+// Debug (`--profile`): force the profile card open. It normally only appears
+// when the level chip is clicked, which a --screenshot run cannot do.
+void debugOpenProfileCard(bool open);
 
 } // namespace game

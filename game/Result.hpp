@@ -30,6 +30,14 @@ struct ResultData
     int miss = 0;
     int maxCombo = 0;
     float chartRating = 26.0f; // drives the square-rule / score bar thresholds
+
+    // Player rank (the account). rank/exp are the *post-run* values, so the chip
+    // and the bar already show the rank this score just earned.
+    int playerRank = 1;
+    double playerExp = 0.0;     // banked towards the next rank
+    double playerExpNeed = 0.0; // what that next rank costs
+    int expGain = 0;            // granted by this run
+    int rankUps = 0;            // > 0 -> the screen shows 等级提升
 };
 
 // Draws the whole screen on ImGui's background draw list (call after

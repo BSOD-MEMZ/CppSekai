@@ -852,4 +852,101 @@ ImTextureID& closeTexture()
     return texture;
 }
 
+namespace
+{
+ImTextureID& levelIconTexture()
+{
+    static ImTextureID texture = 0;
+    return texture;
+}
+} // namespace
+
+void setLevelIconTexture(ImTextureID texture)
+{
+    levelIconTexture() = texture;
+}
+
+ImVec4 playerLevelChip(ImDrawList* dl, ImFont* font, ImVec2 anchor, int rank, float unit, bool alignRight)
+{
+    if (dl == nullptr) {
+        return ImVec4(anchor.x, anchor.y, 0.0f, 0.0f);
+    }
+    ImFont* f = font != nullptr ? font : ImGui::GetFont();
+    const float u = std::max(unit, 1e-3f);
+
+    // 1080p-era numbers, all scaled by `u`. Laid out like the official chip:
+    // a note glyph in its own rounded square, the 等级 caption, then the rank.
+    const float h = 56.0f * u;
+    const float pad = 7.0f * u;
+    const float icon = h - pad * 2.0f;
+    const float capSize = 24.0f * u;
+    const float numSize = 27.0f * u;
+    const char* cap = "等级";
+    char num[16];
+    std::snprintf(num, sizeof(num), "%d", rank > 0 ? rank : 1);
+
+    const float capW = f->CalcTextSizeA(capSize, FLT_MAX, 0.0f, cap).x;
+    const float numW = f->CalcTextSizeA(numSize, FLT_MAX, 0.0f, num).x;
+    const float gapIcon = 10.0f * u;
+    const float gapText = 16.0f * u;
+    const float w = pad + icon + gapIcon + capW + gapText + numW + pad * 1.6f;
+
+    const float x0 = alignRight ? anchor.x - w : anchor.x;
+    const float y0 = anchor.y;
+
+    // Pill: a dark translucent gray (the official chip sits on top of the live
+    // background, so it has to hold its own contrast).
+    dl->AddRectFilled(ImVec2(x0, y0), ImVec2(x0 + w, y0 + h), IM_COL32(38, 38, 52, 208), h * 0.5f);
+
+    // Note glyph square: mint fill, the sprite on top.
+    const float ix = x0 + pad;
+    const float iy = y0 + pad;
+    dl->AddRectFilled(ImVec2(ix, iy), ImVec2(ix + icon, iy + icon), IM_COL32(64, 224, 196, 255),
+        icon * 0.32f);
+    const ImTextureID tex = levelIconTexture();
+    if (tex != 0) {
+        const float inset = icon * 0.09f;
+        dl->AddImage(tex, ImVec2(ix + inset, iy + inset), ImVec2(ix + icon - inset, iy + icon - inset));
+    } else {
+        // Fallback: an eighth note, so a missing sprite still reads as 等级.
+        const float cx = ix + icon * 0.52f;
+        const float cy = iy + icon * 0.58f;
+        const float r = icon * 0.17f;
+        dl->AddCircleFilled(ImVec2(cx, cy), r, IM_COL32(255, 236, 120, 255), 20);
+        dl->AddRectFilled(ImVec2(cx + r * 0.55f, iy + icon * 0.18f),
+            ImVec2(cx + r * 1.15f, cy + r * 0.2f), IM_COL32(255, 236, 120, 255), r * 0.3f);
+        dl->AddRectFilled(ImVec2(cx + r * 0.55f, iy + icon * 0.18f),
+            ImVec2(cx + r * 1.15f, iy + icon * 0.42f), IM_COL32(255, 236, 120, 255), r * 0.3f);
+    }
+
+    const ImU32 textCol = IM_COL32(238, 238, 248, 255);
+    const float capX = ix + icon + gapIcon;
+    dl->AddText(f, capSize, ImVec2(capX, y0 + (h - capSize) * 0.5f - 1.0f * u), textCol, cap);
+    dl->AddText(f, numSize, ImVec2(capX + capW + gapText, y0 + (h - numSize) * 0.5f - 1.0f * u),
+        textCol, num);
+    return ImVec4(x0, y0, w, h);
+}
+
+void expBar(ImDrawList* dl, ImVec2 pos, float width, float unit, float ratio)
+{
+    if (dl == nullptr || width <= 0.0f) {
+        return;
+    }
+    const float u = std::max(unit, 1e-3f);
+    const float h = 8.0f * u;
+    const float r = h * 0.5f;
+    dl->AddRectFilled(pos, ImVec2(pos.x + width, pos.y + h), IM_COL32(30, 30, 44, 200), r);
+    const float fill = std::clamp(ratio, 0.0f, 1.0f) * width;
+    if (fill > h) {
+        // Full-round left end, square right end: a rounded rect narrower than
+        // its own height turns into a blob, so the fill is drawn as a rounded
+        // rect plus a small square capping the right edge.
+        dl->AddRectFilled(pos, ImVec2(pos.x + fill, pos.y + h), IM_COL32(106, 232, 208, 255), r);
+        dl->AddRectFilled(ImVec2(pos.x + fill - r, pos.y), ImVec2(pos.x + fill, pos.y + h),
+            IM_COL32(106, 232, 208, 255));
+    } else if (fill > 0.0f) {
+        dl->AddRectFilled(pos, ImVec2(pos.x + fill, pos.y + h), IM_COL32(106, 232, 208, 255), r);
+    }
+}
+
 } // namespace ui

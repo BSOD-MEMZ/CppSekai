@@ -309,10 +309,17 @@ namespace
 } // namespace
 
 std::string gSelectAssetDir; // set via setSelectAssetDir()
-
 void setSelectAssetDir(const std::string& dir)
 {
     gSelectAssetDir = dir;
+}
+
+// Profile card (the account) is open. Module state so --profile can force it
+// open in a headless run.
+bool gProfileOpen = false;
+void debugOpenProfileCard(bool open)
+{
+    gProfileOpen = open;
 }
 
 // Blurred desktop wallpaper used as the screen backdrop (0 = draw the built-in
@@ -366,8 +373,66 @@ std::string userDataPath(const std::string& exeDir)
     return (fs::path(exeDir) / "userdata.json").string();
 }
 
+double expToNextRank(int rank)
+{
+    if (rank < 1 || rank >= kMaxPlayerRank) {
+        return 0.0; // fresh account / rank cap
+    }
+    if (rank == 1) {
+        return 10.0; // the official table hands the first rank out immediately
+    }
+    if (rank == 2) {
+        return 8010.0;
+    }
+    if (rank <= 12) {
+        return 8000.0 + 500.0 * static_cast<double>(rank - 2);
+    }
+    if (rank <= 15) {
+        return 13000.0 + 1000.0 * static_cast<double>(rank - 12);
+    }
+    return 16000.0 + 480.0 * static_cast<double>(rank - 15);
+}
+
+int scoreRankExp(char rank)
+{
+    switch (rank) {
+    case 's':
+        return 320;
+    case 'a':
+        return 280;
+    case 'b':
+        return 240;
+    case 'c':
+        return 200;
+    default:
+        return 20; // 'd'
+    }
+}
+
+int addPlayerExp(AccountData& account, double amount)
+{
+    if (amount <= 0.0) {
+        return 0;
+    }
+    if (account.rank < 1) {
+        account.rank = 1;
+    }
+    account.exp += amount;
+    int ups = 0;
+    for (;;) {
+        const double need = expToNextRank(account.rank);
+        if (need <= 0.0 || account.exp < need) {
+            break;
+        }
+        account.exp -= need;
+        ++account.rank;
+        ++ups;
+    }
+    return ups;
+}
+
 void loadUserData(const std::string& path, UserSettings& settings,
-    std::map<std::string, ScoreRecord>& scores)
+    std::map<std::string, ScoreRecord>& scores, AccountData& account)
 {
     std::ifstream file(path, std::ios::binary);
     if (!file) {
@@ -424,6 +489,16 @@ void loadUserData(const std::string& path, UserSettings& settings,
             settings.sortMode = s.value("sortMode", settings.sortMode);
             settings.groupMode = s.value("groupMode", settings.groupMode);
         }
+        if (wrapped && doc.contains("account") && doc["account"].is_object()) {
+            const nlohmann::json& a = doc["account"];
+            account.name = a.value("name", account.name);
+            account.org = a.value("org", account.org);
+            account.note = a.value("note", account.note);
+            account.rank = a.value("rank", account.rank);
+            account.exp = a.value("exp", account.exp);
+            account.plays = a.value("plays", account.plays);
+            account.totalScore = a.value("totalScore", account.totalScore);
+        }
     } catch (...) {
         // malformed file: keep the defaults
     }
@@ -443,10 +518,17 @@ void loadUserData(const std::string& path, UserSettings& settings,
     settings.uiScale = std::clamp(settings.uiScale, 0.7f, 1.5f);
     settings.sortMode = std::clamp(settings.sortMode, 0, 1);
     settings.groupMode = std::clamp(settings.groupMode, 0, 3);
+
+    // Account: a rank past the cap (a hand-edited file) would make
+    // expToNextRank() return 0 and freeze the bar, so clamp it. Exp is left
+    // alone - addPlayerExp() rolls any excess over on the next run.
+    account.rank = std::clamp(account.rank, 1, kMaxPlayerRank);
+    account.exp = std::max(account.exp, 0.0);
+    account.plays = std::max(account.plays, 0);
 }
 
 void saveUserData(const std::string& path, const UserSettings& settings,
-    const std::map<std::string, ScoreRecord>& scores)
+    const std::map<std::string, ScoreRecord>& scores, const AccountData& account)
 {
     nlohmann::json scoreDoc = nlohmann::json::object();
     for (const auto& [name, rec] : scores) {
@@ -483,6 +565,15 @@ void saveUserData(const std::string& path, const UserSettings& settings,
         {"groupMode", settings.groupMode},
     };
     doc["scores"] = scoreDoc;
+    doc["account"] = {
+        {"name", account.name},
+        {"org", account.org},
+        {"note", account.note},
+        {"rank", account.rank},
+        {"exp", account.exp},
+        {"plays", account.plays},
+        {"totalScore", account.totalScore},
+    };
     std::ofstream file(path, std::ios::binary);
     if (file) {
         file << doc.dump(2) << std::endl;
@@ -1667,7 +1758,7 @@ void loadMusicVocals(const std::string& path)
 
 int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& entries, int& selected,
     int windowW, int windowH, float timeSec, int& sortMode, int& groupMode, int& vocalIndex,
-    float uiScale, ImVec2* confirmCenter)
+    float uiScale, ImVec2* confirmCenter, const AccountData* account)
 {
     int action = SelectNone;
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
@@ -3037,8 +3128,106 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         }
     }
 
+    // Player level chip, top right like the official screen. Drawn after the
+    // tilt pass on purpose: the phone block is rotated about its own centre,
+    // this is not part of it.
+    bool& profileOpen = gProfileOpen; // module state, so --profile can force it
+    if (account != nullptr) {
+        const ImVec2 chipAnchor(w - 26.0f * k, 20.0f * k);
+        const ImVec4 chip = ui::playerLevelChip(dl, body, chipAnchor, account->rank, k, true);
+        const ImVec2 mouse = ImGui::GetIO().MousePos;
+        const bool hot = !profileOpen && mouse.x >= chip.x && mouse.x <= chip.x + chip.z
+            && mouse.y >= chip.y && mouse.y <= chip.y + chip.w;
+        if (hot) {
+            // Hover: a soft ring, so the chip reads as clickable.
+            dl->AddRect(ImVec2(chip.x - 2.0f, chip.y - 2.0f),
+                ImVec2(chip.x + chip.z + 2.0f, chip.y + chip.w + 2.0f), IM_COL32(255, 255, 255, 120),
+                (chip.w + 4.0f) * 0.5f, 0, 2.0f * k);
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                profileOpen = true;
+                ui::se(ui::SeClick);
+            }
+        }
+    }
+
     ImGui::End();
     ImGui::PopStyleVar(2);
+
+    // ------------------------------------------------------------------
+    // Profile card. The account is deliberately invisible during normal play -
+    // this card (opened from the level chip) and 设置 -> 账户 are the only two
+    // places the name / school are ever drawn.
+    // ------------------------------------------------------------------
+    if (profileOpen && account != nullptr) {
+        const float s = ui::scale();
+        ImVec2 cardSize(360.0f * s, 470.0f * s);
+        ImVec2 cardCenter(w * 0.5f, h * 0.5f);
+        bool closeClicked = false;
+        if (ui::beginCard("##profile", &cardCenter, &cardSize, true, true, &closeClicked, profileOpen)) {
+            if (closeClicked) {
+                profileOpen = false;
+            }
+            const float interior = cardSize.x - 56.0f * s;
+            const float padX = 28.0f * s;
+            const auto left = [&](float extra) {
+                ImGui::SetCursorScreenPos(ImVec2(cardCenter.x - cardSize.x * 0.5f + padX,
+                    ImGui::GetCursorScreenPos().y + extra));
+            };
+            ImGui::SetCursorScreenPos(
+                ImVec2(cardCenter.x - cardSize.x * 0.5f + padX, cardCenter.y - cardSize.y * 0.5f + 16.0f * s));
+            ui::cardTitle("个人资料", interior);
+            ImGui::PushStyleColor(ImGuiCol_Text, ui::kBodyText);
+            ImGui::PushFont(body, 22.0f * s);
+            ImGui::PushItemWidth(interior);
+
+            left(6.0f * s);
+            ImGui::Text("昵称");
+            left(2.0f * s);
+            ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(ui::kNotePink), "%s",
+                account->name.empty() ? "（未设置）" : account->name.c_str());
+            left(14.0f * s);
+            ImGui::Text("学校 / 组织");
+            left(2.0f * s);
+            ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(ui::kNotePink), "%s",
+                account->org.empty() ? "（未设置）" : account->org.c_str());
+            if (!account->note.empty()) {
+                left(14.0f * s);
+                ImGui::Text("签名");
+                left(2.0f * s);
+                ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(ui::kNotePink), "%s",
+                    account->note.c_str());
+            }
+
+            // 等级 + 进度: everything else on this card is flavour, this is the
+            // part that moves when a song is played.
+            const double need = game::expToNextRank(account->rank);
+            char rankLine[64];
+            std::snprintf(rankLine, sizeof(rankLine), "%d  (到下一级 %d / %d)", account->rank,
+                static_cast<int>(account->exp), static_cast<int>(need));
+            char playLine[64];
+            std::snprintf(playLine, sizeof(playLine), "%d 次   平均 %.0f", account->plays,
+                account->plays > 0 ? account->totalScore / account->plays : 0.0);
+            left(18.0f * s);
+            std::vector<std::pair<std::string, std::string>> rows = {
+                {"等级", rankLine},
+                {"游玩 / 平均分", playLine},
+            };
+            ui::infoRows(rows, interior);
+
+            ImGui::PopItemWidth();
+            ImGui::PopFont();
+            ImGui::PopStyleColor();
+            ImGui::SetCursorScreenPos(
+                ImVec2(cardCenter.x - cardSize.x * 0.5f + padX, cardCenter.y + cardSize.y * 0.5f - 68.0f * s));
+            if (ui::capsuleButton("关闭", ImVec2(132.0f * s, 46.0f * s), false)) {
+                profileOpen = false;
+            }
+            ui::endCard();
+        } else {
+            profileOpen = false;
+        }
+    }
+
     (void)windowW;
     (void)windowH;
     return action;

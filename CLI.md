@@ -69,17 +69,18 @@ cppsekai [--sus <file.sus>] [--bgm <audio>] [--charts <dir>] [--cover <image>]
          [--width <px>] [--height <px>] [--window borderless|windowed|fullscreen]
          [--fps <n>] [--screenshot <png>] [--screenshot-time <sec>]
          [--judge-sheet] [--judge-frame <n>] [--test-hits]
-         [--show-pause-dialog] [--settings] [--settings-tab <0-3>]
+         [--show-pause-dialog] [--settings] [--settings-tab <0-4>]
          [--select-id <musicId>] [--select-vocal <n>] [--dump-events <n>]
          [--test-restart] [--restart-at <sec>]
-         [--result-preview] [--result-at <sec>] [--confirm-flash [<sec>]] [--help]
+         [--result-preview] [--result-at <sec>] [--confirm-flash [<sec>]]
+         [--profile] [--player <昵称[:组织]>] [--player-rank <n>] [--help]
 ```
 
 ### 4.1 内容 / 对齐
 
 | 参数 | 说明 |
 |---|---|
-| `--sus <file.sus>` | 指定谱面。给了就直接进演奏，不给就进选曲界面 |
+| `--sus <file.sus>` | 指定谱面。给了就直接进演奏，不给就进选曲界面。**脚本 / 无头运行时给绝对路径最稳**：Git Bash 的 MSYS 会改写以 `..` 开头的相对参数，`../charts/x.sus` 会被改到别的地方去 |
 | `--bgm <audio>` | BGM 文件。不给时用谱面旁边的 sidecar（同目录同名音频） |
 | `--charts <dir>` | 谱面目录，同时决定 F5 重扫的目录 |
 | `--cover <image>` | 曲绘，不给时用 sidecar / 同目录的 jacket |
@@ -117,7 +118,7 @@ cppsekai [--sus <file.sus>] [--bgm <audio>] [--charts <dir>] [--cover <image>]
 | `--judge-frame <n>` | 把判定文字**冻结**在第 n 帧（60fps 计），用来逐帧核对动画 |
 | `--test-hits` | 不按键，按时间轴把音符逐个喂给判定引擎（查特效链路） |
 | `--show-pause-dialog` | 演奏 0.5s 后强制打开暂停弹窗（截弹窗用的） |
-| `--settings` `--settings-tab <0-3>` | 启动即打开设置卡片，并指定分页（0 演奏 / 1 画面 / 2 判定 / 3 系统），配合 `--screenshot` 截设置面板——按键没法在无头运行里送进去 |
+| `--settings` `--settings-tab <0-4>` | 启动即打开设置卡片，并指定分页（0 演奏 / 1 画面 / 2 判定 / 3 系统 / 4 账户），配合 `--screenshot` 截设置面板——按键没法在无头运行里送进去 |
 | `--select-id <musicId>` | 启动就停在选曲列表里这首歌上（截图 / 下载器交接用），首帧定位不会被列表初始布局覆盖 |
 | `--ui-scale <n>` | 选曲 / 结算画面的界面缩放（`1.0` = 正好填满窗口，可用范围 0.7~1.5）。**只影响这两个画面**，演奏界面和 HUD 不受影响；设置卡片的「画面」页有同一个滑杆，值存进 `userdata.json` |
 | `--dump-stage-bg <png>` | 把当前歌曲生成的舞台底板写成 PNG（排查舞台背景合成用），2048x2048（上游 renderToSquareBackground 的方形结果） |
@@ -128,6 +129,9 @@ cppsekai [--sus <file.sus>] [--bgm <audio>] [--charts <dir>] [--cover <image>]
 | `--result-at <sec>` | 谱面走到指定秒数就切到**结算画面**（用真实判定数据），不用等整首歌放完 |
 | `--result-preview` | 启动即进结算画面，且用参考截图的样例数字（940021 / PERFECT 634 …），专门用来跟原版截图做像素对比 |
 | `--confirm-flash [<sec>]` | 在选曲界面单独放一次「确定」的白色爆发光效（默认 1.0s 处，**不加载歌曲**），配合 `--screenshot` 抓爆发过程 |
+| `--profile` | 启动即打开选曲界面的**个人资料卡**（平时要点右上角的等级牌才出来），配合 `--screenshot` 截它 |
+| `--player <昵称[:组织]>` | 无头检查用：把账户的昵称 / 学校塞进内存（**不读也不写 userdata.json**），让资料卡和设置「账户」页有东西可看 |
+| `--player-rank <n>` | 同上，直接把等级设成 n（本级经验清零），用来对比不同等级下的等级牌 / 经验条 |
 | `--help` / `-h` | 打印用法并退出 |
 
 ---

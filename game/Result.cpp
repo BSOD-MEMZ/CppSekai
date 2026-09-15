@@ -15,6 +15,7 @@
 #include "game/Hud.hpp"
 #include "game/Intro.hpp"
 #include "game/SongSelect.hpp" // difficultyColor()
+#include "game/Ui.hpp"         // player level chip + exp bar
 
 #include "imgui.h"
 
@@ -800,6 +801,57 @@ void drawResult(platform::Renderer& renderer, const ResultData& data, float elap
                 drawFontDigits(c, cond, kComboFontSize, combo, kComboRight,
                     cy + kComboFontSize * kDigitBaselineNudge, kComboAdvance, kDigitGray, kWhite,
                     alpha);
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Player level (the account). The chip is the same component the song
+    // select draws, so the two screens cannot drift apart; the bar under it is
+    // this run's progress towards the next rank.
+    //
+    // It sits on the free right-hand area below the strip panel - the phone
+    // layout fills that with the character, the 16:9 one does not.
+    // -----------------------------------------------------------------------
+    {
+        const float alpha = easeOutCubic(span(t, 1.80f, 0.35f));
+        if (alpha > 0.004f) {
+            const int vtxFirst = dl->VtxBuffer.Size;
+            const float right = kCanvasW - kPlateRightInset;
+            const float chipY = kPanelBottom + 62.0f + (1.0f - alpha) * 12.0f;
+            ui::playerLevelChip(dl, bold, ImVec2(c.x(right), c.y(chipY)), data.playerRank, c.scale,
+                true);
+
+            constexpr float kBarW = 232.0f;
+            const float barY = chipY + 76.0f;
+            const float ratio = data.playerExpNeed > 0.0
+                ? static_cast<float>(data.playerExp / data.playerExpNeed)
+                : 1.0f;
+            ui::expBar(dl, ImVec2(c.x(right - kBarW), c.y(barY)), c.s(kBarW), c.scale, ratio);
+
+            char buf[64];
+            ImU32 col = kMint;
+            if (data.rankUps > 0) {
+                std::snprintf(buf, sizeof(buf), "等级提升!  +%d EXP", data.expGain);
+                col = kNewRecord;
+            } else if (data.expGain > 0) {
+                std::snprintf(buf, sizeof(buf), "+%d EXP", data.expGain);
+            } else {
+                std::snprintf(buf, sizeof(buf), "%d / %d", static_cast<int>(data.playerExp),
+                    static_cast<int>(data.playerExpNeed));
+            }
+            textCentered(c, bold, 21.0f, right - kBarW * 0.5f, barY + 26.0f, col, buf);
+
+            // Fade the whole block in by rewriting the alpha of the vertices it
+            // just added (the chip has no alpha parameter of its own).
+            const int a8 = static_cast<int>(alpha * 255.0f);
+            if (a8 < 255) {
+                for (int i = vtxFirst; i < dl->VtxBuffer.Size; ++i) {
+                    ImU32& vcol = dl->VtxBuffer[i].col;
+                    const ImU32 a = (vcol >> IM_COL32_A_SHIFT) & 0xFF;
+                    vcol = (vcol & ~IM_COL32_A_MASK)
+                        | (static_cast<ImU32>(a * a8 / 255) << IM_COL32_A_SHIFT);
+                }
             }
         }
     }

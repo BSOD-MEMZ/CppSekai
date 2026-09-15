@@ -49,6 +49,8 @@ game/Result.*     # 结算画面（PRESENT/RESULT）：参考原版截图 1:1 �
                   # 详细测量笔记见下面「结算画面」一节。
 game/Intro.*      # ImGui 卡片/UI；字体跟随系统（注册表找字体文件 + CJK 字形探测，Yu Gothic UI
                   # 是 CFF 轮廓 stb_truetype 渲染不了，会自动落到 Microsoft YaHei UI；--pjsk-font 回退）
+game/SongSelect.* # 选曲界面 + userdata.json 读写（settings / scores / account 三段）+ 等级曲线。
+                  # 账户 / 等级 / 资料卡见下面「账户 / 等级」一节。
 main.cpp          # SDL2 窗口、事件循环、输入映射、ImGui HUD、截图模式
 ```
 
@@ -727,6 +729,40 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
   调试：`--confirm-flash [<sec>]` 单独放一次这个特效（不加载歌曲），配 `--screenshot` 看帧。
   实测（1280x720，按钮中心 1083,521）：年龄 0.06s 时射线方向 280px=187 / 420px=179 / 850px=153、
   射线之间 121（有渐变、向外衰减）；0.32s 时中心 244、四角 ~140（不再是全屏死白）。
+
+## 账户 / 等级（2026-09-15，`game::AccountData`）
+
+- **数据**（`game/SongSelect.hpp` 的 `AccountData`，存在 `userdata.json` 的 `account` 段）：
+  `name` / `org` / `note` / `rank` / `exp`（**指向下一级**的存量，`addPlayerExp()` 已经把超出
+  的部分滚过去了）/ `plays` / `totalScore`。老存档没有 `account` 段就是默认账户，不报错。
+  `loadUserData` / `saveUserData` 多带一个 `AccountData&` 参数（只有 main.cpp 两个调用点）。
+- **等级曲线**（`expToNextRank`，1:1 照 Sekaipedia 的官方表）：1 级 10、2 级 8010、
+  3~12 级 `8000+500*(r-2)`、13~15 级 `13000+1000*(r-12)`、16 级起 `16000+480*(r-15)`，
+  上限 `kMaxPlayerRank = 900`。一局的经验 = **分数评级倍率**（`scoreRankExp`：
+  d 20 / c 200 / b 240 / a 280 / s 320）—— 官方是 `m_score × m_bonus`，我们**没有加成系统**，
+  所以恒等于 `m_score`。评级用 `game::scoreRankAndBar()`，和结算画面牌子同一个调用，不会打架。
+- **经验只在完整跑完时结算**：挂在 `main.cpp` 记成绩那块（`!autoPlay && !session.scoreRecorded
+  && songTime >= trackDurationSec - 0.25`）里，所以 **autoplay 预览不加经验**，中途放弃也不加。
+  **`--result-at` 提前切结算不会记成绩**（songTime 还没到片尾），所以也拿不到经验——想在无头
+  环境验证就得真放完整首歌（`--screenshot-time` 给够）。
+  日志：`[rank] <评级> +N exp -> rank R (x/need)`（有 ` (rank up)` 就是升级了）。
+- **等级牌**（`ui::playerLevelChip` / `ui::expBar`，`game/Ui.hpp`）：圆角深灰药丸 +
+  薄荷方格里贴 `assets/select/level.png` + `等级` + 数字，几何全部按 `unit`（= 调用方的
+  px/1080p 单位）缩放，坐标算屏幕像素。贴图走 `ui::setLevelIconTexture()`（main.cpp 启动时
+  `loadUiTexture(baseDir + "assets\\select\\level.png")` 注册），**丢了会退化成手画的八分音符**。
+  两处调用：选曲右上角（`w - 26*k` / `20*k`，`alignRight`）、结算面板右下角
+  （`kCanvasW - kPlateRightInset`，和 SCORERANK 牌子右缘对齐）。
+  结算那块的淡入是**重写这一段顶点 alpha**（芯片自己没有 alpha 参数），和手机面板那套一样。
+- **个人资料卡**（`drawSongSelect` 末尾、`ImGui::End()` 之后）：`ui::beginCard` + `infoRows`，
+  点选曲右上角的等级牌打开（卡片是带 dim 的模态，关窗靠 X / 关闭按钮——**别指望 Escape，
+  选曲界面按 Escape 是退出游戏**）。`gProfileOpen` 是**模块级**变量（不是函数 static），
+  这样 `--profile` 能在无头运行里直接把它顶开。
+- **平时不显示**：昵称 / 学校 / 签名只有资料卡和设置「账户」页会画，演奏、HUD、结算都只有等级。
+- 无头检查：`--profile`（开资料卡）、`--player 昵称:组织`、`--player-rank N`。
+  后两个**只改内存**（在 `loadUserData` 之后套用），不会往存档里写测试数据。
+- **坑**：`--sus` 的相对路径在 Git Bash 下不可靠（MSYS 会改写 `../x` 这类参数，
+  实测 `--sus ../charts/x.sus` 和 `--sus charts/x.sus` 都读不到，绝对路径正常）。
+  脚本里一律给绝对路径。另外 `--screenshot` 收的是**文件路径**不是目录，指到目录上会静默不写。
 
 ## 待办（按优先级）
 
