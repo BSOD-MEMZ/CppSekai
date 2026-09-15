@@ -68,8 +68,11 @@ SOURCES=(
 
 mkdir -p build
 # Windows resources: the exe icon + version info. zig ships its own resource
-# compiler, so no windres / Windows SDK is needed.
+# compiler, so no windres / Windows SDK is needed. Two .rc files: the icon and
+# the version block are shared (resources.rc), the manifests are not - the
+# downloader declares DPI awareness, the game does not.
 "$ZIG" rc app.rc build/app.res
+"$ZIG" rc chartdl.rc build/chartdl.res
 "$ZIG" c++ "${CXXFLAGS[@]}" "${SOURCES[@]}" build/app.res \
     "$SDL/lib/libSDL2.dll.a" \
     -limm32 -lsetupapi -lversion -lole32 -loleaut32 -lwinmm -lgdi32 -luser32 -ladvapi32     -lshell32 \
@@ -85,7 +88,7 @@ DL_SOURCES=(
 )
 # GUI subsystem: double-clicking it must not flash a console. The command line
 # modes attach to the parent console themselves (see main()).
-"$ZIG" c++ "${CXXFLAGS[@]}" -Wl,--subsystem,windows "${DL_SOURCES[@]}" build/app.res     -lole32 -loleaut32 -lgdi32 -luser32 -ladvapi32 -lshell32 -lcomctl32 -lcomdlg32     -o build/chartdl.exe "$@"
+"$ZIG" c++ "${CXXFLAGS[@]}" -Wl,--subsystem,windows "${DL_SOURCES[@]}" build/chartdl.res     -lole32 -loleaut32 -lgdi32 -luser32 -ladvapi32 -lshell32 -lcomctl32 -lcomdlg32     -o build/chartdl.exe "$@"
 
 # Runtime DLL + assets next to the exe
 cp -f "$SDL/bin/SDL2.dll" build/ 2>/dev/null || true

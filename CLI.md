@@ -119,6 +119,7 @@ cppsekai [--sus <file.sus>] [--bgm <audio>] [--charts <dir>] [--cover <image>]
 | `--show-pause-dialog` | 演奏 0.5s 后强制打开暂停弹窗（截弹窗用的） |
 | `--settings` `--settings-tab <0-3>` | 启动即打开设置卡片，并指定分页（0 演奏 / 1 画面 / 2 判定 / 3 系统），配合 `--screenshot` 截设置面板——按键没法在无头运行里送进去 |
 | `--select-id <musicId>` | 启动就停在选曲列表里这首歌上（截图 / 下载器交接用），首帧定位不会被列表初始布局覆盖 |
+| `--ui-scale <n>` | 选曲 / 结算画面的界面缩放（`1.0` = 正好填满窗口，可用范围 0.7~1.5）。**只影响这两个画面**，演奏界面和 HUD 不受影响；设置卡片的「画面」页有同一个滑杆，值存进 `userdata.json` |
 | `--dump-stage-bg <png>` | 把当前歌曲生成的舞台底板写成 PNG（排查舞台背景合成用），2048x2048（上游 renderToSquareBackground 的方形结果） |
 | `--select-vocal <n>` | 预选第 n 个演唱版本（`availableVocals()` 的下标），用来截"切了版本"的界面 / 验证预览音频跟着走 |
 | `--dump-events <n>` | 谱面加载后打印前 n 个 packed HitEvent（time / center / width / kind / flags / endTime / volume）。谱面"看起来不对"时先看这个：分出是解析的问题还是渲染的问题 |

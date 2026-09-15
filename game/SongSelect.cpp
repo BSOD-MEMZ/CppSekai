@@ -425,6 +425,7 @@ void loadUserData(const std::string& path, UserSettings& settings,
             settings.bgStyle = s.value("bgStyle", settings.bgStyle);
             settings.bgBlur = s.value("bgBlur", settings.bgBlur);
             settings.bgDim = s.value("bgDim", settings.bgDim);
+            settings.uiScale = s.value("uiScale", settings.uiScale);
             settings.sortMode = s.value("sortMode", settings.sortMode);
             settings.groupMode = s.value("groupMode", settings.groupMode);
         }
@@ -440,6 +441,9 @@ void loadUserData(const std::string& path, UserSettings& settings,
     settings.bgStyle = std::clamp(settings.bgStyle, 0, 1);
     settings.bgBlur = std::clamp(settings.bgBlur, 0.0f, 1.0f);
     settings.bgDim = std::clamp(settings.bgDim, 0.0f, 1.0f);
+    // Small range on purpose: this zooms the select / result canvas, and past
+    // roughly +-50% the screen starts running out of window.
+    settings.uiScale = std::clamp(settings.uiScale, 0.7f, 1.5f);
     settings.sortMode = std::clamp(settings.sortMode, 0, 1);
     settings.groupMode = std::clamp(settings.groupMode, 0, 3);
 }
@@ -475,6 +479,7 @@ void saveUserData(const std::string& path, const UserSettings& settings,
         {"bgStyle", settings.bgStyle},
         {"bgBlur", settings.bgBlur},
         {"bgDim", settings.bgDim},
+        {"uiScale", settings.uiScale},
         {"sortMode", settings.sortMode},
         {"groupMode", settings.groupMode},
     };
@@ -1636,14 +1641,21 @@ void loadMusicVocals(const std::string& path)
 }
 
 int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& entries, int& selected,
-    int windowW, int windowH, float timeSec, int& sortMode, int& groupMode, int& vocalIndex)
+    int windowW, int windowH, float timeSec, int& sortMode, int& groupMode, int& vocalIndex,
+    float uiScale)
 {
     int action = SelectNone;
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     const float w = viewport->WorkSize.x;
     const float h = viewport->WorkSize.y;
-    // 1080p reference layout.
-    const float k = std::clamp(h / 1080.0f, 0.5f, 2.0f);
+    // 1080p reference layout. The user's UI scale multiplies it, which zooms the
+    // whole screen: kBase stays "how big is the window", k is what everything is
+    // laid out with. The phone panel below is the one piece sized from the window
+    // itself, so it multiplies the scale as well - otherwise the list would grow
+    // while the panel stayed put.
+    const float scale = std::clamp(uiScale, 0.5f, 2.0f);
+    const float kBase = std::clamp(h / 1080.0f, 0.5f, 2.0f);
+    const float k = kBase * scale;
 
     static std::vector<SongGroup> groups;
     static int groupIndex = 0;
@@ -2594,10 +2606,10 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     // reference UI.
     // ------------------------------------------------------------------
     const float phoneAspect = 1034.0f / 1942.0f;
-    float phoneH = h - 24.0f * k;
+    float phoneH = (h - 24.0f * kBase) * scale;
     float phoneW = phoneH * phoneAspect;
-    if (phoneW > w * 0.46f) {
-        phoneW = w * 0.46f;
+    if (phoneW > w * 0.46f * scale) {
+        phoneW = w * 0.46f * scale;
         phoneH = phoneW / phoneAspect;
     }
     const float phoneX = w - phoneW - 30.0f * k;

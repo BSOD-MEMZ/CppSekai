@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!--
+  Application manifest for the downloader (chartdl.exe), embedded by chartdl.rc
+  as RT_MANIFEST id 1.
+
+  It is the game's manifest plus one thing: DPI awareness.
+
+  chartdl is an ordinary windowed app with native controls, so on a display
+  running at 125%..200% it wants to lay itself out in real pixels - otherwise
+  Windows renders it at 96 DPI and stretches the result, which turns every label
+  and list row into a blurry smear. All of its layout goes through dp() in
+  chartdl.cpp, so the window keeps its proportions at any scale.
+
+  "true" is *system* DPI awareness: the scale of the primary monitor at login.
+  Per-monitor ("true/pm") would be sharper when dragging the window between
+  monitors with different scales, but it also requires handling WM_DPICHANGED
+  (recreate the font, relayout) - not worth it for a download helper that is
+  almost always used on one screen.
+
+  The game deliberately does NOT declare this: SDL2 owns its window and would
+  have to be told about it as well (SDL_HINT_WINDOWS_DPI_AWARENESS), which also
+  changes how fullscreen and the splash window are sized.
+-->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <assemblyIdentity type="win32" name="CppSekaiChartDl" version="1.0.0.0" processorArchitecture="*"/>
+
+  <!-- Themed native controls (ListView, buttons, progress bar). -->
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity type="win32" name="Microsoft.Windows.Common-Controls"
+        version="6.0.0.0" processorArchitecture="*" publicKeyToken="6595b64144ccf1df"
+        language="*"/>
+    </dependentAssembly>
+  </dependency>
+
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+    <security>
+      <requestedPrivileges>
+        <requestedExecutionLevel level="asInvoker" uiAccess="false"/>
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true</dpiAware>
+    </windowsSettings>
+  </application>
+</assembly>

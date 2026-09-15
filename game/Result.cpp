@@ -502,22 +502,26 @@ void drawDigitRun(const Canvas& c, platform::Renderer& renderer, const std::stri
 } // namespace
 
 // Canvas transform shared by the drawing code and resultContinueHitTest().
-Canvas makeCanvas(ImDrawList* dl, int windowW, int windowH)
+// `uiScale` is the user's UI scale (see UserSettings::uiScale): the 1920x1080
+// canvas is zoomed about the centre of the window, so everything on this screen
+// keeps its proportions. resultContinueHitTest has to be given the same value,
+// otherwise the 继续 button stops matching what is drawn.
+Canvas makeCanvas(ImDrawList* dl, int windowW, int windowH, float uiScale)
 {
     Canvas c;
     c.dl = dl;
     c.scale = std::min(static_cast<float>(windowW) / kCanvasW,
-        static_cast<float>(windowH) / kCanvasH);
+        static_cast<float>(windowH) / kCanvasH) * std::clamp(uiScale, 0.5f, 2.0f);
     c.ox = (static_cast<float>(windowW) - kCanvasW * c.scale) * 0.5f;
     c.oy = (static_cast<float>(windowH) - kCanvasH * c.scale) * 0.5f;
     return c;
 }
 
 void drawResult(platform::Renderer& renderer, const ResultData& data, float elapsedSec,
-    int windowW, int windowH)
+    int windowW, int windowH, float uiScale)
 {
     ImDrawList* dl = ImGui::GetBackgroundDrawList();
-    const Canvas c = makeCanvas(dl, windowW, windowH);
+    const Canvas c = makeCanvas(dl, windowW, windowH, uiScale);
 
     const float t = std::max(elapsedSec, 0.0f);
     const float appear = easeOutCubic(span(t, 0.0f, 0.30f));
@@ -808,9 +812,9 @@ void drawResult(platform::Renderer& renderer, const ResultData& data, float elap
     }
 }
 
-bool resultContinueHitTest(int windowW, int windowH, int x, int y)
+bool resultContinueHitTest(int windowW, int windowH, int x, int y, float uiScale)
 {
-    const Canvas c = makeCanvas(nullptr, windowW, windowH);
+    const Canvas c = makeCanvas(nullptr, windowW, windowH, uiScale);
     const float x0 = c.x(kCanvasW - kPanelRightInset - kBtnW);
     const float y0 = c.y(kBtnBottom - kBtnH);
     return static_cast<float>(x) >= x0 && static_cast<float>(x) <= x0 + c.s(kBtnW)

@@ -280,6 +280,9 @@ namespace
             "--pjsk-font: use the bundled pjsk fonts instead of the system UI font.\n"
             "--window: borderless (default) | windowed | fullscreen. --width/--height:\n"
             "          window size (default 1280x720).\n"
+            "--ui-scale <n>: zoom the song-select and result screens (1.0 = fit the\n"
+            "                window, saved in userdata.json). The play screen is not\n"
+            "                affected. Useful for high-DPI displays.\n"
             "--fps: cap the frame rate in addition to vsync (0 = vsync only). Lower\n"
             "       values (e.g. 30/60) reduce GPU/CPU load and power draw.\n"
             "Keyboard: Z S X D C V G B H N J M = 12 lanes\n"
@@ -610,6 +613,8 @@ int main(int argc, char** argv)
     double resultAtSec = -1.0;  // debug: show the result at this chart time
     int winWidth = 1366;
     int winHeight = 768;
+    float uiScaleArg = 1.0f;      // --ui-scale: song-select / result zoom
+    bool uiScaleGiven = false;
     int windowMode = 1; // 0=borderless 1=windowed 2=fullscreen(desktop)
     int fpsLimit = 60;  // extra frame cap on top of vsync; 0 = vsync only
     bool showProgressBar = true; // subtle top-edge playback bar (settings toggle)
@@ -647,6 +652,9 @@ int main(int argc, char** argv)
             offsetGiven = true;
         } else if (arg == "--filler" && i + 1 < utf8Argc) {
             gFillerSec = std::atof(utf8Argv[++i]);
+        } else if (arg == "--ui-scale" && i + 1 < utf8Argc) {
+            uiScaleArg = static_cast<float>(std::atof(utf8Argv[++i]));
+            uiScaleGiven = true;
         } else if (arg == "--width" && i + 1 < utf8Argc) {
             winWidth = std::atoi(utf8Argv[++i]);
             widthGiven = true;
@@ -835,6 +843,9 @@ int main(int argc, char** argv)
     }
     if (!offsetGiven) {
         gUserOffsetSec = userSettings.offsetSec;
+    }
+    if (uiScaleGiven) {
+        userSettings.uiScale = std::clamp(uiScaleArg, 0.5f, 2.0f);
     }
     if (!autoplayGiven) {
         autoPlay = userSettings.autoplay;
@@ -1625,6 +1636,19 @@ int main(int argc, char** argv)
                 }
             } else if (tab == 1) {
                 // 画面: resolution + window mode + frame rate.
+                // UI zoom for the two screens that are laid out on a virtual
+                // canvas. The play screen is not affected on purpose.
+                contentLeft();
+                ImGui::Text("界面缩放（选曲 / 结算）");
+                float uiScalePct = userSettings.uiScale * 100.0f;
+                contentLeft();
+                if (ui::slider("uiscale", &uiScalePct, 70.0f, 150.0f, 5.0f, "%.0f%%", interior)) {
+                    const float next = std::clamp(uiScalePct / 100.0f, 0.7f, 1.5f);
+                    if (next != userSettings.uiScale) {
+                        userSettings.uiScale = next;
+                        persistUserData();
+                    }
+                }
                 contentLeft();
                 ImGui::Text("分辨率");
                 // Preset sizes; the live window resizes immediately when not
@@ -2230,7 +2254,7 @@ int main(int argc, char** argv)
                         }
                         const int fx = static_cast<int>(event.tfinger.x * static_cast<float>(windowW));
                         const int fy = static_cast<int>(event.tfinger.y * static_cast<float>(windowH));
-                        if (game::resultContinueHitTest(windowW, windowH, fx, fy)) {
+                        if (game::resultContinueHitTest(windowW, windowH, fx, fy, userSettings.uiScale)) {
                             resultContinueRequested = true;
                         }
                         break;
@@ -2342,7 +2366,7 @@ int main(int argc, char** argv)
                         // and mouse share one path. No lane input afterwards.
                         if (event.button.button == SDL_BUTTON_LEFT && !ImGui::GetIO().WantCaptureMouse
                             && game::resultContinueHitTest(windowW, windowH, event.button.x,
-                                   event.button.y)) {
+                                   event.button.y, userSettings.uiScale)) {
                             resultContinueRequested = true;
                         }
                         break;
@@ -2521,7 +2545,7 @@ int main(int argc, char** argv)
             const int prevGroupMode = userSettings.groupMode;
             const int action = game::drawSongSelect(renderer, entries, selected, windowW, windowH,
                 static_cast<float>(uiClock), userSettings.sortMode, userSettings.groupMode,
-                selectedVocal);
+                selectedVocal, userSettings.uiScale);
             if (prevSortMode != userSettings.sortMode || prevGroupMode != userSettings.groupMode) {
                 persistUserData();
             }
@@ -3149,7 +3173,8 @@ int main(int argc, char** argv)
                 audio.startResultBgm(resultBgmPath, 0.85f, error);
                 error.clear();
             }
-            game::drawResult(renderer, resultData, resultElapsed, windowW, windowH);
+            game::drawResult(renderer, resultData, resultElapsed, windowW, windowH,
+                userSettings.uiScale);
             if (resultContinueRequested) {
                 audio.stopResultBgm();
                 std::printf("[result] continue -> song select\n");

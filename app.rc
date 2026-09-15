@@ -1,42 +1,16 @@
-// Windows resources for both executables (cppsekai.exe and chartdl.exe).
+// Windows resources for the game executable (cppsekai.exe).
 //
 // Compiled by `zig rc` and linked straight into the exe, so Explorer, the
 // taskbar and the Alt-Tab switcher show the game's icon even before it runs.
-// The icon id must stay 1: the downloader loads it as MAKEINTRESOURCE(1) for
-// its window class, and main.cpp uses the same id for the window icon.
-//
-// Paths are relative to this file's folder (the repository root).
+// The downloader uses chartdl.rc instead: the same icon and version block (both
+// live in resources.rc), but its own application manifest.
 
-1 ICON "icon.ico"
+#include "resources.rc"
 
-1 VERSIONINFO
-FILEVERSION     1,0,0,0
-PRODUCTVERSION  1,0,0,0
-FILEOS          0x00000004L // VOS__WINDOWS32
-FILETYPE        0x00000001L // VFT_APP
-BEGIN
-    BLOCK "StringFileInfo"
-    BEGIN
-        BLOCK "080404b0" // Chinese (Simplified), Unicode
-        BEGIN
-            VALUE "CompanyName",      "CppSekai"
-            VALUE "FileDescription",  "CppSekai - Project SEKAI style SUS chart player"
-            VALUE "FileVersion",      "1.0.0.0"
-            VALUE "InternalName",     "cppsekai"
-            VALUE "OriginalFilename", "cppsekai.exe"
-            VALUE "ProductName",      "CppSekai"
-            VALUE "ProductVersion",   "1.0.0.0"
-            VALUE "LegalCopyright",   "AGPL-3.0-only. Chart core from sekai-mmw-preview-web (AGPL-3.0), MikuMikuWorld port (MIT). No game assets are distributed."
-        END
-    END
-    BLOCK "VarFileInfo"
-    BEGIN
-        VALUE "Translation", 0x0804, 1200
-    END
-END
-
-// Application manifest (RT_MANIFEST = 24, CREATEPROCESS_MANIFEST_RESOURCE_ID = 1).
-// Declares the Common Controls 6.0 dependency, so the downloader's native
-// widgets come up themed instead of in the flat Windows 95 style. Details in
-// app.manifest next to this file.
+// Application manifest (RT_MANIFEST = 24, CREATEPROCESS_MANIFEST_RESOURCE_ID = 1):
+// declares the Common Controls 6.0 dependency so native widgets come up themed
+// instead of in the flat Windows 95 style. The game itself draws with SDL+ImGui,
+// so this is mainly for the downloader - but both exes carry one, and the game's
+// manifest stays separate so chartdl can declare DPI awareness on its own.
+// Details in app.manifest / chartdl.manifest next to this file.
 1 24 "app.manifest"

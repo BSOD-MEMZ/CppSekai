@@ -34,15 +34,17 @@ struct ResultData
 
 // Draws the whole screen on ImGui's background draw list (call after
 // ImGui::NewFrame, before ImGui::Render). `elapsedSec` is the time since the
-// screen appeared and drives the entrance animation.
+// screen appeared and drives the entrance animation. `uiScale` zooms the whole
+// canvas (UserSettings::uiScale, 1.0 = fit the window).
 void drawResult(platform::Renderer& renderer, const ResultData& data, float elapsedSec,
-    int windowW, int windowH);
+    int windowW, int windowH, float uiScale = 1.0f);
 
 // Hit test for the 继续 button, in *window pixel* coordinates. The press is
 // handled by the SDL event path (the same way the HUD pause button and the
 // intro's skip pill are), not by ImGui: the synthesized mouse events touch
 // contacts produce are filtered out in main.cpp, so an ImGui-only test would
-// leave the button dead on a touchscreen.
-bool resultContinueHitTest(int windowW, int windowH, int x, int y);
+// leave the button dead on a touchscreen. Pass the same uiScale the frame was
+// drawn with, or the hitbox and the button drift apart.
+bool resultContinueHitTest(int windowW, int windowH, int x, int y, float uiScale = 1.0f);
 
 } // namespace game

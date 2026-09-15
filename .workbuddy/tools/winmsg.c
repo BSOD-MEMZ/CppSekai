@@ -127,6 +127,40 @@ int main(int argc, char** argv)
         std::printf("done, window alive=%d\n", IsWindow(hwnd));
         return 0;
     }
+    if (std::strcmp(verb, "clickchild") == 0) {
+        // Like "click", but aimed at a child window picked by class. Plenty of
+        // common controls are their own HWNDs (a ListView header is
+        // "SysHeader32") and EnumWindows never sees those, so clicking a column
+        // header needs this instead of "click".
+        wchar_t childClass[128] = {};
+        if (count < 2) {
+            std::fprintf(stderr, "usage: winmsg.exe <parentClass> clickchild <childClass> <x> <y>\n");
+            return 2;
+        }
+        utf8ToWide(rest[1], childClass, 128);
+        gFound = nullptr;
+        gWantClass = childClass;
+        gWantPid = 0;
+        gPrintAll = 0;
+        EnumChildWindows(hwnd, enumProc, 0);
+        if (gFound == nullptr) {
+            std::fprintf(stderr, "child window not found: %ls\n", childClass);
+            return 1;
+        }
+        const int x = count > 2 ? std::atoi(rest[2]) : 0;
+        const int y = count > 3 ? std::atoi(rest[3]) : 0;
+        const LPARAM pos = MAKELPARAM(x, y);
+        HWND child = gFound;
+        std::printf("clickchild (%d,%d) -> %p\n", x, y, static_cast<void*>(child));
+        std::fflush(stdout);
+        PostMessageW(child, WM_MOUSEMOVE, 0, pos);
+        PostMessageW(child, WM_LBUTTONDOWN, MK_LBUTTON, pos);
+        Sleep(60);
+        PostMessageW(child, WM_LBUTTONUP, 0, pos);
+        Sleep(150);
+        std::printf("done, child alive=%d\n", IsWindow(child));
+        return 0;
+    }
     if (control == nullptr) {
         std::fprintf(stderr, "control id %d not found\n", ctrlId);
         return 1;

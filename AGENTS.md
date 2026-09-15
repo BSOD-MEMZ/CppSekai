@@ -86,6 +86,20 @@ main.cpp          # SDL2 窗口、事件循环、输入映射、ImGui HUD、截�
   **歌曲表按 id 去重**：下载路径里的 `0374_normal.sus` 全由 id 拼出来，所以同 id 出现两条
   记录既会重复列一行、又会让两个任务抢同一个输出路径。`loadData()` 用 set 丢掉后来的重复
   id，`rebuildList()` 再兜一层，丢掉的条数写进日志（`dropped N duplicate song id(s)`）。
+  **列与排序**：九列（ID / 曲名 / 读音 / EASY..MASTER / 演唱版本），点表头排序、再点一次反向。
+  排序标记写在**表头控件**上（`Header_SetItem` + `HDF_SORTUP/DOWN`）：ListView 自己存了一份列文本，
+  v6 下改 ListView 的列**不会**同步到表头（只写 ListView 的话屏幕上看不到任何变化，但
+  `LVM_GETCOLUMN` 读回来是对的 —— 很容易误判成"没重绘"）。
+  **字体 / DPI**：`chartdl.manifest` 声明了系统 DPI 感知（**游戏那份故意没有**，见
+  SDL_HINT_WINDOWS_DPI_AWARENESS 的默认值是不改感知），布局里所有硬编码数字都过 `dp()`
+  （96dpi 单位 → 实际像素），字体走 `createUiFont()`（依次试 Microsoft YaHei UI → Microsoft
+  YaHei → Segoe UI → Tahoma，用 `GetTextFaceW` 反查确认没被 GDI 悄悄替换）。启动打一行
+  `[ui] dpi=… client=… screen=… font=…`，DPI 出问题先看它。`--dpi <n>` 强制缩放值，是 100% 机器上
+  唯一能看高 DPI 布局的手段。
+  **资源分家**：图标 + 版本信息在 `resources.rc`，`app.rc` / `chartdl.rc` 各自 `#include` 它再加
+  自己的清单 —— 下载器要 DPI 感知、游戏不要，共用一份 `.res` 做不到。
+  `--screenshot` 抓图前会先 `RedrawWindow(…RDW_ALLCHILDREN)` 强制重绘，否则被冻住的子控件
+  （比如排序后的表头）会被拍成旧的。
   **文本一律走 `toUtf8()` / `windowTextW()`，路径一律留 `std::wstring`**（2026-09-14 修崩溃）：
   之前 `windowText()` 把用户输的 UTF-8 塞进 `fs::path` 再 `.string()` 取回来，而 Windows 上
   `fs::path` 内部是宽字符、窄的那一端是**本地 ANSI 代码页**（日文机 Shift-JIS / 中文机 cp936）。
@@ -130,6 +144,18 @@ bash build.sh          # 仅需 Git Bash；产物 build/cppsekai.exe + SDL2.dll 
   `--charts` → `exe\charts` → `exe\..\charts` → `./charts`，取第一个有谱面的。
 - 音频对齐：官服 mp3 开头有静音填充（fillerSec≈9s），谱面 tick0 在静音之后。优先级：
   sidecar json `fillerSec`/`offset`(ms) > 自动静音检测 > 0；`--filler`/`--offset` 可覆盖。
+- **界面缩放（`UserSettings::uiScale`）只作用于选曲和结算**：这两个画面都画在 1080p 虚拟画布上，
+  演奏界面和 HUD **故意不吃这个值**（打歌时放大/缩小 UI 比 UI 偏小更糟）。
+  - 选曲：`k = kBase * scale`，其中 `kBase` 仍是"窗口有多大"那份；手机面板是唯一由窗口尺寸算出
+    的部件，所以它额外乘 `scale` —— 不乘的话列表会变大而面板纹丝不动。
+  - 结算：`makeCanvas()` 的 `scale` 乘上它。**`resultContinueHitTest()` 必须收到同一个 uiScale**，
+    否则「继续」按钮的判定框会和画面对不上（触摸/鼠标点不中）。
+  - `--ui-scale` / 设置卡片「画面」页滑杆，范围 0.7~1.5，存 `userdata.json` 的 `uiScale`。
+- **`app.manifest` 里没有 `dpiAware`，游戏是 DPI unaware**：SDL2 的 `SDL_HINT_WINDOWS_DPI_AWARENESS`
+  默认是空串（"不改变 DPI 感知"，见 SDL_hints.h），main.cpp 也没设它 —— 所以在缩放显示器的
+  系统会把窗口位图拉伸（糊），同时 `SDL_WINDOW_ALLOW_HIGHDPI` 因为没有感知而没有实际作用。
+  要改就得同时动 manifest 和 SDL hint，并且窗口的物理尺寸语义会跟着变（高 DPI 下窗口变小），
+  所以一直是"记录在案、没动"。
 - **`AudioEngine::loadMusic()` 必须先 `ma_sound_uninit` 掉上一首**：miniaudio 的
   `ma_sound_init_from_file` 内部会 `MA_ZERO_OBJECT(pSound)`，对已经初始化的 ma_sound 再 init
   会把它在引擎资源表里的节点丢掉，之后引擎遍历到坏节点直接假死。表现就是「打到一半点放弃、

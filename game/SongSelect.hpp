@@ -100,6 +100,11 @@ struct UserSettings
     int bgStyle = 0;
     float bgBlur = 0.5f; // 0..1 blur amount for the wallpaper
     float bgDim = 0.45f; // 0..1 darkening on top of it (keeps the list readable)
+    // UI scale for the two screens laid out on a virtual canvas - song select and
+    // the result screen (1.0 = fit the window). The play screen and the HUD
+    // deliberately ignore it: those are played, not read, and a mis-scaled lane
+    // would be worse than a small one.
+    float uiScale = 1.0f;
     // Song-list order / grouping, so the list comes back the way it was left
     // (see game::drawSongSelect, which owns the two values while it runs).
     int sortMode = 0;  // 0 = by name, 1 = by difficulty
@@ -248,7 +253,10 @@ enum SelectAction
 // change). `vocalIndex` is out-only: the index (into availableVocals()) of the
 // version currently picked for the selected song, so the caller can point the
 // entry at that audio before starting. -1 = the song has no chooser at all.
+// `uiScale` scales the whole 1080p canvas this screen is laid out on (1.0 =
+// exactly fit the window, see UserSettings::uiScale).
 int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& entries, int& selected,
-    int windowW, int windowH, float timeSec, int& sortMode, int& groupMode, int& vocalIndex);
+    int windowW, int windowH, float timeSec, int& sortMode, int& groupMode, int& vocalIndex,
+    float uiScale = 1.0f);
 
 } // namespace game

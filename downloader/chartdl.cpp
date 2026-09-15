@@ -713,6 +713,8 @@ void printUsage()
         "              [--out <dir>]             default: ..\\charts\n"
         "              [--no-jacket] [--no-sidecar] [--force]\n"
         "  chartdl.exe --screenshot <png> [--screenshot-time <sec>]\n"
+        "              [--dpi <96|120|144|192>]   force the layout scale (default:\n"
+        "                                          the system DPI)\n"
         "\n"
         "Source: assets.unipjsk.com (charts, BGM per vocal version, jackets).\n");
 }
@@ -784,6 +786,99 @@ namespace
     std::vector<HWND> gVocalChecks;
     HFONT gFont = nullptr;
 
+    // -----------------------------------------------------------------------
+    // DPI. chartdl declares DPI awareness (see chartdl.manifest), which means
+    // Windows no longer renders the window at 96 DPI and stretches the result -
+    // it hands us a real-pixel client area instead, and everything here has to
+    // lay itself out in those pixels. Every hard-coded size in the layout goes
+    // through dp(), so the window keeps its proportions at any scale.
+    // `--dpi <n>` overrides the value (headless checks: it is the only way to
+    // see a 150% layout on a 100% machine).
+    int gDpi = 96;
+    int gDpiOverride = 0;
+
+    int dp(int value)
+    {
+        return MulDiv(value, gDpi, 96);
+    }
+
+    // The system DPI - which is exactly what the manifest's "true" (system aware)
+    // promises. A per-monitor process would have to ask the window instead.
+    int systemDpi()
+    {
+        HDC screen = GetDC(nullptr);
+        if (screen == nullptr) {
+            return 96;
+        }
+        const int dpi = GetDeviceCaps(screen, LOGPIXELSY);
+        ReleaseDC(nullptr, screen);
+        return dpi > 0 ? dpi : 96;
+    }
+
+    // SetWindowPos with every argument passed through dp().
+    void place(HWND child, int x, int y, int w, int h)
+    {
+        SetWindowPos(child, nullptr, dp(x), dp(y), dp(w), dp(h), SWP_NOZORDER);
+    }
+
+    // Asks GDI for a font, but CreateFontW never fails - it substitutes silently
+    // when the family is missing. So ask the font we got back what it actually is
+    // (GetTextFaceW) and keep looking when it is not the one we asked for.
+    HFONT createUiFont(int pointSize)
+    {
+        static const wchar_t* kFaces[] = {
+            L"Microsoft YaHei UI", // Win8+, the "msyh" family (modern default)
+            L"Microsoft YaHei",    // Win7 name for the same face
+            L"Segoe UI",           // latin-only fallback, still much newer than MS Shell Dlg
+            L"Tahoma",
+        };
+        HDC screen = GetDC(nullptr);
+        if (screen == nullptr) {
+            return reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+        }
+        const int height = -MulDiv(pointSize, gDpi, 72);
+        for (const wchar_t* face : kFaces) {
+            HFONT font = CreateFontW(height, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, face);
+            if (font == nullptr) {
+                continue;
+            }
+            HGDIOBJ previous = SelectObject(screen, font);
+            wchar_t actual[LF_FACESIZE] = {};
+            GetTextFaceW(screen, LF_FACESIZE, actual);
+            SelectObject(screen, previous);
+            if (_wcsicmp(actual, face) == 0) {
+                ReleaseDC(nullptr, screen);
+                return font;
+            }
+            DeleteObject(font); // substituted: not the family we asked for
+        }
+        ReleaseDC(nullptr, screen);
+        return reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+    }
+
+    // -----------------------------------------------------------------------
+    // List columns. The five difficulties get one column each (instead of the old
+    // packed "E24 N30 H32 X36 M38" cell) so the header can be clicked to sort by
+    // level - which is the whole point of splitting them.
+    // -----------------------------------------------------------------------
+    constexpr int kColId = 0;
+    constexpr int kColTitle = 1;
+    constexpr int kColKana = 2;
+    constexpr int kColDiffFirst = 3; // EASY .. MASTER, in kDiffNames order
+    constexpr int kColVersions = kColDiffFirst + 5;
+    constexpr int kColumnCount = kColVersions + 1;
+
+    const wchar_t* const kColumnTitles[kColumnCount] = {
+        L"ID", L"曲名", L"读音", L"EASY", L"NORMAL", L"HARD", L"EXPERT", L"MASTER", L"演唱版本"};
+    // Widths in 96-DPI units; dp() scales them on the way into the header.
+    const int kColumnWidths[kColumnCount] = {52, 230, 150, 58, 68, 56, 66, 66, 84};
+
+    // Click a header to sort by that column; click it again to flip. Starts on
+    // the id, which is the order of the upstream table.
+    int gSortColumn = kColId;
+    bool gSortAscending = true;
+
     std::vector<int> gRowSong;   // list row -> gSongs index (after filtering)
     int gDetailSong = -1;        // song the right panel describes
     std::size_t gLogShown = 0;   // log lines already appended to the listbox
@@ -848,6 +943,41 @@ namespace
 
     // Fills the list from gSongs, keeping the current search filter and the
     // check state of the songs that stay visible.
+    // Marks the column the list is sorted by: the native header arrow (needs
+    // comctl32 v6, which chartdl.manifest asks for) plus a text marker, since the
+    // arrow is easy to miss and does not appear at all without a theme.
+    //
+    // Written straight to the header control: the ListView keeps its own copy of
+    // the column text and (under v6) does not push a later LVM_SETCOLUMN through
+    // to the header, so going that way leaves the visible header unchanged.
+    void updateHeaderSortMarks()
+    {
+        HWND header = ListView_GetHeader(gList);
+        if (header == nullptr) {
+            return;
+        }
+        for (int i = 0; i < kColumnCount; ++i) {
+            const bool sorted = i == gSortColumn;
+            std::wstring title = kColumnTitles[i];
+            if (sorted) {
+                title += gSortAscending ? L" ▲" : L" ▼";
+            }
+            HDITEMW item{};
+            item.mask = HDI_FORMAT;
+            if (Header_GetItem(header, i, &item) == FALSE) {
+                continue;
+            }
+            item.mask = HDI_TEXT | HDI_FORMAT;
+            item.pszText = const_cast<wchar_t*>(title.c_str());
+            item.cchTextMax = static_cast<int>(title.size());
+            item.fmt &= ~(HDF_SORTUP | HDF_SORTDOWN);
+            if (sorted) {
+                item.fmt |= gSortAscending ? HDF_SORTUP : HDF_SORTDOWN;
+            }
+            Header_SetItem(header, i, &item);
+        }
+    }
+
     void rebuildList(const std::string& filter)
     {
         // Remember what was ticked.
@@ -863,17 +993,67 @@ namespace
         ListView_DeleteAllItems(gList);
         gRowSong.clear();
 
-        // Second guard on top of loadData's: whatever ended up in gSongs, one id
-        // gets exactly one row here.
-        std::set<int> listedIds;
-        for (std::size_t i = 0; i < gSongs.size(); ++i) {
-            const Song& song = gSongs[i];
-            if (!matchesFilter(song, filter)) {
-                continue;
+        // Which songs to show, in the order the header asks for.
+        std::vector<int> order;
+        order.reserve(gSongs.size());
+        {
+            // Second guard on top of loadData's: whatever ended up in gSongs, one
+            // id gets exactly one row here.
+            std::set<int> listedIds;
+            for (std::size_t i = 0; i < gSongs.size(); ++i) {
+                const Song& song = gSongs[i];
+                if (!matchesFilter(song, filter)) {
+                    continue;
+                }
+                if (!listedIds.insert(song.id).second) {
+                    continue;
+                }
+                order.push_back(static_cast<int>(i));
             }
-            if (!listedIds.insert(song.id).second) {
-                continue;
+        }
+        const auto& songs = gSongs;
+        std::stable_sort(order.begin(), order.end(), [&](int a, int b) {
+            const Song& lhs = songs[static_cast<std::size_t>(a)];
+            const Song& rhs = songs[static_cast<std::size_t>(b)];
+            int cmp = 0;
+            switch (gSortColumn) {
+                case kColTitle:
+                    cmp = lhs.title.compare(rhs.title);
+                    break;
+                case kColKana:
+                    cmp = lhs.kana.compare(rhs.kana);
+                    break;
+                case kColVersions:
+                    cmp = static_cast<int>(lhs.vocals.size()) - static_cast<int>(rhs.vocals.size());
+                    break;
+                case kColId:
+                    cmp = lhs.id - rhs.id;
+                    break;
+                default: {
+                    // The five difficulty columns; a missing level (-1 / 0) sorts
+                    // to the bottom either way, which keeps the songs that have
+                    // this difficulty on top.
+                    const int d = std::clamp(gSortColumn - kColDiffFirst, 0, 4);
+                    const int lv = lhs.levels[static_cast<std::size_t>(d)];
+                    const int rv = rhs.levels[static_cast<std::size_t>(d)];
+                    const bool lvSet = lv > 0;
+                    const bool rvSet = rv > 0;
+                    if (lvSet != rvSet) {
+                        cmp = lvSet ? -1 : 1;
+                    } else {
+                        cmp = lv - rv;
+                    }
+                    break;
+                }
             }
+            if (cmp == 0) {
+                cmp = lhs.id - rhs.id; // stable tiebreak: the upstream order
+            }
+            return gSortAscending ? cmp < 0 : cmp > 0;
+        });
+
+        for (const int index : order) {
+            const Song& song = gSongs[static_cast<std::size_t>(index)];
             wchar_t id[16];
             std::swprintf(id, 16, L"%04d", song.id);
             LVITEMW item{};
@@ -885,19 +1065,26 @@ namespace
             auto setColumn = [&](int column, const std::wstring& text) {
                 ListView_SetItemText(gList, row, column, const_cast<wchar_t*>(text.c_str()));
             };
-            setColumn(1, widen(song.title));
-            setColumn(2, widen(song.kana));
-            std::string levels = "E" + std::to_string(song.levels[0]) + " N" + std::to_string(song.levels[1])
-                + " H" + std::to_string(song.levels[2]) + " X" + std::to_string(song.levels[3]) + " M"
-                + std::to_string(song.levels[4]);
-            setColumn(3, widen(levels));
-            setColumn(4, widen(std::to_string(song.vocals.size()) + " 版本"));
-            const auto state = checked.find(static_cast<int>(i));
+            setColumn(kColTitle, widen(song.title));
+            setColumn(kColKana, widen(song.kana));
+            for (int d = 0; d < 5; ++d) {
+                const int level = song.levels[static_cast<std::size_t>(d)];
+                setColumn(kColDiffFirst + d, widen(level > 0 ? std::to_string(level) : std::string("-")));
+            }
+            setColumn(kColVersions, widen(std::to_string(song.vocals.size()) + " 版本"));
+            const auto state = checked.find(index);
             ListView_SetCheckState(gList, row, state != checked.end() && state->second ? TRUE : FALSE);
-            gRowSong.push_back(static_cast<int>(i));
+            gRowSong.push_back(index);
         }
         SendMessageW(gList, WM_SETREDRAW, TRUE, 0);
         InvalidateRect(gList, nullptr, TRUE);
+        // The header is a child window of the list and does not come back on its
+        // own after WM_SETREDRAW - without this the sort marker stays invisible
+        // until something else happens to repaint it.
+        if (HWND header = ListView_GetHeader(gList)) {
+            RedrawWindow(header, nullptr, nullptr,
+                RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN | RDW_FRAME);
+        }
     }
 
     void updateDetailPanel(int songIndex);
@@ -906,7 +1093,10 @@ namespace
     {
         switch (message) {
             case WM_CREATE: {
-                gFont = reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+                gDpi = gDpiOverride > 0 ? gDpiOverride : systemDpi();
+                // "Microsoft YaHei UI" (msyh) when the system has it, and 10pt
+                // instead of the 9pt MS Shell Dlg that DEFAULT_GUI_FONT hands out.
+                gFont = createUiFont(10);
                 auto create = [&](const wchar_t* cls, const wchar_t* text, DWORD style, int id) {
                     HWND control = CreateWindowExW(0, cls, text, WS_CHILD | WS_VISIBLE | style, 0, 0, 10, 10,
                         hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), nullptr, nullptr);
@@ -931,21 +1121,15 @@ namespace
                 SendMessageW(gList, WM_SETFONT, reinterpret_cast<WPARAM>(gFont), TRUE);
                 ListView_SetExtendedListViewStyle(gList,
                     LVS_EX_FULLROWSELECT | LVS_EX_CHECKBOXES | LVS_EX_DOUBLEBUFFER);
-                struct Column
-                {
-                    const wchar_t* title;
-                    int width;
-                };
-                const Column columns[] = {
-                    {L"ID", 52}, {L"曲名", 220}, {L"读音", 140}, {L"难度 (E/N/H/X/M)", 150}, {L"演唱版本", 90}};
-                for (int i = 0; i < 5; ++i) {
+                for (int i = 0; i < kColumnCount; ++i) {
                     LVCOLUMNW column{};
                     column.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM;
-                    column.pszText = const_cast<wchar_t*>(columns[i].title);
-                    column.cx = columns[i].width;
+                    column.pszText = const_cast<wchar_t*>(kColumnTitles[i]);
+                    column.cx = dp(kColumnWidths[i]);
                     column.iSubItem = i;
                     ListView_InsertColumn(gList, i, &column);
                 }
+                updateHeaderSortMarks();
 
                 create(L"BUTTON", L"下载内容", BS_GROUPBOX, kIdDetailGroup);
                 gDetailTitle = create(L"STATIC", L"（在左边选一首歌）", SS_LEFT, kIdDetailTitle);
@@ -973,36 +1157,45 @@ namespace
                 return 0;
             }
             case WM_SIZE: {
-                const int width = LOWORD(lParam);
+                const int width = LOWORD(lParam); // real pixels already
                 const int height = HIWORD(lParam);
+                // The numbers below are 96-DPI units; dp() turns them into real
+                // pixels, and the widths that mix in the client size use
+                // SetWindowPos directly (that size is not a design unit).
                 const int margin = 10;
                 const int panelWidth = 330;
                 const int bottomHeight = 188;
-                const int listWidth = width - margin * 3 - panelWidth;
-                const int listHeight = height - 76 - bottomHeight - margin;
-                const int panelX = margin * 2 + listWidth;
+                const int listWidth = width - dp(margin) * 3 - dp(panelWidth);
+                const int listHeight = height - dp(76) - dp(bottomHeight) - dp(margin);
+                const int panelX = dp(margin) * 2 + listWidth;
 
-                SetWindowPos(GetDlgItem(hwnd, kIdDetailGroup), nullptr, panelX, 68, panelWidth - margin, listHeight + 4,
+                SetWindowPos(GetDlgItem(hwnd, kIdDetailGroup), nullptr, panelX, dp(68), listWidth,
+                    listHeight + dp(4), SWP_NOZORDER);
+                SetWindowPos(gList, nullptr, dp(margin), dp(68), listWidth, listHeight + dp(4), SWP_NOZORDER);
+
+                place(gOutDirLabel, margin, 15, 62, 20);
+                SetWindowPos(gOutDirEdit, nullptr, dp(76), dp(12), width - dp(76) - dp(220), dp(24),
                     SWP_NOZORDER);
-                SetWindowPos(gList, nullptr, margin, 68, listWidth, listHeight + 4, SWP_NOZORDER);
-
-                SetWindowPos(gOutDirLabel, nullptr, margin, 15, 62, 20, SWP_NOZORDER);
-                SetWindowPos(gOutDirEdit, nullptr, 76, 12, width - 76 - 220, 24, SWP_NOZORDER);
-                SetWindowPos(GetDlgItem(hwnd, kIdBrowse), nullptr, width - 208, 12, 90, 24, SWP_NOZORDER);
-                SetWindowPos(GetDlgItem(hwnd, kIdOpenDir), nullptr, width - 112, 12, 102, 24, SWP_NOZORDER);
-                SetWindowPos(gSearchLabel, nullptr, margin, 45, 62, 20, SWP_NOZORDER);
-                SetWindowPos(gSearch, nullptr, 76, 42, 240, 24, SWP_NOZORDER);
-                SetWindowPos(gQueueButton, nullptr, 330, 42, 150, 24, SWP_NOZORDER);
-                SetWindowPos(GetDlgItem(hwnd, kIdCheckAll), nullptr, 488, 42, 120, 24, SWP_NOZORDER);
-                SetWindowPos(gCancelButton, nullptr, 616, 42, 80, 24, SWP_NOZORDER);
-
-                const int progressY = height - bottomHeight + 4;
-                SetWindowPos(gProgress, nullptr, margin, progressY, width - margin * 2, 20, SWP_NOZORDER);
-                SetWindowPos(gStatus, nullptr, margin, progressY + 24, width - margin * 2, 18, SWP_NOZORDER);
-                SetWindowPos(gLogList, nullptr, margin, progressY + 46, width - margin * 2, bottomHeight - 56,
+                SetWindowPos(GetDlgItem(hwnd, kIdBrowse), nullptr, width - dp(208), dp(12), dp(90), dp(24),
                     SWP_NOZORDER);
+                SetWindowPos(GetDlgItem(hwnd, kIdOpenDir), nullptr, width - dp(112), dp(12), dp(102), dp(24),
+                    SWP_NOZORDER);
+                place(gSearchLabel, margin, 45, 62, 20);
+                place(gSearch, 76, 42, 240, 24);
+                place(gQueueButton, 330, 42, 150, 24);
+                place(GetDlgItem(hwnd, kIdCheckAll), 488, 42, 120, 24);
+                place(gCancelButton, 616, 42, 80, 24);
 
-                SetWindowPos(gDetailTitle, nullptr, panelX + 14, 92, panelWidth - 28, 18, SWP_NOZORDER);
+                const int progressY = height - dp(bottomHeight) + dp(4);
+                SetWindowPos(gProgress, nullptr, dp(margin), progressY, width - dp(margin) * 2, dp(20),
+                    SWP_NOZORDER);
+                SetWindowPos(gStatus, nullptr, dp(margin), progressY + dp(24), width - dp(margin) * 2, dp(18),
+                    SWP_NOZORDER);
+                SetWindowPos(gLogList, nullptr, dp(margin), progressY + dp(46), width - dp(margin) * 2,
+                    dp(bottomHeight) - dp(56), SWP_NOZORDER);
+
+                SetWindowPos(gDetailTitle, nullptr, panelX + dp(14), dp(92), dp(panelWidth) - dp(28), dp(18),
+                    SWP_NOZORDER);
                 if (gDetailSong >= 0) {
                     updateDetailPanel(gDetailSong);
                 }
@@ -1010,7 +1203,7 @@ namespace
             }
             case WM_GETMINMAXINFO: {
                 auto* info = reinterpret_cast<MINMAXINFO*>(lParam);
-                info->ptMinTrackSize = {860, 560};
+                info->ptMinTrackSize = {dp(860), dp(560)};
                 return 0;
             }
             case WM_COMMAND: {
@@ -1128,6 +1321,21 @@ namespace
             }
             case WM_NOTIFY: {
                 auto* header = reinterpret_cast<NMHDR*>(lParam);
+                if (header->idFrom == kIdList && header->code == LVN_COLUMNCLICK) {
+                    // Click a header to sort by it, click it again to flip the
+                    // direction. The list is rebuilt from the new order, so the
+                    // ticks (which are kept per song id) survive.
+                    const int column = reinterpret_cast<NMLISTVIEW*>(lParam)->iSubItem;
+                    if (column == gSortColumn) {
+                        gSortAscending = !gSortAscending;
+                    } else {
+                        gSortColumn = column;
+                        gSortAscending = true;
+                    }
+                    updateHeaderSortMarks();
+                    rebuildList(windowText(gSearch));
+                    return 0;
+                }
                 if (header->idFrom == kIdList && header->code == LVN_ITEMCHANGED) {
                     const int row = ListView_GetNextItem(gList, -1, LVNI_SELECTED);
                     const int songIndex =
@@ -1187,6 +1395,10 @@ namespace
                 return 0;
             }
             case WM_DESTROY:
+                if (gFont != nullptr && gFont != GetStockObject(DEFAULT_GUI_FONT)) {
+                    DeleteObject(gFont); // ours, not a stock object
+                    gFont = nullptr;
+                }
                 KillTimer(hwnd, 1);
                 PostQuitMessage(0);
                 return 0;
@@ -1216,12 +1428,13 @@ namespace
         RECT panel{};
         GetWindowRect(GetDlgItem(GetParent(gList), kIdDetailGroup), &panel);
         MapWindowPoints(HWND_DESKTOP, GetParent(gList), reinterpret_cast<POINT*>(&panel), 2);
-        const int baseX = panel.left + 14;
-        int y = panel.top + 40;
-        const int rowHeight = 22;
+        // `panel` is real pixels, the offsets are 96-DPI units.
+        const int contentWidth = panel.right - panel.left - dp(28);
+        const int baseX = panel.left + dp(14);
+        int y = panel.top + dp(40);
+        const int rowHeight = dp(24);
 
-        SetWindowPos(gDetailTitle, nullptr, baseX, panel.top + 18, panel.right - panel.left - 28, 18,
-            SWP_NOZORDER);
+        SetWindowPos(gDetailTitle, nullptr, baseX, panel.top + dp(18), contentWidth, dp(18), SWP_NOZORDER);
 
         for (int d = 0; d < 5; ++d) {
             const int level = song.levels[d];
@@ -1235,10 +1448,10 @@ namespace
             SetWindowTextW(gDiffChecks[d], label.c_str());
             EnableWindow(gDiffChecks[d], available ? TRUE : FALSE);
             SendMessageW(gDiffChecks[d], BM_SETCHECK, available ? BST_CHECKED : BST_UNCHECKED, 0);
-            SetWindowPos(gDiffChecks[d], nullptr, baseX, y, panel.right - panel.left - 28, rowHeight, SWP_NOZORDER);
+            SetWindowPos(gDiffChecks[d], nullptr, baseX, y, contentWidth, rowHeight, SWP_NOZORDER);
             y += rowHeight;
         }
-        y += 8;
+        y += dp(8);
         for (std::size_t v = 0; v < song.vocals.size(); ++v) {
             const VocalVersion& version = song.vocals[v];
             std::wstring label = widen(version.caption.empty() ? version.type : version.caption);
@@ -1246,7 +1459,7 @@ namespace
                 label += L"  " + widen(version.singers);
             }
             HWND check = CreateWindowExW(0, L"BUTTON", label.c_str(),
-                WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, baseX, y, panel.right - panel.left - 28, rowHeight,
+                WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, baseX, y, contentWidth, rowHeight,
                 GetParent(gList), reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdVocalBase + v)), nullptr, nullptr);
             SendMessageW(check, WM_SETFONT, reinterpret_cast<WPARAM>(gFont), TRUE);
             SendMessageW(check, BM_SETCHECK, BST_CHECKED, 0);
@@ -1255,20 +1468,25 @@ namespace
         }
         if (song.vocals.empty()) {
             HWND none = CreateWindowExW(0, L"STATIC", L"（没有演唱版本数据）", WS_CHILD | WS_VISIBLE,
-                baseX, y, panel.right - panel.left - 28, rowHeight, GetParent(gList), nullptr, nullptr, nullptr);
+                baseX, y, contentWidth, rowHeight, GetParent(gList), nullptr, nullptr, nullptr);
             SendMessageW(none, WM_SETFONT, reinterpret_cast<WPARAM>(gFont), TRUE);
             y += rowHeight;
         }
-        y += 8;
-        SetWindowPos(gJacketCheck, nullptr, baseX, y, panel.right - panel.left - 28, rowHeight, SWP_NOZORDER);
+        y += dp(8);
+        SetWindowPos(gJacketCheck, nullptr, baseX, y, contentWidth, rowHeight, SWP_NOZORDER);
         y += rowHeight;
-        SetWindowPos(gSidecarCheck, nullptr, baseX, y, panel.right - panel.left - 28, rowHeight, SWP_NOZORDER);
+        SetWindowPos(gSidecarCheck, nullptr, baseX, y, contentWidth, rowHeight, SWP_NOZORDER);
     }
 
     // --screenshot: grab the window with GDI (no screen capture, no input) so
     // the UI can be checked from a script.
     bool saveWindowPng(HWND hwnd, const std::string& path)
     {
+        // Full repaint first: BitBlt off the window DC reads what is on screen, so
+        // a child control that has been invalidated but not yet painted (the list
+        // header after a sort, for one) would be captured stale - which is exactly
+        // what a screenshot check must not do.
+        RedrawWindow(hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
         RECT rect{};
         GetClientRect(hwnd, &rect);
         const int width = rect.right;
@@ -1309,6 +1527,10 @@ namespace
     int runGui(fs::path outDir, const std::string& screenshotPath, double screenshotTime)
     {
         gOutDir = outDir.native();
+        // DPI before anything else: the window size below and every layout number
+        // that follows are scaled by it (dp()). WM_CREATE re-asserts the value for
+        // the case where the window is created some other way.
+        gDpi = gDpiOverride > 0 ? gDpiOverride : systemDpi();
         loadData();
         if (!gDataError.empty()) {
             appendLog(std::string("[data] ") + gDataError);
@@ -1337,13 +1559,37 @@ namespace
         RegisterClassExW(&windowClass);
 
         HWND hwnd = CreateWindowExW(0, windowClass.lpszClassName, L"CppSekai 谱面下载器",
-            WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 1180, 760, nullptr, nullptr,
+            WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, dp(1180), dp(760), nullptr, nullptr,
             windowClass.hInstance, nullptr);
         if (hwnd == nullptr) {
             return 1;
         }
         ShowWindow(hwnd, SW_SHOW);
         UpdateWindow(hwnd);
+        {
+            // One line so a DPI problem can be diagnosed without guesswork (and so
+            // the headless check can assert it). `screen` is SM_CXSCREEN: for a
+            // DPI-aware process that is the real pixel width of the primary
+            // display, while an unaware process is handed a virtualised (smaller)
+            // value - so the pair tells you both the scale and whether the
+            // manifest took effect.
+            RECT client{};
+            GetClientRect(hwnd, &client);
+            // Which face createUiFont() actually ended up with - the substitution
+            // check inside it is silent, so report the winner.
+            std::wstring face = L"?";
+            if (HDC dc = GetDC(hwnd)) {
+                HGDIOBJ previous = SelectObject(dc, gFont);
+                wchar_t name[LF_FACESIZE] = {};
+                GetTextFaceW(dc, LF_FACESIZE, name);
+                SelectObject(dc, previous);
+                ReleaseDC(hwnd, dc);
+                face = name;
+            }
+            note("[ui] dpi=" + std::to_string(gDpi) + " client=" + std::to_string(client.right) + "x"
+                + std::to_string(client.bottom) + " screen=" + std::to_string(GetSystemMetrics(SM_CXSCREEN))
+                + "x" + std::to_string(GetSystemMetrics(SM_CYSCREEN)) + " font=" + toUtf8(face));
+        }
         rebuildList("");
 
         const ULONGLONG start = GetTickCount64();
@@ -1420,6 +1666,13 @@ int main(int argc, char** argv)
             }
         } else if (arg == "--screenshot") {
             next(screenshotPath);
+        } else if (arg == "--dpi") {
+            // Force the layout scale instead of reading the system DPI. Mainly a
+            // testing hook: it is the only way to look at a 150% / 200% layout on
+            // a 100% machine (see dp()).
+            std::string value;
+            next(value);
+            gDpiOverride = std::atoi(value.c_str());
         } else if (arg == "--screenshot-time") {
             std::string value;
             next(value);

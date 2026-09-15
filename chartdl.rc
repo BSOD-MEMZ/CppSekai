@@ -1,0 +1,10 @@
+// Windows resources for the downloader (chartdl.exe).
+//
+// Same icon + version block as the game (they live in resources.rc), but its own
+// manifest: chartdl additionally declares DPI awareness, because its layout is
+// scaled by dp() in chartdl.cpp and it does not want Windows stretching the
+// window on a scaled display. See chartdl.manifest.
+
+#include "resources.rc"
+
+1 24 "chartdl.manifest"
