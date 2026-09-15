@@ -933,7 +933,7 @@ void expBar(ImDrawList* dl, ImVec2 pos, float width, float unit, float ratio)
         return;
     }
     const float u = std::max(unit, 1e-3f);
-    const float h = 8.0f * u;
+    const float h = 10.0f * u;
     const float r = h * 0.5f;
     dl->AddRectFilled(pos, ImVec2(pos.x + width, pos.y + h), IM_COL32(30, 30, 44, 200), r);
     const float fill = std::clamp(ratio, 0.0f, 1.0f) * width;

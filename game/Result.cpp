@@ -840,7 +840,7 @@ void drawResult(platform::Renderer& renderer, const ResultData& data, float elap
                 std::snprintf(buf, sizeof(buf), "%d / %d", static_cast<int>(data.playerExp),
                     static_cast<int>(data.playerExpNeed));
             }
-            textCentered(c, bold, 21.0f, right - kBarW * 0.5f, barY + 26.0f, col, buf);
+            textCentered(c, bold, 23.0f, right - kBarW * 0.5f, barY + 28.0f, col, buf);
 
             // Fade the whole block in by rewriting the alpha of the vertices it
             // just added (the chip has no alpha parameter of its own).
