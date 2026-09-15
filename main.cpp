@@ -1861,7 +1861,7 @@ int main(int argc, char** argv)
                 contentLeft();
                 ImGui::Text("实测: %.1f fps", 1.0 / std::max(1e-6, lastFrameDeltaSec));
                 contentLeft();
-                ImGui::Text("显示器刷新率 %d Hz；超过刷新率会自动关垂直同步", displayRefreshHz);
+                ImGui::Text("超过 %d Hz 自动关垂直同步", displayRefreshHz);
                 contentLeft();
                 bool showProgressBox = showProgressBar;
                 ui::checkBox("显示播放进度条", &showProgressBox, interior);
@@ -1873,7 +1873,7 @@ int main(int argc, char** argv)
                 // Splash style: static image (0) vs classic progress bar (1).
                 // Only read at startup, so a change takes effect next launch.
                 bool classicSplashBox = userSettings.splashStyle != 0;
-                ui::checkBox("经典开屏 (标题+进度条)", &classicSplashBox, interior);
+                ui::checkBox("经典开屏画面", &classicSplashBox, interior);
                 if (classicSplashBox != (userSettings.splashStyle != 0)) {
                     userSettings.splashStyle = classicSplashBox ? 1 : 0;
                     persistUserData();
@@ -1929,7 +1929,7 @@ int main(int argc, char** argv)
                 // checkBox returns the *new* value, so gate on a real change -
                 // gating on the return value made the box impossible to untick.
                 bool autoPlayBox = autoPlay;
-                ui::checkBox("AUTOPLAY 谱面预览", &autoPlayBox, interior);
+                ui::checkBox("自动演出", &autoPlayBox, interior);
                 if (autoPlayBox != autoPlay) {
                     autoPlay = autoPlayBox;
                     userSettings.autoplay = autoPlayBox;
@@ -2044,7 +2044,7 @@ int main(int argc, char** argv)
                 contentLeft();
                 ImGui::Text("只存在本机 userdata.json，");
                 contentLeft();
-                ImGui::Text("平时不显示；点选曲右上角的等级牌可查看。");
+                ImGui::Text("点选曲右上角的等级牌可查看。");
 
                 const double need = game::expToNextRank(account.rank);
                 char lvLine[64];
