@@ -1925,6 +1925,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     static int lastGroup = -1;
     static double lastInputTime = -100.0;
     static std::string lastSignature;
+    static float listIn = 1.0f; // list rebuild animation (0 = just rebuilt)
     static std::vector<ListRow> cachedRows;
     static bool rowsBuilt = false;
     // Section jump panel: tapping a section header swaps the list for an index
@@ -1952,6 +1953,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         cachedRows = buildRows(groups, visible, entries, diffIndex, order, groupMode);
         listInit = false; // the list changed shape: recentre without gliding
         slotHeights.assign(cachedRows.size(), 0.0f);
+        listIn = 0.0f; // and let the new rows rise in (see the vertex pass below)
     }
     // Grouping off means no section headers exist, so the panel has nothing to
     // show any more.
@@ -2396,12 +2398,24 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     }
 
     // ------------------------------------------------------------------
-    if (indexAnim > 0.0f) {
+    // List rebuild (search / sort / grouping change) and the section index both
+    // work by rewriting the vertices the list just produced. The rebuild case
+    // makes the new rows rise into place and fade up, so filtering reads as "the
+    // list settles" instead of a hard swap.
+    listIn = std::min(1.0f, listIn + frameDt / 0.20f);
+    const float listEase = easeOutCubic(listIn);
+    const float listRise = (1.0f - listEase) * 12.0f * k;
+    const int listFade = static_cast<int>(std::clamp(listEase, 0.0f, 1.0f) * 255.0f);
+    if (indexAnim > 0.0f || listFade < 255) {
         const int fade = static_cast<int>(std::clamp(1.0f - indexAnim, 0.0f, 1.0f) * 255.0f);
         for (int i = listVtxFirst; i < listDl->VtxBuffer.Size; ++i) {
+            if (listRise > 0.0f) {
+                listDl->VtxBuffer[i].pos.y += listRise;
+            }
             ImU32& col = listDl->VtxBuffer[i].col;
             const ImU32 a = (col >> IM_COL32_A_SHIFT) & 0xFF;
-            col = (col & ~IM_COL32_A_MASK) | (static_cast<ImU32>(a * fade / 255u) << IM_COL32_A_SHIFT);
+            const ImU32 cut = static_cast<ImU32>(std::min(fade, listFade));
+            col = (col & ~IM_COL32_A_MASK) | ((a * cut / 255u) << IM_COL32_A_SHIFT);
         }
     }
 
@@ -2630,6 +2644,11 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     const float scrY1 = phoneY + phoneH * 0.972f;
     const float cx = (scrX0 + scrX1) * 0.5f;
     const float sw = scrX1 - scrX0;
+
+    // Vertex index where the content block starts (jacket, metadata, difficulty
+    // pads, rank badge). The frame drawn above stays outside it, so a song change
+    // can animate the content while the phone itself holds still.
+    const int phoneContentVtxFirst = dl->VtxBuffer.Size;
 
     if (!groups.empty() && selected >= 0) {
         const ChartEntry& item = entries[static_cast<size_t>(selected)];
@@ -2900,6 +2919,20 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         }
     }
 
+    // Song change: the content block rises into place and fades up while the
+    // phone frame stays where it is. Same trick as the entry animation below -
+    // it only needs the vertex index the content started at.
+    static int lastPanelSong = -1;
+    static float panelIn = 1.0f;
+    if (groupIndex != lastPanelSong) {
+        lastPanelSong = groupIndex;
+        panelIn = 0.0f;
+    }
+    panelIn = std::min(1.0f, panelIn + static_cast<float>(ImGui::GetIO().DeltaTime) / 0.22f);
+    const float panelEase = easeOutCubic(panelIn);
+    const float panelRise = (1.0f - panelEase) * 16.0f * k;
+    const int panelAlpha = static_cast<int>(std::clamp(panelEase, 0.0f, 1.0f) * 255.0f);
+
     // Tilt the phone: rotate every vertex the block above produced about the
     // phone's centre. Text, images, rounded shapes - all rotate together. The
     // same pass runs the intro animation: on entry the whole phone slides in
@@ -2910,14 +2943,16 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     const int enterAlpha = static_cast<int>(std::clamp(enter, 0.0f, 1.0f) * 255.0f);
     for (int i = phoneVtxFirst; i < dl->VtxBuffer.Size; ++i) {
         ImVec2& p = dl->VtxBuffer[i].pos;
+        const bool isContent = i >= phoneContentVtxFirst;
         const float dx = p.x + phoneSlide - tiltPivot.x;
-        const float dy = p.y - tiltPivot.y;
+        const float dy = p.y + (isContent ? panelRise : 0.0f) - tiltPivot.y;
         p = ImVec2(tiltPivot.x + dx * tiltCos - dy * tiltSin, tiltPivot.y + dx * tiltSin + dy * tiltCos);
-        if (enterAlpha < 255) {
+        const int vtxAlpha = isContent ? std::min(enterAlpha, panelAlpha) : enterAlpha;
+        if (vtxAlpha < 255) {
             ImU32& col = dl->VtxBuffer[i].col;
             const ImU32 a = (col >> IM_COL32_A_SHIFT) & 0xFF;
             col = (col & ~IM_COL32_A_MASK)
-                | (static_cast<ImU32>(a * static_cast<ImU32>(enterAlpha) / 255u) << IM_COL32_A_SHIFT);
+                | (static_cast<ImU32>(a * static_cast<ImU32>(vtxAlpha) / 255u) << IM_COL32_A_SHIFT);
         }
     }
 

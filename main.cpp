@@ -1583,6 +1583,19 @@ int main(int argc, char** argv)
             // tab is taller than the card, and a row that runs past the bottom
             // ends up underneath the 关闭 button (submitted later, so it eats
             // the clicks). Scrolling here keeps every row reachable.
+            // Switching tabs slides the new page up into place instead of
+            // swapping it in a single frame. Purely a vertical offset, so it also
+            // works for the rows drawn by hand (which a fade would not cover).
+            static int lastTab = tab;
+            static float tabIn = 1.0f;
+            if (tab != lastTab) {
+                lastTab = tab;
+                tabIn = 0.0f;
+            }
+            tabIn = std::min(1.0f, tabIn + ImGui::GetIO().DeltaTime / 0.18f);
+            const float tabEase = 1.0f - (1.0f - tabIn) * (1.0f - tabIn) * (1.0f - tabIn);
+            const float tabSlide = (1.0f - tabEase) * 14.0f * s;
+
             const float contentTop = ImGui::GetCursorScreenPos().y;
             const float contentBottom = cardCenter.y + cardSize.y * 0.5f - 74.0f * s;
             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
@@ -1591,7 +1604,7 @@ int main(int argc, char** argv)
                 ImVec2(cardSize.x, std::max(40.0f * s, contentBottom - contentTop)),
                 ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoScrollbar);
             ImGui::PopStyleVar();
-            ImGui::SetCursorScreenPos(ImVec2(cardCenter.x - cardSize.x * 0.5f + padX, contentTop));
+            ImGui::SetCursorScreenPos(ImVec2(cardCenter.x - cardSize.x * 0.5f + padX, contentTop + tabSlide));
 
             if (tab == 0) {
                 // 演奏: audio offset + note speed.
