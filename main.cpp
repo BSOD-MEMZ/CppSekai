@@ -82,7 +82,15 @@ namespace
         float lastLanePos = 0.0f;
         float lastScreenX = 0.0f;
         float lastScreenY = 0.0f;
-        double lastMoveTimeSec = 0.0;
+        // Event timestamp (ms) of the last *processed* sample. Deliberately the
+        // event's own stamp and not SDL_GetTicks() at processing time: SDL hands
+        // a whole frame's events over in one batch, so processing-time stamps
+        // made every sample of a batch share one millisecond (see movePointer).
+        Uint32 lastMoveTimeMs = 0;
+        // Displacement of the samples that arrived inside the same millisecond,
+        // waiting to be folded into one measurement instead of being dropped.
+        float pendingDx = 0.0f;
+        float pendingDy = 0.0f;
         // When this touch last fired a flick. A finger may fire more than
         // once: the old one-shot latch burned it for the rest of the contact,
         // so a swipe that came a little early (or any accidental swipe during
@@ -118,41 +126,63 @@ namespace
     constexpr double kFlickIdleGapSec = 0.05;
     // Shortest time between two flick fires from the same touch. One swipe may
     // clear consecutive flick notes, but it must not fire on every event.
+    // Only a *successful* judgement re-arms it (see movePointer).
     constexpr double kFlickRefireSec = 0.06;
     // Below this speed (screen px/s, scaled by the window height) the finger
     // counts as parked, so its lane is remembered as the flick's origin lane.
     constexpr float kFlickRestSpeed = 250.0f;
 
+    // A swipe that travelled this far in one direction *is* a flick, whatever
+    // the measured speed says (in 1080p-relative pixels). This is the safety
+    // net for everything the speed test can get wrong: a slow-reporting panel,
+    // a sample batch that collapsed, or a deliberately gentle thumb swipe. For
+    // scale, a tap never travels more than ~10px.
+    //
+    // The mouse gets a much longer one on purpose: it reaches 900 px/s without
+    // trying, so it does not need the help, and a mouse player resting a button
+    // while sliding to reposition would otherwise fire flicks by accident.
+    constexpr float kFlickBigTravelTouch = 56.0f;
+    constexpr float kFlickBigTravelMouse = 150.0f;
+
     // Flick direction from a swipe measured in screen px/s (up / right
     // positive) plus how far the gesture actually travelled in that direction.
     //
-    // Measuring both axes in pixels matters: the old check compared world-Y
-    // against *lane* units, and at 16:9 one lane unit is ~6x coarser than one
-    // world unit, so an up flick effectively had to be 3.6x more vertical than
-    // horizontal before it counted - which is why swiping on a touchscreen
-    // almost never registered. `heightScale` (= window height / 1080) keeps the
-    // threshold in the same "feel" at every resolution.
+    // Two things matter here and both were wrong for touchscreens:
+    //
+    //  1. Neither axis may win on speed alone. The dominant *travel* decides,
+    //     and a small margin goes to the horizontal axis: swiping a left/right
+    //     note diagonally used to be classified "up" (the up test ran first and
+    //     only needed up >= side*0.5), so the note never cleared and the whole
+    //     gesture was consumed - the single biggest reason a touch flick felt
+    //     impossible.
+    //  2. A long swipe counts even when the measured speed is low. Touch panels
+    //     report unevenly, and a batched/collapsed sample under-reports the
+    //     speed by a factor of the batch size.
+    //
+    // `heightScale` (= window height / 1080) keeps the thresholds in the same
+    // "feel" at every resolution.
     game::FlickDir flickDirFrom(float upSpeed, float sideSpeed, float travelUp, float travelSide, bool isTouch,
         float heightScale)
     {
-        const float upThreshold = (isTouch ? 500.0f : 900.0f) * heightScale;
-        const float sideThreshold = (isTouch ? 600.0f : 900.0f) * heightScale;
-        // How vertical an up flick has to be. A finger swipe is rarely
-        // straight, so touch gets a generous cone (~63 degrees off vertical);
-        // the travel check keeps tap jitter out.
-        const float upBias = isTouch ? 0.5f : 0.8f;
-        const float minTravel = 14.0f * heightScale;
-        if (upSpeed > upThreshold && travelUp > minTravel
-            && upSpeed >= std::abs(sideSpeed) * upBias) {
-            return game::FlickUp;
+        const float upThreshold = (isTouch ? 380.0f : 900.0f) * heightScale;
+        const float sideThreshold = (isTouch ? 450.0f : 900.0f) * heightScale;
+        const float minTravel = 12.0f * heightScale;
+        const float bigTravel = (isTouch ? kFlickBigTravelTouch : kFlickBigTravelMouse) * heightScale;
+
+        const float upTravel = travelUp;
+        const float sideTravel = std::abs(travelSide);
+        const bool upOk = travelUp > minTravel && (upSpeed > upThreshold || travelUp > bigTravel);
+        const bool sideOk = sideTravel > minTravel && (std::abs(sideSpeed) > sideThreshold || sideTravel > bigTravel);
+        if (!upOk && !sideOk) {
+            return game::FlickNone;
         }
-        if (sideSpeed > sideThreshold && travelSide > minTravel) {
-            return game::FlickRight;
+        // 0.85 rather than 0.5: a few degrees past 45 still counts as a side
+        // flick, which is what a hand swiping toward a side arrow does.
+        const bool sideWins = !upOk || (sideOk && sideTravel >= upTravel * 0.85f);
+        if (sideWins) {
+            return travelSide > 0.0f ? game::FlickRight : game::FlickLeft;
         }
-        if (sideSpeed < -sideThreshold && travelSide < -minTravel) {
-            return game::FlickLeft;
-        }
-        return game::FlickNone;
+        return game::FlickUp;
     }
 
     // Keyboard: 12 keys -> 12 lanes. Lane i (0..11) is the core's note lane i,
@@ -1606,6 +1636,10 @@ int main(int argc, char** argv)
         if (splashStyle == 0) {
             if (windowMode == 1) {
                 SDL_SetWindowBordered(window, SDL_TRUE);
+                // SDL_SetWindowBordered re-applies a caption but NOT the resize
+                // frame (WS_THICKFRAME), so the image splash left a window that
+                // looked normal and could not be dragged by its edges.
+                SDL_SetWindowResizable(window, SDL_TRUE);
             } else if (windowMode == 2) {
                 SDL_SetWindowFullscreen(window, SDL_WINDOW_FULLSCREEN_DESKTOP);
             }
@@ -2192,7 +2226,7 @@ int main(int argc, char** argv)
                     static int customH = resH;
                     const float half = interior * 0.48f;
                     contentLeft();
-                    ImGui::Text("自定义宽 / 高 (320..7680)");
+                    ImGui::Text("自定义宽 / 高");
                     contentLeft();
                     ImGui::SetNextItemWidth(half);
                     ImGui::InputInt("##resw", &customW, 16, 160);
@@ -2223,10 +2257,6 @@ int main(int argc, char** argv)
                     }
                 }
                 contentLeft();
-                ImGui::Text(userSettings.renderScale == 1
-                        ? "始终按上面的分辨率绘制，拖动窗口只缩放画面。"
-                        : "画面随窗口重排，窗口越小看到的部分越少。");
-                contentLeft();
                 ImGui::Text("窗口模式");
                 static int winMode = windowMode;
                 contentLeft();
@@ -2238,6 +2268,10 @@ int main(int argc, char** argv)
                     } else {
                         SDL_SetWindowFullscreen(window, 0);
                         SDL_SetWindowBordered(window, winMode == 1 ? SDL_TRUE : SDL_FALSE);
+                        // Leaving fullscreen and re-applying the frame drops
+                        // WS_THICKFRAME (see the boot sequence), so put the
+                        // resize frame back explicitly.
+                        SDL_SetWindowResizable(window, SDL_TRUE);
                     }
                 }
                 contentLeft();
@@ -2402,10 +2436,6 @@ int main(int argc, char** argv)
                         persistUserData();
                     }
                 }
-                contentLeft();
-                ImGui::Text(userSettings.instanceMode == 1
-                        ? "每个窗口一份独立的贴图与素材（约 250MB/窗口）。"
-                        : "多开时新窗口会自动换用户，两个窗口不会写同一份存档。");
             } else {
                 // 账户: the local profile. Nothing here leaves the machine, and
                 // none of it is drawn during play - see game/AccountData.
@@ -2430,7 +2460,7 @@ int main(int argc, char** argv)
 
                 // --- 多用户 ---
                 contentLeft();
-                ImGui::Text("用户（每人的设置 / 成绩 / 资料分开存）");
+                ImGui::Text("用户");
                 contentLeft();
                 {
                     int current = 0;
@@ -2525,8 +2555,6 @@ int main(int argc, char** argv)
                     if (profiles.size() < 2) {
                         ImGui::EndDisabled();
                     }
-                    ImGui::SameLine();
-                    ImGui::Text("删除只移除列表，profile 文件保留在 profiles/ 里");
                 }
 
                 contentLeft();
@@ -2685,7 +2713,7 @@ int main(int argc, char** argv)
     // Starts a tap at a window position. Returns false when the press is
     // outside the playfield (e.g. on the sky above the horizon), where the
     // inverse perspective would map it to a bogus lane.
-    auto beginPointer = [&](SDL_FingerID id, int x, int y, bool isTouch) {
+    auto beginPointer = [&](SDL_FingerID id, int x, int y, bool isTouch, Uint32 eventMs) {
         const float clipX = (static_cast<float>(x) / static_cast<float>(windowW)) * 2.0f - 1.0f;
         const float clipY = 1.0f - (static_cast<float>(y) / static_cast<float>(windowH)) * 2.0f;
         const float worldY = renderer.clipToWorldY(clipY);
@@ -2709,7 +2737,7 @@ int main(int argc, char** argv)
         track.lastLanePos = lanePos;
         track.lastScreenX = static_cast<float>(x);
         track.lastScreenY = static_cast<float>(y);
-        track.lastMoveTimeSec = SDL_GetTicks() / 1000.0;
+        track.lastMoveTimeMs = eventMs;
         touches.push_back(track);
         lanePress[static_cast<size_t>(track.laneIndex)] = 1.0f;
         const double songTime = audio.hasMusic() ? audio.songTime() : wallSongTime();
@@ -2723,10 +2751,20 @@ int main(int argc, char** argv)
     // Tracks pointer movement; a fast swipe is a flick. The gesture is judged
     // in screen pixels per second (see flickDirFrom) so the up / left / right
     // decision does not depend on the perspective scaling of the playfield.
-    auto movePointer = [&](SDL_FingerID id, int x, int y) {
+    //
+    // `eventMs` is the *event's own* timestamp (event.tfinger.timestamp /
+    // event.motion.timestamp), never SDL_GetTicks(): SDL delivers a whole
+    // frame's events in one batch, so stamping them at processing time gave
+    // every sample of a batch the same millisecond. The old code then dropped
+    // those samples (dt == 0 skips the update) while still advancing the
+    // position, so the displacement was lost and both speed and travel came out
+    // far too small. A mouse never hit this because Windows coalesces
+    // WM_MOUSEMOVE (at most one per pump) while WM_TOUCH is not coalesced.
+    // Samples that do share a millisecond are now accumulated into one
+    // measurement instead of being thrown away.
+    auto movePointer = [&](SDL_FingerID id, int x, int y, Uint32 eventMs) {
         const float clipX = (static_cast<float>(x) / static_cast<float>(windowW)) * 2.0f - 1.0f;
         const float clipY = 1.0f - (static_cast<float>(y) / static_cast<float>(windowH)) * 2.0f;
-        const double now = SDL_GetTicks() / 1000.0;
         const float worldY = renderer.clipToWorldY(clipY);
         const float heightScale = static_cast<float>(windowH) / 1080.0f;
         for (auto& track : touches) {
@@ -2738,34 +2776,50 @@ int main(int argc, char** argv)
                 : renderer.clipToWorldX(clipX);
             const float dx = static_cast<float>(x) - track.lastScreenX;
             const float dy = static_cast<float>(y) - track.lastScreenY; // screen: down is positive
-            const double rawDt = now - track.lastMoveTimeSec;
+            // The position advances with every event - the displacement is
+            // banked, not swallowed.
+            track.lastScreenX = static_cast<float>(x);
+            track.lastScreenY = static_cast<float>(y);
+            track.pendingDx += dx;
+            track.pendingDy += dy;
+            const Uint32 rawMs = eventMs - track.lastMoveTimeMs; // wraps cleanly
+            if (rawMs == 0) {
+                continue; // same millisecond: the rest of the batch is still coming
+            }
+            const double rawDt = static_cast<double>(rawMs) / 1000.0;
             // See kFlickMaxSampleSec: a finger parked on a hold emits no motion
             // events, and the gap before the first sample of the flick must not
             // be used as the sample period - that alone made hold-tail flicks
             // measure ~100 px/s instead of ~800 and never register.
             const double dt = std::min(rawDt, kFlickMaxSampleSec);
+            const float sampleDx = track.pendingDx;
+            const float sampleDy = track.pendingDy;
+            track.pendingDx = 0.0f;
+            track.pendingDy = 0.0f;
+            track.lastMoveTimeMs = eventMs;
+            const double now = static_cast<double>(eventMs) / 1000.0;
             if (rawDt > kFlickIdleGapSec) {
                 track.velUp = 0.0f;
                 track.velSide = 0.0f;
             }
             if (dt > 0.001) {
-                // Low-pass the per-event velocity: touch panels report
+                // Low-pass the per-sample velocity: touch panels report
                 // unevenly spaced position jumps and a single-frame delta
                 // often under- or over-shoots a real flick.
-                const float upSpeed = -dy / static_cast<float>(dt);
-                const float sideSpeed = dx / static_cast<float>(dt);
+                const float upSpeed = -sampleDy / static_cast<float>(dt);
+                const float sideSpeed = sampleDx / static_cast<float>(dt);
                 track.velUp = track.velUp * 0.35f + upSpeed * 0.65f;
                 track.velSide = track.velSide * 0.35f + sideSpeed * 0.65f;
                 // Distance travelled in the current direction: the counter
                 // starts over whenever the movement reverses, so the jitter of
                 // a resting finger never adds up while a deliberate swipe does.
-                const float upDelta = -dy;
+                const float upDelta = -sampleDy;
                 track.travelUp = (upDelta >= 0.0f) == (track.travelUp >= 0.0f)
                     ? track.travelUp + upDelta
                     : upDelta;
-                track.travelSide = (dx >= 0.0f) == (track.travelSide >= 0.0f)
-                    ? track.travelSide + dx
-                    : dx;
+                track.travelSide = (sampleDx >= 0.0f) == (track.travelSide >= 0.0f)
+                    ? track.travelSide + sampleDx
+                    : sampleDx;
                 if (std::abs(track.velUp) > std::abs(track.peakUp)) {
                     track.peakUp = track.velUp;
                 }
@@ -2776,17 +2830,21 @@ int main(int argc, char** argv)
             const game::FlickDir dir = flickDirFrom(track.velUp, track.velSide, track.travelUp,
                 track.travelSide, track.isTouch, heightScale);
             if (dir != game::FlickNone && now - track.lastFlickFireTimeSec >= kFlickRefireSec) {
-                track.lastFlickFireTimeSec = now;
-                // Consume the gesture: resetting the travelled distance stops
-                // one continuous swipe from firing on every motion event, while
-                // the finger stays armed so a later, separate swipe fires again.
-                track.travelUp = 0.0f;
-                track.travelSide = 0.0f;
                 const double songTime = audio.hasMusic() ? audio.songTime() : wallSongTime();
                 const game::Judge result = flickJudge(track, songTime, dir);
                 if (result != game::Judge::None) {
+                    // Consume the gesture: resetting the travelled distance stops
+                    // one continuous swipe from firing on every sample, while the
+                    // finger stays armed so a later, separate swipe fires again.
+                    track.lastFlickFireTimeSec = now;
+                    track.travelUp = 0.0f;
+                    track.travelSide = 0.0f;
                     playHitSe(audio, judgement, seVolume);
                 }
+                // A miss keeps the distance: the direction a swipe resolves to
+                // can change as it continues (a diagonal that straightens out),
+                // and the old code burnt the gesture on the first wrong guess -
+                // the player had to lift the finger and swipe again.
             } else if (std::abs(track.velUp) < kFlickRestSpeed * heightScale
                 && std::abs(track.velSide) < kFlickRestSpeed * heightScale) {
                 // Slow enough to count as parked: remember this lane. It is the
@@ -2796,10 +2854,7 @@ int main(int argc, char** argv)
                 // with the up-stroke's perspective skew.
                 track.restLanePos = lanePos;
             }
-            track.lastScreenX = static_cast<float>(x);
-            track.lastScreenY = static_cast<float>(y);
             track.lastLanePos = lanePos;
-            track.lastMoveTimeSec = now;
         }
     };
 
@@ -3172,6 +3227,7 @@ int main(int argc, char** argv)
                         if (!fullscreen) {
                             // Restore whatever chrome the current window mode uses.
                             SDL_SetWindowBordered(window, windowMode == 1 ? SDL_TRUE : SDL_FALSE);
+                            SDL_SetWindowResizable(window, SDL_TRUE);
                         }
                     } else if (!typingText && event.key.keysym.sym == SDLK_h) {
                         showDebug = !showDebug;
@@ -3278,7 +3334,8 @@ int main(int argc, char** argv)
                     }
                     beginPointer(event.tfinger.fingerId,
                         static_cast<int>(event.tfinger.x * static_cast<float>(windowW)),
-                        static_cast<int>(event.tfinger.y * static_cast<float>(windowH)), true);
+                        static_cast<int>(event.tfinger.y * static_cast<float>(windowH)), true,
+                        event.tfinger.timestamp);
                     break;
                 }
                 case SDL_FINGERMOTION: {
@@ -3287,7 +3344,8 @@ int main(int argc, char** argv)
                     }
                     movePointer(event.tfinger.fingerId,
                         static_cast<int>(event.tfinger.x * static_cast<float>(windowW)),
-                        static_cast<int>(event.tfinger.y * static_cast<float>(windowH)));
+                        static_cast<int>(event.tfinger.y * static_cast<float>(windowH)),
+                        event.tfinger.timestamp);
                     break;
                 }
                 case SDL_FINGERUP: {
@@ -3297,10 +3355,28 @@ int main(int argc, char** argv)
                     // fires (and the last move can already be a slow one).
                     if (state == AppState::Play && !autoPlay && !paused) {
                         const float heightScale = static_cast<float>(windowH) / 1080.0f;
-                        for (const TouchTrack& track : touches) {
+                        for (TouchTrack& track : touches) {
                             if (track.fingerId != event.tfinger.fingerId) {
                                 continue;
                             }
+                            // Fold in whatever was banked for the millisecond in
+                            // progress: a short flick can end before that batch
+                            // is processed, and those are exactly the pixels the
+                            // gesture was made of.
+                            const float upDelta = -track.pendingDy;
+                            const float sideDelta = track.pendingDx;
+                            if (upDelta != 0.0f) {
+                                track.travelUp = (upDelta >= 0.0f) == (track.travelUp >= 0.0f)
+                                    ? track.travelUp + upDelta
+                                    : upDelta;
+                            }
+                            if (sideDelta != 0.0f) {
+                                track.travelSide = (sideDelta >= 0.0f) == (track.travelSide >= 0.0f)
+                                    ? track.travelSide + sideDelta
+                                    : sideDelta;
+                            }
+                            track.pendingDx = 0.0f;
+                            track.pendingDy = 0.0f;
                             const game::FlickDir dir = flickDirFrom(track.peakUp, track.peakSide, track.travelUp,
                                 track.travelSide, track.isTouch, heightScale);
                             if (dir != game::FlickNone) {
@@ -3380,7 +3456,8 @@ int main(int argc, char** argv)
                     if (ImGui::GetIO().WantCaptureMouse) {
                         break;
                     }
-                    beginPointer(pointerIdForButton(event.button.button), event.button.x, event.button.y, false);
+                    beginPointer(pointerIdForButton(event.button.button), event.button.x, event.button.y, false,
+                        event.button.timestamp);
                     break;
                 }
                 case SDL_MOUSEMOTION: {
@@ -3391,10 +3468,12 @@ int main(int argc, char** argv)
                         break;
                     }
                     if ((event.motion.state & SDL_BUTTON_LMASK) != 0) {
-                        movePointer(pointerIdForButton(SDL_BUTTON_LEFT), event.motion.x, event.motion.y);
+                        movePointer(pointerIdForButton(SDL_BUTTON_LEFT), event.motion.x, event.motion.y,
+                            event.motion.timestamp);
                     }
                     if ((event.motion.state & SDL_BUTTON_RMASK) != 0) {
-                        movePointer(pointerIdForButton(SDL_BUTTON_RIGHT), event.motion.x, event.motion.y);
+                        movePointer(pointerIdForButton(SDL_BUTTON_RIGHT), event.motion.x, event.motion.y,
+                            event.motion.timestamp);
                     }
                     break;
                 }

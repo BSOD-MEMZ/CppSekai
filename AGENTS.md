@@ -863,17 +863,21 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
   跨进程共享不了 GL 纹理和解码缓冲，想省只能是（a）单进程多窗口，或（b）给非首个实例开
   `CPSEKAI_TEX_RAW=0` 那套贴图缩小策略（`loadTextureFromFile` 的 maxDim/cropHeight 还编在里面，
   现在只是没人用）。**这轮没有实现，只测了数**。
-- **触摸 flick 难触发（已定位，未改）**：`movePointer()` 里的 `now = SDL_GetTicks()` 是**处理
-  事件时**取的毫秒时钟。SDL 把整帧的事件一次性投递，同一帧里的多条 `SDL_FINGERMOTION`
-  拿到同一个 `now` → `rawDt == 0` → 被 `if (dt > 0.001)` 整条跳过（速度、位移都不累加，但
-  `lastScreenX/Y` 照旧前进，那段位移就永久丢了）。鼠标没事是因为 **Windows 的消息队列会合并
-  `WM_MOUSEMOVE`**（每次 pump 最多一条），而 `WM_TOUCH` 不合并，一次能带多个触点，
-  SDL 逐个转成 FINGERMOTION。数值模型（100Hz 面板）显示：中等速度 600px/s 的上划要 3 个采样
-  才过阈值，低于 ~500px/s 永不过；窗口 1440p 时阈值涨到 667px/s 就完全划不动了。
-  次要问题：`flickDirFrom` **先判上、再判左右**，`up >= side*0.5` 就算 UP，所以右/左 flick 的
-  斜划必须在水平 ±37° 以内（实测 40° 起判成 UP），而且判定失败的那次仍会吃掉手势
-  （位移清零 + 60ms 内不再判），用户得重划一次。修的方向：用 `event.*.timestamp` 当采样时刻、
-  `dt==0` 时累加而不是丢弃、加"短时间位移"兜底、方向按位移主轴判并在同一手势里允许改判。
+- **窗口不能拖边框缩放（2026-09-16 修）**：开屏样式是图片时窗口被强制建为 `SDL_WINDOW_BORDERLESS`，
+  加载完再 `SDL_SetWindowBordered(window, SDL_TRUE)`。**这个调用只把标题栏加回来，不会恢复
+  `WS_THICKFRAME`**，于是窗口看起来正常但拖边缘毫无反应（`WS_MAXIMIZEBOX` 也一起没了）。
+  修法：恢复边框之后补一次 `SDL_SetWindowResizable(window, SDL_TRUE)`（SDL 内部就是加
+  `WS_THICKFRAME|WS_MAXIMIZEBOX`）。退出全屏（F 键、设置里换窗口模式）两处也补了。
+  判断依据别靠肉眼：`.workbuddy/tools/winstyle.c` → `build/winstyle.exe <窗口标题>` 直接打样式位
+  （PowerShell 的 `Add-Type` 在本沙箱被禁，所以用 C 小工具）。
+- **触摸 flick 的修复（2026-09-16 晚，已改）**，四处：
+  1. `movePointer` / `beginPointer` 现在收 `event.*.timestamp`，不再用处理事件时的 `SDL_GetTicks()`；
+  2. 同一毫秒的采样**累加**（`pendingDx/pendingDy`）而不是 `dt==0` 直接丢掉，抬手时也把在攒的位移并进去；
+  3. 新增"位移兜底"：触摸划出 56px（1080p 当量，鼠标 150px）就算 flick，不管秒速度；
+     触摸阈值 500→380、600→450 px/s；
+  4. 方向改成**按位移主轴判**（侧向在 0.85 倍内算侧向），并且**判失败不再吃掉手势**
+     （只有打中才清零位移 + 上 60ms 的锁）。数值模型：温和 343px/s 上传（原来永不触发）、
+     1440p 窗口、一半采样同毫秒丢样本这三种情况现在都能判出 UP，45° 斜划判 RIGHT（原来判 UP）。
 
 ## 待办（按优先级）
 
