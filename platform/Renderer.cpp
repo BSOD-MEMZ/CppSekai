@@ -24,6 +24,11 @@ constexpr unsigned int GL_ARRAY_BUFFER = 0x8892;
 constexpr unsigned int GL_DYNAMIC_DRAW = 0x88E8;
 constexpr unsigned int GL_CLAMP_TO_EDGE = 0x812F;
 constexpr unsigned int GL_TEXTURE0 = 0x84C0;
+// Framebuffer objects (GL 3.0) - used for the fixed-resolution render target.
+constexpr unsigned int GL_FRAMEBUFFER = 0x8D40;
+constexpr unsigned int GL_COLOR_ATTACHMENT0 = 0x8CE0;
+constexpr unsigned int GL_FRAMEBUFFER_COMPLETE = 0x8CD5;
+// GL_RGBA8 comes from gl.h itself (the internal format of the render target).
 using GLsizeiptr = ptrdiff_t;
 
 // MinGW's gl.h (GL 1.1) lacks the GL 3.x proc typedefs; declare the ones we use.
@@ -53,6 +58,11 @@ typedef void (*PFNGLVERTEXATTRIBPOINTERPROC)(unsigned int, int, unsigned int, un
 typedef void (*PFNGLBLENDFUNCSEPARATEPROC)(unsigned int, unsigned int, unsigned int, unsigned int);
 typedef void (*PFNGLACTIVETEXTUREPROC)(unsigned int);
 typedef void (*PFNGLUSEPROGRAMPROC)(unsigned int);
+typedef void (*PFNGLGENFRAMEBUFFERSPROC)(int, unsigned int*);
+typedef void (*PFNGLDELETEFRAMEBUFFERSPROC)(int, const unsigned int*);
+typedef void (*PFNGLBINDFRAMEBUFFERPROC)(unsigned int, unsigned int);
+typedef void (*PFNGLFRAMEBUFFERTEXTURE2DPROC)(unsigned int, unsigned int, unsigned int, unsigned int, int);
+typedef unsigned int (*PFNGLCHECKFRAMEBUFFERSTATUSPROC)(unsigned int);
 
 #define GL_PROC_LIST(X) \
     X(PFNGLCREATESHADERPROC, glCreateShader) \
@@ -80,7 +90,12 @@ typedef void (*PFNGLUSEPROGRAMPROC)(unsigned int);
     X(PFNGLVERTEXATTRIBPOINTERPROC, glVertexAttribPointer) \
     X(PFNGLBLENDFUNCSEPARATEPROC, glBlendFuncSeparate) \
     X(PFNGLACTIVETEXTUREPROC, glActiveTexture) \
-    X(PFNGLUSEPROGRAMPROC, glUseProgram)
+    X(PFNGLUSEPROGRAMPROC, glUseProgram) \
+    X(PFNGLGENFRAMEBUFFERSPROC, glGenFramebuffers) \
+    X(PFNGLDELETEFRAMEBUFFERSPROC, glDeleteFramebuffers) \
+    X(PFNGLBINDFRAMEBUFFERPROC, glBindFramebuffer) \
+    X(PFNGLFRAMEBUFFERTEXTURE2DPROC, glFramebufferTexture2D) \
+    X(PFNGLCHECKFRAMEBUFFERSTATUSPROC, glCheckFramebufferStatus)
 
 #define GL_PROC_TYPEDEF(type, name) extern type name;
 #define GL_PROC_DEF(type, name) type name = nullptr;
@@ -262,6 +277,14 @@ Renderer::~Renderer()
     deleteTexture(mTouchLine);
     deleteTexture(mEffect);
     deleteTexture(mWhite);
+    if (mFbo != 0) {
+        glDeleteFramebuffers(1, &mFbo);
+        mFbo = 0;
+    }
+    if (mFboTexture != 0) {
+        glDeleteTextures(1, &mFboTexture);
+        mFboTexture = 0;
+    }
     if (mCover.id != 0) {
         glDeleteTextures(1, &mCover.id);
         mCover.id = 0;
@@ -286,6 +309,8 @@ bool Renderer::init(int width, int height, std::string& outError)
 
     mWidth = std::max(1, width);
     mHeight = std::max(1, height);
+    mWindowW = mWidth;
+    mWindowH = mHeight;
 
     if (!createPrograms(outError)) {
         return false;
@@ -336,9 +361,142 @@ bool Renderer::init(int width, int height, std::string& outError)
 
 void Renderer::resize(int width, int height)
 {
-    mWidth = std::max(1, width);
-    mHeight = std::max(1, height);
+    mWindowW = std::max(1, width);
+    mWindowH = std::max(1, height);
+    if (!mOffscreen) {
+        mWidth = mWindowW;
+        mHeight = mWindowH;
+        buildStaticVertices();
+    }
+}
+
+void Renderer::setRenderTargetSize(int width, int height)
+{
+    if (width <= 0 || height <= 0) {
+        if (mOffscreen) {
+            if (mFbo != 0) {
+                glDeleteFramebuffers(1, &mFbo);
+                mFbo = 0;
+            }
+            if (mFboTexture != 0) {
+                glDeleteTextures(1, &mFboTexture);
+                mFboTexture = 0;
+            }
+            mOffscreen = false;
+        }
+        mWidth = mWindowW;
+        mHeight = mWindowH;
+        buildStaticVertices();
+        return;
+    }
+    width = std::max(1, width);
+    height = std::max(1, height);
+    if (mOffscreen && mWidth == width && mHeight == height) {
+        return; // already there
+    }
+    if (mFbo != 0) {
+        glDeleteFramebuffers(1, &mFbo);
+        mFbo = 0;
+    }
+    if (mFboTexture != 0) {
+        glDeleteTextures(1, &mFboTexture);
+        mFboTexture = 0;
+    }
+    glGenTextures(1, &mFboTexture);
+    glBindTexture(GL_TEXTURE_2D, mFboTexture);
+    glTexImage2D(GL_TEXTURE_2D, 0, static_cast<int>(GL_RGBA8), width, height, 0, GL_RGBA,
+        GL_UNSIGNED_BYTE, nullptr);    // LINEAR so an upscaled window does not come out blocky, CLAMP_TO_EDGE so
+    // the edges never sample across.
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, static_cast<int>(GL_CLAMP_TO_EDGE));
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, static_cast<int>(GL_CLAMP_TO_EDGE));
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    glGenFramebuffers(1, &mFbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, mFbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, mFboTexture, 0);
+    const unsigned int status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    if (status != GL_FRAMEBUFFER_COMPLETE) {
+        std::fprintf(stderr, "renderer: %dx%d framebuffer incomplete (0x%x)\n", width, height, status);
+        glDeleteFramebuffers(1, &mFbo);
+        glDeleteTextures(1, &mFboTexture);
+        mFbo = 0;
+        mFboTexture = 0;
+        mOffscreen = false;
+        mWidth = mWindowW;
+        mHeight = mWindowH;
+        buildStaticVertices();
+        return;
+    }
+    mOffscreen = true;
+    mWidth = width;
+    mHeight = height;
+    // The playfield geometry is derived from the render size, so it has to be
+    // rebuilt whenever that changes.
     buildStaticVertices();
+}
+
+float Renderer::outputScale() const
+{
+    if (!mOffscreen || mWidth <= 0 || mHeight <= 0) {
+        return 1.0f;
+    }
+    return std::min(static_cast<float>(mWindowW) / static_cast<float>(mWidth),
+        static_cast<float>(mWindowH) / static_cast<float>(mHeight));
+}
+
+void Renderer::outputRect(int& x, int& y, int& w, int& h) const
+{
+    const float scale = outputScale();
+    w = std::max(1, static_cast<int>(mWidth * scale));
+    h = std::max(1, static_cast<int>(mHeight * scale));
+    x = (mWindowW - w) / 2;
+    y = (mWindowH - h) / 2;
+}
+
+void Renderer::presentFrame()
+{
+    if (!mOffscreen || mFboTexture == 0) {
+        return;
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glViewport(0, 0, mWindowW, mWindowH);
+    // Everything outside the picture is the letterbox: plain black, so a
+    // narrow window reads as a bordered screen instead of a smear.
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    int x = 0;
+    int y = 0;
+    int w = 0;
+    int h = 0;
+    outputRect(x, y, w, h);
+    // Window pixels -> clip space. The offscreen buffer has the same
+    // orientation as the window (origin bottom-left), so uv (0,0) is its
+    // bottom-left corner and nothing has to be flipped.
+    const float x0 = 2.0f * static_cast<float>(x) / static_cast<float>(mWindowW) - 1.0f;
+    const float x1 = 2.0f * static_cast<float>(x + w) / static_cast<float>(mWindowW) - 1.0f;
+    const float y1 = 1.0f - 2.0f * static_cast<float>(y) / static_cast<float>(mWindowH);
+    const float y0 = 1.0f - 2.0f * static_cast<float>(y + h) / static_cast<float>(mWindowH);
+    const float quad[6 * 9] = {
+        x0, y0, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f,
+        x1, y0, 1.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f,
+        x1, y1, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f,
+        x0, y0, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f,
+        x1, y1, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f,
+        x0, y1, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f,
+    };
+    Texture target;
+    target.id = mFboTexture;
+    target.width = mWidth;
+    target.height = mHeight;
+    // Straight copy: alpha blending would key the picture off whatever was in
+    // the back buffer, and the source alpha is 1 everywhere anyway.
+    glDisable(GL_BLEND);
+    drawVertices(target, std::vector<float>(quad, quad + 6 * 9), false, BLEND_NORMAL);
+    glEnable(GL_BLEND);
 }
 
 bool Renderer::createPrograms(std::string& outError)
@@ -1078,6 +1236,10 @@ void Renderer::renderFrame(const float* packedQuads, int quadCount, float backgr
     const float visibility = std::max(0.0f, std::min(1.0f, playfieldVisibility));
     GLint viewport[4] = {0, 0, 0, 0};
     glGetIntegerv(GL_VIEWPORT, viewport);
+    // Fixed-resolution mode: everything this frame (ImGui included, which runs
+    // after this call) goes into the offscreen buffer, and presentFrame()
+    // scales it into the window afterwards.
+    glBindFramebuffer(GL_FRAMEBUFFER, mOffscreen ? mFbo : 0);
     glClearColor(0.03f, 0.03f, 0.05f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
     glViewport(0, 0, mWidth, mHeight);

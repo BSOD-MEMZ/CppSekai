@@ -10,15 +10,20 @@ This dumps the image to raw RGB (via ImageMagick) and prints, for a region:
   * the bounding box of "ink" (pixels far from the region's median colour),
   * the region's most common exact colours.
 
-Usage (Git Bash / cmd, `magick` must be on PATH):
+Usage (Git Bash / cmd):
 
   python shot_probe.py <image> <x0> <y0> <x1> <y1> [block]
   python shot_probe.py mine.png 400 0 1400 200
+
+Decoding uses ImageMagick (`magick`) when it is on PATH and Pillow otherwise -
+the work machines have neither installed the same way, and a missing `magick`
+used to make this tool useless right when a screenshot needed checking.
 
 The ASCII map legend:  .  background   #  bright/white   -  mid   %  very bright
                        r  red/pink     g  green         b  blue     ?  other
 """
 import os
+import shutil
 import subprocess
 import sys
 import statistics
@@ -26,14 +31,29 @@ import tempfile
 from collections import Counter
 
 
+def magick():
+    for name in ('magick', 'magick.exe'):
+        found = shutil.which(name)
+        if found:
+            return found
+    return None
+
+
 def load(path):
-    raw = os.path.join(tempfile.gettempdir(), 'shot_probe.raw')
-    size = subprocess.run(['magick', 'identify', '-format', '%w %h', path],
-                          capture_output=True, text=True, check=True).stdout.split()
-    w, h = int(size[0]), int(size[1])
-    subprocess.run(['magick', path, '-depth', '8', 'rgb:' + raw], check=True)
-    with open(raw, 'rb') as fh:
-        return fh.read(), w, h
+    tool = magick()
+    if tool:
+        raw = os.path.join(tempfile.gettempdir(), 'shot_probe.raw')
+        size = subprocess.run([tool, 'identify', '-format', '%w %h', path],
+                              capture_output=True, text=True, check=True).stdout.split()
+        w, h = int(size[0]), int(size[1])
+        subprocess.run([tool, path, '-depth', '8', 'rgb:' + raw], check=True)
+        with open(raw, 'rb') as fh:
+            return fh.read(), w, h
+    from PIL import Image
+    with Image.open(path) as img:
+        img = img.convert('RGB')
+        w, h = img.size
+        return img.tobytes(), w, h
 
 
 def luminance(c):

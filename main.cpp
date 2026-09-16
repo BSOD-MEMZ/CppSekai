@@ -43,6 +43,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <set>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -283,6 +284,8 @@ namespace
             "--pjsk-font: use the bundled pjsk fonts instead of the system UI font.\n"
             "--window: borderless (default) | windowed | fullscreen. --width/--height:\n"
             "          window size (default 1280x720).\n"
+            "--render-size <w>x<h>: fixed render mode - draw at this size and scale it\n"
+            "                into the window (letterbox). Same as the 渲染模式 setting.\n"
             "--ui-scale <n>: zoom the song-select and result screens (1.0 = fit the\n"
             "                window, saved in userdata.json). The play screen is not\n"
             "                affected. Useful for high-DPI displays.\n"
@@ -631,6 +634,9 @@ int main(int argc, char** argv)
     bool playerSpecGiven = false;
     int playerRankGiven = -1;      // --player-rank
     double playerExpGiven = -1.0;  // --player-exp: fraction towards the next rank
+    int renderSizeW = 0;           // --render-size <w>x<h>: fixed render mode
+    int renderSizeH = 0;
+    std::string activateProfileArg; // --activate-profile <id> (headless check)
     int selectMusicId = 0;         // --select-id: preselect this song id in the list
     bool testRestart = false; // debug: replay "give up -> pick another song"
     double restartAtSec = 8.0;
@@ -693,6 +699,19 @@ int main(int argc, char** argv)
         } else if (arg == "--height" && i + 1 < utf8Argc) {
             winHeight = std::atoi(utf8Argv[++i]);
             heightGiven = true;
+        } else if (arg == "--render-size" && i + 1 < utf8Argc) {            // "<w>x<h>": switch to the fixed render mode at that size. The
+            // window itself still comes from --width/--height (or the saved
+            // settings), which is how a letterbox can be produced headlessly.
+            const std::string value = utf8Argv[++i];
+            const size_t sep = value.find_first_of("xX*");
+            if (sep != std::string::npos) {
+                renderSizeW = std::atoi(value.substr(0, sep).c_str());
+                renderSizeH = std::atoi(value.substr(sep + 1).c_str());
+            }
+        } else if (arg == "--activate-profile" && i + 1 < utf8Argc) {
+            // Headless check for the multi-user switch: the picker in 设置 ->
+            // 账户 does the same thing through activateProfile().
+            activateProfileArg = utf8Argv[++i];
         } else if (arg == "--window" && i + 1 < utf8Argc) {
             const std::string mode = utf8Argv[++i];
             windowGiven = true;
@@ -874,7 +893,17 @@ int main(int argc, char** argv)
             SDL_free(basePath);
         }
     }
-    const std::string userDataFile = game::userDataPath(baseDir);
+    // Profiles (multi-user): one data file per user, listed in an index next to
+    // them. On the very first run loadProfiles() imports the old single
+    // userdata.json as the "default" user, so an existing install keeps its
+    // scores, settings and account.
+    std::string userDataFile = game::userDataPath(baseDir);
+    const std::string userDataDir = game::userDataDir(baseDir);
+    std::string activeProfileId;
+    std::vector<game::UserProfile> profiles = game::loadProfiles(userDataDir, activeProfileId);
+    userDataFile = game::profileDataPath(userDataDir, activeProfileId);
+    std::printf("[profile] active='%s' (%zu user(s), dir %s)\n", activeProfileId.c_str(),
+        profiles.size(), userDataDir.c_str());
     game::loadUserData(userDataFile, userSettings, scores, account);
     // --player / --player-rank override what the file just loaded (headless
     // checks: they must never write a fixture into the player's own save).
@@ -902,6 +931,14 @@ int main(int argc, char** argv)
     if (!windowGiven) {
         windowMode = userSettings.windowMode;
     }
+    // --render-size <w>x<h>: forces the fixed render mode and pins the game's
+    // drawing size, which is what a headless letterbox check needs (the window
+    // can then be a different size via --width/--height).
+    if (renderSizeW > 0 && renderSizeH > 0) {
+        userSettings.renderScale = 1;
+        userSettings.windowWidth = renderSizeW;
+        userSettings.windowHeight = renderSizeH;
+    }
     // Saved resolution applies unless --width/--height overrode it. resW/resH
     // keep the *chosen* size (the live windowW/H follow resizes + fullscreen),
     // so persisting never records the desktop size of a fullscreen session.
@@ -909,8 +946,8 @@ int main(int argc, char** argv)
         winWidth = userSettings.windowWidth;
         winHeight = userSettings.windowHeight;
     }
-    int resW = std::max(320, winWidth);
-    int resH = std::max(240, winHeight);
+    int resW = std::max(320, renderSizeW > 0 ? renderSizeW : winWidth);
+    int resH = std::max(240, renderSizeH > 0 ? renderSizeH : winHeight);
     if (!fpsGiven) {
         fpsLimit = userSettings.fpsLimit;
     }
@@ -1229,6 +1266,27 @@ int main(int argc, char** argv)
     // ------------------------------------------------------------------
     core_api::init();
     core_api::resize(windowW, windowH, 1.0f);
+    // Render size vs window size. Everything in the game (lanes, HUD, ImGui
+    // layout, input) works in `windowW x windowH`; in the fixed-resolution
+    // render mode that is the configured resolution and the picture is scaled
+    // into the real window, letterboxed. `winPixelW/H` always hold the real
+    // window, which is what SDL events and the GL viewport are in.
+    int winPixelW = windowW;
+    int winPixelH = windowH;
+    auto applyRenderMode = [&]() {
+        if (userSettings.renderScale == 1) {
+            renderer.setRenderTargetSize(std::max(320, resW), std::max(240, resH));
+        } else {
+            renderer.setRenderTargetSize(0, 0);
+        }
+        windowW = renderer.width();
+        windowH = renderer.height();
+        core_api::resize(windowW, windowH, 1.0f);
+        std::printf("[window] window=%dx%d render=%dx%d scaleMode=%s\n", winPixelW, winPixelH,
+            windowW, windowH, userSettings.renderScale == 1 ? "fixed" : "window");
+        std::fflush(stdout);
+    };
+    applyRenderMode();
     // Player mode drives the core's hit effects from the judgement engine
     // instead of letting the chart timeline fire them (autoplay).
     core_api::setEffectAutoplay(autoPlay);
@@ -1436,11 +1494,49 @@ int main(int argc, char** argv)
     // ------------------------------------------------------------------
     // Song list / session
     // ------------------------------------------------------------------
-    // Pick the first candidate folder that actually contains a chart.
     std::vector<game::ChartEntry> entries;
+    // ------------------------------------------------------------------
+    // Chart scan. Every candidate folder is scanned and merged, not just the
+    // first one that has something: the downloader writes to <exe>\charts
+    // while an older library may still sit in ..\charts, and both have to be
+    // visible at once. A chart that exists in two folders is listed once (the
+    // earlier candidate wins). `chartsDir` is the folder the downloader's
+    // "play this now" hand-off (--select-id) and the empty-state hint use.
+    // ------------------------------------------------------------------
+    auto chartFileKey = [](const std::string& path) {
+        const size_t cut = path.find_last_of("\\/");
+        return cut == std::string::npos ? path : path.substr(cut + 1);
+    };
+    auto scanAllChartDirs = [&]() {
+        std::vector<game::ChartEntry> found;
+        std::set<std::string> seen;
+        for (const std::string& candidate : chartCandidates) {
+            for (game::ChartEntry& entry : game::scanChartFolder(candidate)) {
+                const std::string key = chartFileKey(entry.susPath);
+                if (key.empty() || !seen.insert(key).second) {
+                    continue;
+                }
+                found.push_back(std::move(entry));
+            }
+        }
+        // Same ordering scanChartFolder() applies inside one folder: title (or
+        // the file-name fallback) first, difficulty as the tiebreak.
+        std::stable_sort(found.begin(), found.end(),
+            [](const game::ChartEntry& a, const game::ChartEntry& b) {
+                const std::string left = a.title.empty() ? a.displayName : a.title;
+                const std::string right = b.title.empty() ? b.displayName : b.title;
+                if (left != right) {
+                    return left < right;
+                }
+                return a.difficulty < b.difficulty;
+            });
+        return found;
+    };
+
+    std::vector<game::ChartEntry>& chartEntries = entries;
+    chartEntries = scanAllChartDirs();
     for (const std::string& candidate : chartCandidates) {
-        entries = game::scanChartFolder(candidate);
-        if (!entries.empty()) {
+        if (!game::scanChartFolder(candidate).empty()) {
             chartsDir = candidate;
             break;
         }
@@ -1667,6 +1763,100 @@ int main(int argc, char** argv)
     };
 
     // ------------------------------------------------------------------
+    // Profiles (multi-user): switching replaces settings + scores + account and
+    // re-applies the subset that can change live. Window mode / resolution /
+    // splash style are read once at boot, so those need a restart - everything
+    // else (volumes, offset, note speed, judgement, ui scale, background)
+    // takes effect on the spot.
+    // ------------------------------------------------------------------
+    auto activateProfile = [&](const std::string& id) {
+        const auto found = std::find_if(profiles.begin(), profiles.end(),
+            [&](const game::UserProfile& user) { return user.id == id; });
+        if (found == profiles.end() || id == activeProfileId) {
+            return;
+        }
+        // Persist the outgoing profile before anything else: the in-memory
+        // settings/scores belong to it.
+        game::saveUserData(userDataFile, userSettings, scores, account);
+
+        userDataFile = game::profileDataPath(userDataDir, id);
+        // Start from the defaults, then read: a key missing from the new file
+        // must not silently inherit the previous user's value.
+        game::UserSettings freshSettings;
+        std::map<std::string, game::ScoreRecord> freshScores;
+        game::AccountData freshAccount;
+        game::loadUserData(userDataFile, freshSettings, freshScores, freshAccount);
+        userSettings = freshSettings;
+        scores = freshScores;
+        account = freshAccount;
+        activeProfileId = id;
+        game::saveProfiles(userDataDir, profiles, activeProfileId);
+
+        // Re-derive every live mirror from the profile that was just loaded.
+        // persistUserData() copies these *into* userSettings before saving, so
+        // leaving the old user's values here would write them into the new
+        // user's file on the spot. Command-line overrides keep winning, exactly
+        // like they do at boot.
+        if (!speedGiven) {
+            noteSpeed = userSettings.noteSpeed;
+        }
+        if (!seGiven) {
+            seVolume = userSettings.seVolume;
+        }
+        if (!leadInGiven) {
+            leadIn = userSettings.leadInSec;
+        }
+        if (!offsetGiven) {
+            gUserOffsetSec = userSettings.offsetSec;
+        }
+        if (!windowGiven) {
+            windowMode = userSettings.windowMode;
+        }
+        if (!fpsGiven) {
+            fpsLimitLive = userSettings.fpsLimit;
+        }
+        if (!widthGiven && !heightGiven) {
+            // The window itself only follows at the next launch, but in the
+            // fixed render mode this is the size the game draws at - that part
+            // takes effect right here.
+            resW = std::max(320, userSettings.windowWidth);
+            resH = std::max(240, userSettings.windowHeight);
+        }
+        audio.setBgmVolume(userSettings.bgmVolume);
+        audio.setUserOffset(userSettings.offsetSec);
+        ui::bindSe(&audio, 0.8f * seVolume);
+        autoPlay = userSettings.autoplay;
+        showProgressBar = userSettings.showProgressBar;
+        hideTouchFeedback = userSettings.hideTouchFeedback;
+#ifdef _WIN32
+        applyTouchFeedback(window, hideTouchFeedback);
+#endif
+        judgement.setStrictFlick(userSettings.strictFlick);
+        judgement.setInitialLife(userSettings.initialLife);
+        {
+            game::JudgementWindows windows;
+            windows.perfectMs = userSettings.perfectMs;
+            windows.greatMs = userSettings.greatMs;
+            windows.goodMs = userSettings.goodMs;
+            windows.missAfterMs = userSettings.goodMs + 60.0f;
+            windows.badMs = windows.missAfterMs;
+            judgement.setWindows(windows);
+        }
+        core_api::setPreviewConfig(0, 1, 1, 1, 0, 0, noteSpeed, 1.0f, 0.6f, 0.0f, 1.0f, 0.85f);
+        refreshSelectBackdrop();
+        applyRenderMode();
+        systemMedia.setReporting(userSettings.reportSmtc);
+        game::applyScores(entries, scores);
+        std::printf("[profile] switched to '%s' (%zu score(s))\n", id.c_str(), scores.size());
+        std::fflush(stdout);
+        persistUserData();
+    };
+
+    if (!activateProfileArg.empty()) {
+        activateProfile(activateProfileArg);
+    }
+
+    // ------------------------------------------------------------------
     // Settings card ("debug panel"), shared by the song select and the
     // play states. Opened with H or the musicsetting button; alive flag
     // keeps it on screen while the close animation plays out.
@@ -1814,29 +2004,89 @@ int main(int argc, char** argv)
                 }
                 contentLeft();
                 ImGui::Text("分辨率");
-                // Preset sizes; the live window resizes immediately when not
-                // in fullscreen (there the desktop size wins until exit).
-                static constexpr int kResW[5] = {1280, 1366, 1600, 1920, 2560};
-                static constexpr int kResH[5] = {720, 768, 900, 1080, 1440};
-                static int resIdx = [](int w, int h) {
-                    for (int i = 0; i < 5; ++i) {
-                        if (kResW[i] == w && kResH[i] == h) {
-                            return i;
-                        }
-                    }
-                    return 1;
-                }(resW, resH);
-                contentLeft();
-                ImGui::SetNextItemWidth(interior);
-                if (ImGui::Combo("##resolution", &resIdx,
-                        "1280 x 720\0" "1366 x 768\0" "1600 x 900\0" "1920 x 1080\0" "2560 x 1440\0")) {
-                    resW = kResW[resIdx];
-                    resH = kResH[resIdx];
+                // Presets from 640x360 up. The low end is for small windows /
+                // testing; anything else goes through 自定义… below.
+                static constexpr int kResCount = 10;
+                static constexpr int kResW[kResCount] = {640, 800, 960, 1024, 1120, 1280, 1366, 1600, 1920, 2560};
+                static constexpr int kResH[kResCount] = {360, 450, 540, 576, 630, 720, 768, 900, 1080, 1440};
+                // Applies the chosen size: the window when it is not fullscreen
+                // (there the desktop size wins until exit), the offscreen render
+                // target always - in the fixed render mode that is what actually
+                // decides how much the game draws.
+                auto applySize = [&]() {
+                    resW = std::clamp(resW, 320, 7680);
+                    resH = std::clamp(resH, 240, 4320);
+                    userSettings.windowWidth = resW;
+                    userSettings.windowHeight = resH;
                     if (windowMode != 2) {
                         SDL_SetWindowSize(window, resW, resH);
                         SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
                     }
+                    applyRenderMode();
+                    persistUserData();
+                };
+                int resIdx = [](int w, int h) {
+                    for (int i = 0; i < kResCount; ++i) {
+                        if (kResW[i] == w && kResH[i] == h) {
+                            return i;
+                        }
+                    }
+                    return kResCount; // 自定义…
+                }(resW, resH);
+                contentLeft();
+                ImGui::SetNextItemWidth(interior);
+                if (ImGui::Combo("##resolution", &resIdx,
+                        "640 x 360\0" "800 x 450\0" "960 x 540\0" "1024 x 576\0" "1120 x 630\0"
+                        "1280 x 720\0" "1366 x 768\0" "1600 x 900\0" "1920 x 1080\0" "2560 x 1440\0"
+                        "自定义…\0")) {
+                    if (resIdx < kResCount) {
+                        resW = kResW[resIdx];
+                        resH = kResH[resIdx];
+                        applySize();
+                    }
                 }
+                if (resIdx >= kResCount) {
+                    // Committed on Enter / focus loss, not per keystroke: "1280"
+                    // typed digit by digit would otherwise resize the window
+                    // four times on the way there.
+                    static int customW = resW;
+                    static int customH = resH;
+                    const float half = interior * 0.48f;
+                    contentLeft();
+                    ImGui::Text("自定义宽 / 高 (320..7680)");
+                    contentLeft();
+                    ImGui::SetNextItemWidth(half);
+                    ImGui::InputInt("##resw", &customW, 16, 160);
+                    const bool editedW = ImGui::IsItemDeactivatedAfterEdit();
+                    ImGui::SameLine();
+                    ImGui::SetNextItemWidth(half);
+                    ImGui::InputInt("##resh", &customH, 16, 160);
+                    const bool editedH = ImGui::IsItemDeactivatedAfterEdit();
+                    if (editedW || editedH) {
+                        resW = customW;
+                        resH = customH;
+                        applySize();
+                    }
+                }
+                contentLeft();
+                ImGui::Text("渲染模式");
+                contentLeft();
+                {
+                    // Not `static`: a profile switch replaces the whole settings
+                    // struct and a stale index would show the wrong mode.
+                    int renderModeSel = userSettings.renderScale;
+                    ImGui::SetNextItemWidth(interior);
+                    if (ImGui::Combo("##renderscale", &renderModeSel,
+                            "窗口多大就渲染多大\0固定分辨率（等比缩放 + 黑边）\0")) {
+                        userSettings.renderScale = std::clamp(renderModeSel, 0, 1);
+                        applyRenderMode();
+                        persistUserData();
+                    }
+                }
+                contentLeft();
+                ImGui::Text(userSettings.renderScale == 1
+                        ? "始终按上面的分辨率绘制，拖动窗口只缩放画面。"
+                        : "画面随窗口重排，窗口越小看到的部分越少。");
                 contentLeft();
                 ImGui::Text("窗口模式");
                 static int winMode = windowMode;
@@ -2010,11 +2260,117 @@ int main(int argc, char** argv)
                 static char orgBuf[96] = {};
                 static char noteBuf[160] = {};
                 static bool bufReady = false;
-                if (!bufReady) {
+                // Which profile the buffers were filled from. Switching user
+                // has to re-read them, otherwise the next keystroke would write
+                // the previous player's name into the new profile.
+                static std::string bufProfile;
+                if (!bufReady || bufProfile != activeProfileId) {
                     bufReady = true;
+                    bufProfile = activeProfileId;
                     std::snprintf(nameBuf, sizeof(nameBuf), "%s", account.name.c_str());
                     std::snprintf(orgBuf, sizeof(orgBuf), "%s", account.org.c_str());
                     std::snprintf(noteBuf, sizeof(noteBuf), "%s", account.note.c_str());
+                }
+
+                // --- 多用户 ---
+                contentLeft();
+                ImGui::Text("用户（每人的设置 / 成绩 / 资料分开存）");
+                contentLeft();
+                {
+                    int current = 0;
+                    for (std::size_t i = 0; i < profiles.size(); ++i) {
+                        if (profiles[i].id == activeProfileId) {
+                            current = static_cast<int>(i);
+                        }
+                    }
+                    std::vector<const char*> labels;
+                    labels.reserve(profiles.size());
+                    for (const game::UserProfile& user : profiles) {
+                        labels.push_back(user.name.c_str());
+                    }
+                    int chosen = current;
+                    ImGui::SetNextItemWidth(interior);
+                    if (!labels.empty()
+                        && ImGui::Combo("##profile", &chosen, labels.data(), static_cast<int>(labels.size()))) {
+                        if (chosen != current) {
+                            activateProfile(profiles[static_cast<std::size_t>(chosen)].id);
+                        }
+                    }
+                }
+                contentLeft();
+                {
+                    static char newName[48] = "新用户";
+                    const float buttonW = interior * 0.3f;
+                    const float fieldW = interior - buttonW - 8.0f * s;
+                    ImGui::SetNextItemWidth(fieldW);
+                    ImGui::InputText("##newprofile", newName, sizeof(newName));
+                    ImGui::SameLine();
+                    if (ui::capsuleButton("新建", ImVec2(buttonW, 40.0f * s), true)) {
+                        std::string label(newName);
+                        if (label.empty()) {
+                            label = "新用户";
+                        }
+                        // A fresh profile starts from the defaults (so it does
+                        // not inherit this user's note speed / offset), which
+                        // is also what "save the current one first" protects.
+                        game::saveUserData(userDataFile, userSettings, scores, account);
+                        game::UserProfile user;
+                        user.id = game::makeProfileId(label, profiles);
+                        user.name = label;
+                        profiles.push_back(user);
+                        activeProfileId.clear(); // so activateProfile() does not bail out
+                        activateProfile(user.id);
+                        // New account: clear the mirrored text buffers by
+                        // renaming through the profile id change.
+                        std::printf("[profile] created '%s' as %s\n", label.c_str(), user.id.c_str());
+                    }
+                }
+                contentLeft();
+                {
+                    // Two-step instead of a modal: the first press only arms it,
+                    // and the same button becomes the confirmation for ~3s.
+                    static int confirmFrames = 0;
+                    const float buttonW = interior * 0.36f;
+                    if (profiles.size() < 2) {
+                        ImGui::BeginDisabled();
+                    }
+                    if (confirmFrames > 0) {
+                        if (ui::capsuleButton("确认删除？", ImVec2(buttonW, 40.0f * s), true)) {
+                            confirmFrames = 0;
+                            const std::string victim = activeProfileId;
+                            std::string victimName;
+                            std::size_t target = profiles.size();
+                            for (std::size_t i = 0; i < profiles.size(); ++i) {
+                                if (profiles[i].id == victim) {
+                                    victimName = profiles[i].name;
+                                } else if (target == profiles.size()) {
+                                    target = i;
+                                }
+                            }
+                            if (target < profiles.size()) {
+                                // Take the id first: erasing shifts the indexes.
+                                const std::string targetId = profiles[target].id;
+                                profiles.erase(std::remove_if(profiles.begin(), profiles.end(),
+                                                   [&](const game::UserProfile& user) { return user.id == victim; }),
+                                    profiles.end());
+                                activeProfileId.clear(); // so activateProfile() does not bail out
+                                activateProfile(targetId);
+                                // The file is left on disk on purpose: removing a
+                                // user from the list must never destroy their
+                                // scores. It sits in profiles/ as <id>.json.
+                                std::printf("[profile] removed '%s' (%s) from the list; file kept\n",
+                                    victimName.c_str(), victim.c_str());
+                            }
+                        }
+                        --confirmFrames;
+                    } else if (ui::capsuleButton("删除此用户", ImVec2(buttonW, 40.0f * s), false)) {
+                        confirmFrames = 180;
+                    }
+                    if (profiles.size() < 2) {
+                        ImGui::EndDisabled();
+                    }
+                    ImGui::SameLine();
+                    ImGui::Text("删除只移除列表，profile 文件保留在 profiles/ 里");
                 }
 
                 contentLeft();
@@ -2385,25 +2741,85 @@ int main(int argc, char** argv)
         if (screenshotPath.empty()) {
             return;
         }
-        std::vector<unsigned char> pixels(static_cast<size_t>(windowW) * static_cast<size_t>(windowH) * 4);
+        // The real framebuffer, not the logical render size: in the fixed
+        // render mode the picture is presented letterboxed and reading only
+        // `windowW x windowH` would grab a corner of it.
+        const int shotW = winPixelW;
+        const int shotH = winPixelH;
+        std::vector<unsigned char> pixels(static_cast<size_t>(shotW) * static_cast<size_t>(shotH) * 4);
         glPixelStorei(GL_PACK_ALIGNMENT, 1);
-        glReadPixels(0, 0, windowW, windowH, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+        glReadPixels(0, 0, shotW, shotH, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
         // Flip vertically (GL origin is bottom-left).
-        const int rowBytes = windowW * 4;
+        const int rowBytes = shotW * 4;
         std::vector<unsigned char> flipped(pixels.size());
-        for (int y = 0; y < windowH; ++y) {
+        for (int y = 0; y < shotH; ++y) {
             std::memcpy(flipped.data() + static_cast<size_t>(y) * rowBytes,
-                pixels.data() + static_cast<size_t>(windowH - 1 - y) * rowBytes,
+                pixels.data() + static_cast<size_t>(shotH - 1 - y) * rowBytes,
                 static_cast<size_t>(rowBytes));
         }
-        stbi_write_png(screenshotPath.c_str(), windowW, windowH, 4, flipped.data(), rowBytes);
+        stbi_write_png(screenshotPath.c_str(), shotW, shotH, 4, flipped.data(), rowBytes);
         std::printf("screenshot saved: %s\n", screenshotPath.c_str());
         std::fflush(stdout);
+    };
+
+    // Fixed render mode: the window is bigger than the picture, so a pointer
+    // position in window pixels has to be mapped into the render size before
+    // anything looks at it. Rewriting the event in place means the game's
+    // handlers, the ImGui backend and the touch paths all keep working in one
+    // coordinate space (`windowW x windowH`) without a single call-site change.
+    auto mapPointerEvent = [&](SDL_Event& e) {
+        if (!renderer.offscreen()) {
+            return;
+        }
+        const float scale = renderer.outputScale();
+        if (scale <= 0.0f) {
+            return;
+        }
+        int ox = 0;
+        int oy = 0;
+        int ow = 0;
+        int oh = 0;
+        renderer.outputRect(ox, oy, ow, oh);
+        auto cx = [&](float x) { return (x - static_cast<float>(ox)) / scale; };
+        auto cy = [&](float y) { return (y - static_cast<float>(oy)) / scale; };
+        switch (e.type) {
+            case SDL_MOUSEMOTION:
+                e.motion.x = static_cast<int>(cx(static_cast<float>(e.motion.x)));
+                e.motion.y = static_cast<int>(cy(static_cast<float>(e.motion.y)));
+                break;
+            case SDL_MOUSEBUTTONDOWN:
+            case SDL_MOUSEBUTTONUP:
+                e.button.x = static_cast<int>(cx(static_cast<float>(e.button.x)));
+                e.button.y = static_cast<int>(cy(static_cast<float>(e.button.y)));
+                break;
+            default:
+                break;
+        }
+    };
+
+    // Window pixels -> the game's coordinate space, for the places that poll
+    // SDL directly instead of reading an event.
+    auto toGamePoint = [&](int& x, int& y) {
+        if (!renderer.offscreen()) {
+            return;
+        }
+        const float scale = renderer.outputScale();
+        if (scale <= 0.0f) {
+            return;
+        }
+        int ox = 0;
+        int oy = 0;
+        int ow = 0;
+        int oh = 0;
+        renderer.outputRect(ox, oy, ow, oh);
+        x = static_cast<int>((static_cast<float>(x) - static_cast<float>(ox)) / scale);
+        y = static_cast<int>((static_cast<float>(y) - static_cast<float>(oy)) / scale);
     };
 
     bool escapePressed = false;
     bool rescanRequested = false; // F5 in the song list: re-read charts/
         while (SDL_PollEvent(&event) != 0) {
+            mapPointerEvent(event);
             ImGui_ImplSDL2_ProcessEvent(&event);
             switch (event.type) {
                 case SDL_QUIT:
@@ -2435,10 +2851,12 @@ int main(int argc, char** argv)
                 }
                 case SDL_WINDOWEVENT:
                     if (event.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
-                        windowW = event.window.data1;
-                        windowH = event.window.data2;
-                        renderer.resize(windowW, windowH);
-                        core_api::resize(windowW, windowH, 1.0f);
+                        // The real window changed; the render size only follows
+                        // it when the render mode is "window sized".
+                        winPixelW = event.window.data1;
+                        winPixelH = event.window.data2;
+                        renderer.resize(winPixelW, winPixelH);
+                        applyRenderMode();
                     } else if (event.window.event == SDL_WINDOWEVENT_FOCUS_LOST
                         || event.window.event == SDL_WINDOWEVENT_LEAVE) {
                         // A mouse button released outside the window would
@@ -2896,6 +3314,17 @@ int main(int argc, char** argv)
 
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplSDL2_NewFrame();
+        // Fixed render mode: ImGui has to lay out in the *render* size (it draws
+        // into the same offscreen buffer as the scene) instead of the window's.
+        // FramebufferScale 1.0 also means the atlas is rasterised at that size
+        // and then scaled up with everything else, which is exactly what "只渲染
+        // 这个分辨率" means. Mouse positions arrive already mapped by
+        // mapPointerEvent(); the backend's own fallback path (mouse outside the
+        // window) is left alone - ImGui has nothing hovered there anyway.
+        if (renderer.offscreen()) {
+            ImGui::GetIO().DisplaySize = ImVec2(static_cast<float>(windowW), static_cast<float>(windowH));
+            ImGui::GetIO().DisplayFramebufferScale = ImVec2(1.0f, 1.0f);
+        }
         ImGui::NewFrame();
 
         if (state == AppState::Select) {
@@ -2993,7 +3422,7 @@ int main(int argc, char** argv)
             } else if (action == game::SelectSettings) {
                 showDebug = true;
             } else if (wantRescan) {
-                entries = game::scanChartFolder(chartsDir);
+                entries = scanAllChartDirs();
                 selected = entries.empty() ? -1 : 0;
                 game::applyScores(entries, scores);
                 loadedCoverPath.clear();
@@ -3284,6 +3713,8 @@ int main(int argc, char** argv)
             int mouseY = 0;
             laneHover.fill(0.0f);
             if (SDL_GetMouseState(&mouseX, &mouseY) != 0 && !autoPlay) {
+                // Polled straight from SDL, so it is still in window pixels.
+                toGamePoint(mouseX, mouseY);
                 const float clipX = (static_cast<float>(mouseX) / static_cast<float>(windowW)) * 2.0f - 1.0f;
                 const float clipY = 1.0f - (static_cast<float>(mouseY) / static_cast<float>(windowH)) * 2.0f;
                 const float worldY = renderer.clipToWorldY(clipY);
@@ -3805,6 +4236,9 @@ int main(int argc, char** argv)
         ui::flushSe();
         ImGui::Render();
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+        // Presents the offscreen buffer into the window (letterboxed). No-op
+        // when the render mode draws straight to the window.
+        renderer.presentFrame();
 
         // Captured after the ImGui pass so the HUD / intro card / song list
         // are part of the frame.

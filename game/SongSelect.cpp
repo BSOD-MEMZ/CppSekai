@@ -373,6 +373,178 @@ std::string userDataPath(const std::string& exeDir)
     return (fs::path(exeDir) / "userdata.json").string();
 }
 
+// ---------------------------------------------------------------------------
+// Local profiles (multi-user).
+//
+// Settings, scores and the account all live in one JSON. With profiles there is
+// one such file per user, under <dataDir>\profiles\<id>.json, plus a tiny index
+// that lists the names and records which one is active:
+//
+//   <dataDir>\profiles\index.json   { "active": "<id>", "users": [ {id,name} ] }
+//   <dataDir>\profiles\<id>.json    { settings, scores, account }
+//
+// The first run migrates the old single-file <dataDir>\userdata.json into the
+// "default" profile, so an existing install keeps its scores and settings.
+// <dataDir> is whatever folder userDataPath() points into (next to charts/ in
+// the build layout, next to the exe in a packaged one).
+// ---------------------------------------------------------------------------
+namespace
+{
+    std::string profileIdFromName(const std::string& name)
+    {
+        std::string out;
+        for (const char ch : name) {
+            const unsigned char byte = static_cast<unsigned char>(ch);
+            if (byte >= 0x80) {
+                // Non-ASCII (a CJK nickname): keep the hashed digits below
+                // honest and skip the byte - the id only has to be unique and
+                // file-name safe, the label the user sees is the name itself.
+                continue;
+            }
+            if ((byte >= '0' && byte <= '9') || (byte >= 'a' && byte <= 'z')
+                || (byte >= 'A' && byte <= 'Z')) {
+                out.push_back(static_cast<char>(byte >= 'A' && byte <= 'Z' ? byte + 32 : byte));
+            } else if (byte == '-' || byte == '_') {
+                out.push_back('_');
+            }
+        }
+        if (out.empty()) {
+            // Fall back to a stable number derived from the name, so two
+            // Chinese nicknames do not both become "user".
+            unsigned hash = 2166136261u;
+            for (const char ch : name) {
+                hash = (hash ^ static_cast<unsigned char>(ch)) * 16777619u;
+            }
+            char buffer[24];
+            std::snprintf(buffer, sizeof(buffer), "user%08x", hash);
+            out = buffer;
+        }
+        if (out.size() > 32) {
+            out.resize(32);
+        }
+        return out;
+    }
+} // namespace
+
+std::string userDataDir(const std::string& exeDir)
+{
+    const fs::path file = userDataPath(exeDir);
+    return file.parent_path().string();
+}
+
+std::string profileDataPath(const std::string& dataDir, const std::string& id)
+{
+    return (fs::path(dataDir) / "profiles" / (id + ".json")).string();
+}
+
+std::string profileIndexPath(const std::string& dataDir)
+{
+    return (fs::path(dataDir) / "profiles" / "index.json").string();
+}
+
+std::string makeProfileId(const std::string& name, const std::vector<UserProfile>& existing)
+{
+    const std::string base = profileIdFromName(name);
+    std::string candidate = base;
+    for (int suffix = 2; suffix < 1000; ++suffix) {
+        const bool taken = std::any_of(existing.begin(), existing.end(),
+            [&](const UserProfile& user) { return user.id == candidate; });
+        if (!taken) {
+            return candidate;
+        }
+        candidate = base + std::to_string(suffix);
+    }
+    return base + "999";
+}
+
+std::vector<UserProfile> loadProfiles(const std::string& dataDir, std::string& active)
+{
+    std::vector<UserProfile> profiles;
+    std::error_code ec;
+    fs::create_directories(fs::path(dataDir) / "profiles", ec);
+
+    const std::string index = profileIndexPath(dataDir);
+    if (fs::exists(index, ec)) {
+        std::ifstream file(index, std::ios::binary);
+        if (file) {
+            try {
+                const nlohmann::json doc = nlohmann::json::parse(file);
+                if (doc.is_object()) {
+                    active = doc.value("active", std::string{});
+                    if (doc.contains("users") && doc["users"].is_array()) {
+                        for (const auto& row : doc["users"]) {
+                            if (!row.is_object()) {
+                                continue;
+                            }
+                            UserProfile user;
+                            user.id = row.value("id", std::string{});
+                            user.name = row.value("name", std::string{});
+                            if (!user.id.empty()) {
+                                profiles.push_back(std::move(user));
+                            }
+                        }
+                    }
+                }
+            } catch (...) {
+                // Malformed index: start over from whatever files are there.
+            }
+        }
+    }
+
+    if (profiles.empty()) {
+        // First run with profiles: adopt the old single save as "default".
+        // Copying (not moving) keeps an older build, still pointed straight at
+        // userdata.json, working side by side.
+        UserProfile user;
+        user.id = "default";
+        const std::string legacy = (fs::path(dataDir) / "userdata.json").string();
+        std::string label;
+        if (fs::exists(legacy, ec)) {
+            std::ifstream file(legacy, std::ios::binary);
+            if (file) {
+                try {
+                    const nlohmann::json doc = nlohmann::json::parse(file);
+                    label = doc.value("account", nlohmann::json::object()).value("name", std::string{});
+                } catch (...) {
+                }
+            }
+            std::error_code copyEc;
+            fs::copy_file(legacy, profileDataPath(dataDir, user.id),
+                fs::copy_options::overwrite_existing, copyEc);
+        }
+        user.name = label.empty() ? "默认用户" : label;
+        profiles.push_back(user);
+        active = user.id;
+        saveProfiles(dataDir, profiles, active);
+    }
+
+    const bool activeOk = std::any_of(profiles.begin(), profiles.end(),
+        [&](const UserProfile& user) { return user.id == active; });
+    if (!activeOk) {
+        active = profiles.front().id;
+        saveProfiles(dataDir, profiles, active);
+    }
+    return profiles;
+}
+
+void saveProfiles(const std::string& dataDir, const std::vector<UserProfile>& profiles,
+    const std::string& active)
+{
+    nlohmann::json users = nlohmann::json::array();
+    for (const UserProfile& user : profiles) {
+        users.push_back({{"id", user.id}, {"name", user.name}});
+    }
+    nlohmann::json doc;
+    doc["active"] = active;
+    doc["users"] = users;
+    std::error_code ec;
+    fs::create_directories(fs::path(dataDir) / "profiles", ec);
+    std::ofstream file(profileIndexPath(dataDir), std::ios::binary);
+    if (file) {
+        file << doc.dump(2) << std::endl;
+    }
+}
+
 double expToNextRank(int rank)
 {
     if (rank < 1 || rank >= kMaxPlayerRank) {
@@ -470,6 +642,7 @@ void loadUserData(const std::string& path, UserSettings& settings,
             settings.windowMode = s.value("windowMode", settings.windowMode);
             settings.windowWidth = s.value("windowWidth", settings.windowWidth);
             settings.windowHeight = s.value("windowHeight", settings.windowHeight);
+            settings.renderScale = s.value("renderScale", settings.renderScale);
             settings.fpsLimit = s.value("fpsLimit", settings.fpsLimit);
             settings.showProgressBar = s.value("showProgressBar", settings.showProgressBar);
             settings.hideTouchFeedback = s.value("hideTouchFeedback", settings.hideTouchFeedback);
@@ -510,6 +683,7 @@ void loadUserData(const std::string& path, UserSettings& settings,
     settings.initialLife = std::clamp(settings.initialLife, 100.0f, 1000.0f);
     settings.windowWidth = std::clamp(settings.windowWidth, 320, 7680);
     settings.windowHeight = std::clamp(settings.windowHeight, 240, 4320);
+    settings.renderScale = std::clamp(settings.renderScale, 0, 1);
     settings.bgStyle = std::clamp(settings.bgStyle, 0, 1);
     settings.bgBlur = std::clamp(settings.bgBlur, 0.0f, 1.0f);
     settings.bgDim = std::clamp(settings.bgDim, 0.0f, 1.0f);
@@ -545,6 +719,7 @@ void saveUserData(const std::string& path, const UserSettings& settings,
         {"windowMode", settings.windowMode},
         {"windowWidth", settings.windowWidth},
         {"windowHeight", settings.windowHeight},
+        {"renderScale", settings.renderScale},
         {"fpsLimit", settings.fpsLimit},
         {"showProgressBar", settings.showProgressBar},
         {"hideTouchFeedback", settings.hideTouchFeedback},

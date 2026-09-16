@@ -21,6 +21,7 @@
 #define UNICODE
 #define _UNICODE
 #include <windows.h>
+#include <windowsx.h> // GET_X_LPARAM / GET_Y_LPARAM (the splitter drags)
 
 #include <commctrl.h>
 #include <shellapi.h>
@@ -320,6 +321,82 @@ bool fileExists(const fs::path& path)
     return fs::exists(path, ec) && fs::is_regular_file(path, ec);
 }
 
+// ---------------------------------------------------------------------------
+// Paths
+//
+// The chart folder is *always* "charts" next to the executable - the game and
+// this tool agree on that. It used to default to "..\charts" (the build/
+// layout, where the exe sits one level below the repo root), which quietly
+// downloads to the *parent of the game folder* in a packaged release: the zip
+// unpacks to CppSekai-<date>\ and "..\charts" lands outside it.
+// ---------------------------------------------------------------------------
+fs::path exeDirectory()
+{
+    wchar_t buffer[MAX_PATH * 2] = {};
+    const DWORD length = GetModuleFileNameW(nullptr, buffer,
+        static_cast<DWORD>(sizeof(buffer) / sizeof(buffer[0])));
+    if (length == 0) {
+        return fs::current_path();
+    }
+    fs::path exe(buffer, buffer + length);
+    return exe.parent_path();
+}
+
+fs::path defaultChartsDir()
+{
+    return exeDirectory() / "charts";
+}
+
+// ---------------------------------------------------------------------------
+// Downloader settings (chartdl.json, next to the exe).
+// ---------------------------------------------------------------------------
+struct DlSettings
+{
+    int closeAction = 0; // 0 = 退出程序, 1 = 隐藏到托盘
+    bool notifyOnDone = true; // 下载完成弹气球
+    bool minimizeToTray = false; // 最小化时也收进托盘
+    std::string outDir;  // remembered output folder (empty = default)
+};
+
+fs::path settingsPath()
+{
+    return exeDirectory() / "chartdl.json";
+}
+
+void loadDlSettings(DlSettings& settings)
+{
+    std::ifstream file(settingsPath(), std::ios::binary);
+    if (!file) {
+        return;
+    }
+    try {
+        const nlohmann::json doc = nlohmann::json::parse(file);
+        if (!doc.is_object()) {
+            return;
+        }
+        settings.closeAction = doc.value("closeAction", settings.closeAction);
+        settings.notifyOnDone = doc.value("notifyOnDone", settings.notifyOnDone);
+        settings.minimizeToTray = doc.value("minimizeToTray", settings.minimizeToTray);
+        settings.outDir = doc.value("outDir", settings.outDir);
+    } catch (...) {
+        // malformed: keep the defaults
+    }
+    settings.closeAction = std::clamp(settings.closeAction, 0, 1);
+}
+
+void saveDlSettings(const DlSettings& settings)
+{
+    nlohmann::json doc;
+    doc["closeAction"] = settings.closeAction;
+    doc["notifyOnDone"] = settings.notifyOnDone;
+    doc["minimizeToTray"] = settings.minimizeToTray;
+    doc["outDir"] = settings.outDir;
+    std::ofstream file(settingsPath(), std::ios::binary);
+    if (file) {
+        file << doc.dump(2) << std::endl;
+    }
+}
+
 // Reads one of the JSON tables from next to the exe / repo root.
 bool readJson(const std::string& fileName, nlohmann::json& out)
 {
@@ -343,6 +420,13 @@ bool readJson(const std::string& fileName, nlohmann::json& out)
 
 void loadData()
 {
+    // Called once from main() (for --list / --download) and again by the GUI,
+    // so it has to be idempotent: without the reset the song table doubled on
+    // every call (715 -> 1430) and everything keyed off its index - the
+    // "already downloaded" scan included - was done twice over.
+    gSongs.clear();
+    gDuplicateIds = 0;
+    gDataError.clear();
     nlohmann::json musics;
     if (!readJson("musics.json", musics) || !musics.is_array()) {
         return;
@@ -518,6 +602,76 @@ std::string jacketUrl(const Song& song)
 {
     const std::string stem = jacketStem(song.jacket, song.id);
     return "https://assets.unipjsk.com/startapp/music/jacket/" + stem + "/" + stem + ".png";
+}
+
+// ---------------------------------------------------------------------------
+// What is already on disk.
+//
+// Every file name this tool produces is derived from the song id
+// ("0374_normal.sus", "se_0374_01.mp3", "0374.png"), i.e. pure ASCII, so the
+// scan compares native (UTF-16) file names against widened ASCII expectations -
+// never through fs::path's narrow side, which is the ANSI code page.
+// ---------------------------------------------------------------------------
+struct SongFiles
+{
+    bool chart[5] = {false, false, false, false, false};
+    bool jacket = false;
+    bool sidecar = false;
+    std::vector<bool> vocal; // one entry per Song::vocals
+
+    int haveCharts = 0;
+    int wantCharts = 0; // difficulties the song actually has (level > 0)
+    // Every difficulty the song has, plus the jacket and the metadata sidecar.
+    // Vocal versions are deliberately *not* part of this: unipjsk is missing
+    // some of them for good, and a song that can never be called "done" would
+    // leave its row tickable forever.
+    bool complete = false;
+    bool any = false;
+};
+
+std::vector<SongFiles> scanDownloaded(const std::vector<Song>& songs, const fs::path& dir)
+{
+    std::vector<SongFiles> out(songs.size());
+    std::set<std::wstring> present;
+    {
+        std::error_code ec;
+        for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
+            std::error_code kindEc;
+            if (!it->is_regular_file(kindEc)) {
+                continue; // the ".part" of a run in flight is not a download yet
+            }
+            std::wstring name = it->path().filename().native();
+            if (name.size() > 5 && name.compare(name.size() - 5, 5, L".part") == 0) {
+                continue;
+            }
+            present.insert(std::move(name));
+        }
+    }
+    auto has = [&](const std::string& name) { return present.count(http::widen(name)) != 0; };
+
+    for (std::size_t i = 0; i < songs.size(); ++i) {
+        const Song& song = songs[i];
+        SongFiles files;
+        files.vocal.assign(song.vocals.size(), false);
+        for (int d = 0; d < 5; ++d) {
+            files.chart[d] = has((id4(song.id) + "_" + kDiffNames[d] + ".sus"));
+            files.haveCharts += files.chart[d] ? 1 : 0;
+            files.wantCharts += song.levels[static_cast<std::size_t>(d)] > 0 ? 1 : 0;
+        }
+        files.jacket = has(id4(song.id) + ".png");
+        files.sidecar = has(id4(song.id) + ".json");
+        for (std::size_t v = 0; v < song.vocals.size(); ++v) {
+            const std::string asset = song.vocals[v].asset.empty() ? id4(song.id) + "_01"
+                                                                   : song.vocals[v].asset;
+            files.vocal[v] = has(asset + ".mp3");
+        }
+        const int wantCharts = files.wantCharts > 0 ? files.wantCharts : 5;
+        files.complete = files.haveCharts >= wantCharts && files.jacket && files.sidecar;
+        files.any = files.haveCharts > 0 || files.jacket || files.sidecar
+            || std::any_of(files.vocal.begin(), files.vocal.end(), [](bool v) { return v; });
+        out[i] = std::move(files);
+    }
+    return out;
 }
 
 // Sidecar the game reads next to the chart (<id4>.json).
@@ -710,11 +864,13 @@ void printUsage()
         "  chartdl.exe --download <ids>         ids: 374 or 374,75,127\n"
         "              [--diffs all|easy,normal,hard,expert,master]\n"
         "              [--vocals all|0,1,2]      indexes into the song's version list\n"
-        "              [--out <dir>]             default: ..\\charts\n"
+        "              [--out <dir>]             default: charts next to the exe\n"
         "              [--no-jacket] [--no-sidecar] [--force]\n"
         "  chartdl.exe --screenshot <png> [--screenshot-time <sec>]\n"
         "              [--dpi <96|120|144|192>]   force the layout scale (default:\n"
         "                                          the system DPI)\n"
+        "              [--open-settings]         also open the settings window\n"
+        "                                          (headless layout check)\n"
         "\n"
         "Source: assets.unipjsk.com (charts, BGM per vocal version, jackets).\n");
 }
@@ -766,8 +922,24 @@ namespace
     constexpr int kIdDetailTitle = 1012;
     constexpr int kIdJacket = 1013;
     constexpr int kIdSidecar = 1014;
+    constexpr int kIdSettings = 1015;
+    constexpr int kIdTrayIcon = 1016;
     constexpr int kIdDiffBase = 1100;  // 1100..1104 = EASY..MASTER
     constexpr int kIdVocalBase = 1120; // 1120.. = one per vocal version
+
+    // Settings window controls.
+    constexpr int kIdSetCloseExit = 1200;
+    constexpr int kIdSetCloseTray = 1201;
+    constexpr int kIdSetNotify = 1202;
+    constexpr int kIdSetMinTray = 1203;
+    constexpr int kIdSetOk = 1204;
+    constexpr int kIdSetCancel = 1205;
+
+    // Tray callback + the balloon the worker thread asks for. The tray icon
+    // never calls back with the parent disabled, so WM_APP + 1 is free.
+    constexpr UINT kTrayCallback = WM_APP + 1;
+    constexpr int kTrayShow = 1300;
+    constexpr int kTrayExit = 1301;
 
     HWND gList = nullptr;
     HWND gOutDirLabel = nullptr;
@@ -782,9 +954,36 @@ namespace
     HWND gDetailTitle = nullptr;
     HWND gJacketCheck = nullptr;
     HWND gSidecarCheck = nullptr;
+    HWND gSettingsButton = nullptr;
     HWND gDiffChecks[5] = {};
     std::vector<HWND> gVocalChecks;
     HFONT gFont = nullptr;
+
+    // What of each song is already in the output folder (parallel to gSongs).
+    std::vector<SongFiles> gFiles;
+    // Set while rebuildList / rebuild-with-revert is poking the check states,
+    // so LVN_ITEMCHANGED does not fight it (and does not recurse).
+    bool gSyncingChecks = false;
+
+    // Splitter positions, in real pixels. -1 = not laid out yet, so the first
+    // WM_SIZE picks the default and later ones keep whatever the user dragged.
+    // gListWidth = the song table's own width, gBottomHeight = the height of
+    // the log/progress strip along the bottom.
+    int gListWidth = -1;
+    int gBottomHeight = -1;
+    int gDragSplitter = 0; // 0 = none, 1 = list/detail, 2 = top/bottom
+    int gDragOrigin = 0;
+    int gDragStart = 0;
+
+    DlSettings gDlSettings;
+    HWND gSettingsWindow = nullptr;
+    bool gTrayAdded = false;
+    // Turns true once a run has been observed running, so the "queue finished"
+    // edge fires exactly once - on the transition running -> idle.
+    bool gSawRunning = false;
+    bool gNeedClearTicks = false;
+    std::string gPendingBalloon;
+    std::mutex gPendingMutex;
 
     // -----------------------------------------------------------------------
     // DPI. chartdl declares DPI awareness (see chartdl.manifest), which means
@@ -867,12 +1066,16 @@ namespace
     constexpr int kColKana = 2;
     constexpr int kColDiffFirst = 3; // EASY .. MASTER, in kDiffNames order
     constexpr int kColVersions = kColDiffFirst + 5;
-    constexpr int kColumnCount = kColVersions + 1;
+    constexpr int kColState = kColVersions + 1; // 已下载 / 部分 / 空
+    constexpr int kColumnCount = kColState + 1;
 
     const wchar_t* const kColumnTitles[kColumnCount] = {
-        L"ID", L"曲名", L"读音", L"EASY", L"NORMAL", L"HARD", L"EXPERT", L"MASTER", L"演唱版本"};
-    // Widths in 96-DPI units; dp() scales them on the way into the header.
-    const int kColumnWidths[kColumnCount] = {52, 230, 150, 58, 68, 56, 66, 66, 84};
+        L"ID", L"曲名", L"读音", L"EASY", L"NORMAL", L"HARD", L"EXPERT", L"MASTER", L"演唱版本",
+        L"已下载"};
+    // Widths in 96-DPI units; dp() scales them on the way into the header. They
+    // add up to a bit under the default table width on purpose - the five
+    // difficulty columns plus 已下载 otherwise push the last one out of sight.
+    const int kColumnWidths[kColumnCount] = {48, 190, 120, 50, 58, 50, 60, 60, 66, 58};
 
     // Click a header to sort by that column; click it again to flip. Starts on
     // the id, which is the order of the upstream table.
@@ -981,6 +1184,7 @@ namespace
             checked[gRowSong[static_cast<std::size_t>(row)]] = isChecked;
         }
 
+        gSyncingChecks = true;
         SendMessageW(gList, WM_SETREDRAW, FALSE, 0);
         ListView_DeleteAllItems(gList);
         gRowSong.clear();
@@ -1021,6 +1225,13 @@ namespace
                 case kColId:
                     cmp = lhs.id - rhs.id;
                     break;
+                case kColState: {
+                    // Fully downloaded songs last (they have nothing left to
+                    // fetch), untouched ones first.
+                    auto rank = [](const SongFiles& f) { return f.complete ? 2 : (f.any ? 1 : 0); };
+                    cmp = rank(gFiles[static_cast<std::size_t>(a)]) - rank(gFiles[static_cast<std::size_t>(b)]);
+                    break;
+                }
                 default: {
                     // The five difficulty columns; a missing level (-1 / 0) sorts
                     // to the bottom either way, which keeps the songs that have
@@ -1064,11 +1275,21 @@ namespace
                 setColumn(kColDiffFirst + d, widen(level > 0 ? std::to_string(level) : std::string("-")));
             }
             setColumn(kColVersions, widen(std::to_string(song.vocals.size()) + " 版本"));
+            const SongFiles& files = gFiles[static_cast<std::size_t>(index)];
+            if (files.complete) {
+                setColumn(kColState, L"已下载");
+            } else if (files.any) {
+                setColumn(kColState, L"部分");
+            }
+            // A song whose files are all there cannot be queued again: its tick
+            // is forced off here and reverted in LVN_ITEMCHANGED.
             const auto state = checked.find(index);
-            ListView_SetCheckState(gList, row, state != checked.end() && state->second ? TRUE : FALSE);
+            const bool wantChecked = !files.complete && state != checked.end() && state->second;
+            ListView_SetCheckState(gList, row, wantChecked ? TRUE : FALSE);
             gRowSong.push_back(index);
         }
         SendMessageW(gList, WM_SETREDRAW, TRUE, 0);
+        gSyncingChecks = false;
         InvalidateRect(gList, nullptr, TRUE);
         // The header is a child window of the list and does not come back on its
         // own after WM_SETREDRAW - without this the sort marker stays invisible
@@ -1077,6 +1298,395 @@ namespace
             RedrawWindow(header, nullptr, nullptr,
                 RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN | RDW_FRAME);
         }
+    }
+
+    void updateDetailPanel(int songIndex);
+
+    // -----------------------------------------------------------------------
+    // Local (already downloaded) state
+    // -----------------------------------------------------------------------
+    void refreshDownloadedState()
+    {
+        gFiles = scanDownloaded(gSongs, fs::path(gOutDir));
+        std::size_t complete = 0;
+        std::size_t partial = 0;
+        for (const SongFiles& files : gFiles) {
+            complete += files.complete ? 1 : 0;
+            partial += (!files.complete && files.any) ? 1 : 0;
+        }
+        // Assertion hook for headless runs: "N complete, M partial" is what the
+        // 已下载 column and the per-entry disabling are driven by.
+        note("[scan] " + std::to_string(complete) + " complete, " + std::to_string(partial)
+            + " partial, " + std::to_string(gFiles.size()) + " songs; dir="
+            + pathText(fs::path(gOutDir)));
+    }
+
+    bool songIsDone(int songIndex)
+    {
+        return songIndex >= 0 && songIndex < static_cast<int>(gFiles.size())
+            && gFiles[static_cast<std::size_t>(songIndex)].complete;
+    }
+
+    void clearAllTicks()
+    {
+        gSyncingChecks = true;
+        const int rows = ListView_GetItemCount(gList);
+        for (int row = 0; row < rows; ++row) {
+            ListView_SetCheckState(gList, row, FALSE);
+        }
+        gSyncingChecks = false;
+    }
+
+    // -----------------------------------------------------------------------
+    // Splitter geometry.
+    // Three panes: the song table on the left, the download-content panel on
+    // the right, the log/progress strip at the bottom. The gaps between them
+    // are the parent window's own client area, so a drag on one arrives here
+    // (a control would swallow it).
+    // -----------------------------------------------------------------------
+    int splitterThickness()
+    {
+        return dp(8);
+    }
+
+    // Paints one splitter bar. The gaps between the three panes are the
+    // parent's own client area, so they have to be drawn here - without the
+    // grip they are just background-coloured and nothing suggests they can be
+    // dragged.
+    void drawSplitterBar(HDC dc, const RECT& bar, bool vertical)
+    {
+        FillRect(dc, &bar, GetSysColorBrush(COLOR_BTNFACE));
+        HBRUSH dark = GetSysColorBrush(COLOR_BTNSHADOW);
+        HBRUSH light = GetSysColorBrush(COLOR_BTNHIGHLIGHT);
+        if (vertical) {
+            const int cx = (bar.left + bar.right) / 2;
+            const int cy = (bar.top + bar.bottom) / 2;
+            const int half = std::min(dp(60), std::max(dp(12), static_cast<int>((bar.bottom - bar.top) / 6)));
+            for (int i = -1; i <= 1; ++i) {
+                RECT groove{cx - 1 + i * dp(4), cy - half, cx + i * dp(4), cy + half};
+                RECT highlight = groove;
+                highlight.left += 1;
+                highlight.right += 1;
+                FillRect(dc, &groove, dark);
+                FillRect(dc, &highlight, light);
+            }
+        } else {
+            const int cx = (bar.left + bar.right) / 2;
+            const int cy = (bar.top + bar.bottom) / 2;
+            const int half = std::min(dp(120), std::max(dp(20), static_cast<int>((bar.right - bar.left) / 8)));
+            for (int i = -1; i <= 1; ++i) {
+                RECT groove{cx - half, cy - 1 + i * dp(4), cx + half, cy + i * dp(4)};
+                RECT highlight = groove;
+                highlight.top += 1;
+                highlight.bottom += 1;
+                FillRect(dc, &groove, dark);
+                FillRect(dc, &highlight, light);
+            }
+        }
+    }
+
+    // Where the two bars sit for a given client size. Kept next to the pixel
+    // layout so a change to one cannot silently desync the other.
+    void splitterRects(HWND hwnd, RECT& vertical, RECT& horizontal)
+    {
+        RECT client{};
+        GetClientRect(hwnd, &client);
+        const int margin = dp(10);
+        const int band = splitterThickness();
+        const int topY = dp(68);
+        const int topHeight = client.bottom - topY - band - gBottomHeight - margin;
+        vertical = {margin + gListWidth, topY, margin + gListWidth + band,
+            std::max(topY, topY + topHeight)};
+        const int barY = topY + std::max(0, topHeight);
+        horizontal = {margin, barY, client.right - margin, barY + band};
+    }
+
+    // 0 = nowhere, 1 = list/detail (vertical bar), 2 = top/bottom (horizontal).
+    int hitSplitter(HWND hwnd, int x, int y)
+    {
+        if (gListWidth < 0 || gBottomHeight < 0) {
+            return 0; // not laid out yet
+        }
+        RECT client{};
+        GetClientRect(hwnd, &client);
+        const int margin = dp(10);
+        const int topY = dp(68);
+        const int band = splitterThickness();
+        const int topHeight = client.bottom - topY - band - gBottomHeight - margin;
+        if (client.bottom <= topY || topHeight <= 0) {
+            return 0;
+        }
+        const int barX = margin + gListWidth;
+        if (x >= barX && x < barX + band && y >= topY && y < topY + topHeight) {
+            return 1;
+        }
+        const int barY = topY + topHeight;
+        if (y >= barY && y < barY + band && x >= margin && x < client.right - margin) {
+            return 2;
+        }
+        return 0;
+    }
+
+    void layoutChildren(HWND hwnd, int width, int height)
+    {
+        // The numbers below are 96-DPI units; dp() turns them into real
+        // pixels, and the widths that mix in the client size use SetWindowPos
+        // directly (that size is not a design unit).
+        const int margin = dp(10);
+        const int band = splitterThickness();
+        const int topY = dp(68);
+        const int minList = dp(200);
+        const int minPanel = dp(220);
+
+        if (gListWidth < 0) {
+            gListWidth = width - margin * 3 - dp(330);
+        }
+        gListWidth = std::clamp(gListWidth, minList,
+            std::max(minList, width - margin * 2 - band - minPanel));
+        if (gBottomHeight < 0) {
+            gBottomHeight = dp(188);
+        }
+        gBottomHeight = std::clamp(gBottomHeight, dp(90),
+            std::max(dp(90), height - topY - band - dp(140)));
+
+        const int topHeight = std::max(dp(80), height - topY - band - gBottomHeight - margin);
+        const int listX = margin;
+        const int panelX = listX + gListWidth + band;
+        const int panelW = std::max(dp(120), width - panelX - margin);
+
+        SetWindowPos(GetDlgItem(hwnd, kIdDetailGroup), nullptr, panelX, topY, panelW, topHeight,
+            SWP_NOZORDER);
+        SetWindowPos(gList, nullptr, listX, topY, gListWidth, topHeight, SWP_NOZORDER);
+
+        place(gOutDirLabel, margin, 15, 62, 20);
+        SetWindowPos(gOutDirEdit, nullptr, dp(76), dp(12), width - dp(76) - dp(228), dp(24),
+            SWP_NOZORDER);
+        SetWindowPos(GetDlgItem(hwnd, kIdBrowse), nullptr, width - dp(216), dp(12), dp(90), dp(24),
+            SWP_NOZORDER);
+        SetWindowPos(GetDlgItem(hwnd, kIdOpenDir), nullptr, width - dp(120), dp(12), dp(110), dp(24),
+            SWP_NOZORDER);
+        place(gSearchLabel, margin, 45, 62, 20);
+        place(gSearch, 76, 42, 240, 24);
+        place(gQueueButton, 330, 42, 150, 24);
+        place(GetDlgItem(hwnd, kIdCheckAll), 488, 42, 120, 24);
+        place(gCancelButton, 616, 42, 80, 24);
+        // The settings button rides on the right end of the second row, so the
+        // search/queue group stays put while the window grows.
+        SetWindowPos(gSettingsButton, nullptr, width - dp(120), dp(42), dp(110), dp(24), SWP_NOZORDER);
+
+        const int progressY = topY + topHeight + band + dp(4);
+        SetWindowPos(gProgress, nullptr, margin, progressY, width - margin * 2, dp(20), SWP_NOZORDER);
+        SetWindowPos(gStatus, nullptr, margin, progressY + dp(24), width - margin * 2, dp(18),
+            SWP_NOZORDER);
+        SetWindowPos(gLogList, nullptr, margin, progressY + dp(46), width - margin * 2,
+            std::max(dp(24), height - progressY - dp(56)), SWP_NOZORDER);
+
+        SetWindowPos(gDetailTitle, nullptr, panelX + dp(14), topY + dp(24), panelW - dp(28), dp(18),
+            SWP_NOZORDER);
+        if (gDetailSong >= 0) {
+            updateDetailPanel(gDetailSong);
+        }
+
+        // The bars are painted by us (see WM_PAINT) and moving the children
+        // around them does not necessarily invalidate their strips.
+        RECT vertical{};
+        RECT horizontal{};
+        splitterRects(hwnd, vertical, horizontal);
+        InvalidateRect(hwnd, &vertical, FALSE);
+        InvalidateRect(hwnd, &horizontal, FALSE);
+    }
+
+    // -----------------------------------------------------------------------
+    // Tray icon + balloon
+    // -----------------------------------------------------------------------
+    HICON appIcon()
+    {
+        const HINSTANCE instance = GetModuleHandleW(nullptr);
+        HICON icon = reinterpret_cast<HICON>(
+            LoadImageW(instance, MAKEINTRESOURCEW(1), IMAGE_ICON, 0, 0,
+                LR_DEFAULTSIZE | LR_SHARED));
+        if (icon == nullptr) {
+            icon = LoadIconW(nullptr, IDI_APPLICATION);
+        }
+        return icon;
+    }
+
+    void addTrayIcon(HWND hwnd)
+    {
+        if (gTrayAdded) {
+            return;
+        }
+        NOTIFYICONDATAW data{};
+        data.cbSize = sizeof(data);
+        data.hWnd = hwnd;
+        data.uID = kIdTrayIcon;
+        data.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
+        data.uCallbackMessage = kTrayCallback;
+        data.hIcon = appIcon();
+        wcsncpy_s(data.szTip, L"CppSekai 谱面下载器", _TRUNCATE);
+        gTrayAdded = Shell_NotifyIconW(NIM_ADD, &data) != FALSE;
+    }
+
+    void removeTrayIcon(HWND hwnd)
+    {
+        if (!gTrayAdded) {
+            return;
+        }
+        NOTIFYICONDATAW data{};
+        data.cbSize = sizeof(data);
+        data.hWnd = hwnd;
+        data.uID = kIdTrayIcon;
+        Shell_NotifyIconW(NIM_DELETE, &data);
+        gTrayAdded = false;
+    }
+
+    void showBalloon(HWND hwnd, const wchar_t* title, const std::wstring& text)
+    {
+        addTrayIcon(hwnd); // a balloon has nowhere to come from without an icon
+        NOTIFYICONDATAW data{};
+        data.cbSize = sizeof(data);
+        data.hWnd = hwnd;
+        data.uID = kIdTrayIcon;
+        data.uFlags = NIF_INFO;
+        data.dwInfoFlags = NIIF_INFO;
+        wcsncpy_s(data.szInfoTitle, title, _TRUNCATE);
+        wcsncpy_s(data.szInfo, text.c_str(), _TRUNCATE);
+        Shell_NotifyIconW(NIM_MODIFY, &data);
+    }
+
+    void showMainWindow(HWND hwnd)
+    {
+        ShowWindow(hwnd, SW_SHOW);
+        ShowWindow(hwnd, SW_RESTORE);
+        SetForegroundWindow(hwnd);
+    }
+
+    // -----------------------------------------------------------------------
+    // Settings window (a real top-level child window, made modal by disabling
+    // the parent - the common controls have no dialog template lying around).
+    // -----------------------------------------------------------------------
+    HWND gSetCloseExit = nullptr;
+    HWND gSetCloseTray = nullptr;
+    HWND gSetNotify = nullptr;
+    HWND gSetMinTray = nullptr;
+    HFONT gSetFont = nullptr;
+
+    LRESULT CALLBACK settingsProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
+    {
+        switch (message) {
+            case WM_CREATE: {
+                const int row = dp(34);
+                auto create = [&](const wchar_t* cls, const wchar_t* text, DWORD style, int id,
+                                  int x, int y, int w, int h) {
+                    HWND control = CreateWindowExW(0, cls, text, WS_CHILD | WS_VISIBLE | style, x, y, w,
+                        h, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), nullptr, nullptr);
+                    SendMessageW(control, WM_SETFONT,
+                        reinterpret_cast<WPARAM>(gSetFont != nullptr ? gSetFont : gFont), TRUE);
+                    return control;
+                };
+                const int left = dp(20);
+                const int width = dp(320);
+                // Explicit bands, because a chain of += is what put the second
+                // group box on top of the first one.
+                const int group1Y = dp(16);
+                const int group1H = dp(92);
+                const int group2Y = group1Y + group1H + dp(12);
+                const int group2H = dp(76);
+                const int buttonY = group2Y + group2H + dp(20);
+                create(L"BUTTON", L"关闭窗口时", BS_GROUPBOX, -1, left, group1Y, width, group1H);
+                gSetCloseExit = create(L"BUTTON", L"退出程序", BS_AUTORADIOBUTTON | WS_GROUP,
+                    kIdSetCloseExit, left + dp(14), group1Y + dp(22), width - dp(28), dp(22));
+                gSetCloseTray = create(L"BUTTON", L"隐藏到托盘（后台继续下载）", BS_AUTORADIOBUTTON,
+                    kIdSetCloseTray, left + dp(14), group1Y + dp(46), width - dp(28), dp(22));
+                create(L"BUTTON", L"提醒", BS_GROUPBOX, -1, left, group2Y, width, group2H);
+                gSetNotify = create(L"BUTTON", L"下载完成后弹出气泡提醒", BS_AUTOCHECKBOX, kIdSetNotify,
+                    left + dp(14), group2Y + dp(22), width - dp(28), dp(22));
+                gSetMinTray = create(L"BUTTON", L"最小化时收进托盘", BS_AUTOCHECKBOX, kIdSetMinTray,
+                    left + dp(14), group2Y + dp(46), width - dp(28), dp(22));
+
+                create(L"BUTTON", L"确定", BS_DEFPUSHBUTTON, kIdSetOk, dp(20), buttonY, dp(120), dp(30));
+                create(L"BUTTON", L"取消", BS_PUSHBUTTON, kIdSetCancel, dp(152), buttonY, dp(120), dp(30));
+                // Size the *window* so the client area matches the layout above:
+                // the caller only guessed a size, and with a caption in the way
+                // the bottom buttons would be off-screen.
+                RECT want{0, 0, dp(380), buttonY + dp(30) + dp(20)};
+                const DWORD style = static_cast<DWORD>(GetWindowLongPtrW(hwnd, GWL_STYLE));
+                AdjustWindowRectEx(&want, style, FALSE,
+                    static_cast<DWORD>(GetWindowLongPtrW(hwnd, GWL_EXSTYLE)));
+                SetWindowPos(hwnd, nullptr, 0, 0, want.right - want.left, want.bottom - want.top,
+                    SWP_NOMOVE | SWP_NOZORDER);
+
+                SendMessageW(gSetCloseExit, BM_SETCHECK,
+                    gDlSettings.closeAction == 0 ? BST_CHECKED : BST_UNCHECKED, 0);
+                SendMessageW(gSetCloseTray, BM_SETCHECK,
+                    gDlSettings.closeAction == 1 ? BST_CHECKED : BST_UNCHECKED, 0);
+                SendMessageW(gSetNotify, BM_SETCHECK, gDlSettings.notifyOnDone ? BST_CHECKED : BST_UNCHECKED, 0);
+                SendMessageW(gSetMinTray, BM_SETCHECK, gDlSettings.minimizeToTray ? BST_CHECKED : BST_UNCHECKED, 0);
+                return 0;
+            }
+            case WM_COMMAND: {
+                const int id = LOWORD(wParam);
+                if (id == kIdSetOk) {
+                    gDlSettings.closeAction =
+                        SendMessageW(gSetCloseTray, BM_GETCHECK, 0, 0) == BST_CHECKED ? 1 : 0;
+                    gDlSettings.notifyOnDone =
+                        SendMessageW(gSetNotify, BM_GETCHECK, 0, 0) == BST_CHECKED;
+                    gDlSettings.minimizeToTray =
+                        SendMessageW(gSetMinTray, BM_GETCHECK, 0, 0) == BST_CHECKED;
+                    gDlSettings.outDir = pathText(fs::path(gOutDir));
+                    saveDlSettings(gDlSettings);
+                    logLine("[cfg] close=" + std::string(gDlSettings.closeAction == 1 ? "tray" : "exit")
+                        + " notify=" + (gDlSettings.notifyOnDone ? "on" : "off")
+                        + " minTray=" + (gDlSettings.minimizeToTray ? "on" : "off"));
+                    DestroyWindow(hwnd);
+                    return 0;
+                }
+                if (id == kIdSetCancel || id == IDCANCEL) {
+                    DestroyWindow(hwnd);
+                    return 0;
+                }
+                return 0;
+            }
+            case WM_CLOSE:
+                DestroyWindow(hwnd);
+                return 0;
+            case WM_DESTROY:
+                if (HWND parent = GetParent(hwnd)) {
+                    EnableWindow(parent, TRUE);
+                    SetForegroundWindow(parent);
+                }
+                gSettingsWindow = nullptr;
+                gSetCloseExit = gSetCloseTray = gSetNotify = gSetMinTray = nullptr;
+                return 0;
+            default:
+                break;
+        }
+        return DefWindowProcW(hwnd, message, wParam, lParam);
+    }
+
+    void openSettingsWindow(HWND parent)
+    {
+        if (gSettingsWindow != nullptr) {
+            showMainWindow(gSettingsWindow);
+            return;
+        }
+        gSetFont = gFont;
+        RECT parentRect{};
+        GetWindowRect(parent, &parentRect);
+        const int width = dp(380);
+        // Only a first guess - WM_CREATE re-sizes the window so its *client*
+        // area matches the layout (see settingsProc).
+        const int height = dp(16) + dp(92) + dp(12) + dp(76) + dp(20) + dp(30) + dp(20);
+        gSettingsWindow = CreateWindowExW(WS_EX_DLGMODALFRAME, L"CppSekaiChartDlSettings",
+            L"下载器设置", WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
+            parentRect.left + dp(80), parentRect.top + dp(80), width, height, parent, nullptr,
+            GetModuleHandleW(nullptr), nullptr);
+        if (gSettingsWindow == nullptr) {
+            return;
+        }
+        EnableWindow(parent, FALSE);
+        ShowWindow(gSettingsWindow, SW_SHOW);
+        SetForegroundWindow(gSettingsWindow);
     }
 
     void updateDetailPanel(int songIndex);
@@ -1106,6 +1716,7 @@ namespace
                 gQueueButton = create(L"BUTTON", L"下载勾选的歌曲", BS_PUSHBUTTON | BS_DEFPUSHBUTTON, kIdQueue);
                 create(L"BUTTON", L"全选 / 全不选", BS_PUSHBUTTON, kIdCheckAll);
                 gCancelButton = create(L"BUTTON", L"取消", BS_PUSHBUTTON, kIdCancel);
+                gSettingsButton = create(L"BUTTON", L"设置…", BS_PUSHBUTTON, kIdSettings);
 
                 gList = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"",
                     WS_CHILD | WS_VISIBLE | LVS_REPORT | LVS_SHOWSELALWAYS,
@@ -1149,48 +1760,7 @@ namespace
                 return 0;
             }
             case WM_SIZE: {
-                const int width = LOWORD(lParam); // real pixels already
-                const int height = HIWORD(lParam);
-                // The numbers below are 96-DPI units; dp() turns them into real
-                // pixels, and the widths that mix in the client size use
-                // SetWindowPos directly (that size is not a design unit).
-                const int margin = 10;
-                const int panelWidth = 330;
-                const int bottomHeight = 188;
-                const int listWidth = width - dp(margin) * 3 - dp(panelWidth);
-                const int listHeight = height - dp(76) - dp(bottomHeight) - dp(margin);
-                const int panelX = dp(margin) * 2 + listWidth;
-
-                SetWindowPos(GetDlgItem(hwnd, kIdDetailGroup), nullptr, panelX, dp(68), listWidth,
-                    listHeight + dp(4), SWP_NOZORDER);
-                SetWindowPos(gList, nullptr, dp(margin), dp(68), listWidth, listHeight + dp(4), SWP_NOZORDER);
-
-                place(gOutDirLabel, margin, 15, 62, 20);
-                SetWindowPos(gOutDirEdit, nullptr, dp(76), dp(12), width - dp(76) - dp(220), dp(24),
-                    SWP_NOZORDER);
-                SetWindowPos(GetDlgItem(hwnd, kIdBrowse), nullptr, width - dp(208), dp(12), dp(90), dp(24),
-                    SWP_NOZORDER);
-                SetWindowPos(GetDlgItem(hwnd, kIdOpenDir), nullptr, width - dp(112), dp(12), dp(102), dp(24),
-                    SWP_NOZORDER);
-                place(gSearchLabel, margin, 45, 62, 20);
-                place(gSearch, 76, 42, 240, 24);
-                place(gQueueButton, 330, 42, 150, 24);
-                place(GetDlgItem(hwnd, kIdCheckAll), 488, 42, 120, 24);
-                place(gCancelButton, 616, 42, 80, 24);
-
-                const int progressY = height - dp(bottomHeight) + dp(4);
-                SetWindowPos(gProgress, nullptr, dp(margin), progressY, width - dp(margin) * 2, dp(20),
-                    SWP_NOZORDER);
-                SetWindowPos(gStatus, nullptr, dp(margin), progressY + dp(24), width - dp(margin) * 2, dp(18),
-                    SWP_NOZORDER);
-                SetWindowPos(gLogList, nullptr, dp(margin), progressY + dp(46), width - dp(margin) * 2,
-                    dp(bottomHeight) - dp(56), SWP_NOZORDER);
-
-                SetWindowPos(gDetailTitle, nullptr, panelX + dp(14), dp(92), dp(panelWidth) - dp(28), dp(18),
-                    SWP_NOZORDER);
-                if (gDetailSong >= 0) {
-                    updateDetailPanel(gDetailSong);
-                }
+                layoutChildren(hwnd, LOWORD(lParam), HIWORD(lParam));
                 return 0;
             }
             case WM_GETMINMAXINFO: {
@@ -1198,6 +1768,115 @@ namespace
                 info->ptMinTrackSize = {dp(860), dp(560)};
                 return 0;
             }
+            case WM_PAINT: {
+                PAINTSTRUCT paint{};
+                HDC dc = BeginPaint(hwnd, &paint);
+                RECT vertical{};
+                RECT horizontal{};
+                splitterRects(hwnd, vertical, horizontal);
+                drawSplitterBar(dc, vertical, true);
+                drawSplitterBar(dc, horizontal, false);
+                EndPaint(hwnd, &paint);
+                return 0;
+            }
+            case WM_SETCURSOR: {
+                if (LOWORD(lParam) == HTCLIENT) {
+                    POINT point{};
+                    GetCursorPos(&point);
+                    ScreenToClient(hwnd, &point);
+                    const int which = hitSplitter(hwnd, point.x, point.y);
+                    if (which != 0) {
+                        SetCursor(LoadCursorW(nullptr, which == 1 ? IDC_SIZEWE : IDC_SIZENS));
+                        return TRUE;
+                    }
+                }
+                break;
+            }
+            case WM_LBUTTONDOWN: {
+                const int x = GET_X_LPARAM(lParam);
+                const int y = GET_Y_LPARAM(lParam);
+                const int which = hitSplitter(hwnd, x, y);
+                if (which != 0) {
+                    gDragSplitter = which;
+                    gDragOrigin = which == 1 ? x : y;
+                    gDragStart = which == 1 ? gListWidth : gBottomHeight;
+                    SetCapture(hwnd);
+                    return 0;
+                }
+                break;
+            }
+            case WM_MOUSEMOVE:
+                if (gDragSplitter != 0) {
+                    RECT client{};
+                    GetClientRect(hwnd, &client);
+                    if (gDragSplitter == 1) {
+                        gListWidth = gDragStart + GET_X_LPARAM(lParam) - gDragOrigin;
+                    } else {
+                        // Dragging the bar down makes the bottom strip shorter.
+                        gBottomHeight = gDragStart - (GET_Y_LPARAM(lParam) - gDragOrigin);
+                    }
+                    layoutChildren(hwnd, client.right, client.bottom);
+                    return 0;
+                }
+                break;
+            case WM_LBUTTONUP:
+                if (gDragSplitter != 0) {
+                    gDragSplitter = 0;
+                    ReleaseCapture();
+                    return 0;
+                }
+                break;
+            case kTrayCallback: {
+                const UINT event = LOWORD(lParam);
+                if (event == WM_LBUTTONUP || event == WM_LBUTTONDBLCLK) {
+                    showMainWindow(hwnd);
+                    return 0;
+                }
+                if (event == WM_RBUTTONUP) {
+                    POINT point{};
+                    GetCursorPos(&point);
+                    HMENU menu = CreatePopupMenu();
+                    AppendMenuW(menu, MF_STRING, kTrayShow, L"显示主窗口");
+                    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+                    AppendMenuW(menu, MF_STRING, kTrayExit, L"退出");
+                    SetForegroundWindow(hwnd);
+                    const int command = static_cast<int>(TrackPopupMenu(menu,
+                        TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON, point.x, point.y, 0, hwnd, nullptr));
+                    DestroyMenu(menu);
+                    if (command == kTrayShow) {
+                        showMainWindow(hwnd);
+                    } else if (command == kTrayExit) {
+                        DestroyWindow(hwnd);
+                    }
+                    return 0;
+                }
+                return 0;
+            }
+            case WM_SYSCOMMAND:
+                // "Minimize into the tray" is opt-in - without it the normal
+                // minimize (taskbar button, no tray icon) is kept.
+                if ((wParam & 0xFFF0) == SC_MINIMIZE && gDlSettings.minimizeToTray) {
+                    ShowWindow(hwnd, SW_HIDE);
+                    return 0;
+                }
+                break;
+            case WM_CLOSE:
+                if (gDlSettings.closeAction == 1) {
+                    // Hide, keep downloading: the worker thread is detached and
+                    // the timer keeps pumping while the window is invisible.
+                    addTrayIcon(hwnd);
+                    if (gTrayAdded) {
+                        ShowWindow(hwnd, SW_HIDE);
+                        showBalloon(hwnd, L"CppSekai 谱面下载器",
+                            L"已隐藏到托盘，下载会继续。双击托盘图标可以恢复窗口。");
+                        return 0;
+                    }
+                    // No icon appeared, so there would be no way back: exit
+                    // instead of leaving an unreachable process behind.
+                    logLine("[cfg] tray icon unavailable, closing for real");
+                }
+                DestroyWindow(hwnd);
+                return 0;
             case WM_COMMAND: {
                 const int id = LOWORD(wParam);
                 if (id == kIdBrowse) {
@@ -1211,6 +1890,8 @@ namespace
                         if (SHGetPathFromIDListW(item, path)) {
                             gOutDir.assign(path);
                             SetWindowTextW(gOutDirEdit, path);
+                            refreshDownloadedState();
+                            rebuildList(windowText(gSearch));
                         }
                         CoTaskMemFree(item);
                     }
@@ -1220,10 +1901,18 @@ namespace
                     ShellExecuteW(hwnd, L"open", gOutDir.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
                     return 0;
                 }
+                if (id == kIdSettings) {
+                    openSettingsWindow(hwnd);
+                    return 0;
+                }
                 if (id == kIdCheckAll) {
                     const bool anyUnchecked = [&] {
                         const int rows = ListView_GetItemCount(gList);
                         for (int row = 0; row < rows; ++row) {
+                            // Songs that are already on disk stay unticked.
+                            if (songIsDone(gRowSong[static_cast<std::size_t>(row)])) {
+                                continue;
+                            }
                             if (ListView_GetCheckState(gList, row) == 0) {
                                 return true;
                             }
@@ -1231,11 +1920,14 @@ namespace
                         return false;
                     }();
                     const int rows = ListView_GetItemCount(gList);
+                    gSyncingChecks = true;
                     SendMessageW(gList, WM_SETREDRAW, FALSE, 0);
                     for (int row = 0; row < rows; ++row) {
-                        ListView_SetCheckState(gList, row, anyUnchecked ? TRUE : FALSE);
+                        const bool done = songIsDone(gRowSong[static_cast<std::size_t>(row)]);
+                        ListView_SetCheckState(gList, row, (anyUnchecked && !done) ? TRUE : FALSE);
                     }
                     SendMessageW(gList, WM_SETREDRAW, TRUE, 0);
+                    gSyncingChecks = false;
                     InvalidateRect(gList, nullptr, TRUE);
                     return 0;
                 }
@@ -1276,11 +1968,16 @@ namespace
 
                     const int rows = ListView_GetItemCount(gList);
                     int queued = 0;
+                    int skippedDone = 0;
                     for (int row = 0; row < rows; ++row) {
                         if (ListView_GetCheckState(gList, row) == 0) {
                             continue;
                         }
                         const int songIndex = gRowSong[static_cast<std::size_t>(row)];
+                        if (songIsDone(songIndex)) {
+                            ++skippedDone;
+                            continue;
+                        }
                         const Song& song = gSongs[static_cast<std::size_t>(songIndex)];
                         Request songRequest = request;
                         if (songIndex != gDetailSong || song.vocals.empty()) {
@@ -1293,8 +1990,10 @@ namespace
                         ++queued;
                     }
                     if (queued == 0) {
-                        MessageBoxW(hwnd, L"左边没有勾选任何歌曲。", L"CppSekai 谱面下载器",
-                            MB_OK | MB_ICONINFORMATION);
+                        MessageBoxW(hwnd, skippedDone > 0
+                                ? L"勾选的歌曲都已经下载过了，没有需要下载的文件。"
+                                : L"左边没有勾选任何歌曲。",
+                            L"CppSekai 谱面下载器", MB_OK | MB_ICONINFORMATION);
                         return 0;
                     }
                     gCancel.store(false);
@@ -1303,9 +2002,21 @@ namespace
                     setStatus("开始下载…");
                     appendLog("=== " + std::to_string(queued) + " 首歌曲，共 "
                         + std::to_string(gJobs.size()) + " 个文件 ===");
+                    if (skippedDone > 0) {
+                        appendLog("[skip] " + std::to_string(skippedDone) + " 首已下载完整，已跳过");
+                    }
                     return 0;
                 }
                 if (id == kIdSearch && HIWORD(wParam) == EN_CHANGE) {
+                    rebuildList(windowText(gSearch));
+                    return 0;
+                }
+                if (id == kIdOutDir && HIWORD(wParam) == EN_KILLFOCUS) {
+                    // Re-scan when the folder changes, so the "已下载" column and
+                    // the disabled entries follow it. On kill-focus rather than
+                    // on every keystroke: the scan lists the whole directory.
+                    gOutDir = windowTextW(gOutDirEdit);
+                    refreshDownloadedState();
                     rebuildList(windowText(gSearch));
                     return 0;
                 }
@@ -1313,29 +2024,67 @@ namespace
             }
             case WM_NOTIFY: {
                 auto* header = reinterpret_cast<NMHDR*>(lParam);
-                if (header->idFrom == kIdList && header->code == LVN_COLUMNCLICK) {
-                    // Click a header to sort by it, click it again to flip the
-                    // direction. The list is rebuilt from the new order, so the
-                    // ticks (which are kept per song id) survive.
-                    const int column = reinterpret_cast<NMLISTVIEW*>(lParam)->iSubItem;
-                    if (column == gSortColumn) {
-                        gSortAscending = !gSortAscending;
-                    } else {
-                        gSortColumn = column;
-                        gSortAscending = true;
+                if (header->idFrom == kIdList && header->hwndFrom == gList) {
+                    if (header->code == NM_CUSTOMDRAW) {
+                        auto* draw = reinterpret_cast<NMLVCUSTOMDRAW*>(lParam);
+                        if (draw->nmcd.dwDrawStage == CDDS_PREPAINT) {
+                            return CDRF_NOTIFYITEMDRAW;
+                        }
+                        if (draw->nmcd.dwDrawStage == CDDS_ITEMPREPAINT
+                            || draw->nmcd.dwDrawStage == (CDDS_ITEMPREPAINT | CDDS_SUBITEM)) {
+                            const int row = static_cast<int>(draw->nmcd.dwItemSpec);
+                            if (row >= 0 && row < static_cast<int>(gRowSong.size())
+                                && songIsDone(gRowSong[static_cast<std::size_t>(row)])) {
+                                // Greyed out: nothing left to fetch for this song.
+                                draw->clrText = RGB(150, 150, 158);
+                                draw->clrTextBk = RGB(244, 244, 248);
+                            }
+                            return CDRF_DODEFAULT;
+                        }
+                        return CDRF_DODEFAULT;
                     }
-                    updateHeaderSortMarks();
-                    rebuildList(windowText(gSearch));
-                    return 0;
-                }
-                if (header->idFrom == kIdList && header->code == LVN_ITEMCHANGED) {
-                    const int row = ListView_GetNextItem(gList, -1, LVNI_SELECTED);
-                    const int songIndex =
-                        row >= 0 && row < static_cast<int>(gRowSong.size())
-                        ? gRowSong[static_cast<std::size_t>(row)]
-                        : -1;
-                    if (songIndex != gDetailSong) {
-                        updateDetailPanel(songIndex);
+                    if (header->code == LVN_COLUMNCLICK) {
+                        // Click a header to sort by it, click it again to flip the
+                        // direction. The list is rebuilt from the new order, so the
+                        // ticks (which are kept per song id) survive.
+                        const int column = reinterpret_cast<NMLISTVIEW*>(lParam)->iSubItem;
+                        if (column == gSortColumn) {
+                            gSortAscending = !gSortAscending;
+                        } else {
+                            gSortColumn = column;
+                            gSortAscending = true;
+                        }
+                        updateHeaderSortMarks();
+                        rebuildList(windowText(gSearch));
+                        return 0;
+                    }
+                    if (header->code == LVN_ITEMCHANGED) {
+                        if (gSyncingChecks) {
+                            return 0;
+                        }
+                        // A row whose files are all there refuses the tick: the
+                        // list puts it back and nothing else notices.
+                        const auto* change = reinterpret_cast<NMLISTVIEW*>(lParam);
+                        if ((change->uChanged & LVIF_STATE) != 0
+                            && (change->uNewState & LVIS_STATEIMAGEMASK) != 0) {
+                            const int row = change->iItem;
+                            if (row >= 0 && row < static_cast<int>(gRowSong.size())
+                                && songIsDone(gRowSong[static_cast<std::size_t>(row)])
+                                && ListView_GetCheckState(gList, row) != 0) {
+                                gSyncingChecks = true;
+                                ListView_SetCheckState(gList, row, FALSE);
+                                gSyncingChecks = false;
+                                setStatus("这首歌已经下载完整了");
+                            }
+                        }
+                        const int row = ListView_GetNextItem(gList, -1, LVNI_SELECTED);
+                        const int songIndex =
+                            row >= 0 && row < static_cast<int>(gRowSong.size())
+                            ? gRowSong[static_cast<std::size_t>(row)]
+                            : -1;
+                        if (songIndex != gDetailSong) {
+                            updateDetailPanel(songIndex);
+                        }
                     }
                 }
                 return 0;
@@ -1373,6 +2122,36 @@ namespace
                     setStatus(failed == 0 ? "全部完成" : ("完成，失败 " + std::to_string(failed) + " 个"));
                 }
 
+                // Run just ended: drop every tick (the files are on disk now,
+                // they are not queued again) and re-read what the folder holds.
+                if (gRunning.load()) {
+                    gSawRunning = true;
+                } else if (gSawRunning) {
+                    gSawRunning = false;
+                    std::size_t done = 0;
+                    std::size_t failed = 0;
+                    std::size_t skipped = 0;
+                    {
+                        std::lock_guard<std::mutex> lock(gJobMutex);
+                        for (const Job& job : gJobs) {
+                            done += job.state == JobState::Done ? 1 : 0;
+                            failed += job.state == JobState::Failed ? 1 : 0;
+                            skipped += job.state == JobState::Skipped ? 1 : 0;
+                        }
+                    }
+                    char summary[160];
+                    std::snprintf(summary, sizeof(summary), "成功 %zu，跳过 %zu，失败 %zu",
+                        done, skipped, failed);
+                    logLine(std::string("[done] ") + summary);
+                    if (gDlSettings.notifyOnDone) {
+                        showBalloon(hwnd, failed == 0 ? L"下载完成" : L"下载完成（有失败）",
+                            widen(std::string(summary)));
+                    }
+                    clearAllTicks();
+                    refreshDownloadedState();
+                    rebuildList(windowText(gSearch));
+                }
+
                 std::vector<std::string> lines;
                 {
                     std::lock_guard<std::mutex> lock(gLogMutex);
@@ -1387,6 +2166,7 @@ namespace
                 return 0;
             }
             case WM_DESTROY:
+                removeTrayIcon(hwnd);
                 if (gFont != nullptr && gFont != GetStockObject(DEFAULT_GUI_FONT)) {
                     DeleteObject(gFont); // ours, not a stock object
                     gFont = nullptr;
@@ -1428,33 +2208,49 @@ namespace
 
         SetWindowPos(gDetailTitle, nullptr, baseX, panel.top + dp(18), contentWidth, dp(18), SWP_NOZORDER);
 
+        const SongFiles& files = static_cast<std::size_t>(songIndex) < gFiles.size()
+            ? gFiles[static_cast<std::size_t>(songIndex)]
+            : SongFiles{};
+
         for (int d = 0; d < 5; ++d) {
             const int level = song.levels[d];
             const bool available = level > 0;
+            const bool onDisk = available && files.chart[d];
             std::wstring label = widen(kDiffNames[d]);
             if (available) {
                 label += L"  Lv." + std::to_wstring(level);
             } else {
                 label += L"  （无）";
             }
+            if (onDisk) {
+                label += L"  ✓已下载";
+            }
             SetWindowTextW(gDiffChecks[d], label.c_str());
-            EnableWindow(gDiffChecks[d], available ? TRUE : FALSE);
-            SendMessageW(gDiffChecks[d], BM_SETCHECK, available ? BST_CHECKED : BST_UNCHECKED, 0);
+            // Already there: the box is disabled *and* unticked, so it can never
+            // end up in the queue again.
+            EnableWindow(gDiffChecks[d], (available && !onDisk) ? TRUE : FALSE);
+            SendMessageW(gDiffChecks[d], BM_SETCHECK,
+                (available && !onDisk) ? BST_CHECKED : BST_UNCHECKED, 0);
             SetWindowPos(gDiffChecks[d], nullptr, baseX, y, contentWidth, rowHeight, SWP_NOZORDER);
             y += rowHeight;
         }
         y += dp(8);
         for (std::size_t v = 0; v < song.vocals.size(); ++v) {
             const VocalVersion& version = song.vocals[v];
+            const bool onDisk = v < files.vocal.size() && files.vocal[v];
             std::wstring label = widen(version.caption.empty() ? version.type : version.caption);
             if (!version.singers.empty()) {
                 label += L"  " + widen(version.singers);
+            }
+            if (onDisk) {
+                label += L"  ✓已下载";
             }
             HWND check = CreateWindowExW(0, L"BUTTON", label.c_str(),
                 WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, baseX, y, contentWidth, rowHeight,
                 GetParent(gList), reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdVocalBase + v)), nullptr, nullptr);
             SendMessageW(check, WM_SETFONT, reinterpret_cast<WPARAM>(gFont), TRUE);
-            SendMessageW(check, BM_SETCHECK, BST_CHECKED, 0);
+            SendMessageW(check, BM_SETCHECK, onDisk ? BST_UNCHECKED : BST_CHECKED, 0);
+            EnableWindow(check, onDisk ? FALSE : TRUE);
             gVocalChecks.push_back(check);
             y += rowHeight;
         }
@@ -1465,8 +2261,15 @@ namespace
             y += rowHeight;
         }
         y += dp(8);
+        SetWindowTextW(gJacketCheck, files.jacket ? L"曲绘  ✓已下载" : L"曲绘");
+        EnableWindow(gJacketCheck, files.jacket ? FALSE : TRUE);
+        SendMessageW(gJacketCheck, BM_SETCHECK, files.jacket ? BST_UNCHECKED : BST_CHECKED, 0);
         SetWindowPos(gJacketCheck, nullptr, baseX, y, contentWidth, rowHeight, SWP_NOZORDER);
         y += rowHeight;
+        SetWindowTextW(gSidecarCheck,
+            files.sidecar ? L"元数据 (sidecar json)  ✓已下载" : L"元数据 (sidecar json)");
+        EnableWindow(gSidecarCheck, files.sidecar ? FALSE : TRUE);
+        SendMessageW(gSidecarCheck, BM_SETCHECK, files.sidecar ? BST_UNCHECKED : BST_CHECKED, 0);
         SetWindowPos(gSidecarCheck, nullptr, baseX, y, contentWidth, rowHeight, SWP_NOZORDER);
     }
 
@@ -1521,9 +2324,11 @@ namespace
         return stbi_write_png(path.c_str(), width, height, 4, rgba.data(), width * 4) != 0;
     }
 
-    int runGui(fs::path outDir, const std::string& screenshotPath, double screenshotTime)
+    int runGui(fs::path outDir, const std::string& screenshotPath, double screenshotTime,
+        bool openSettingsAtStart = false)
     {
         gOutDir = outDir.native();
+        loadDlSettings(gDlSettings);
         // DPI before anything else: the window size below and every layout number
         // that follows are scaled by it (dp()). WM_CREATE re-asserts the value for
         // the case where the window is created some other way.
@@ -1534,6 +2339,20 @@ namespace
         }
         if (gDuplicateIds > 0) {
             appendLog("[data] dropped " + std::to_string(gDuplicateIds) + " duplicate song id(s)");
+        }
+
+        // Settings window class (see settingsProc): not registered until now
+        // because it needs the main font/DPI, which WM_CREATE sets.
+        {
+            WNDCLASSEXW settingsClass{};
+            settingsClass.cbSize = sizeof(settingsClass);
+            settingsClass.lpfnWndProc = settingsProc;
+            settingsClass.hInstance = GetModuleHandleW(nullptr);
+            settingsClass.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+            settingsClass.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_BTNFACE + 1);
+            settingsClass.lpszClassName = L"CppSekaiChartDlSettings";
+            settingsClass.hIcon = appIcon();
+            RegisterClassExW(&settingsClass);
         }
 
         WNDCLASSEXW windowClass{};
@@ -1587,7 +2406,12 @@ namespace
                 + std::to_string(client.bottom) + " screen=" + std::to_string(GetSystemMetrics(SM_CXSCREEN))
                 + "x" + std::to_string(GetSystemMetrics(SM_CYSCREEN)) + " font=" + toUtf8(face));
         }
+        refreshDownloadedState();
         rebuildList("");
+        note("[out] " + pathText(fs::path(gOutDir)));
+        if (openSettingsAtStart) {
+            openSettingsWindow(hwnd);
+        }
 
         const ULONGLONG start = GetTickCount64();
         MSG message{};
@@ -1601,7 +2425,10 @@ namespace
             }
             if (!screenshotPath.empty()
                 && static_cast<double>(GetTickCount64() - start) / 1000.0 >= screenshotTime) {
-                saveWindowPng(hwnd, screenshotPath);
+                // With --open-settings the thing worth a picture is that window,
+                // not the main one behind it.
+                saveWindowPng(openSettingsAtStart && gSettingsWindow != nullptr ? gSettingsWindow : hwnd,
+                    screenshotPath);
                 break;
             }
             MsgWaitForMultipleObjects(0, nullptr, FALSE, 30, QS_ALLINPUT);
@@ -1625,7 +2452,14 @@ int main(int argc, char** argv)
             freopen_s(&dummy, "CONOUT$", "w", stderr);
         }
     }
-    fs::path outDir = "..\\charts";
+    DlSettings dlSettings;
+    loadDlSettings(dlSettings);
+    fs::path outDir = defaultChartsDir();
+    if (!dlSettings.outDir.empty()) {
+        // The JSON holds UTF-8; fs::path(<narrow>) would go through the ANSI
+        // code page instead and throw on anything it cannot represent.
+        outDir = fs::path(http::widen(dlSettings.outDir));
+    }
     std::string listFilter;
     std::string downloadIds;
     std::string diffArg = "all";
@@ -1633,6 +2467,7 @@ int main(int argc, char** argv)
     bool wantList = false;
     std::string screenshotPath;
     double screenshotTime = 1.0;
+    bool openSettingsAtStart = false;
     bool force = false;
     bool wantJacket = true;
     bool wantSidecar = true;
@@ -1678,6 +2513,10 @@ int main(int argc, char** argv)
             }
         } else if (arg == "--force") {
             force = true;
+        } else if (arg == "--open-settings") {
+            // Headless layout check: the settings window is otherwise only
+            // reachable by clicking 设置…, which a --screenshot run cannot do.
+            openSettingsAtStart = true;
         } else if (arg == "--no-jacket") {
             wantJacket = false;
         } else if (arg == "--no-sidecar") {
@@ -1765,5 +2604,5 @@ int main(int argc, char** argv)
         return runJobQueue(error);
     }
 
-    return runGui(outDir, screenshotPath, screenshotTime);
+    return runGui(outDir, screenshotPath, screenshotTime, openSettingsAtStart);
 }

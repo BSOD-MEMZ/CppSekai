@@ -24,6 +24,32 @@ class Renderer
     bool init(int width, int height, std::string& outError);
     void resize(int width, int height);
 
+    // -----------------------------------------------------------------------
+    // Output size (the "render mode" setting).
+    //
+    // By default the scene is drawn straight into the window, so the window
+    // size *is* the render size and everything (lanes, HUD) rescales with it.
+    // setRenderTargetSize(w, h) instead renders into an offscreen buffer of
+    // exactly that size and presents it into the window with the aspect ratio
+    // preserved - dragging the window then only scales the picture, it does not
+    // change what the game draws. Pass (0, 0) to go back to window-sized.
+    //
+    // While offscreen, width()/height() keep reporting the *render* size, which
+    // is what the playfield projection and the UI layout must use; the real
+    // window size is windowWidth()/windowHeight().
+    // -----------------------------------------------------------------------
+    void setRenderTargetSize(int width, int height);
+    [[nodiscard]] bool offscreen() const { return mOffscreen; }
+    [[nodiscard]] int windowWidth() const { return mWindowW; }
+    [[nodiscard]] int windowHeight() const { return mWindowH; }
+    // Uniform scale from render pixels to window pixels (1.0 when not
+    // offscreen) and the letterbox rect in window pixels, top-left based.
+    [[nodiscard]] float outputScale() const;
+    void outputRect(int& x, int& y, int& w, int& h) const;
+    // Presents the offscreen buffer (no-op when drawing straight to the
+    // window). Must run after the ImGui pass, which draws into the same buffer.
+    void presentFrame();
+
     bool loadAssets(const std::string& assetDir, std::string& outError);
 
     // Loads only the background + stage so a frame can be drawn before the
@@ -131,6 +157,13 @@ class Renderer
 
     int mWidth = 1;
     int mHeight = 1;
+    // Real drawable size of the window. Equal to mWidth/mHeight unless an
+    // offscreen render target is installed.
+    int mWindowW = 1;
+    int mWindowH = 1;
+    bool mOffscreen = false;
+    GLuint mFbo = 0;
+    GLuint mFboTexture = 0;
 
     GLuint mProgram = 0;
     GLuint mEffectProgram = 0;

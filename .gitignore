@@ -17,6 +17,13 @@ charts/
 # together with charts/ to keep the records (scores are keyed by chart name).
 userdata.json
 
+# Per-user profiles (settings / scores / account per player, 2026-09-16).
+# Same reasoning as userdata.json: this is someone's save, not source.
+profiles/
+
+# Downloader settings (chartdl.json sits next to chartdl.exe)
+chartdl.json
+
 # Release staging + archives (made by: bash package.sh)
 dist/
 

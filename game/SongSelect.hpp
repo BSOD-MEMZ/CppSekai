@@ -116,10 +116,19 @@ struct UserSettings
     double offsetSec = 0.0; // audio offset; the UI shows it in ms
     double leadInSec = 6.0;
     int windowMode = 1; // 0=borderless 1=windowed 2=fullscreen
-    // Windowed/borderless resolution (fullscreen always uses the desktop size).
+    // Windowed/borderless resolution. Also the *render* resolution when
+    // renderScale is 1 (then it is what the game draws at, whatever the window
+    // size is). Fullscreen always uses the desktop size for the window, but in
+    // fixed mode the render size is still this.
     int windowWidth = 1366;
     int windowHeight = 768;
     int fpsLimit = 60;  // 0 = vsync only; >refresh rate auto-disables vsync
+    // Render size. 0 = the window size *is* the render size (dragging the
+    // window relayouts the lanes and the HUD), 1 = always render at
+    // windowWidth x windowHeight and scale that picture into the window with
+    // the aspect ratio kept (letterbox) - dragging then only zooms the picture,
+    // it never changes the layout.
+    int renderScale = 0;
     // Subtle playback progress bar along the top edge of the play screen.
     bool showProgressBar = true;
     // Hide the Windows touch ripple over our window (per-window setting).
@@ -146,7 +155,9 @@ struct UserSettings
     int splashStyle = 0;
     // Song-select background: 0 = the built-in gradient, 1 = the user's
     // Windows desktop wallpaper (blurred) so the screen matches the desktop.
-    int bgStyle = 0;
+    // 1 is the default: a fresh install comes up with the desktop's own
+    // picture behind the list (a missing wallpaper falls back to the gradient).
+    int bgStyle = 1;
     float bgBlur = 0.5f; // 0..1 blur amount for the wallpaper
     float bgDim = 0.45f; // 0..1 darkening on top of it (keeps the list readable)
     // UI scale for the two screens laid out on a virtual canvas - song select and
@@ -168,6 +179,36 @@ struct UserSettings
 // survives wiping build/), otherwise <exeDir>\userdata.json for a packaged
 // build. exeDir must end with a path separator.
 std::string userDataPath(const std::string& exeDir);
+
+// ---------------------------------------------------------------------------
+// Local profiles (multi-user). Each user keeps their own settings / scores /
+// account in <dataDir>\profiles\<id>.json; <dataDir>\profiles\index.json lists
+// the users and which one is active. The first run copies the old single
+// <dataDir>\userdata.json into the "default" profile, so nothing is lost.
+// ---------------------------------------------------------------------------
+struct UserProfile
+{
+    std::string id;   // file-name safe, unique
+    std::string name; // what the UI shows
+};
+
+// Folder that holds userdata.json / profiles/ - i.e. dirname(userDataPath()).
+std::string userDataDir(const std::string& exeDir);
+
+// Reads the profile list, creating it (and importing userdata.json) when it is
+// missing. `active` receives the id of the active profile and is never left
+// empty.
+std::vector<UserProfile> loadProfiles(const std::string& dataDir, std::string& active);
+
+void saveProfiles(const std::string& dataDir, const std::vector<UserProfile>& profiles,
+    const std::string& active);
+
+// Path of one profile's data file.
+std::string profileDataPath(const std::string& dataDir, const std::string& id);
+
+// A free profile id derived from `name` ("初音" -> "user<hash>", "xxt" -> "xxt",
+// a second "xxt" -> "xxt2").
+std::string makeProfileId(const std::string& name, const std::vector<UserProfile>& existing);
 
 // Reads settings + scores + account. A legacy flat scores.json (a bare map, no
 // "settings"/"scores" wrapper) is still accepted, so an old file migrates.
