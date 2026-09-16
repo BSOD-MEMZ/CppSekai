@@ -1349,44 +1349,12 @@ namespace
         return dp(8);
     }
 
-    // Paints one splitter bar. The gaps between the three panes are the
-    // parent's own client area, so they have to be drawn here - without the
-    // grip they are just background-coloured and nothing suggests they can be
-    // dragged.
-    void drawSplitterBar(HDC dc, const RECT& bar, bool vertical)
-    {
-        FillRect(dc, &bar, GetSysColorBrush(COLOR_BTNFACE));
-        HBRUSH dark = GetSysColorBrush(COLOR_BTNSHADOW);
-        HBRUSH light = GetSysColorBrush(COLOR_BTNHIGHLIGHT);
-        if (vertical) {
-            const int cx = (bar.left + bar.right) / 2;
-            const int cy = (bar.top + bar.bottom) / 2;
-            const int half = std::min(dp(60), std::max(dp(12), static_cast<int>((bar.bottom - bar.top) / 6)));
-            for (int i = -1; i <= 1; ++i) {
-                RECT groove{cx - 1 + i * dp(4), cy - half, cx + i * dp(4), cy + half};
-                RECT highlight = groove;
-                highlight.left += 1;
-                highlight.right += 1;
-                FillRect(dc, &groove, dark);
-                FillRect(dc, &highlight, light);
-            }
-        } else {
-            const int cx = (bar.left + bar.right) / 2;
-            const int cy = (bar.top + bar.bottom) / 2;
-            const int half = std::min(dp(120), std::max(dp(20), static_cast<int>((bar.right - bar.left) / 8)));
-            for (int i = -1; i <= 1; ++i) {
-                RECT groove{cx - half, cy - 1 + i * dp(4), cx + half, cy + i * dp(4)};
-                RECT highlight = groove;
-                highlight.top += 1;
-                highlight.bottom += 1;
-                FillRect(dc, &groove, dark);
-                FillRect(dc, &highlight, light);
-            }
-        }
-    }
-
     // Where the two bars sit for a given client size. Kept next to the pixel
     // layout so a change to one cannot silently desync the other.
+    //
+    // The bars are not painted: the gaps stay plain background and the only
+    // affordance is the standard resize cursor (WM_SETCURSOR). Drawn grips
+    // looked like yet another control in a dialog that is mostly controls.
     void splitterRects(HWND hwnd, RECT& vertical, RECT& horizontal)
     {
         RECT client{};
@@ -1486,14 +1454,6 @@ namespace
         if (gDetailSong >= 0) {
             updateDetailPanel(gDetailSong);
         }
-
-        // The bars are painted by us (see WM_PAINT) and moving the children
-        // around them does not necessarily invalidate their strips.
-        RECT vertical{};
-        RECT horizontal{};
-        splitterRects(hwnd, vertical, horizontal);
-        InvalidateRect(hwnd, &vertical, FALSE);
-        InvalidateRect(hwnd, &horizontal, FALSE);
     }
 
     // -----------------------------------------------------------------------
@@ -1766,17 +1726,6 @@ namespace
             case WM_GETMINMAXINFO: {
                 auto* info = reinterpret_cast<MINMAXINFO*>(lParam);
                 info->ptMinTrackSize = {dp(860), dp(560)};
-                return 0;
-            }
-            case WM_PAINT: {
-                PAINTSTRUCT paint{};
-                HDC dc = BeginPaint(hwnd, &paint);
-                RECT vertical{};
-                RECT horizontal{};
-                splitterRects(hwnd, vertical, horizontal);
-                drawSplitterBar(dc, vertical, true);
-                drawSplitterBar(dc, horizontal, false);
-                EndPaint(hwnd, &paint);
                 return 0;
             }
             case WM_SETCURSOR: {

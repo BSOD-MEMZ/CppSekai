@@ -833,6 +833,48 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
 - `loadData()` 现在**幂等**（开头 clear）：main 和 GUI 各调一次，不定稿的话歌表翻倍（715 → 1430），
   所有按索引进 `gSongs` 的东西（含已下载扫描）都会做两遍。
 
+## 手柄 / 单实例 / 触摸 flick（2026-09-16 晚）
+
+- **手柄绑定**（`main.cpp` 的 pad 块，仍是"手柄→键盘脉冲"这一套）：
+  A = 确定 / 开始 / **跳过开场卡片** / 结算继续；START = 演奏中暂停、其他地方开设置；
+  **X / Y = 暂停对话框的 重试 / 放弃**；LB / RB = **设置卡片切页签**；B / BACK = 返回。
+  - **演奏中 BACK 改成暂停**（原来发 Escape，而 Play + Escape = 放弃并回选曲，误触代价太大）。
+  - **暂停对话框是自绘的**（`ui::messageDialog` 的胶囊按钮是 InvisibleButton，ImGui 自己的焦点
+    导航够不着），所以给 `messageDialog` 加了 `forcedChoice` 参数：手柄的选择按"点了一下那个
+    按钮"处理（含关闭动画），调用方的 action 分支一行都不用加。
+  - **同一帧里 `pressed(btn, prev)` 只能调一次**：第二次算出来一定是 false（prev 已经置真），
+    所以 A/START 在"暂停对话框"和"跳过开场"两处都要用，就必须先 `const bool padA = pressed(...)`
+    存下来。这是很容易踩的坑（写了两次，A 确认暂停对话框就永远不生效）。
+  - 设置卡片的页签变量从 lambda 里的 `static int tab` **提到 main 作用域**（`settingsTab`），
+    否则手柄改不到它。
+- **无头验证手柄**：`--fake-pad <A|B|X|Y|LB|RB|START|BACK>[,...]` 让这些键以 30 帧压 / 30 帧松
+  的节奏循环（多个键各错开半周期，否则 START 会抢掉 X 的那一帧），默认 6 个周期后停
+  （不停的话会一直重开对话框，跑不到截图）。SDL 的按钮名是 `leftshoulder`/`dpup` 这种，
+  短名在 `padDown()` 里做别名映射。**注意控制台输出不进管道**（GUI 子系统），要看
+  `cppsekai.log`，而且每个进程启动时会**截断**这个日志，多开时只能看到最后一个。
+- **单实例 / 多开**（`UserSettings::instanceMode`，设置→系统 或 `--instance single|multi`）：
+  - single（默认）：`Local\CppSekai.SingleInstance` 命名互斥体已存在 → `EnumWindows` 找标题
+    `CppSekai` 的窗口，`ShowWindow(SW_RESTORE)` + `SetForegroundWindow`，然后自己退出。
+  - multi：再占一个 `Local\CppSekai.Profile.<id>` 互斥体。**每个实例都要占自己那份**，
+    否则第二个窗口会照样挑 `default` 然后两边同时写同一个存档。已有用户都被占了就自动建
+    `用户N`（在 设置→账户 里能看到，可改名）。
+  - 互斥体靠进程结束由系统释放，崩溃也不会留下死锁。
+- **多开的内存**：实测三个实例 207 / 299 / 333 MB（工作集），**线性增长，没有共享**。
+  跨进程共享不了 GL 纹理和解码缓冲，想省只能是（a）单进程多窗口，或（b）给非首个实例开
+  `CPSEKAI_TEX_RAW=0` 那套贴图缩小策略（`loadTextureFromFile` 的 maxDim/cropHeight 还编在里面，
+  现在只是没人用）。**这轮没有实现，只测了数**。
+- **触摸 flick 难触发（已定位，未改）**：`movePointer()` 里的 `now = SDL_GetTicks()` 是**处理
+  事件时**取的毫秒时钟。SDL 把整帧的事件一次性投递，同一帧里的多条 `SDL_FINGERMOTION`
+  拿到同一个 `now` → `rawDt == 0` → 被 `if (dt > 0.001)` 整条跳过（速度、位移都不累加，但
+  `lastScreenX/Y` 照旧前进，那段位移就永久丢了）。鼠标没事是因为 **Windows 的消息队列会合并
+  `WM_MOUSEMOVE`**（每次 pump 最多一条），而 `WM_TOUCH` 不合并，一次能带多个触点，
+  SDL 逐个转成 FINGERMOTION。数值模型（100Hz 面板）显示：中等速度 600px/s 的上划要 3 个采样
+  才过阈值，低于 ~500px/s 永不过；窗口 1440p 时阈值涨到 667px/s 就完全划不动了。
+  次要问题：`flickDirFrom` **先判上、再判左右**，`up >= side*0.5` 就算 UP，所以右/左 flick 的
+  斜划必须在水平 ±37° 以内（实测 40° 起判成 UP），而且判定失败的那次仍会吃掉手势
+  （位移清零 + 60ms 内不再判），用户得重划一次。修的方向：用 `event.*.timestamp` 当采样时刻、
+  `dt==0` 时累加而不是丢弃、加"短时间位移"兜底、方向按位移主轴判并在同一手势里允许改判。
+
 ## 待办（按优先级）
 
 1. hold 音效循环（SeHoldLoop 未接）与 SE kind 区分（当前键盘全播一个音）

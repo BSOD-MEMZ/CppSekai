@@ -177,7 +177,12 @@ ImU32 mix(ImU32 from, ImU32 to, float t);
 //   -2    close animation just finished - stop calling (X = dismiss)
 //   -3    close animation still running - keep calling
 //   -1    nothing new
+// `forcedChoice` (>= 0, otherwise -1) is a choice made *outside* the mouse - the
+// game controller, whose bindings main.cpp owns. It behaves exactly like
+// clicking that button, close animation included, so the caller needs only one
+// action path and the pad cannot leave a dialog stuck open.
 int messageDialog(platform::Renderer& renderer, const char* id, const char* title,
-    const std::vector<std::string>& buttons, const std::vector<bool>& primary);
+    const std::vector<std::string>& buttons, const std::vector<bool>& primary,
+    int forcedChoice = -1);
 
 } // namespace ui

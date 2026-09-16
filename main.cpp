@@ -286,6 +286,13 @@ namespace
             "          window size (default 1280x720).\n"
             "--render-size <w>x<h>: fixed render mode - draw at this size and scale it\n"
             "                into the window (letterbox). Same as the 渲染模式 setting.\n"
+            "--activate-profile <id>: multi-user check - switch the active profile.\n"
+            "--fake-pad <button>: hold an Xbox button for half a second at boot\n"
+            "                (A/B/X/Y/LB/RB/START/BACK) so the controller bindings can\n"
+            "                be checked without a device.\n"
+            "--instance <single|multi>: single = refuse to start twice (bring the\n"
+            "                running window forward instead), multi = every extra\n"
+            "                copy logs in as a different user. Same as 设置 -> 系统.\n"
             "--ui-scale <n>: zoom the song-select and result screens (1.0 = fit the\n"
             "                window, saved in userdata.json). The play screen is not\n"
             "                affected. Useful for high-DPI displays.\n"
@@ -637,6 +644,9 @@ int main(int argc, char** argv)
     int renderSizeW = 0;           // --render-size <w>x<h>: fixed render mode
     int renderSizeH = 0;
     std::string activateProfileArg; // --activate-profile <id> (headless check)
+    std::string fakePadButton;      // --fake-pad <A|B|X|Y|LB|RB|START|BACK>
+    int instanceModeOverride = 0;   // --instance single|multi
+    bool instanceModeGiven = false;
     int selectMusicId = 0;         // --select-id: preselect this song id in the list
     bool testRestart = false; // debug: replay "give up -> pick another song"
     double restartAtSec = 8.0;
@@ -712,6 +722,15 @@ int main(int argc, char** argv)
             // Headless check for the multi-user switch: the picker in 设置 ->
             // 账户 does the same thing through activateProfile().
             activateProfileArg = utf8Argv[++i];
+        } else if (arg == "--fake-pad" && i + 1 < utf8Argc) {
+            // Headless check for the controller bindings (see padDown()).
+            fakePadButton = utf8Argv[++i];
+        } else if (arg == "--instance" && i + 1 < utf8Argc) {
+            // single = one copy only (default), multi = extra copies take
+            // another user. Same as the 系统 page setting.
+            const std::string mode = utf8Argv[++i];
+            instanceModeGiven = true;
+            instanceModeOverride = mode == "multi" ? 1 : 0;
         } else if (arg == "--window" && i + 1 < utf8Argc) {
             const std::string mode = utf8Argv[++i];
             windowGiven = true;
@@ -905,6 +924,119 @@ int main(int argc, char** argv)
     std::printf("[profile] active='%s' (%zu user(s), dir %s)\n", activeProfileId.c_str(),
         profiles.size(), userDataDir.c_str());
     game::loadUserData(userDataFile, userSettings, scores, account);
+
+    // ------------------------------------------------------------------
+    // Instance policy (UserSettings::instanceMode).
+    //
+    // 0 (default) - one copy only. A second launch finds the running window,
+    //               brings it to the front and exits. Two copies writing the
+    //               same profile file is the one thing multi-open can corrupt.
+    // 1           - several copies, and every extra one logs in as a different
+    //               user, so no two windows share a save file.
+    //
+    // The guard is a named mutex (Local\ so it is per logon session) held for
+    // the rest of the process; the OS releases it on exit, even after a crash.
+    // ------------------------------------------------------------------
+    HANDLE singleInstanceLock = nullptr;
+    HANDLE profileLock = nullptr;
+    {
+        auto toWideAscii = [](const std::string& text) {
+            return std::wstring(text.begin(), text.end());
+        };
+        auto tryLockProfile = [&](const std::string& id) -> HANDLE {
+            const std::wstring name = L"Local\\CppSekai.Profile." + toWideAscii(id);
+            HANDLE lock = CreateMutexW(nullptr, FALSE, name.c_str());
+            if (lock == nullptr) {
+                return nullptr;
+            }
+            if (GetLastError() == ERROR_ALREADY_EXISTS) {
+                CloseHandle(lock); // someone else's window owns this profile
+                return nullptr;
+            }
+            return lock;
+        };
+
+        singleInstanceLock = CreateMutexW(nullptr, FALSE, L"Local\\CppSekai.SingleInstance");
+        const bool alreadyRunning = singleInstanceLock != nullptr
+            && GetLastError() == ERROR_ALREADY_EXISTS;
+        const int instanceMode = instanceModeGiven ? instanceModeOverride : userSettings.instanceMode;
+
+        if (alreadyRunning && instanceMode == 0) {
+            // Hand the running window back to the user. The title is unique in
+            // this mode by definition (this branch is what keeps it so).
+            struct Finder
+            {
+                static BOOL CALLBACK proc(HWND hwnd, LPARAM param)
+                {
+                    auto* found = reinterpret_cast<HWND*>(param);
+                    if (GetWindow(hwnd, GW_OWNER) != nullptr) {
+                        return TRUE; // owned popups are not the main window
+                    }
+                    wchar_t title[128] = {};
+                    if (GetWindowTextW(hwnd, title, 128) == 0 || std::wcscmp(title, L"CppSekai") != 0) {
+                        return TRUE;
+                    }
+                    *found = hwnd;
+                    return FALSE;
+                }
+            };
+            HWND existing = nullptr;
+            EnumWindows(&Finder::proc, reinterpret_cast<LPARAM>(&existing));
+            if (existing != nullptr) {
+                ShowWindow(existing, SW_RESTORE);
+                SetForegroundWindow(existing);
+            }
+            std::printf("[instance] already running%s, brought it to the front and exiting\n",
+                existing != nullptr ? "" : " (window not found)");
+            std::fflush(stdout);
+            SDL_Quit();
+            return 0;
+        }
+
+        // Every instance holds a lock on the profile it uses, so the next one
+        // can tell which are taken. Without this a second window would happily
+        // take the same "default" profile and both would write it.
+        profileLock = tryLockProfile(activeProfileId);
+        if (profileLock != nullptr) {
+            std::printf("[instance] single owner of profile '%s'\n", activeProfileId.c_str());
+        } else if (instanceMode == 1) {
+            std::string chosen;
+            for (const game::UserProfile& user : profiles) {
+                if (user.id == activeProfileId) {
+                    continue;
+                }
+                profileLock = tryLockProfile(user.id);
+                if (profileLock != nullptr) {
+                    chosen = user.id;
+                    break;
+                }
+            }
+            if (chosen.empty()) {
+                // Every existing user is already playing: make one up. It shows
+                // up in 设置 -> 账户 like any other and can be renamed there.
+                game::UserProfile user;
+                user.name = "用户" + std::to_string(profiles.size() + 1);
+                user.id = game::makeProfileId(user.name, profiles);
+                profiles.push_back(user);
+                game::saveProfiles(userDataDir, profiles, activeProfileId);
+                profileLock = tryLockProfile(user.id);
+                chosen = user.id;
+            }
+            if (!chosen.empty() && chosen != activeProfileId) {
+                activeProfileId = chosen;
+                userDataFile = game::profileDataPath(userDataDir, chosen);
+                // Start from the defaults, then read: a key missing from the
+                // other profile must not inherit this one's value.
+                userSettings = game::UserSettings{};
+                scores.clear();
+                account = game::AccountData{};
+                game::loadUserData(userDataFile, userSettings, scores, account);
+            }
+            std::printf("[instance] multi-open -> profile '%s' (%zu user(s))\n", chosen.c_str(),
+                profiles.size());
+            std::fflush(stdout);
+        }
+    }
     // --player / --player-rank override what the file just loaded (headless
     // checks: they must never write a fixture into the player's own save).
     if (playerSpecGiven) {
@@ -1861,6 +1993,10 @@ int main(int argc, char** argv)
     // play states. Opened with H or the musicsetting button; alive flag
     // keeps it on screen while the close animation plays out.
     // ------------------------------------------------------------------
+    // 演奏 / 画面 / 判定 / 系统 / 账户. Hoisted out of the card lambda so the
+    // pad's shoulder buttons can switch pages from the input side.
+    constexpr int kSettingsTabCount = 5;
+    int settingsTab = settingsTabShot >= 0 ? settingsTabShot : 0;
     auto drawSettingsCard = [&]() {
         static bool settingsAlive = false;
         if (showDebug) {
@@ -1889,7 +2025,10 @@ int main(int argc, char** argv)
                 cardCenter.y - cardSize.y * 0.5f + 16.0f * s));
             ui::cardTitle("设置", interior);
 
-            static int tab = settingsTabShot >= 0 ? settingsTabShot : 0;
+            // Hoisted out of this lambda (see settingsTab): the pad's LB/RB
+            // changes it from the input side, where a function-local static is
+            // simply unreachable.
+            int& tab = settingsTab;
             ui::tabBar("settings-tabs",
                 {std::string("演奏"), std::string("画面"), std::string("判定"), std::string("系统"),
                     std::string("账户")},
@@ -2250,6 +2389,23 @@ int main(int argc, char** argv)
                     }
                     persistUserData();
                 }
+                contentLeft();
+                ImGui::Text("多开 / 单实例");
+                contentLeft();
+                {
+                    int mode = userSettings.instanceMode;
+                    ImGui::SetNextItemWidth(interior);
+                    if (ImGui::Combo("##instancemode", &mode,
+                            "只允许一个实例（再启动就切回已有窗口）\0"
+                            "允许多开，新实例登录另一个用户\0")) {
+                        userSettings.instanceMode = std::clamp(mode, 0, 1);
+                        persistUserData();
+                    }
+                }
+                contentLeft();
+                ImGui::Text(userSettings.instanceMode == 1
+                        ? "每个窗口一份独立的贴图与素材（约 250MB/窗口）。"
+                        : "多开时新窗口会自动换用户，两个窗口不会写同一份存档。");
             } else {
                 // 账户: the local profile. Nothing here leaves the machine, and
                 // none of it is drawn during play - see game/AccountData.
@@ -2704,9 +2860,79 @@ int main(int argc, char** argv)
     Uint32 padDirNext[4] = {0, 0, 0, 0};
     bool padPrevA = false;
     bool padPrevB = false;
+    bool padPrevX = false;
     bool padPrevY = false;
+    bool padPrevL1 = false;
+    bool padPrevR1 = false;
     bool padPrevStart = false;
     bool padPrevBack = false;
+    // --fake-pad <A|B|X|Y|LB|RB|START|BACK>[,...]: makes those pad buttons read
+    // as pressed, cycling down/up every ~half second, so the controller
+    // bindings can be checked headlessly - there is no way to press a real pad
+    // in a --screenshot run. Several names at once is what makes a two-step
+    // flow checkable (START opens the pause dialog, X picks 重试 in it). It also
+    // keeps the pad block alive when SDL found no device, which is exactly the
+    // headless case.
+    std::vector<std::string> fakePad;
+    if (!fakePadButton.empty()) {
+        std::string current;
+        for (const char ch : fakePadButton + ",") {
+            if (ch == ',' || ch == ' ') {
+                if (!current.empty()) {
+                    fakePad.push_back(current);
+                    current.clear();
+                }
+                continue;
+            }
+            current.push_back(static_cast<char>(ch >= 'a' && ch <= 'z' ? ch - 32 : ch));
+        }
+    }
+    bool fakePadHeld = !fakePad.empty();
+    int fakePadFrames = 0;
+    // How long --fake-pad keeps pressing (in 30-frame cycles). Long enough for
+    // the boot + the first dialog, short enough that the run still settles.
+    constexpr int kFakePadCycles = 6;
+    auto padDown = [&](SDL_GameControllerButton button) -> bool {
+        if (!fakePad.empty()) {
+            const char* name = SDL_GameControllerGetStringForButton(button);
+            if (name != nullptr) {
+                std::string upper;
+                for (const char* p = name; *p != '\0'; ++p) {
+                    upper.push_back(static_cast<char>(*p >= 'a' && *p <= 'z' ? *p - 32 : *p));
+                }
+                for (std::size_t i = 0; i < fakePad.size(); ++i) {
+                    const std::string& wanted = fakePad[i];
+                    // SDL calls the shoulders "leftshoulder"/"rightshoulder" and
+                    // the d-pad "dpup"/..., so the short names people actually
+                    // type are mapped onto them here.
+                    const bool match = upper == wanted
+                        || ((wanted == "LB" || wanted == "L1") && upper == "LEFTSHOULDER")
+                        || ((wanted == "RB" || wanted == "R1") && upper == "RIGHTSHOULDER")
+                        || (wanted == "UP" && upper == "DPUP")
+                        || (wanted == "DOWN" && upper == "DPDOWN")
+                        || (wanted == "LEFT" && upper == "DPLEFT")
+                        || (wanted == "RIGHT" && upper == "DPRIGHT");
+                    if (!match) {
+                        continue;
+                    }
+                    // 30 frames down, 30 up; every further entry is offset by
+                    // half a cycle. Two buttons in one list must never fire on
+                    // the same frame, or "START opens the pause dialog, X picks
+                    // 重试" cannot be checked - START would win the frame and
+                    // just resume.
+                    //
+                    // Stops after kFakePadCycles cycles: an endless press/release
+                    // loop would keep re-opening the dialog (and re-picking the
+                    // choice) so the run never settles enough to screenshot.
+                    if (fakePadFrames >= kFakePadCycles * 30) {
+                        return false;
+                    }
+                    return ((fakePadFrames + static_cast<int>(i) * 15) / 30) % 2 == 0;
+                }
+            }
+        }
+        return pad != nullptr && SDL_GameControllerGetButton(pad, button) != 0;
+    };
     auto openPad = [&]() {
         if (pad != nullptr) {
             return;
@@ -2724,6 +2950,31 @@ int main(int argc, char** argv)
         }
     };
     openPad();
+
+    // -----------------------------------------------------------------------
+    // Opening-card skip, shared by the mouse / touch paths and the pad's A.
+    // The button only exists while the card is on screen, so `available` is
+    // also the guard for "A does nothing else during the lead-in".
+    // -----------------------------------------------------------------------
+    auto introSkipAvailable = [&]() {
+        const double currentSongTime = audio.hasMusic() ? audio.songTime() : wallSongTime();
+        return currentSongTime + leadInSec < static_cast<double>(game::kHudIntroDurationSec);
+    };
+    auto skipIntro = [&]() {
+        if (audio.hasMusic()) {
+            audio.skipLeadIn();
+        } else {
+            // No BGM: the clock is the wall clock - move its anchor so chart
+            // time 0 is now.
+            perfStart = SDL_GetPerformanceCounter()
+                - static_cast<Uint64>(leadInSec * static_cast<double>(perfFreq));
+        }
+        std::printf("[intro] lead-in skipped\n");
+        std::fflush(stdout);
+    };
+    // A choice made with the pad on the pause dialog, handed to
+    // ui::messageDialog() as a forced click (see the dialog below).
+    int pauseDialogChoice = -1;
 
     while (running) {
         const Uint64 nowCounter = SDL_GetPerformanceCounter();
@@ -3018,14 +3269,7 @@ int main(int argc, char** argv)
                         if (!ImGui::GetIO().WantCaptureMouse
                             && currentSongTime + leadInSec < static_cast<double>(game::kHudIntroDurationSec)
                             && game::introSkipHitTest(windowW, windowH, fx, fy)) {
-                            if (audio.hasMusic()) {
-                                audio.skipLeadIn();
-                            } else {
-                                perfStart = SDL_GetPerformanceCounter()
-                                    - static_cast<Uint64>(leadInSec * static_cast<double>(perfFreq));
-                            }
-                            std::printf("[intro] lead-in skipped\n");
-                            std::fflush(stdout);
+                            skipIntro();
                             break;
                         }
                     }
@@ -3120,16 +3364,7 @@ int main(int argc, char** argv)
                             audio.hasMusic() ? audio.songTime() : wallSongTime();
                         if (currentSongTime + leadInSec < static_cast<double>(game::kHudIntroDurationSec)
                             && game::introSkipHitTest(windowW, windowH, event.button.x, event.button.y)) {
-                            if (audio.hasMusic()) {
-                                audio.skipLeadIn();
-                            } else {
-                                // No BGM: the clock is the wall clock - move
-                                // its anchor so chart time 0 is now.
-                                perfStart = SDL_GetPerformanceCounter()
-                                    - static_cast<Uint64>(leadInSec * static_cast<double>(perfFreq));
-                            }
-                            std::printf("[intro] lead-in skipped\n");
-                            std::fflush(stdout);
+                            skipIntro();
                             break;
                         }
                     }
@@ -3220,8 +3455,20 @@ int main(int argc, char** argv)
             }
             padReleaseQueue.clear();
         }
-        if (pad != nullptr) {
+        if (pad != nullptr || !fakePad.empty()) {
             SDL_GameControllerUpdate();
+            // --fake-pad cycles the button (held ~half a second, then released
+            // for half a second) instead of firing once: a single fire would
+            // only ever catch whatever screen is up in the first second, and
+            // the dialogs this is meant to check open much later.
+            // --fake-pad cycles the buttons (held ~half a second, released for
+            // half a second) instead of firing once: a single fire would only
+            // catch whatever screen is up in the first second, and the dialogs
+            // this has to check open much later.
+            if (!fakePad.empty() && (++fakePadFrames % 30) == 0) {
+                std::printf("[pad] fake cycle %d\n", fakePadFrames / 30);
+                std::fflush(stdout);
+            }
             auto pulse = [&](SDL_Scancode sc) {
                 SDL_Event down{};
                 down.type = SDL_KEYDOWN;
@@ -3235,7 +3482,7 @@ int main(int argc, char** argv)
                 padReleaseQueue.push_back(sc);
             };
             auto pressed = [&](SDL_GameControllerButton button, bool& prev) {
-                const bool down = SDL_GameControllerGetButton(pad, button) != 0;
+                const bool down = padDown(button);
                 const bool edge = down && !prev;
                 prev = down;
                 return edge;
@@ -3243,13 +3490,17 @@ int main(int argc, char** argv)
 
             // Directions: D-pad or left stick, with auto-repeat while held.
             {
-                const Sint16 lx = SDL_GameControllerGetAxis(pad, SDL_CONTROLLER_AXIS_LEFTX);
-                const Sint16 ly = SDL_GameControllerGetAxis(pad, SDL_CONTROLLER_AXIS_LEFTY);
+                const Sint16 lx = pad != nullptr
+                    ? SDL_GameControllerGetAxis(pad, SDL_CONTROLLER_AXIS_LEFTX)
+                    : 0;
+                const Sint16 ly = pad != nullptr
+                    ? SDL_GameControllerGetAxis(pad, SDL_CONTROLLER_AXIS_LEFTY)
+                    : 0;
                 const bool dir[4] = {
-                    SDL_GameControllerGetButton(pad, SDL_CONTROLLER_BUTTON_DPAD_UP) != 0 || ly < -kPadDeadZone,
-                    SDL_GameControllerGetButton(pad, SDL_CONTROLLER_BUTTON_DPAD_DOWN) != 0 || ly > kPadDeadZone,
-                    SDL_GameControllerGetButton(pad, SDL_CONTROLLER_BUTTON_DPAD_LEFT) != 0 || lx < -kPadDeadZone,
-                    SDL_GameControllerGetButton(pad, SDL_CONTROLLER_BUTTON_DPAD_RIGHT) != 0 || lx > kPadDeadZone,
+                    padDown(SDL_CONTROLLER_BUTTON_DPAD_UP) || ly < -kPadDeadZone,
+                    padDown(SDL_CONTROLLER_BUTTON_DPAD_DOWN) || ly > kPadDeadZone,
+                    padDown(SDL_CONTROLLER_BUTTON_DPAD_LEFT) || lx < -kPadDeadZone,
+                    padDown(SDL_CONTROLLER_BUTTON_DPAD_RIGHT) || lx > kPadDeadZone,
                 };
                 const SDL_Scancode dirKey[4] = {SDL_SCANCODE_UP, SDL_SCANCODE_DOWN, SDL_SCANCODE_LEFT,
                     SDL_SCANCODE_RIGHT};
@@ -3269,18 +3520,63 @@ int main(int argc, char** argv)
                 }
             }
 
-            // A = 确定 / start the song / continue;  START = settings card in the
-            // song list, pause dialog while playing;  Y = rescan (F5);
+            // Left / right shoulder: the settings card's tab row. Its tabs are
+            // custom-drawn (InvisibleButton hit tests), so neither the keyboard
+            // nor ImGui's own focus navigation can reach them - the pad is the
+            // only way to switch pages without a mouse.
+            const bool tabPrev = pressed(SDL_CONTROLLER_BUTTON_LEFTSHOULDER, padPrevL1);
+            const bool tabNext = pressed(SDL_CONTROLLER_BUTTON_RIGHTSHOULDER, padPrevR1);
+            if (showDebug && (tabPrev || tabNext)) {
+                settingsTab = (settingsTab + (tabNext ? 1 : kSettingsTabCount - 1)) % kSettingsTabCount;
+                if (settingsTab < 0) {
+                    settingsTab += kSettingsTabCount;
+                }
+                std::printf("[pad] settings tab -> %d\n", settingsTab);
+                std::fflush(stdout);
+            }
+            const bool padA = pressed(SDL_CONTROLLER_BUTTON_A, padPrevA);
+            const bool padB = pressed(SDL_CONTROLLER_BUTTON_B, padPrevB);
+            const bool padX = pressed(SDL_CONTROLLER_BUTTON_X, padPrevX);
+            const bool padY = pressed(SDL_CONTROLLER_BUTTON_Y, padPrevY);
+            const bool padStart = pressed(SDL_CONTROLLER_BUTTON_START, padPrevStart);
+            const bool padBack = pressed(SDL_CONTROLLER_BUTTON_BACK, padPrevBack);
+
+            // A = 确定 / start the song / skip the opening card / continue;
+            // START = pause or settings;  X / Y = dialog choices and rescan;
             // B / BACK = dismiss a dialog or leave a screen. B deliberately does
             // nothing in the song list: Escape quits the game there.
-            if (pressed(SDL_CONTROLLER_BUTTON_A, padPrevA)) {
+            //
+            // The edges are read once above: calling pressed() twice for the
+            // same button in one frame returns false the second time (prev is
+            // already true), which is how "A also confirms the pause dialog"
+            // silently stops working.
+            if (pauseDialogOpen) {
+                // Pause dialog: every button has to be reachable from the pad.
+                // The dialog is custom-drawn, so the choice is handed to
+                // ui::messageDialog as a forced click (same close animation).
+                if (padA || padStart) {
+                    pauseDialogChoice = 2; // 继续演出
+                } else if (padX) {
+                    pauseDialogChoice = 0; // 重试
+                } else if (padY) {
+                    pauseDialogChoice = 1; // 放弃
+                }
+                if (pauseDialogChoice >= 0) {
+                    std::printf("[pad] pause dialog -> choice %d\n", pauseDialogChoice);
+                    std::fflush(stdout);
+                }
+            } else if (padA) {
                 if (state == AppState::Result) {
                     resultContinueRequested = true;
+                } else if (state == AppState::Play && !paused && !countdownActive && introSkipAvailable()) {
+                    // The opening card's skip button was mouse/touch only; A is
+                    // free during the lead-in, so it takes that job.
+                    skipIntro();
                 } else {
                     pulse(SDL_SCANCODE_RETURN);
                 }
             }
-            if (pressed(SDL_CONTROLLER_BUTTON_START, padPrevStart)) {
+            if (padStart) {
                 if (state == AppState::Play && !pauseDialogOpen && !countdownActive) {
                     // Same as the HUD pause button / Space: the dialog appears
                     // and its window_open sound plays.
@@ -3293,18 +3589,30 @@ int main(int argc, char** argv)
                     pulse(SDL_SCANCODE_H); // settings card
                 }
             }
-            if (pressed(SDL_CONTROLLER_BUTTON_B, padPrevB)) {
+            if (padB) {
                 if (showDebug) {
                     pulse(SDL_SCANCODE_H); // close the settings card
                 } else if (pauseDialogOpen || state == AppState::Result) {
                     pulse(SDL_SCANCODE_ESCAPE);
                 }
             }
-            if (pressed(SDL_CONTROLLER_BUTTON_BACK, padPrevBack) && state != AppState::Select) {
-                pulse(SDL_SCANCODE_ESCAPE);
-            }
-            if (pressed(SDL_CONTROLLER_BUTTON_Y, padPrevY) && state == AppState::Select) {
+            if (!pauseDialogOpen && padY && state == AppState::Select) {
                 pulse(SDL_SCANCODE_F5); // re-scan charts/
+            }
+            // BACK used to send Escape everywhere except the song list, i.e.
+            // during a run it abandoned the song and went back - the last thing
+            // a stray thumb press should do. In Play it pauses like START;
+            // elsewhere it keeps the old meaning.
+            if (padBack) {
+                if (state == AppState::Play) {
+                    if (!pauseDialogOpen && !countdownActive) {
+                        paused = true;
+                        audio.pause();
+                        pauseDialogOpen = true;
+                    }
+                } else if (state != AppState::Select) {
+                    pulse(SDL_SCANCODE_ESCAPE);
+                }
             }
         }
 
@@ -3955,10 +4263,19 @@ int main(int argc, char** argv)
             if (pauseDialogOpen) {
                 pauseDialogAlive = true;
             }
+            // Pause dialog: every button has to be reachable from the pad.
+            // The dialog is custom-drawn, so the choice is handed to
+            // ui::messageDialog as a forced click (same close animation).
+            if (pauseDialogChoice >= 0) {
+                std::printf("[pause] pad choice %d (state=%d paused=%d dialog=%d)\n", pauseDialogChoice,
+                    static_cast<int>(state), paused ? 1 : 0, pauseDialogOpen ? 1 : 0);
+                std::fflush(stdout);
+            }
             if (pauseDialogAlive) {
                 const int action = ui::messageDialog(renderer, "##pauseDialog", "是否继续演出？",
                     {std::string("重试"), std::string("放弃"), std::string("继续演出")},
-                    {false, false, true});
+                    {false, false, true}, pauseDialogChoice);
+                pauseDialogChoice = -1;
                 if (action == 0) {
                     // Retry: reload the current chart from the top.
                     pauseDialogOpen = false;

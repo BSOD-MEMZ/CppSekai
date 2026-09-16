@@ -408,7 +408,13 @@ namespace
                 out.push_back('_');
             }
         }
-        if (out.empty()) {
+        // A name that leaves nothing but digits ("用户3") would yield the id "3":
+        // a legal file name, but it reads like a stray number in the profile
+        // list and in the [instance] log, and collides with the next "…3"-ish
+        // name. Hash those as well.
+        const bool allDigits = !out.empty()
+            && out.find_first_not_of("0123456789") == std::string::npos;
+        if (out.empty() || allDigits) {
             // Fall back to a stable number derived from the name, so two
             // Chinese nicknames do not both become "user".
             unsigned hash = 2166136261u;
@@ -643,6 +649,7 @@ void loadUserData(const std::string& path, UserSettings& settings,
             settings.windowWidth = s.value("windowWidth", settings.windowWidth);
             settings.windowHeight = s.value("windowHeight", settings.windowHeight);
             settings.renderScale = s.value("renderScale", settings.renderScale);
+            settings.instanceMode = s.value("instanceMode", settings.instanceMode);
             settings.fpsLimit = s.value("fpsLimit", settings.fpsLimit);
             settings.showProgressBar = s.value("showProgressBar", settings.showProgressBar);
             settings.hideTouchFeedback = s.value("hideTouchFeedback", settings.hideTouchFeedback);
@@ -684,6 +691,7 @@ void loadUserData(const std::string& path, UserSettings& settings,
     settings.windowWidth = std::clamp(settings.windowWidth, 320, 7680);
     settings.windowHeight = std::clamp(settings.windowHeight, 240, 4320);
     settings.renderScale = std::clamp(settings.renderScale, 0, 1);
+    settings.instanceMode = std::clamp(settings.instanceMode, 0, 1);
     settings.bgStyle = std::clamp(settings.bgStyle, 0, 1);
     settings.bgBlur = std::clamp(settings.bgBlur, 0.0f, 1.0f);
     settings.bgDim = std::clamp(settings.bgDim, 0.0f, 1.0f);
@@ -720,6 +728,7 @@ void saveUserData(const std::string& path, const UserSettings& settings,
         {"windowWidth", settings.windowWidth},
         {"windowHeight", settings.windowHeight},
         {"renderScale", settings.renderScale},
+        {"instanceMode", settings.instanceMode},
         {"fpsLimit", settings.fpsLimit},
         {"showProgressBar", settings.showProgressBar},
         {"hideTouchFeedback", settings.hideTouchFeedback},

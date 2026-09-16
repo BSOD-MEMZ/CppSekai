@@ -789,7 +789,7 @@ bool stepper(const char* id, float* value, const std::vector<float>& deltas, con
 }
 
 int messageDialog(platform::Renderer& renderer, const char* id, const char* title,
-    const std::vector<std::string>& buttons, const std::vector<bool>& primary)
+    const std::vector<std::string>& buttons, const std::vector<bool>& primary, int forcedChoice)
 {
     const float s = scale();
     const ImVec2 display = ImGui::GetIO().DisplaySize;
@@ -840,6 +840,14 @@ int messageDialog(platform::Renderer& renderer, const char* id, const char* titl
             requestClose(st);
         }
         x += btnW + gap;
+    }
+    // A choice the mouse did not make (the game controller): identical to a
+    // click, close animation included, so the caller's action handling stays
+    // one path and the card cannot be left open behind a running game.
+    if (result < 0 && forcedChoice >= 0 && forcedChoice < static_cast<int>(buttons.size())) {
+        result = forcedChoice;
+        se(SeClick);
+        requestClose(st);
     }
     endCard();
     (void)renderer;

@@ -129,6 +129,13 @@ struct UserSettings
     // the aspect ratio kept (letterbox) - dragging then only zooms the picture,
     // it never changes the layout.
     int renderScale = 0;
+    // How many copies of the game may run at once.
+    //   0 = one only: launching a second one just brings the running window to
+    //       the front and exits (two copies would fight over the same save).
+    //   1 = several: every extra instance logs in as a *different* user, so no
+    //       two windows ever write the same profile file. Costs one full copy
+    //       of the assets and textures per window (~250 MB); see AGENTS.md.
+    int instanceMode = 0;
     // Subtle playback progress bar along the top edge of the play screen.
     bool showProgressBar = true;
     // Hide the Windows touch ripple over our window (per-window setting).
