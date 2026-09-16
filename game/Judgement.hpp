@@ -13,6 +13,7 @@
 //   [6] volume    SE volume at this note
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -81,6 +82,12 @@ struct JudgementWindows
 // MISS -80, BAD -50, a hold broken mid-way -40.
 constexpr float kMaxLife = 1000.0f;
 
+// Upper bound of the "初始血量" setting (settings > 判定 > 初始血量). pjsk itself
+// never leaves 1000 - it is a practice knob, so the pool may go well past it.
+// The bar is normalised against whatever pool the run started with, so a big
+// pool still reads 100% at the start instead of overflowing the panel.
+constexpr float kMaxInitialLife = 5000.0f;
+
 // Score constants ported from sekai-mmw-preview-web's overlay player
 // (native/src/mmw_overlay_player.cpp). The score of a note is
 //   (TEAM_POWER / weightedNoteCount) * 4 * noteWeight * levelFactor * comboFactor
@@ -123,18 +130,31 @@ struct JudgementStats
 class JudgementEngine
 {
   public:
+    // Debug (settings > 判定 > Flick 调试日志): a flick note near a chart time,
+    // handed to the host's log so a touch flick that produced nothing can say
+    // what it was aiming at. See debugFlickNotesNear().
+    struct FlickDebugNote
+    {
+        float timeSec = 0.0f;
+        float center = 0.0f;
+        float width = 1.0f;
+        std::uint8_t dir = FlickNone; // required swipe direction
+        std::uint8_t state = 0;       // 0 pending, 1 hit, 2 missed
+    };
+
     // Packed HitEvents from the chart core (getHitEventBufferPointer).
     void load(const float* packed, int count);
     void reset();
 
     // Life the next session starts with (settings > 判定 > 初始血量). reset() - which
     // runs per session - seeds the stats from it, so push it before a chart loads.
-    // Clamped to 1..kMaxLife: the HUD bar and the clear check both use kMaxLife.
-    void setInitialLife(float life)
-    {
-        mInitialLife = life > 1.0f ? (life < kMaxLife ? life : kMaxLife) : 1.0f;
-    }
+    // Clamped to 1..kMaxInitialLife.
+    void setInitialLife(float life) { mInitialLife = std::clamp(life, 1.0f, kMaxInitialLife); }
     [[nodiscard]] float initialLife() const { return mInitialLife; }
+
+    // Ceiling for the life *value*. A pool above kMaxLife (初始血量 > 1000) must
+    // not be clipped back down to 1000 by the damage handlers.
+    [[nodiscard]] float lifeCeiling() const { return std::max(kMaxLife, mInitialLife); }
 
     // Advances auto-miss / hold tracking. Call once per frame with chart time.
     void update(float songTimeSec);
@@ -158,6 +178,12 @@ class JudgementEngine
     [[nodiscard]] bool anyActiveHold(bool* criticalOut = nullptr) const;
 
     [[nodiscard]] const JudgementStats& stats() const { return mStats; }
+
+    // Debug: every flick note (kind 2) within +-windowSec of songTimeSec, so a
+    // touch flick that cleared nothing can be explained in the log. Only call
+    // it while the debug log is on - it walks the whole note list.
+    void debugFlickNotesNear(float songTimeSec, float windowSec, std::vector<FlickDebugNote>& out) const;
+
     [[nodiscard]] const JudgementWindows& windows() const { return mWindows; }
     void setWindows(const JudgementWindows& windows) { mWindows = windows; }
 
@@ -171,8 +197,15 @@ class JudgementEngine
     }
     [[nodiscard]] float chartRating() const { return mChartRating; }
 
-    // Life in 0..1, for the HUD's life bar.
-    [[nodiscard]] float lifeRatio() const { return mStats.life / kMaxLife; }
+    // Life in 0..1, for the HUD's life bar. Normalised against the pool the run
+    // STARTED with, so the bar reads 100% at the beginning whatever 初始血量 is
+    // (a 5000 pool used to be clipped at 1000 and a 300 pool started two thirds
+    // empty - neither matched what the player asked for).
+    [[nodiscard]] float lifeRatio() const
+    {
+        const float pool = mInitialLife > 1.0f ? mInitialLife : kMaxLife;
+        return std::clamp(mStats.life / pool, 0.0f, 1.0f);
+    }
 
     // Long notes the player let go of too early, appended to `out` as flat
     // (center, hold start time seconds) pairs - the same key the chart core's

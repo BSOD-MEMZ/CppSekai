@@ -64,7 +64,7 @@ void JudgementEngine::load(const float* packed, int count)
     // Loading a chart wipes the stats just like reset() does, so the configured
     // starting life has to be seeded here too - this is the one that runs last
     // when a session starts (reset() then load()).
-    mStats.life = std::clamp(mInitialLife, 1.0f, kMaxLife);
+    mStats.life = std::clamp(mInitialLife, 1.0f, kMaxInitialLife);
     mLoaded = true;
 
     // Score-able notes: taps, flicks, traces, hold starts and hold tails.
@@ -241,10 +241,9 @@ void JudgementEngine::reset()
     mMissedHoldKeys.clear();
     mHitEventIndices.clear();
     mStats = JudgementStats{};
-    // Settings > 判定 > 初始血量: a smaller pool makes the clear harder (the bar and
-    // the clear check both measure against kMaxLife, so the run simply starts
-    // part-filled).
-    mStats.life = std::clamp(mInitialLife, 1.0f, kMaxLife);
+    // Settings > 判定 > 初始血量: a smaller pool makes the clear harder (the bar is
+    // normalised against the pool, so the run always starts at a full bar).
+    mStats.life = std::clamp(mInitialLife, 1.0f, kMaxInitialLife);
     mComboFactor = 1.0;
 }
 
@@ -255,7 +254,7 @@ void JudgementEngine::registerMiss(float songTimeSec, float lifeCost)
     // A combo break drops the score bonus back to its base level (pjsk pays
     // the combo bonus again from scratch after a miss).
     mComboFactor = 1.0;
-    mStats.life = std::clamp(mStats.life + lifeCost, 0.0f, kMaxLife);
+    mStats.life = std::clamp(mStats.life + lifeCost, 0.0f, lifeCeiling());
     mStats.lastJudge = Judge::Miss;
     // Record the time, otherwise the HUD never sees the judge change and the
     // MISS sprite is never shown.
@@ -308,7 +307,7 @@ Judge JudgementEngine::registerJudge(Judge judge, bool critical, float volume, f
 
     // BAD still costs life (but not as much as a MISS).
     if (judge == Judge::Bad) {
-        mStats.life = std::clamp(mStats.life + kLifeBad, 0.0f, kMaxLife);
+        mStats.life = std::clamp(mStats.life + kLifeBad, 0.0f, lifeCeiling());
     }
 
     const double delta = scoreDeltaFor(kind, critical) * judgeMultiplier(judge);
@@ -884,6 +883,31 @@ bool JudgementEngine::anyActiveHold(bool* criticalOut) const
         return true;
     }
     return false;
+}
+
+void JudgementEngine::debugFlickNotesNear(
+    float songTimeSec, float windowSec, std::vector<FlickDebugNote>& out) const
+{
+    out.clear();
+    for (const HitNote& note : mNotes) {
+        if (static_cast<int>(note.kind) != 2) {
+            continue; // flick notes only
+        }
+        const float delta = note.timeSec - songTimeSec;
+        if (std::fabs(delta) > windowSec) {
+            continue;
+        }
+        FlickDebugNote entry;
+        entry.timeSec = note.timeSec;
+        entry.center = note.center;
+        entry.width = note.width;
+        entry.dir = noteFlickDir(note);
+        entry.state = note.state;
+        out.push_back(entry);
+    }
+    std::sort(out.begin(), out.end(), [&](const FlickDebugNote& a, const FlickDebugNote& b) {
+        return std::fabs(a.timeSec - songTimeSec) < std::fabs(b.timeSec - songTimeSec);
+    });
 }
 
 } // namespace game

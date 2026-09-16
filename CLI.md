@@ -128,6 +128,7 @@ cppsekai [--sus <file.sus>] [--bgm <audio>] [--charts <dir>] [--cover <image>]
 | `--test-restart` `--restart-at <sec>` | 走到指定秒数执行「放弃 → 换一首」——回归测「打到一半重选曲卡死」那个 bug |
 | `--result-at <sec>` | 谱面走到指定秒数就切到**结算画面**（用真实判定数据），不用等整首歌放完 |
 | `--result-preview` | 启动即进结算画面，且用参考截图的样例数字（940021 / PERFECT 634 …），专门用来跟原版截图做像素对比 |
+| `--flick-log` | 开触摸 flick 调试日志（等同设置里「判定 > Flick 调试日志」，但不写档案）。写 `flick_debug.log`：每个触摸采样（坐标/位移/dt/vel/travel/分类出的方向）+ 每次 flick 判定的结果，**没打中时还会列出附近 flick 音符的 dt / 轨道偏差 / 需要的方向**——触摸 flick 老 MISS 就靠它定位 |
 | `--confirm-flash [<sec>]` | 在选曲界面单独放一次「确定」的白色爆发光效（默认 1.0s 处，**不加载歌曲**），配合 `--screenshot` 抓爆发过程 |
 | `--profile` | 启动即打开选曲界面的**个人资料卡**（平时要点右上角的等级牌才出来），配合 `--screenshot` 截它 |
 | `--player <昵称[:组织]>` | 无头检查用：把账户的昵称 / 学校塞进内存（**不读也不写 userdata.json**），让资料卡和设置「账户」页有东西可看 |

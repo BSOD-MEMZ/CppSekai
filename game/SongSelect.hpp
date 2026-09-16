@@ -143,11 +143,17 @@ struct UserSettings
     float perfectMs = 40.0f;
     float greatMs = 90.0f;
     float goodMs = 140.0f;
-    // Life a run starts with (100..1000; kMaxLife is 1000 and the HUD bar measures
-    // against it, so a lower value simply starts the bar part-filled). Pushed to
-    // the judgement engine, which seeds its stats from it on every reset.
+    // Life a run starts with (100..5000). The HUD bar is normalised against it,
+    // so whatever the value the bar reads 100% when the live starts; a bigger
+    // pool just takes longer to drain. Pushed to the judgement engine, which
+    // seeds its stats from it on every reset.
     float initialLife = 1000.0f;
     bool strictFlick = true;
+    // Flick debug log (settings > 判定 > Flick 调试日志): while on, every raw
+    // touch sample, the swipe measurement the classifier saw and the judgement
+    // it produced go to flick_debug.log next to the exe, so a missed touch
+    // flick can be diagnosed after the fact.
+    bool debugLog = false;
     // Autoplay chart preview (all-PERFECT run, AUTO judge text, no records).
     bool autoplay = false;
     // Pause the run when the window loses keyboard focus (alt-tab, a popup

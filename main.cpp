@@ -40,6 +40,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -52,6 +53,7 @@
 // Alignment overrides shared with startSession() (set from the command line).
 double gFillerSec = -1.0;    // < 0: auto-detect the leading silence
 double gUserOffsetSec = 0.0; // manual fine tune, seconds
+bool gForceFlickLog = false; // --flick-log: same switch as the 判定 card's checkbox
 
 namespace
 {
@@ -112,6 +114,96 @@ namespace
         float travelUp = 0.0f;
         float travelSide = 0.0f;
     };
+
+    // ------------------------------------------------------------------
+    // Flick debug log (settings > 判定 > Flick 调试日志).
+    //
+    // A missed touch flick leaves nothing to inspect afterwards: the gesture
+    // is a stream of raw SDL_FINGER* events, the thresholds live in
+    // flickDirFrom() and the outcome is one enum. So while the switch is on
+    // every raw sample, the measurement the classifier saw, the direction it
+    // picked and the judgement that came out are appended to flick_debug.log
+    // (flushed per line, so it can be tailed while playing), together with the
+    // flick notes the swipe was aiming at when it cleared nothing.
+    //
+    // Off by default: a dense chart is thousands of lines per song.
+    // ------------------------------------------------------------------
+    struct FlickDebugLog
+    {
+        bool enabled = false;
+        std::FILE* file = nullptr;
+
+        void setEnabled(bool on)
+        {
+            if (on == enabled) {
+                return;
+            }
+            enabled = on;
+            if (file != nullptr) {
+                std::fclose(file);
+                file = nullptr;
+            }
+            if (!enabled) {
+                return;
+            }
+            file = std::fopen("flick_debug.log", "w");
+            if (file == nullptr) {
+                std::printf("[debug] cannot open flick_debug.log\n");
+                return;
+            }
+            std::printf("[debug] flick log -> %s\n", "flick_debug.log");
+            write("=== flick debug log (touch samples in event order, all px / px-per-s) ===");
+        }
+
+        // printf-style. Goes to stdout as well (only visible in --screenshot
+        // runs, where stdout is redirected into cppsekai.log).
+        void write(const char* fmt, ...)
+        {
+            if (!enabled) {
+                return;
+            }
+            char buffer[1024];
+            va_list args;
+            va_start(args, fmt);
+            std::vsnprintf(buffer, sizeof(buffer), fmt, args);
+            va_end(args);
+            std::printf("%s\n", buffer);
+            if (file != nullptr) {
+                std::fprintf(file, "%s\n", buffer);
+            }
+        }
+
+        void flush()
+        {
+            if (file != nullptr) {
+                std::fflush(file);
+            }
+        }
+    };
+
+    FlickDebugLog gFlickLog;
+
+    const char* flickDirName(game::FlickDir dir)
+    {
+        switch (dir) {
+            case game::FlickUp: return "up";
+            case game::FlickLeft: return "left";
+            case game::FlickRight: return "right";
+            default: return "none";
+        }
+    }
+
+    const char* judgeName(game::Judge judge)
+    {
+        switch (judge) {
+            case game::Judge::Perfect: return "perfect";
+            case game::Judge::Great: return "great";
+            case game::Judge::Good: return "good";
+            case game::Judge::Bad: return "bad";
+            case game::Judge::Miss: return "miss";
+            default: return "none";
+        }
+    }
 
     // Sampling of a swipe. A touch panel reports NOTHING while the finger
     // holds still, so the first motion event of a hold-tail flick arrives
@@ -343,6 +435,9 @@ namespace
             "--settings [--settings-tab <0-4>]: open the settings card at boot on the\n"
             "          given page (0 演奏 / 1 画面 / 2 判定 / 3 系统 / 4 账户).\n"
             "--profile: open the player profile card (the level chip's card) at boot.\n"
+            "--flick-log: write flick_debug.log (every touch sample + the swipe\n"
+            "          measurement + the judgement it produced; same switch as\n"
+            "          settings > 判定 > Flick 调试日志). For touch-flick diagnosis.\n"
             "--player <name[:org]> / --player-rank <n> / --player-exp <0..1>: seed the\n"
             "          local account for headless checks (--player-exp = how far into the\n"
             "          current rank, i.e. the level chip's green progress bar); memory\n"
@@ -873,6 +968,9 @@ int main(int argc, char** argv)
             gCardMetadata.vocal = utf8Argv[++i];
         } else if (arg == "--difficulty" && i + 1 < utf8Argc) {
             gCardMetadata.difficulty = utf8Argv[++i];
+        } else if (arg == "--flick-log") {
+            // Debug log without touching the profile (headless / support runs).
+            gForceFlickLog = true;
         } else if (arg == "--help" || arg == "-h") {
             printUsage();
             return 0;
@@ -1127,6 +1225,11 @@ int main(int argc, char** argv)
     }
     showProgressBar = userSettings.showProgressBar;
     hideTouchFeedback = userSettings.hideTouchFeedback;
+    // Flick debug log (settings > 判定 > Flick 调试日志). Truncates the file at
+    // boot when it is on, so every run starts with a clean log.
+    gFlickLog.setEnabled(userSettings.debugLog || gForceFlickLog);
+    std::printf("[settings] flick debug log %s\n",
+        gFlickLog.enabled ? "on (flick_debug.log)" : "off");
     const int splashStyle = userSettings.splashStyle; // 0=image 1=classic
 
     int windowW = std::max(320, winWidth);
@@ -2000,6 +2103,7 @@ int main(int argc, char** argv)
         autoPlay = userSettings.autoplay;
         showProgressBar = userSettings.showProgressBar;
         hideTouchFeedback = userSettings.hideTouchFeedback;
+        gFlickLog.setEnabled(userSettings.debugLog || gForceFlickLog); // the new profile's own setting
 #ifdef _WIN32
         applyTouchFeedback(window, hideTouchFeedback);
 #endif
@@ -2716,6 +2820,43 @@ int main(int argc, char** argv)
         return judgement.flick(track.restLanePos, t, dir, 0.8f);
     };
 
+    // Debug log: one line per flick judgement attempt, and when it cleared
+    // nothing, the flick notes the swipe was aimed at (nearest first) with the
+    // lane / time distance and the direction the note wanted. Inert unless the
+    // debug log is on.
+    auto logFlickOutcome = [&](const TouchTrack& track, double songTime, game::FlickDir dir,
+                               game::Judge result, const char* where) {
+        if (!gFlickLog.enabled) {
+            return;
+        }
+        gFlickLog.write(
+            "[flick] %s finger=%u touch=%d dir=%s judge=%s lane=%.3f restLane=%.3f songTime=%.3f "
+            "peak=(up %.0f side %.0f) travel=(up %.1f side %.1f)",
+            where, static_cast<unsigned>(track.fingerId), track.isTouch ? 1 : 0, flickDirName(dir),
+            judgeName(result), static_cast<double>(track.lanePos), static_cast<double>(track.restLanePos),
+            songTime, static_cast<double>(track.peakUp), static_cast<double>(track.peakSide),
+            static_cast<double>(track.travelUp), static_cast<double>(track.travelSide));
+        if (result == game::Judge::None) {
+            // (`candidates`, not `near`: windef.h defines `near` as an empty
+            // macro, so that name silently swallows the declaration.)
+            std::vector<game::JudgementEngine::FlickDebugNote> candidates;
+            judgement.debugFlickNotesNear(static_cast<float>(songTime), 0.6f, candidates);
+            if (candidates.empty()) {
+                gFlickLog.write("[flick]   -> no flick note within 0.6s, the swipe had nothing to clear");
+            }
+            for (const auto& note : candidates) {
+                gFlickLog.write(
+                    "[flick]   -> candidate t=%.3f dt=%+.3f center=%.3f width=%.2f wantDir=%s state=%u "
+                    "laneDelta=%.3f (+halfWidth %.2f)",
+                    static_cast<double>(note.timeSec), static_cast<double>(note.timeSec - songTime),
+                    static_cast<double>(note.center), static_cast<double>(note.width),
+                    flickDirName(static_cast<game::FlickDir>(note.dir)), static_cast<unsigned>(note.state),
+                    static_cast<double>(track.lanePos - note.center), static_cast<double>(note.width * 0.5f));
+            }
+        }
+        gFlickLog.flush();
+    };
+
     // Starts a tap at a window position. Returns false when the press is
     // outside the playfield (e.g. on the sky above the horizon), where the
     // inverse perspective would map it to a bogus lane.
@@ -2748,6 +2889,13 @@ int main(int argc, char** argv)
         lanePress[static_cast<size_t>(track.laneIndex)] = 1.0f;
         const double songTime = audio.hasMusic() ? audio.songTime() : wallSongTime();
         const game::Judge result = judgement.tap(track.lanePos, static_cast<float>(songTime), false, 0.8f);
+        if (gFlickLog.enabled) {
+            gFlickLog.write("[touch] down finger=%u touch=%d screen=(%d,%d) lane=%.3f laneIndex=%d "
+                            "eventMs=%u songTime=%.3f tap=%s",
+                static_cast<unsigned>(id), isTouch ? 1 : 0, x, y, static_cast<double>(lanePos),
+                track.laneIndex, static_cast<unsigned>(eventMs), songTime, judgeName(result));
+            gFlickLog.flush();
+        }
         if (result != game::Judge::None) {
             playHitSe(audio, judgement, seVolume);
         }
@@ -2835,9 +2983,19 @@ int main(int argc, char** argv)
             }
             const game::FlickDir dir = flickDirFrom(track.velUp, track.velSide, track.travelUp,
                 track.travelSide, track.isTouch, heightScale);
+            if (gFlickLog.enabled) {
+                gFlickLog.write(
+                    "[touch] move finger=%u screen=(%d,%d) d=(%.1f,%.1f) dt=%.1fms rawDt=%.1fms "
+                    "vel=(up %.0f side %.0f) travel=(up %.1f side %.1f) dir=%s lane=%.3f",
+                    static_cast<unsigned>(id), x, y, static_cast<double>(sampleDx), static_cast<double>(sampleDy),
+                    dt * 1000.0, rawDt * 1000.0, static_cast<double>(track.velUp),
+                    static_cast<double>(track.velSide), static_cast<double>(track.travelUp),
+                    static_cast<double>(track.travelSide), flickDirName(dir), static_cast<double>(lanePos));
+            }
             if (dir != game::FlickNone && now - track.lastFlickFireTimeSec >= kFlickRefireSec) {
                 const double songTime = audio.hasMusic() ? audio.songTime() : wallSongTime();
                 const game::Judge result = flickJudge(track, songTime, dir);
+                logFlickOutcome(track, songTime, dir, result, "fire/move");
                 if (result != game::Judge::None) {
                     // Consume the gesture: resetting the travelled distance stops
                     // one continuous swipe from firing on every sample, while the
@@ -2851,6 +3009,11 @@ int main(int argc, char** argv)
                 // can change as it continues (a diagonal that straightens out),
                 // and the old code burnt the gesture on the first wrong guess -
                 // the player had to lift the finger and swipe again.
+            } else if (dir != game::FlickNone && gFlickLog.enabled) {
+                // Debug only: the swipe classified fine but the re-fire latch
+                // is still hot from a previous fire.
+                gFlickLog.write("[touch]   (dir=%s held back: %.0f ms since the last fire)",
+                    flickDirName(dir), (now - track.lastFlickFireTimeSec) * 1000.0);
             } else if (std::abs(track.velUp) < kFlickRestSpeed * heightScale
                 && std::abs(track.velSide) < kFlickRestSpeed * heightScale) {
                 // Slow enough to count as parked: remember this lane. It is the
@@ -3389,9 +3552,16 @@ int main(int argc, char** argv)
                                 const double songTime =
                                     audio.hasMusic() ? audio.songTime() : wallSongTime();
                                 const game::Judge result = flickJudge(track, songTime, dir);
+                                logFlickOutcome(track, songTime, dir, result, "fire/up");
                                 if (result != game::Judge::None) {
                                     playHitSe(audio, judgement, seVolume);
                                 }
+                            } else if (gFlickLog.enabled) {
+                                // The lift-off safety net also found nothing -
+                                // this is the case a "touch flick feels dead"
+                                // report turns out to be, so keep the numbers.
+                                const double songTime = audio.hasMusic() ? audio.songTime() : wallSongTime();
+                                logFlickOutcome(track, songTime, game::FlickNone, game::Judge::None, "up/no-dir");
                             }
                         }
                     }
@@ -4682,7 +4852,7 @@ int main(int argc, char** argv)
                 const auto& st = judgement.stats();
                 std::printf("[stats] perfect=%d great=%d good=%d bad=%d miss=%d combo=%d maxCombo=%d tails=%d breaks=%d score=%.0f life=%.0f (%.1f%%)\n",
                     st.perfect, st.great, st.good, st.bad, st.miss, st.combo, st.maxCombo, st.holdTails, st.holdBreaks,
-                    st.score, st.life, 100.0f * st.life / game::kMaxLife);
+                    st.score, st.life, 100.0f * judgement.lifeRatio());
             }
             saveScreenshot();
             running = false;

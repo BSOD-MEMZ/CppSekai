@@ -721,6 +721,7 @@ void loadUserData(const std::string& path, UserSettings& settings,
             settings.goodMs = s.value("goodMs", settings.goodMs);
             settings.initialLife = s.value("initialLife", settings.initialLife);
             settings.strictFlick = s.value("strictFlick", settings.strictFlick);
+            settings.debugLog = s.value("debugLog", settings.debugLog);
             settings.autoplay = s.value("autoplay", settings.autoplay);
             settings.autoPauseOnBlur = s.value("autoPauseOnBlur", settings.autoPauseOnBlur);
             settings.reportSmtc = s.value("reportSmtc", settings.reportSmtc);
@@ -749,8 +750,9 @@ void loadUserData(const std::string& path, UserSettings& settings,
     settings.perfectMs = std::clamp(settings.perfectMs, 10.0f, 100.0f);
     settings.greatMs = std::max(settings.greatMs, settings.perfectMs + 10.0f);
     settings.goodMs = std::max(settings.goodMs, settings.greatMs + 10.0f);
-    // 100 = one MISS from failing, 1000 = kMaxLife (the default).
-    settings.initialLife = std::clamp(settings.initialLife, 100.0f, 1000.0f);
+    // 100 = one MISS from failing, 5000 = the practice-pool maximum. The HUD bar
+    // is normalised against the value itself, so it always starts full.
+    settings.initialLife = std::clamp(settings.initialLife, 100.0f, 5000.0f);
     settings.windowWidth = std::clamp(settings.windowWidth, 320, 7680);
     settings.windowHeight = std::clamp(settings.windowHeight, 240, 4320);
     settings.renderScale = std::clamp(settings.renderScale, 0, 1);
@@ -800,6 +802,7 @@ void saveUserData(const std::string& path, const UserSettings& settings,
         {"goodMs", settings.goodMs},
         {"initialLife", settings.initialLife},
         {"strictFlick", settings.strictFlick},
+        {"debugLog", settings.debugLog},
         {"autoplay", settings.autoplay},
         {"autoPauseOnBlur", settings.autoPauseOnBlur},
         {"reportSmtc", settings.reportSmtc},

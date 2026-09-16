@@ -970,6 +970,31 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
 - 扫描本身的固定开销还有：每首 `readSusHeader`（开一个文件读 40 行）+ sidecar 的存在性检查。
   这是 715 首那套的真实成本（约 0.4s），暂时够用；要再快只能并行，不是必须。
 
+## 初始血量 / Flick 调试日志（2026-09-16 晚）
+
+- **初始血量上限 5000（`kMaxInitialLife`）**：`settings > 判定 > 初始血量` 的滑杆和
+  `loadUserData` 的 clamp 都是 100..5000。**bar 按「本局开局的血量池」归一化**
+  （`JudgementEngine::lifeRatio() = life / max(1, mInitialLife)`），所以不管设多少，
+  演出界面开局都画在 100%（以前 488 就从 48.8% 开始、5000 会直接画出面板右边）。
+  `lifeCeiling() = max(kMaxLife, mInitialLife)` 是血量**数值**的上限，三个扣血点
+  （`registerMiss` / BAD / 长条中断）都必须用它 clamp —— 用 `kMaxLife` 会把 5000 的池子
+  在第一次扣血时直接压回 1000。日志里的 `[score] life=X/Y` 里 Y 也用 `initialLife()`，
+  `[stats]` 的百分比走 `lifeRatio()`。
+- **Flick 调试日志**（`settings > 判定 > Flick 调试日志`，勾选即生效并写进档案；
+  命令行等价物 `--flick-log`，不落盘设置、只给支持/回归用）。开启时先把
+  `flick_debug.log`（exe 工作目录）清空再逐行 flush，内容：
+  - `[touch] down` / `[touch] move` / 每次 flick 判定尝试的 `[flick] fire/move|fire/up`；
+    move 行有**每个原始采样**：屏幕坐标、位移、`dt`（以及未 clamp 的 rawDt）、低通后的
+    vel、travel、当前分类出的 dir、lane。
+  - 没打中时 `logFlickOutcome` 会调 `JudgementEngine::debugFlickNotesNear(t, 0.6s)`
+    把附近的 flick 音符按时间距离列出来（`dt` / laneDelta / halfWidth / wantDir / state），
+    这是判断"方向错 vs 轨道错 vs 根本没到判定窗口"的关键。
+  - 所以用户报"触摸 flick 老 MISS"，**让他开着这个开关打一遍再把 flick_debug.log 发来**
+    就行（日志很密，一首歌几千行）。
+  - 实现注意：日志结构体 `FlickDebugLog` 在 main.cpp 匿名命名空间（文件级 `gFlickLog`），
+    `setEnabled()` 里会 truncate；**变量别叫 `near`**（windef.h 把它定义成空宏，
+    声明会被吃掉，直接编译不过）。
+
 ## 待办（按优先级）
 
 1. hold 音效循环（SeHoldLoop 未接）与 SE kind 区分（当前键盘全播一个音）
