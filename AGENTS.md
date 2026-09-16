@@ -678,9 +678,13 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
 ## UI 音效（2026-09-15，`ui::se` / `ui::flushSe`）
 
 - 素材在 `assets/se/`：`click.mp3`（任意组件按下）、`select.mp3`（选曲列表每动一格）、
-  `level_choose.mp3`（难度按钮）、`window_open.mp3` / `window_close.mp3`（卡片 / 弹窗）。
+  `level_choose.mp3`（难度按钮）、`window_open.mp3` / `window_close.mp3`（卡片 / 弹窗）、
+  `start.mp3`（点「确定」起白光的那一下，`SeStart`，优先级最高）。
   `AudioEngine::loadUiSe` 在 `loadSe` 末尾加载（每种 3 个声部），**缺文件只打印一行日志**，
   不报错——所以精简包 / 无素材时界面照样能跑，只是没声音。
+  加一种新音效要**同步改三处**：`ui::SeKind`（末尾追加 = 优先级最高）、
+  `platform::AudioEngine::UiSe`（同样的顺序，`flushSe` 直接 `static_cast`）、
+  `loadUiSe` 里的 `kFiles[]`，以及 `Ui.cpp` 顶部的 `kSeKindCount`。
 - 播放**不在按下瞬间**：组件只 `ui::se(...)` 记一个请求，主循环帧尾调一次 `ui::flushSe()`
   （`main.cpp` 里紧挨 `ImGui::Render()` 之前），由它挑**本帧最高优先级**的那一个播。
   `ui::SeKind` 的顺序 = 优先级（click < select < level_choose < window_open < window_close），
@@ -720,15 +724,42 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
 - **结算画面难度配色**：`difficultyColor()`（`SongSelect.hpp` 公开，选曲徽章和结算共用）
   现在同时给**难度胶囊**和**曲绘边框**上色。原来是写死的 `kPink`，因为参考截图是 EXPERT 的，
   于是打 EASY 也是红的。
-- **确定键光效**（`main.cpp` 的 confirmFlash 块）：原来是一圈**平的 50% 白三角**（硬边、
-  没有衰减）+ 两层满 alpha 的实心圆。现在：峰值亮度 `kConfirmPeak = 0.88`（不到纯白，
-  纯白帧看着像"切一刀"而不是光）、射线改成**顶点级渐变**（ImGui 1.92 没有
-  `AddTriangleFilledMultiColor`，用 `PrimReserve/PrimWriteVtx/PrimWriteIdx` 手写：
-  两个重合的中心顶点亮、两个尖端顶点 alpha 0），跟着 cover 一起淡出；
-  全屏圆改成 16 层同心圆**叠加**出径向渐变（外圈只有 ~0.18 alpha，边缘不再是硬圆）。
-  调试：`--confirm-flash [<sec>]` 单独放一次这个特效（不加载歌曲），配 `--screenshot` 看帧。
-  实测（1280x720，按钮中心 1083,521）：年龄 0.06s 时射线方向 280px=187 / 420px=179 / 850px=153、
-  射线之间 121（有渐变、向外衰减）；0.32s 时中心 244、四角 ~140（不再是全屏死白）。
+- **确定键光效**（`main.cpp` 的 confirmFlash 块，2026-09-16 重做）：原来是一圈**平的 50% 白三角**
+  （硬边、没有衰减）+ 两层满 alpha 的实心圆，而且**铺不满屏**——圆半径按"按钮到最远角"给，
+  16 层同心圆每层恒定 0.18 alpha 叠起来，最远那个角只叠到 ~29%，加载那 1 秒能看见屏幕。
+  现在：
+  - **包络**加了一段 attack（`kConfirmAttack = 0.09s`，smoothstep 进），旧版第 0 帧就是全亮，
+    那是"硬"的一半；
+  - 半径改成两个值：`rOuter = want * (0.85 + 0.90*cover)`、`rInner = 0.62 * rOuter`。
+    `want` = 按钮到最远角的距离；**关键是 `rInner`（满亮度核心）必须越过 `want`**，
+    cover=1 时 rInner = 1.085 want，于是 `startSession` 那一下整屏都是峰值亮度；
+  - 40 层圆的 alpha 是**解出来的**，不是常数：第 i 层的目标合成率 = smoothstep(径向位置)，
+    而叠加是 `1-prod(1-a_i)`，所以 `a_i = (target - comp) / (1 - comp)`。
+    这样出来的是真径向渐变（`target-alpha` 只出现在最外圈，等于 0），外缘没有硬边。
+  - 峰值仍是 `kConfirmPeak = 0.88`（纯白帧看着像切一刀而不是光）。
+  - 实测（1280x720，按钮中心 1083,521）：t=0.10 时最远角 156 / 近角 241（有渐变、软）；
+    t=0.32（正白的时刻）四角 233~241、中心 238 —— **整屏铺满**。
+  - 调试：`--confirm-flash [<sec>]` 单独放一次这个特效（不加载歌曲），配 `--screenshot` 看帧。
+    无头断言用像素探针量四角 / 中心亮度（见下「验证」）。
+- **`ui::combo` 的弹窗动画曾经把第一行吃掉**（2026-09-16 修，症状：分组下拉里「关闭」没了）。
+  两个坑叠在一起，改 `Ui.cpp` 的 combo 前必读：
+  1. **`ImGui::IsPopupOpen("##combo")` 永远是 false**。它比的是弹窗**窗口自身**的 ID，
+     而 combo 的弹窗窗口名是 `"##Combo_%02d"`（按嵌套深度回收），跟 combo 的 ID 无关。
+     所以 `animValue` 的 t 恒为 0 → 弹窗被永久上移 14px、箭头也从来没转过。
+     现在用一个 `static std::unordered_map<ImGuiID,bool> comboOpen` 记住**上一帧**的
+     `BeginCombo` 返回值来驱动动画（晚一帧正好是缓动要的"开门那帧 t≈0"）。
+  2. **绝对不要 `SetWindowPos()` 挪弹窗**。ImGui 在 `Begin()` 里就把弹窗的裁剪矩形
+     (`ClipRect` / `InnerRect`) 按当时的位置算好了，帧中途挪窗口只改 `Pos` 和内容游标
+     （`SetWindowPos` 会把 `CursorStartPos` 一起偏移），**内容就跑到裁剪矩形外面被裁掉**——
+     上移 14px 正好裁掉第一行。要动只能动内容，而内容一样会出裁剪框。
+     所以入场动画改成**淡入弹窗内容**（`ImGuiStyleVar_Alpha` 只 push 在 popup 内部，
+     不能包住 `BeginCombo`，否则关着的 combo 也一起变透明）。
+  3. 另外 `ImGuiComboFlags_HeightSmall` 把弹窗高度卡在 4 行，而它算行高时**没算调用方的
+     `FramePadding`**（`Selectable` 的 bb 高是 `label_size.y + FramePadding.y*2`），
+     选曲界面那套 padding 下 4 行会多出 ~4px，最后一行被削掉。
+     `ui::combo` 内部把它换成 `HeightRegular`（弹窗是 `AlwaysAutoResize`，仍然贴着内容）。
+  无头验证：跑起来后用 `winsend.exe` 点下拉框（1920x1080 时分组框中心 ≈ `882,50`），
+  截图后数弹窗区域里有几行文字（原来是 3 行，现在 4 行）。
 
 ## 账户 / 等级（2026-09-15，`game::AccountData`）
 
@@ -878,6 +909,66 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
   4. 方向改成**按位移主轴判**（侧向在 0.85 倍内算侧向），并且**判失败不再吃掉手势**
      （只有打中才清零位移 + 上 60ms 的锁）。数值模型：温和 343px/s 上传（原来永不触发）、
      1440p 窗口、一半采样同毫秒丢样本这三种情况现在都能判出 UP，45° 斜划判 RIGHT（原来判 UP）。
+
+## 贴图瘦身 / UTF-8 路径 / 扫描开销（2026-09-16 晚）
+
+- **贴图瘦身是改文件，不是改加载策略**。`loadTextureFromFile` 那套 maxDim/cropHeight
+  策略（`keepRawTextures()`）**仍然默认关闭**——缩/裁之后的纹理尺寸和调用方自己维护的
+  sprite 矩形对不上（2026-09-14 踩过，画面整体错位）。所以瘦身只动**消费方与纹理尺寸无关**
+  的那几张，`.workbuddy/tools/shrink_assets.py` 里就是这份白名单（原图备份在
+  `.workbuddy/backup/assets-20260916/`），跑 `--apply` 生效：
+
+  | 文件 | 改动 | 解码内存 |
+  |---|---|---|
+  | `assets/mmw/stage.png` | 2048x2840 → **裁到 2048x1176**（下面 1664 行没有任何四边形采样） | 23.3 → 9.6 MB |
+  | `assets/mmw/background_overlay.png` | 2048 → 1024（整张 UV，房间底板本来就是糊的） | 16.8 → 4.2 MB |
+  | `assets/select/img_smartphone.png` | 1034x1942 → 517x971（画进一个矩形，内部布局全是比例） | 8.0 → 2.0 MB |
+
+  合计 `[tex] 53.2 MB uploaded` → **28.2 MB**，启动 `stage textures` 484ms → ~100ms。
+  A/B 验证：只换这三张、同一时刻截图，全图差异和"同一套素材跑两次"的噪声完全一致
+  （mean 3.53 / >12 的像素 2.63%）→ 视觉无损。
+  `buildStaticVertices()` 的舞台 sprite 现在写 `min(2048, mStage.width) x min(1176, mStage.height)`：
+  裁过的文件和重新下载的原始文件都会映射到**同一片像素**，谁都不会被拉变形。
+  **别动**：`notes*.png`（音符图集）、`effect.png`（判定特效）、`longNoteLine*`、`touchLine*`、
+  `assets/mmw/overlay/**`（HUD 精灵，全都有写死的 sprite 矩形）——HUD 那套的瘦身走
+  `overlay_opt/` + `shrink_hud.exe`（整张等比缩，UV 仍然对得上）。
+- **路径一律 UTF-8**（`path_utf8.hpp`，2026-09-16 修启动崩溃）。Windows 上 `fs::path` 的窄端
+  是**本地 ANSI 代码页**，`fs::path(std::string)` / `path.string()` 碰到代码页表示不了的字符会
+  **抛 `filesystem_error`**，没人接 → `std::terminate`。实测：谱面目录里放一个
+  `テスト曲_初音ミク_🎵_master.sus`，进程在 `[boot] chart scan` 之前就死了（cp936 机器上
+  一串 UTF-8 字节不是合法 GBK 双字节序列）。所以：
+  - `ChartEntry::susPath` / `bgmPath` / `coverPath`、`userDataPath()` 系列、`--sus` 的参数
+    **全是 UTF-8**（和 `SDL_GetBasePath()`、`utf8Argv`、nlohmann::json 一致，也是 miniaudio
+    和开了 `STBI_WINDOWS_UTF8` 的 stb_image 要的编码）；
+  - 过 `fs::path` 边界只走 `path_utf8::toPath()` / `path_utf8::fromPath()`，
+    不许再出现 `fs::path(窄串)` 和 `.string()`（`game/SongSelect.cpp` 里已经清干净，
+    调用方想省事就照它那两行包装 `toFsPath` / `fromFsPath`）；
+  - `build.sh` 加了 `-DSTBI_WINDOWS_UTF8`（stb 才会用 `_wfopen`）；
+    miniaudio 自己就把 UTF-8 转宽字符，不用管。
+  回归：`build/cppsekai.exe --charts <含 emoji 文件名的目录>` 必须能扫出 1 首并出图。
+  顺带修好的：成绩 key（`scoreKey()` = 谱面文件名）以前是 ACP 窄串写进 JSON 的，
+  非 ASCII 名会存成乱码，现在和 ASCII 名一样（ASCII 下 ACP == UTF-8，老档兼容）。
+- **`findSidecar` 的目录兜底以前是 O(n²)**（2026-09-16 修）。关键字兜底每次都
+  `directory_iterator` 重走一遍整个谱面目录，而没有 `<stem>.png` 的谱面（很常见）每首都会走到
+  这条分支。实测 **700 首 = 扫描 3.2s**（70 首 192ms，10 倍数量 17 倍耗时）。
+  现在 `folderListing()` 按目录缓存一份排序后的 `(小写文件名, 完整路径)`，关键字兜底和
+  **精确名探测**都改成查内存（后者以前每首约 12 次 stat）；`scanChartFolder()` 开头
+  `clearFolderListingCache()`，所以 F5 / 刷新按钮照样能看到新丢进来的谱面。
+  **这条缓存只在扫描期有效，不要提到扫描外面用**（否则会藏住新文件）。
+  实测：700 首 3.25s → **0.25s**（热）。
+- **`scanAllChartDirs` 曾经把每个候选目录扫两遍**（2026-09-16 修）：`chartsDir`
+  （第一个非空候选）原来是靠再调一次 `scanChartFolder` 判断"空不空"找出来的，结果整个扫描
+  白跑一遍。现在在合并那一趟里顺手记下来。**别再为了"探测有没有谱面"调 `scanChartFolder`**，
+  它是全量扫描 + 每首开文件。
+- `CPSEKAI_SCAN_TIMING=1` 打 `[scan] N chart(s): header X ms, sidecar Y ms`（开文件读 SUS 头
+  和各 sidecar 的耗时分解）。剩下的时间在 `entries.push_back`（每条 15+ 个 string）和
+  `std::sort` 上，700 首约 0.15s，不值得再动。
+- 无头量性能：`[boot] chart scan` 行给的是**累计到那一刻**的耗时（前面的行一减就是这一段）；
+  造大库就用脚本把一首谱复制 N 份到 `build/charts_bench/`，再 `--charts charts_bench`。
+  注意 `--charts` 收的是**能被 Windows 打开的路径**：Git Bash 的 `$(pwd)` 会给出
+  `/d/...` 这种 MSYS 路径，`--charts "$(pwd)/charts_bench"` 会扫出 0 首（用相对路径或 `D:/...`）。
+- 扫描本身的固定开销还有：每首 `readSusHeader`（开一个文件读 40 行）+ sidecar 的存在性检查。
+  这是 715 首那套的真实成本（约 0.4s），暂时够用；要再快只能并行，不是必须。
 
 ## 待办（按优先级）
 

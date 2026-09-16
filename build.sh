@@ -23,6 +23,9 @@ CXXFLAGS=(
     -Wl,--subsystem,windows
     -D_XM_NO_INTRINSICS_
     -D_CRT_SECURE_NO_WARNINGS
+    # stb_image must read UTF-8 paths (it opens files with _wfopen when this is
+    # set); everything the game hands it is UTF-8, see path_utf8.hpp.
+    -DSTBI_WINDOWS_UTF8
     -Icore/native
     -Icore/native/src
     -Icore/native/generated

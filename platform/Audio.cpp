@@ -153,6 +153,7 @@ void AudioEngine::loadUiSe(const std::string& dir)
         "level_choose.mp3",
         "window_open.mp3",
         "window_close.mp3",
+        "start.mp3",
     };
     for (int kind = 0; kind < UiSeCount; ++kind) {
         const std::string path = dir + "/" + kFiles[kind];

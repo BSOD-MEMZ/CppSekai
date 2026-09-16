@@ -52,6 +52,7 @@ class AudioEngine
         UiSeLevelChoose,
         UiSeWindowOpen,
         UiSeWindowClose,
+        UiSeStart,
         UiSeCount,
     };
     static constexpr int UI_SE_POOL = 3;

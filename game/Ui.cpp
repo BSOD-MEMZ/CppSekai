@@ -545,34 +545,53 @@ bool combo(const char* id, const char* preview, const std::vector<std::string>& 
         return false;
     }
     const float s = scaleHint > 0.0f ? scaleHint : scale();
+    // ImGuiComboFlags_HeightSmall caps the popup at 4 rows, but its row estimate
+    // ignores the caller's FramePadding while Selectable::height does not - with
+    // the select screen's padding a 4-item list is ~4px taller than the cap, and
+    // the last row gets shaved. HeightRegular only raises the ceiling; the popup
+    // is AlwaysAutoResize, so it still hugs the content either way.
+    if (flags & ImGuiComboFlags_HeightSmall) {
+        flags = (flags & ~ImGuiComboFlags_HeightSmall) | ImGuiComboFlags_HeightRegular;
+    }
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImGui::PushID(id);
     const ImGuiID key = ImGui::GetID("##combo");
     // ImGui rebuilds the popup from scratch on every frame it is open, so an
-    // eased 0..1 is what turns "it appeared" into "it slid in". The value is read
-    // *before* BeginCombo, so on the frame the popup opens it is still 0 and the
-    // popup starts offset, then settles - that is the animation.
+    // eased 0..1 is what turns "it appeared" into "it eased in".
     //
-    // Deliberately no alpha: pushing ImGuiStyleVar_Alpha around BeginCombo made
-    // the *closed* combo translucent too (t stays 0 while closed), which is how
-    // this ended up looking permanently washed out.
-    const float t = animValue(key, ImGui::IsPopupOpen("##combo", ImGuiPopupFlags_None) ? 1.0f : 0.0f,
-        14.0f);
+    // The open flag is remembered from the *previous* frame on purpose:
+    // ImGui::IsPopupOpen(<combo id>) can never be true here - it compares against
+    // the popup *window*'s own id, and a combo's popup window is named
+    // "##Combo_%02d" (recycled by depth), not after the combo. That is how the
+    // slide animation ended up permanently stuck at t = 0: the popup sat 14px too
+    // high forever and the first row (关闭 in the group-by combo) was clipped
+    // away by the popup's own clip rectangle, which Begin() had already computed
+    // from the un-moved position. Reading it one frame late gives the same easing
+    // (t is ~0 on the frame the popup opens) without the lie.
+    static std::unordered_map<ImGuiID, bool> comboOpen;
+    const float t = animValue(key, comboOpen[key] ? 1.0f : 0.0f, 14.0f);
     ImGui::SetNextItemWidth(width);
     bool changed = false;
-    if (ImGui::BeginCombo("##combo", preview, flags | ImGuiComboFlags_NoArrowButton)) {
-        // Slide the popup down into place. ImGui re-anchors it under the combo on
-        // every frame (SetNextWindowPos with ImGuiCond_Always inside
-        // BeginComboPopup), so this offset is recomputed from the anchor and
-        // cannot drift.
-        const ImVec2 popupPos = ImGui::GetWindowPos();
-        ImGui::SetWindowPos(ImVec2(popupPos.x, popupPos.y - (1.0f - t) * 14.0f * s));
+    const bool popupOpen = ImGui::BeginCombo("##combo", preview, flags | ImGuiComboFlags_NoArrowButton);
+    comboOpen[key] = popupOpen;
+    if (popupOpen) {
+        // NOTE: never SetWindowPos() the popup to animate it in - moving the
+        // window mid-frame leaves its content outside the clip rectangle that
+        // Begin() already computed, so whichever row ends up outside simply
+        // disappears. Fade the contents instead; the rows stay put.
+        const float fade = std::clamp(t * 1.6f, 0.0f, 1.0f); // snap in fast, then settle
+        if (fade < 0.999f) {
+            ImGui::PushStyleVar(ImGuiStyleVar_Alpha, fade);
+        }
         for (int i = 0; i < static_cast<int>(items.size()); ++i) {
             if (ImGui::Selectable(items[i].c_str(), *index == i)) {
                 *index = i;
                 changed = true;
                 se(SeClick);
             }
+        }
+        if (fade < 0.999f) {
+            ImGui::PopStyleVar();
         }
         ImGui::EndCombo();
     }

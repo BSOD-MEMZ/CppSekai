@@ -12,6 +12,7 @@
 #include "imgui_impl_opengl3.h"
 
 #include "core_api.hpp"
+#include "path_utf8.hpp"
 #include "platform/Audio.hpp"
 #include "platform/Renderer.hpp"
 #include "platform/SystemMedia.hpp"
@@ -209,7 +210,9 @@ namespace
 
     std::string readFile(const std::string& path)
     {
-        std::ifstream file(path, std::ios::binary);
+        // `path` is UTF-8 (see path_utf8.hpp); the stream has to be opened with
+        // it decoded, not with the ANSI code page.
+        std::ifstream file(path_utf8::toPath(path), std::ios::binary);
         std::ostringstream stream;
         stream << file.rdbuf();
         return stream.str();
@@ -1677,7 +1680,15 @@ int main(int argc, char** argv)
         std::vector<game::ChartEntry> found;
         std::set<std::string> seen;
         for (const std::string& candidate : chartCandidates) {
-            for (game::ChartEntry& entry : game::scanChartFolder(candidate)) {
+            std::vector<game::ChartEntry> scanned = game::scanChartFolder(candidate);
+            // Remember the first candidate that had anything: this used to be
+            // found by scanning every candidate a *second* time further down,
+            // which doubled the whole chart scan for nothing (~1.3 s on a
+            // 700-chart library).
+            if (!scanned.empty() && chartsDir.empty()) {
+                chartsDir = candidate;
+            }
+            for (game::ChartEntry& entry : scanned) {
                 const std::string key = chartFileKey(entry.susPath);
                 if (key.empty() || !seen.insert(key).second) {
                     continue;
@@ -1701,12 +1712,6 @@ int main(int argc, char** argv)
 
     std::vector<game::ChartEntry>& chartEntries = entries;
     chartEntries = scanAllChartDirs();
-    for (const std::string& candidate : chartCandidates) {
-        if (!game::scanChartFolder(candidate).empty()) {
-            chartsDir = candidate;
-            break;
-        }
-    }
     if (chartsDir.empty()) {
         chartsDir = chartCandidates.front();
     }
@@ -1877,6 +1882,7 @@ int main(int argc, char** argv)
     // stage plate takes over a second, and a frozen frame is exactly what this
     // hides - the session is only started once the screen is fully white.
     constexpr float kConfirmExpand = 0.28f; // burst grows from the button
+    constexpr float kConfirmAttack = 0.09f; // soft onset - no hard "pop" on frame 0
     constexpr float kConfirmHold = 0.16f;   // brightest, session loads here
     constexpr float kConfirmFade = 0.75f;   // the glow lifts off over the intro
     // Peak brightness of the flash. Deliberately below 1: a frame of solid
@@ -3806,6 +3812,7 @@ int main(int argc, char** argv)
                 confirmFlashActive = true;
                 confirmFlashTime = 0.0f;
                 confirmFlashOrigin = selectConfirmCenter;
+                ui::se(ui::SeStart); // start.mp3, fires with the burst
             } else if (action == game::SelectSettings) {
                 showDebug = true;
             } else if (wantRescan) {
@@ -3823,6 +3830,7 @@ int main(int argc, char** argv)
                 confirmFlashActive = true;
                 confirmFlashTime = 0.0f;
                 confirmFlashOrigin = selectConfirmCenter;
+                ui::se(ui::SeStart);
                 std::printf("[ui] confirm flash at %.0f,%.0f (debug)\n", selectConfirmCenter.x,
                     selectConfirmCenter.y);
                 std::fflush(stdout);
@@ -4543,27 +4551,40 @@ int main(int argc, char** argv)
             }
             if (confirmFlashActive) {
                 const float t = confirmFlashTime;
+                // Envelope: soft onset -> plateau (the session loads inside it) ->
+                // soft tail. The attack is the half of "it looks hard" the old
+                // version missed: it jumped to full brightness on frame 0.
+                float env = 1.0f;
+                if (t < kConfirmAttack) {
+                    const float a = t / kConfirmAttack;
+                    env = a * a * (3.0f - 2.0f * a);
+                }
                 // Cover grows with a smoothstep (no hard arrival), and the
-                // brightness envelope never reaches pure white - a 100% opaque
-                // frame reads as a cut, not as light.
+                // brightness envelope never reaches pure white.
                 float cover = 1.0f;
                 if (t < kConfirmExpand) {
                     const float u = t / kConfirmExpand;
                     cover = u * u * (3.0f - 2.0f * u);
                 }
-                float alpha = kConfirmPeak;
                 if (t > kConfirmExpand + kConfirmHold) {
                     const float f =
                         std::clamp((t - kConfirmExpand - kConfirmHold) / kConfirmFade, 0.0f, 1.0f);
                     const float inv = 1.0f - f;
-                    alpha *= inv * inv * (3.0f - 2.0f * inv); // smoothstep out: slow, soft tail
+                    env *= inv * inv * (3.0f - 2.0f * inv); // smoothstep out: slow, soft tail
                 }
+                const float alpha = kConfirmPeak * env;
                 if (alpha > 0.002f) {
                     const ImVec2 o = confirmFlashOrigin;
-                    // Far corner: the disc has to reach it to fill the screen.
+                    // Distance the light has to travel to leave no pixel dark.
+                    // The radius is *not* that distance: rInner (the fully lit
+                    // core) has to pass it, otherwise the far corners sit inside
+                    // the falloff and the loading shows through the white. That
+                    // was the "did not fill the screen" half of the bug.
                     const float farX = std::max(o.x, w - o.x);
                     const float farY = std::max(o.y, h - o.y);
-                    const float radius = std::sqrt(farX * farX + farY * farY) * 1.06f;
+                    const float want = std::sqrt(farX * farX + farY * farY);
+                    const float rOuter = want * (0.85f + 0.90f * cover);
+                    const float rInner = rOuter * 0.62f; // -> 1.085 * want when cover = 1
                     // Rays: the "light" read. Each one is a degenerate quad -
                     // two coincident vertices in the button, two at the tip -
                     // so ImGui can blend it from bright to fully transparent
@@ -4574,7 +4595,7 @@ int main(int argc, char** argv)
                     const float rayFade = std::clamp(1.0f - cover * 1.3f, 0.0f, 1.0f);
                     if (rayFade > 0.01f) {
                         const int rays = 12;
-                        const int rayA = static_cast<int>(alpha * rayFade * 150.0f);
+                        const int rayA = static_cast<int>(alpha * rayFade * 130.0f);
                         const ImU32 colIn = IM_COL32(255, 255, 255, rayA);
                         const ImU32 colOut = IM_COL32(255, 255, 255, 0);
                         // ImGui 1.92 has no gradient triangle helper, so the
@@ -4585,8 +4606,8 @@ int main(int argc, char** argv)
                         for (int i = 0; i < rays; ++i) {
                             const float ang =
                                 (6.2831853f / static_cast<float>(rays)) * static_cast<float>(i) + 0.21f;
-                            const float len = radius * (0.42f + 0.9f * cover);
-                            const float spread = radius * (0.006f + 0.005f * static_cast<float>(i % 3));
+                            const float len = rOuter * (0.45f + 0.55f * cover);
+                            const float spread = want * (0.008f + 0.006f * static_cast<float>(i % 3));
                             const ImVec2 dir(std::cos(ang), std::sin(ang));
                             const ImVec2 side(-dir.y, dir.x);
                             const ImVec2 tipA(o.x + dir.x * len + side.x * spread,
@@ -4607,20 +4628,37 @@ int main(int argc, char** argv)
                             fg->PrimWriteIdx(static_cast<ImDrawIdx>(base + 3));
                         }
                     }
-                    // The disc that ends up covering the screen: stacked
-                    // concentric circles, outer first, each adding a little
-                    // opacity - the accumulation is the radial gradient, so the
-                    // light has no rim at all and the centre still goes solid
-                    // enough to hide the session load underneath it.
-                    const float rOuter = radius * cover * 1.02f + 1.0f;
-                    if (rOuter > 1.0f) {
-                        constexpr int kRings = 16;
-                        const int ringA = static_cast<int>(alpha * 255.0f * 0.18f);
-                        for (int i = kRings - 1; i >= 0; --i) {
-                            const float u = static_cast<float>(i) / static_cast<float>(kRings - 1);
-                            fg->AddCircleFilled(o, rOuter * (0.18f + 0.82f * u),
-                                IM_COL32(255, 255, 255, ringA), 64);
+                    // The disc that ends up covering the screen. It is built out
+                    // of concentric filled circles, outermost first, and each
+                    // ring's alpha is *solved* so the accumulated coverage equals
+                    // the wanted profile at that radius (coverage accumulates as
+                    // 1 - prod(1 - a_i), which is what makes the stack a smooth
+                    // gradient instead of a set of visible steps). 16 rings at a
+                    // constant 0.18 alpha - the old version - left the far corner
+                    // at 29% and a visible rim at the outer edge; that is exactly
+                    // what "hard" and "not full screen" meant.
+                    constexpr int kRings = 40;
+                    const float band = std::max(rOuter - rInner, 1e-3f);
+                    float comp = 0.0f; // coverage already laid down
+                    for (int i = 0; i < kRings; ++i) {
+                        const float u = static_cast<float>(i) / static_cast<float>(kRings - 1);
+                        const float r = rOuter + (rInner - rOuter) * u;
+                        if (r < 0.75f) {
+                            break;
                         }
+                        const float d = std::clamp((rOuter - r) / band, 0.0f, 1.0f);
+                        const float target = alpha * d * d * (3.0f - 2.0f * d);
+                        if (target <= comp + 1e-4f) {
+                            continue;
+                        }
+                        const float add = (target - comp) / std::max(1.0f - comp, 1e-3f);
+                        comp += add * (1.0f - comp);
+                        const int a8 = static_cast<int>(std::clamp(add, 0.0f, 1.0f) * 255.0f + 0.5f);
+                        if (a8 <= 0) {
+                            continue;
+                        }
+                        const int seg = std::clamp(static_cast<int>(r * 0.35f), 16, 192);
+                        fg->AddCircleFilled(o, r, IM_COL32(255, 255, 255, a8), seg);
                     }
                 }
             }

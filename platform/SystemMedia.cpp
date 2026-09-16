@@ -8,6 +8,8 @@
 // order of an interface's methods in metadata is its ABI vtable order.
 #include "SystemMedia.hpp"
 
+#include "path_utf8.hpp"
+
 #include <filesystem>
 #include <system_error>
 
@@ -411,9 +413,11 @@ namespace
         {
             std::error_code ec;
             const std::filesystem::path full =
-                std::filesystem::weakly_canonical(std::filesystem::path(rawPath), ec);
+                std::filesystem::weakly_canonical(path_utf8::toPath(rawPath), ec);
             if (!ec && !full.empty()) {
-                path = full.string();
+                // Back to UTF-8, not to the ANSI code page: the URI below is
+                // percent-encoded byte by byte and has to stay UTF-8.
+                path = path_utf8::fromPath(full);
             }
         }
         static const char* kHex = "0123456789ABCDEF";

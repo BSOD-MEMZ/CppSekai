@@ -1176,7 +1176,16 @@ void Renderer::buildStaticVertices()
         {WORLD_STAGE_LEFT, WORLD_STAGE_TOP + WORLD_STAGE_HEIGHT},
         {WORLD_STAGE_LEFT, WORLD_STAGE_TOP},
     }};
-    buildQuad(mStaticStageVertices, mStage, stagePoints, {0.0f, 0.0f, 2048.0f, 1176.0f}, {1.0f, 1.0f, 1.0f, 1.0f});
+    // The quad only ever samples the top-left 2048x1176 of the plate. Take the
+    // sample window from the texture rather than trusting the numbers: the
+    // shipped stage.png has already been cropped to exactly those rows (the
+    // other 1664 rows were 13 MB of texture memory nobody looked at), and a
+    // re-downloaded original is 2048x2840 - `min` keeps both mapping to the same
+    // pixels instead of silently squashing one of them.
+    const float stageSampleW = std::min(2048.0f, static_cast<float>(mStage.width));
+    const float stageSampleH = std::min(1176.0f, static_cast<float>(mStage.height));
+    buildQuad(mStaticStageVertices, mStage, stagePoints, {0.0f, 0.0f, stageSampleW, stageSampleH},
+        {1.0f, 1.0f, 1.0f, 1.0f});
 }
 
 void Renderer::drawStaticScene(float backgroundBrightness, float playfieldVisibility)

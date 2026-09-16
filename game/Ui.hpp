@@ -40,6 +40,7 @@ enum SeKind
     SeLevelChoose, // difficulty button
     SeWindowOpen,  // a card / dialog appeared
     SeWindowClose, // a card / dialog started closing
+    SeStart,       // the white burst when 确定 launches a live (start.mp3)
 };
 
 // Wires the component library to the audio engine (call once after audio init).
