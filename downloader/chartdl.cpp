@@ -1892,6 +1892,8 @@ namespace
                             SetWindowTextW(gOutDirEdit, path);
                             refreshDownloadedState();
                             rebuildList(windowText(gSearch));
+                            gDlSettings.outDir = pathText(fs::path(gOutDir));
+                            saveDlSettings(gDlSettings);
                         }
                         CoTaskMemFree(item);
                     }
@@ -2018,6 +2020,9 @@ namespace
                     gOutDir = windowTextW(gOutDirEdit);
                     refreshDownloadedState();
                     rebuildList(windowText(gSearch));
+                    // Remembered, so the next launch opens on the same folder.
+                    gDlSettings.outDir = pathText(fs::path(gOutDir));
+                    saveDlSettings(gDlSettings);
                     return 0;
                 }
                 return 0;
