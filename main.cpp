@@ -1097,6 +1097,28 @@ int main(int argc, char** argv)
     std::printf("[profile] active='%s' (%zu user(s), dir %s)\n", activeProfileId.c_str(),
         profiles.size(), userDataDir.c_str());
     game::loadUserData(userDataFile, userSettings, scores, account);
+    // The 用户 combobox lists the profile *files* (profiles/index.json), the
+    // nickname lives inside the profile data - two labels for one user. If the
+    // file still carries an older label (renamed before this was tied
+    // together, or hand-edited), fix it up on load so the combobox agrees.
+    // A second window that picked up one of the *other* profiles does the same
+    // for its own (see the multi-open branch below).
+    auto syncProfileLabel = [&]() {
+        if (account.name.empty()) {
+            return;
+        }
+        for (game::UserProfile& user : profiles) {
+            if (user.id == activeProfileId && user.name != account.name) {
+                user.name = account.name;
+                game::saveProfiles(userDataDir, profiles, activeProfileId);
+                std::printf("[profile] label of '%s' updated to '%s'\n", user.id.c_str(),
+                    user.name.c_str());
+                std::fflush(stdout);
+                break;
+            }
+        }
+    };
+    syncProfileLabel();
 
     // ------------------------------------------------------------------
     // Instance policy (UserSettings::instanceMode).
@@ -1209,6 +1231,9 @@ int main(int argc, char** argv)
                 scores.clear();
                 account = game::AccountData{};
                 game::loadUserData(userDataFile, userSettings, scores, account);
+                // This window ended up on somebody else's profile: give that
+                // profile the same label/nickname treatment as the main path.
+                syncProfileLabel();
             }
             std::printf("[instance] multi-open -> profile '%s' (%zu user(s))\n", chosen.c_str(),
                 profiles.size());
@@ -1239,7 +1264,9 @@ int main(int argc, char** argv)
     // ------------------------------------------------------------------
     platform::PartyLink party;
     std::string partyLabel; // also goes into the window title (see below)
-    if (partyGiven ? partyForced : userSettings.multiplayer) {
+    const bool partyWanted = partyGiven ? partyForced : userSettings.multiplayer;
+    const bool roomOpen = platform::PartyLink::roomExists();
+    if (partyWanted || roomOpen) {
         if (party.init()) {
             std::string label = !partyName.empty() ? partyName : account.name;
             if (label.empty()) {
@@ -1247,11 +1274,21 @@ int main(int argc, char** argv)
             }
             partyLabel = label;
             party.setName(label);
-            std::printf("[party] ready: seat %d as %s ('%s'), %d player(s) so far\n", party.slot(),
-                party.isHost() ? "host" : "member", label.c_str(), party.playerCount());
+            std::printf("[party] ready: seat %d as %s ('%s'), %d player(s) so far%s\n", party.slot(),
+                party.isHost() ? "host" : "member", label.c_str(), party.playerCount(),
+                (!partyWanted && roomOpen) ? " [joined a room this profile has switched off]"
+                                           : "");
+            // Nothing on this machine has a touchscreen-friendly answer to "the
+            // first tap on a background window is swallowed": SDL ignores the
+            // click that activates a window by default, so the first tap of a
+            // note in the window that is not in front would simply vanish.
+            SDL_SetHint(SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH, "1");
         } else {
             std::printf("[party] shared room unavailable, continuing solo\n");
         }
+        std::fflush(stdout);
+    } else {
+        std::printf("[party] off (设置 -> 系统 -> 多人游玩 没开，本机也没有别人开好的房间)\n");
         std::fflush(stdout);
     }
     if (!speedGiven) {
@@ -2387,6 +2424,10 @@ int main(int argc, char** argv)
         account = freshAccount;
         activeProfileId = id;
         game::saveProfiles(userDataDir, profiles, activeProfileId);
+        syncProfileLabel(); // the combobox label follows the nickname
+        if (party.active()) {
+            party.setName(account.name.empty() ? partyLabel : account.name);
+        }
 
         // Re-derive every live mirror from the profile that was just loaded.
         // persistUserData() copies these *into* userSettings before saving, so
@@ -2864,14 +2905,28 @@ int main(int argc, char** argv)
                             "只允许一个实例（再启动就切回已有窗口）\0"
                             "允许多开，新实例登录另一个用户\0")) {
                         userSettings.instanceMode = std::clamp(mode, 0, 1);
+                        // 多人游玩 only means something with several windows, so
+                        // switching to single-instance turns it off instead of
+                        // leaving a switch that can never do anything.
+                        if (userSettings.instanceMode == 0 && userSettings.multiplayer) {
+                            userSettings.multiplayer = false;
+                            std::printf("[settings] multiplayer off (single instance)\n");
+                            std::fflush(stdout);
+                        }
                         persistUserData();
                     }
                 }
                 contentLeft();
                 {
-                    bool partyBox = userSettings.multiplayer;
-                    ui::checkBox("多人游玩（同机多窗口一起打）", &partyBox, interior);
-                    if (partyBox != userSettings.multiplayer) {
+                    // Needs 允许多开: greyed out (and inert) when the instance
+                    // policy forbids a second window.
+                    const bool multiOpen = userSettings.instanceMode == 1;
+                    bool partyBox = multiOpen ? userSettings.multiplayer : false;
+                    ui::checkBox("多人游玩（同机多窗口一起打）", &partyBox, interior, multiOpen);
+                    // Only a click can change it: with the policy on single
+                    // instance the greyed box shows "off" and storing that would
+                    // silently wipe the setting just for opening this page.
+                    if (multiOpen && partyBox != userSettings.multiplayer) {
                         userSettings.multiplayer = partyBox;
                         // 多人游玩 needs several windows, so it also switches
                         // the instance policy to multi-open; each copy logs in
@@ -2885,8 +2940,15 @@ int main(int argc, char** argv)
                     }
                 }
                 contentLeft();
-                ImGui::TextWrapped("多人游玩：先开的窗口是房主（负责选曲与播放 BGM），"
-                                   "其它窗口选完难度准备后一起开始。重开所有窗口生效。");
+                if (userSettings.instanceMode == 0) {
+                    ImGui::TextWrapped("多人游玩需要「允许多开」（多个窗口各登录一个用户）。");
+                } else if (userSettings.multiplayer) {
+                    ImGui::TextWrapped("多人游玩已开启：重开所有窗口生效。先开的窗口是房主"
+                                       "（选曲 + 播放 BGM），其它窗口选完难度准备后一起开始。");
+                } else {
+                    ImGui::TextWrapped("多人游玩：先开的窗口是房主（负责选曲与播放 BGM），"
+                                       "其它窗口选完难度准备后一起开始。");
+                }
             } else {
                 // 账户: the local profile. Nothing here leaves the machine, and
                 // none of it is drawn during play - see game/AccountData.
@@ -3014,6 +3076,25 @@ int main(int argc, char** argv)
                 ImGui::SetNextItemWidth(interior);
                 if (ImGui::InputText("##pname", nameBuf, sizeof(nameBuf))) {
                     account.name = nameBuf;
+                    // The 用户 combobox above lists the *profile files*
+                    // (profiles/index.json), which had their own label - so
+                    // renaming yourself left it showing "默认用户" and the two
+                    // looked like unrelated things. Keep them the same label;
+                    // an empty nickname keeps whatever was there before.
+                    for (game::UserProfile& user : profiles) {
+                        if (user.id != activeProfileId || account.name.empty()
+                            || user.name == account.name) {
+                            continue;
+                        }
+                        user.name = account.name;
+                        game::saveProfiles(userDataDir, profiles, activeProfileId);
+                        break;
+                    }
+                    if (party.active()) {
+                        // The room shows this name too (the window title only
+                        // changes on the next launch).
+                        party.setName(account.name.empty() ? partyLabel : account.name);
+                    }
                     persistUserData();
                 }
                 contentLeft();
@@ -4405,25 +4486,49 @@ int main(int argc, char** argv)
                     // it - the others get the difficulty picker and the live
                     // starts once everybody is ready. The white burst still
                     // plays; the load happens on the room screen.
-                    mpEntry = playEntry;
-                    mpEntryIndex = action;
-                    mpMyDifficulty = game::difficultyIndex(playEntry.difficulty);
-                    buildPartyOptions(playEntry.musicId, playEntry.susPath);
-                    mpReady = true; // the host's difficulty is its song-select pick
-                    mpInRoom = true;
-                    mpStatus = "等待其他玩家选择难度";
-                    party.setDifficulty(mpMyDifficulty);
-                    party.setReady(true);
-                    party.lockSong(playEntry.musicId, chartFileName(playEntry.susPath),
-                        playEntry.title.empty() ? playEntry.displayName : playEntry.title,
-                        mpMyDifficulty, static_cast<int>(std::lround(baseLeadInSec * 1000.0)));
-                    mpSeenLockEpoch = party.read().epoch;
+                    if (party.isHost()) {
+                        mpEntry = playEntry;
+                        mpEntryIndex = action;
+                        mpMyDifficulty = game::difficultyIndex(playEntry.difficulty);
+                        buildPartyOptions(playEntry.musicId, playEntry.susPath);
+                        mpReady = true; // the host's difficulty is its song-select pick
+                        mpInRoom = true;
+                        mpStatus = "等待其他玩家选择难度";
+                        party.setDifficulty(mpMyDifficulty);
+                        party.setReady(true);
+                        party.lockSong(playEntry.musicId, chartFileName(playEntry.susPath),
+                            playEntry.title.empty() ? playEntry.displayName : playEntry.title,
+                            mpMyDifficulty, static_cast<int>(std::lround(baseLeadInSec * 1000.0)));
+                        mpSeenLockEpoch = party.read().epoch;
+                    } else {
+                        // A member does not pick the song (that is the host's
+                        // job): 确定 just walks over to the room screen and
+                        // waits there, so nobody readies up for a song that was
+                        // never locked. The host's pick arrives by itself.
+                        mpInRoom = true;
+                        mpReady = false;
+                        mpMyDifficulty = -1;
+                        mpStatus = "等待房主选曲";
+                        party.setDifficulty(-1);
+                        party.setReady(false);
+                        std::printf("[party] waiting for the host to pick a song\n");
+                        std::fflush(stdout);
+                    }
                     confirmFlashActive = true;
                     confirmFlashTime = 0.0f;
                     confirmFlashOrigin = selectConfirmCenter;
                     ui::se(ui::SeStart);
                     state = AppState::Party;
                 } else {
+                    if (party.active() && party.playerCount() < 2) {
+                        // Solo start in a room that is (so far) one player
+                        // deep. Said out loud because "多人游玩 打开了却一个人
+                        // 打" is otherwise invisible: the log says whether the
+                        // other window ever joined.
+                        std::printf("[party] solo start (1 player in the room; "
+                                    "a second window joins the same room)\n");
+                        std::fflush(stdout);
+                    }
                     // Kick off the white burst instead of loading right here: the
                     // load is what stalls, so it runs later, once the screen is
                     // white (see the confirm-flash block below).
@@ -4606,7 +4711,10 @@ int main(int argc, char** argv)
                             resultScheduled = false;
                             resultData = game::ResultData{};
                             songEndBlackout = 0.0f;
-                            party.setSeat(platform::PartySeatPlaying);
+                            // Still "ready" until the live actually starts: the
+                            // seat only turns 游玩中 when the clock is armed
+                            // (below), so the countdown does not claim that
+                            // everybody is already playing.
                             party.clearPlayingScore();
                             std::printf("[party] chart loaded (%s, %s), waiting for the shared start\n",
                                 mpEntry.susPath.c_str(), mpEntry.difficulty.c_str());
@@ -4624,6 +4732,7 @@ int main(int argc, char** argv)
                 // reaches chart time 0 on the same beat (the host's audio clock
                 // is then what the members steer onto, see resolveSongClock).
                 beginSessionClockAt(snap.startCounter);
+                party.setSeat(platform::PartySeatPlaying);
                 state = AppState::Play;
                 std::printf("[party] go (lead-in %.1fs, start counter %llu)\n", leadInSec,
                     static_cast<unsigned long long>(snap.startCounter));
@@ -4631,7 +4740,11 @@ int main(int argc, char** argv)
             }
 
             // ---- room screen ------------------------------------------------
+            // While the room is still a lobby (a member pressed 确定 before the
+            // host picked anything) the picker stays inert, but 返回 still has
+            // to work - otherwise that window would sit here with no way out.
             const bool interactive = snap.phase == platform::PartySongLocked;
+            const bool canLeave = interactive || snap.phase == platform::PartyLobby;
             game::PartyScreenInput room;
             room.windowW = windowW;
             room.windowH = windowH;
@@ -4640,7 +4753,10 @@ int main(int argc, char** argv)
             room.mySlot = party.slot();
             room.host = party.isHost();
             room.title = !mpEntry.title.empty() ? mpEntry.title : mpEntry.displayName;
-            room.songKey = chartFileName(mpEntry.susPath);
+            if (room.title.empty() && snap.phase == platform::PartyLobby) {
+                room.title = "等待房主选曲…";
+            }
+            room.songKey = mpEntry.susPath.empty() ? std::string() : chartFileName(mpEntry.susPath);
             room.artist = mpEntry.artist;
             room.hostDifficultyName = game::difficultyName(snap.hostDifficulty);
             room.options = mpOptions;
@@ -4722,8 +4838,19 @@ int main(int argc, char** argv)
                     + static_cast<Uint64>(
                         (kLoadGraceSec + hostLeadIn) * platform::PartyLink::counterFrequency()));
             }
-            if (interactive && picked.leave) {
+            if (canLeave && picked.leave) {
                 leavePartyRoom(); // ESC / 返回 (the pad's B reaches this too)
+            }
+
+            // Headless check (--screenshot): the room is a menu screen like the
+            // song select, so a plain --screenshot-time captures it (the Select
+            // case below only fires while that screen is up, which is why a
+            // --screenshot run used to be unable to photograph this page).
+            if (!screenshotPath.empty()) {
+                const double shotAt = screenshotTimeGiven ? std::max(0.5, screenshotTimeSec) : 1.2;
+                if (uiClock > shotAt) {
+                    wantScreenshot = true;
+                }
             }
 
         } else if (state == AppState::Play) {

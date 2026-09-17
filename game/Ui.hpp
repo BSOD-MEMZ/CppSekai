@@ -144,7 +144,9 @@ void cardTitle(const char* text, float interiorWidth, float sizePx = 24.0f);
 
 // Pink rounded checkbox with a white check + label, the whole group centered
 // in rowWidth. Toggles *value on click; returns the new value.
-bool checkBox(const char* label, bool* value, float rowWidth = 0.0f);
+// `enabled = false` draws it greyed out and swallows the click - for settings
+// that only make sense under another one (多人游玩 needs 允许多开).
+bool checkBox(const char* label, bool* value, float rowWidth = 0.0f, bool enabled = true);
 
 // pjsk number stepper: a row of small white capsules with the +/- deltas
 // around a gray pill showing the current value, all centered in rowWidth.

@@ -653,7 +653,7 @@ void cardTitle(const char* text, float interiorWidth, float sizePx)
     ImGui::SetCursorScreenPos(ImVec2(pos.x, ruleY + 12.0f * s));
 }
 
-bool checkBox(const char* label, bool* value, float rowWidth)
+bool checkBox(const char* label, bool* value, float rowWidth, bool enabled)
 {
     const float s = scale();
     ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -673,9 +673,15 @@ bool checkBox(const char* label, bool* value, float rowWidth)
     ImGui::Dummy(ImVec2(rowW, boxSize + 8.0f * s)); // reserve the row
 
     ImGui::SetCursorScreenPos(boxLo);
+    if (!enabled) {
+        ImGui::BeginDisabled(); // no hover, no click - the row is inert
+    }
     ImGui::InvisibleButton(label, ImVec2(groupW, boxSize));
-    const bool clicked = ImGui::IsItemClicked();
-    const bool hovered = ImGui::IsItemHovered();
+    const bool clicked = enabled && ImGui::IsItemClicked();
+    const bool hovered = enabled && ImGui::IsItemHovered();
+    if (!enabled) {
+        ImGui::EndDisabled();
+    }
     if (clicked && value != nullptr) {
         *value = !*value;
     }
@@ -689,6 +695,11 @@ bool checkBox(const char* label, bool* value, float rowWidth)
     const float hov = animToggle(boxKey ^ 0x22u, hovered && !checked, 16.0f);
     ImU32 fill = mixColor(kWhiteBtn, IM_COL32(255, 235, 243, 255), hov);
     fill = mixColor(fill, kCheckPink, tick);
+    if (!enabled) {
+        // Greyed out: same shapes, just drained of colour, so a disabled row
+        // still reads as "this is a setting" instead of disappearing.
+        fill = mixColor(fill, IM_COL32(226, 226, 232, 255), 0.65f);
+    }
     // Radius follows the box: the old 10px corner was tuned for a 32px box and
     // looked round-shouldered once the box shrank to 24.
     const float radius = boxSize * 0.26f;
@@ -711,7 +722,8 @@ bool checkBox(const char* label, bool* value, float rowWidth)
     if (tick < 0.99f) {
         dl->AddRect(boxLo, boxHi, withAlpha(kDivider, 1.0f - tick), radius, 0, 2.0f * s);
     }
-    dl->AddText(font, fontSize, ImVec2(boxHi.x + gap, boxLo.y + (boxSize - textSize.y) * 0.5f), kBodyText, label);
+    dl->AddText(font, fontSize, ImVec2(boxHi.x + gap, boxLo.y + (boxSize - textSize.y) * 0.5f),
+        enabled ? kBodyText : withAlpha(kBodyText, 0.45f), label);
     ImGui::SetCursorScreenPos(ImVec2(pos.x, pos.y + boxSize + 8.0f * s));
     return checked;
 }

@@ -758,6 +758,13 @@ void loadUserData(const std::string& path, UserSettings& settings,
     settings.windowHeight = std::clamp(settings.windowHeight, 240, 4320);
     settings.renderScale = std::clamp(settings.renderScale, 0, 1);
     settings.instanceMode = std::clamp(settings.instanceMode, 0, 1);
+    // 多人游玩 needs several windows by definition, so keep the file honest:
+    // main.cpp forces multi-open for such a run anyway, and the settings card
+    // greys the checkbox out whenever the instance policy forbids a second
+    // window (see 设置 -> 系统).
+    if (settings.multiplayer) {
+        settings.instanceMode = 1;
+    }
     settings.bgStyle = std::clamp(settings.bgStyle, 0, 1);
     settings.bgBlur = std::clamp(settings.bgBlur, 0.0f, 1.0f);
     settings.bgDim = std::clamp(settings.bgDim, 0.0f, 1.0f);

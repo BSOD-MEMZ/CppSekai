@@ -134,6 +134,16 @@ double PartyLink::counterToSeconds(std::uint64_t counter)
     return static_cast<double>(counter) / counterFrequency();
 }
 
+bool PartyLink::roomExists()
+{
+    const HANDLE mapping = OpenFileMappingW(FILE_MAP_ALL_ACCESS, FALSE, kMappingName);
+    if (mapping == nullptr) {
+        return false;
+    }
+    CloseHandle(mapping);
+    return true;
+}
+
 bool PartyLink::init()
 {
     if (mActive) {

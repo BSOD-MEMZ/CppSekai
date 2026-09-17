@@ -87,6 +87,15 @@ class PartyLink
     void shutdown();
     bool active() const { return mActive; }
 
+    // True when another window on this machine already has the room open.
+    //
+    // The 多人游玩 switch is stored per *profile*, the room is per machine, so
+    // a second window that logged in as another user (multi-open) would
+    // otherwise come up solo and the first window would never see two players -
+    // which is exactly what "开了多人游玩却进不了房间" looks like. A window
+    // that finds a room joins it whatever its own setting says.
+    static bool roomExists();
+
     // Once per frame, before anything reads the room: keep this seat's
     // heartbeat fresh, drop seats whose owner died, and hand the host role over
     // when the old host is gone.

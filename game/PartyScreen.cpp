@@ -339,9 +339,11 @@ PartyScreenOutput drawPartyScreen(const PartyScreenInput& in)
     }
 
     // ---- right: the player list -------------------------------------------
+    // (listX/listW live outside the block: the charge countdown is drawn into
+    // the same column further down.)
+    const float listX = 1050.0f;
+    const float listW = 750.0f;
     {
-        const float listX = 1050.0f;
-        const float listW = 750.0f;
         textLeft(c, body, 26.0f, listX + 6.0f, 216.0f, kText, "玩家");
         c.dl->AddRectFilled(ImVec2(c.x(listX), c.y(248.0f)), ImVec2(c.x(listX + listW), c.y(936.0f)),
             kCardBg, c.s(20.0f));
@@ -395,9 +397,12 @@ PartyScreenOutput drawPartyScreen(const PartyScreenInput& in)
         const float remain = std::max(0.0f, in.countdownSec);
         char text[16];
         std::snprintf(text, sizeof(text), "%d", static_cast<int>(std::ceil(remain)));
-        c.dl->AddRectFilled(ImVec2(0.0f, 0.0f), ImVec2(W, H), IM_COL32(6, 7, 14, 150));
-        textCentered(c, title, 150.0f, 960.0f, 520.0f, kText, text);
-        textCentered(c, body, 34.0f, 960.0f, 640.0f, kTextDim, "即将开始");
+        c.dl->AddRectFilled(ImVec2(0.0f, 0.0f), ImVec2(W, H), IM_COL32(6, 7, 14, 190));
+        // Centred on the *player list* column: the left card is full of live
+        // widgets (the difficulty chips sit right where a screen-centred number
+        // would land), while the list is mostly empty space below its rows.
+        textCentered(c, title, 140.0f, listX + listW * 0.5f, 560.0f, kText, text);
+        textCentered(c, body, 32.0f, listX + listW * 0.5f, 700.0f, kTextDim, "即将开始");
     }
 
     ImGui::End();

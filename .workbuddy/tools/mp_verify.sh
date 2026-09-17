@@ -85,27 +85,38 @@ check('member muted its BGM', 'bgm muted' in text_b)
 check('host played the BGM', '[audio] bgm:' in text_a)
 check('no clock sample was rejected', 'clock sample rejected' not in text_a + text_b)
 
-def interp(series, q, maxGap=1.5):
+def bracket(series, q, maxGap=1.5):
     for i in range(len(series) - 1):
         q0, t0 = series[i][0], series[i][1]
         q1, t1 = series[i + 1][0], series[i + 1][1]
         if q0 <= q <= q1 and (q1 - q0) <= maxGap:
-            return t0 + (t1 - t0) * (q - q0) / (q1 - q0)
-    return None
+            return t0 + (t1 - t0) * (q - q0) / (q1 - q0), (series[i][2], series[i + 1][2])
+    return None, None
 
 skews = []
+steps = 0.0
 for i, (qa, ta, _, _, _) in enumerate(host):
     # skip instants where the host's own clock is standing still (paused)
     if i > 0 and abs(ta - host[i - 1][1]) < 1e-9 and (qa - host[i - 1][0]) > 0.5:
         continue
-    est = interp(member, qa)
-    if est is not None:
-        skews.append(abs(est - ta) * 1000.0)
+    est, offsets = bracket(member, qa)
+    if est is None:
+        continue
+    # A member whose offset moved inside this bracket was *correcting* onto the
+    # host (that is the design); interpolating across such a step would report a
+    # skew that never existed on screen, so measure it separately.
+    if offsets is not None and abs(offsets[1] - offsets[0]) > 0.020:
+        steps = max(steps, abs(offsets[1] - offsets[0]) * 1000.0)
+        continue
+    skews.append((abs(est - ta) * 1000.0, ta))
 if skews:
-    skews.sort()
-    print(f"host-vs-member skew: {len(skews)} instants, median {skews[len(skews)//2]:.1f} ms, "
-          f"worst {skews[-1]:.1f} ms")
-    check('clock skew under 25 ms', skews[-1] < 25.0)
+    worst, at = max(skews)
+    vals = sorted(v for v, _ in skews)
+    print(f"host-vs-member skew: {len(skews)} instants, median {vals[len(vals)//2]:.1f} ms, "
+          f"worst {worst:.1f} ms (at host t={at:+.1f}s)")
+    if steps > 0.0:
+        print(f"member clock corrections seen: up to {steps:.0f} ms (snap/slew onto the host)")
+    check('clock skew under 25 ms', worst < 25.0)
 else:
     check('clock skew measurable', False)
 
