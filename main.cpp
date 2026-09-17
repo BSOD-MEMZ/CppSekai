@@ -14,11 +14,13 @@
 #include "core_api.hpp"
 #include "path_utf8.hpp"
 #include "platform/Audio.hpp"
+#include "platform/Party.hpp"
 #include "platform/Renderer.hpp"
 #include "platform/SystemMedia.hpp"
 #include "game/Intro.hpp"
 #include "game/Judgement.hpp"
 #include "game/Hud.hpp"
+#include "game/PartyScreen.hpp"
 #include "game/Result.hpp"
 #include "game/SongSelect.hpp"
 #include "game/StageBackground.hpp"
@@ -418,6 +420,13 @@ namespace
             "--instance <single|multi>: single = refuse to start twice (bring the\n"
             "                running window forward instead), multi = every extra\n"
             "                copy logs in as a different user. Same as 设置 -> 系统.\n"
+            "--party [--party-name <name>]: force 多人游玩 on for this run and join\n"
+            "                the shared room (multiple copies on one machine; the\n"
+            "                first window is the host, the host alone plays the BGM).\n"
+            "                Same as 设置 -> 系统 -> 多人游玩.\n"
+            "--party-auto [<difficulty 0-6>]: drive a room round without touching\n"
+            "                the window: the host presses 确定 on the current chart,\n"
+            "                every window picks that difficulty and readies up.\n"
             "--ui-scale <n>: zoom the song-select and result screens (1.0 = fit the\n"
             "                window, saved in userdata.json). The play screen is not\n"
             "                affected. Useful for high-DPI displays.\n"
@@ -505,6 +514,9 @@ namespace
     enum class AppState
     {
         Select,
+        // 多人游玩 room: the host locked a song, so the difficulty picker and
+        // the ready / start countdown live here (see platform/Party.hpp).
+        Party,
         Play,
         Result,
     };
@@ -576,8 +588,13 @@ namespace
     double testVocalSwitchSec = -1.0; // --test-vocal-switch <sec>: flip the version once
     bool testVocalSwitchDone = false;
 
+    // `allowMusic = false` is the 多人游玩 member path: the chart, the cover and
+    // the stage plate all load as usual, but the BGM stays out of this window -
+    // one machine with two copies of the same track playing a few milliseconds
+    // apart sounds like an echo, so the host is the only one that plays it.
     bool startSession(Session& session, const game::ChartEntry& entry, platform::Renderer& renderer,
-        platform::AudioEngine& audio, game::JudgementEngine& judgement, float noteSpeed, std::string& error)
+        platform::AudioEngine& audio, game::JudgementEngine& judgement, float noteSpeed,
+        std::string& error, bool allowMusic = true)
     {
         audio.stopMusic();
         audio.stopResultBgm();
@@ -627,18 +644,24 @@ namespace
         }
         judgement.setChartRating(chartLevel > 0 ? static_cast<float>(chartLevel) : 26.0f);
 
-        if (!entry.bgmPath.empty()) {
+        if (allowMusic && !entry.bgmPath.empty()) {
             // Logged because the file now depends on the vocal version picked in
             // the song select (charts\se_0374_01.mp3 vs an_0374_02.mp3 ...).
             std::printf("[audio] bgm: %s\n", entry.bgmPath.c_str());
             std::fflush(stdout);
             audio.loadMusic(entry.bgmPath, error);
+        } else if (!allowMusic) {
+            // 多人游玩 member: no BGM here (the host is playing it), so this
+            // window's chart clock comes from the wall clock instead - aimed at
+            // the start instant the host published.
+            std::printf("[audio] bgm muted (multiplayer member; the host plays it)\n");
+            std::fflush(stdout);
         }
         // Official pjsk audio starts with fillerSec seconds of silence; chart
         // tick 0 is right after it. Sidecar > auto-detect > 0. The SUS
         // #WAVEOFFSET (positive = audio plays later) is added on top.
         double startPos = entry.audioStartSec;
-        if (startPos <= 0.0 && !entry.bgmPath.empty()) {
+        if (allowMusic && startPos <= 0.0 && !entry.bgmPath.empty()) {
             startPos = platform::AudioEngine::detectLeadingSilence(entry.bgmPath);
             if (startPos > 0.0) {
                 std::printf("[audio] detected %.2fs of leading silence\n", startPos);
@@ -775,6 +798,15 @@ int main(int argc, char** argv)
     std::string fakePadButton;      // --fake-pad <A|B|X|Y|LB|RB|START|BACK>
     int instanceModeOverride = 0;   // --instance single|multi
     bool instanceModeGiven = false;
+    bool partyForced = false;       // --party: 多人游玩 for this run only
+    bool partyGiven = false;
+    std::string partyName;          // --party-name: what the room shows for me
+    // --party-auto <difficulty>: play a whole room round without a mouse. The
+    // host takes this as "press 确定 on the current chart", every window as
+    // "pick this difficulty and ready up" - which is what a headless check of
+    // the sync needs (two windows started with it play a round together).
+    int partyAutoDiff = -1;
+    bool partyAutoGiven = false;
     int selectMusicId = 0;         // --select-id: preselect this song id in the list
     bool testRestart = false; // debug: replay "give up -> pick another song"
     double restartAtSec = 8.0;
@@ -859,6 +891,16 @@ int main(int argc, char** argv)
             const std::string mode = utf8Argv[++i];
             instanceModeGiven = true;
             instanceModeOverride = mode == "multi" ? 1 : 0;
+        } else if (arg == "--party") {
+            partyForced = true;
+            partyGiven = true;
+        } else if (arg == "--party-name" && i + 1 < utf8Argc) {
+            partyName = utf8Argv[++i];
+        } else if (arg == "--party-auto") {
+            partyAutoGiven = true;
+            partyAutoDiff = (i + 1 < utf8Argc && utf8Argv[i + 1][0] != '-')
+                ? std::atoi(utf8Argv[++i])
+                : -1;
         } else if (arg == "--window" && i + 1 < utf8Argc) {
             const std::string mode = utf8Argv[++i];
             windowGiven = true;
@@ -1090,7 +1132,12 @@ int main(int argc, char** argv)
         singleInstanceLock = CreateMutexW(nullptr, FALSE, L"Local\\CppSekai.SingleInstance");
         const bool alreadyRunning = singleInstanceLock != nullptr
             && GetLastError() == ERROR_ALREADY_EXISTS;
-        const int instanceMode = instanceModeGiven ? instanceModeOverride : userSettings.instanceMode;
+        int instanceMode = instanceModeGiven ? instanceModeOverride : userSettings.instanceMode;
+        // 多人游玩 needs several windows by definition, so it forces the
+        // multi-open policy (each copy then logs in as its own user).
+        if (partyGiven ? partyForced : userSettings.multiplayer) {
+            instanceMode = 1;
+        }
 
         if (alreadyRunning && instanceMode == 0) {
             // Hand the running window back to the user. The title is unique in
@@ -1182,6 +1229,31 @@ int main(int argc, char** argv)
     if (playerExpGiven >= 0.0) {
         account.exp = playerExpGiven * game::expToNextRank(account.rank);
     }
+
+    // ------------------------------------------------------------------
+    // 多人游玩: join the room every other CppSekai window on this machine is
+    // in (see platform/Party.hpp). The window that gets seat 0 is the host: it
+    // picks the song, publishes it, and is the only one that plays the BGM.
+    // Without the setting this object stays inactive and every code path below
+    // behaves exactly as it did before multiplayer existed.
+    // ------------------------------------------------------------------
+    platform::PartyLink party;
+    std::string partyLabel; // also goes into the window title (see below)
+    if (partyGiven ? partyForced : userSettings.multiplayer) {
+        if (party.init()) {
+            std::string label = !partyName.empty() ? partyName : account.name;
+            if (label.empty()) {
+                label = "玩家 " + std::to_string(party.slot() + 1);
+            }
+            partyLabel = label;
+            party.setName(label);
+            std::printf("[party] ready: seat %d as %s ('%s'), %d player(s) so far\n", party.slot(),
+                party.isHost() ? "host" : "member", label.c_str(), party.playerCount());
+        } else {
+            std::printf("[party] shared room unavailable, continuing solo\n");
+        }
+        std::fflush(stdout);
+    }
     if (!speedGiven) {
         noteSpeed = userSettings.noteSpeed;
     }
@@ -1264,8 +1336,13 @@ int main(int argc, char** argv)
     if (splashStyle == 0) {
         SDL_GL_SetAttribute(SDL_GL_ALPHA_SIZE, 8); // the framebuffer needs an alpha channel
     }
+    // 多人游玩: several windows with the same title are indistinguishable in
+    // the taskbar (and impossible to address for a script), so the room puts
+    // the player's name in it.
+    const std::string windowTitle = partyLabel.empty() ? std::string("CppSekai")
+                                                       : ("CppSekai - " + partyLabel);
     SDL_Window* window = SDL_CreateWindow(
-        "CppSekai",
+        windowTitle.c_str(),
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
         windowW, windowH,
         windowFlags);
@@ -1864,7 +1941,10 @@ int main(int argc, char** argv)
             duration = core_api::getChartEndTimeSec();
         }
         trackDurationSec = std::max(0.0, duration);
-        if (userSettings.reportSmtc) {
+        // 多人游玩: the host is the one with the BGM, so it is the one Windows
+        // should hear about - two windows announcing the same live fight over
+        // the media widget and the taskbar bar.
+        if (userSettings.reportSmtc && (!party.active() || party.isHost())) {
             systemMedia.setTrack(session.intro.title, session.entry.artist, trackDurationSec,
                 session.entry.coverPath);
         }
@@ -1891,8 +1971,10 @@ int main(int argc, char** argv)
     // Main loop
     // ------------------------------------------------------------------
     // The opening card runs for a fixed 4s and the stage needs another 1.8s
-    // to fade in, so the lead-in can never be shorter than that.
-    const double leadInSec = std::max(leadIn, static_cast<double>(game::kMinLeadInSec));
+    // to fade in, so the lead-in can never be shorter than that. A 多人游玩 run
+    // replaces it with the host's value so every window's card lines up.
+    const double baseLeadInSec = std::max(leadIn, static_cast<double>(game::kMinLeadInSec));
+    double leadInSec = baseLeadInSec;
     bool paused = false;
     bool pauseDialogOpen = false; // pjsk style pause dialog (重试/放弃/继续演出)
     bool running = true;
@@ -1904,14 +1986,20 @@ int main(int argc, char** argv)
     Uint64 perfFreq = SDL_GetPerformanceFrequency();
     Uint64 perfStart = SDL_GetPerformanceCounter();
 
-    // Clock without BGM (auto mode / missing audio): wall clock.
+    // Clock without BGM (auto mode / missing audio): wall clock. In 多人游玩
+    // this is also the follower's raw clock: armed on the instant the host
+    // published, then steered onto the host's audio clock (see songClock()).
     auto wallSongTime = [&]() {
         return -leadInSec + static_cast<double>(SDL_GetPerformanceCounter() - perfStart) / static_cast<double>(perfFreq);
     };
-    auto beginSessionClock = [&]() {
-        perfStart = SDL_GetPerformanceCounter();
+    // `at` (a QPC value, 0 = right now) arms the clock on an absolute instant
+    // instead of the current frame - that is what makes several windows reach
+    // chart time 0 together.
+    auto beginSessionClockAt = [&](Uint64 at) {
+        perfStart = at != 0 ? at : SDL_GetPerformanceCounter();
         audio.start(leadInSec);
     };
+    auto beginSessionClock = [&]() { beginSessionClockAt(0); };
 
     std::vector<TouchTrack> touches;
     bool keyHeld[12] = {};
@@ -1920,6 +2008,237 @@ int main(int argc, char** argv)
     double lastFrameDeltaSec = 0.0;
     Uint64 lastFrameCounter = SDL_GetPerformanceCounter();
     SDL_Event event;
+
+    // ------------------------------------------------------------------
+    // 多人游玩 runtime state (see platform/Party.hpp).
+    //
+    // The host - the first window - owns the room: it picks the song, decides
+    // when the live starts, and is the only one with a decoded BGM. Everybody
+    // else runs the same chart with the BGM muted and their clock derived from
+    // the host's: the same QPC start instant (QPC is machine-wide, so "start
+    // at T" means the same for every window), then a slow correction onto the
+    // host's published audio clock. The correction is capped at 3% of speed,
+    // i.e. invisible, and is what keeps the windows locked together even when
+    // the host's audio device takes a few ms to actually start.
+    // ------------------------------------------------------------------
+    game::ChartEntry mpEntry;   // the chart this window plays in the room
+    int mpEntryIndex = -1;      // its index in `entries` (host side)
+    std::vector<game::PartyDifficultyOption> mpOptions;
+    int mpMyDifficulty = -1;    // canonical difficulty index picked in the room
+    bool mpInRoom = false;      // parked on the room screen
+    bool mpReady = false;
+    int mpSeenLockEpoch = -1;   // last song lock this window reacted to
+    int mpSeenChargeEpoch = -1; // last start this window loaded a chart for
+    bool mpStartPending = false;
+    Uint64 mpStartCounter = 0;
+    bool mpFollowing = false;   // member without BGM: follow the host's clock
+    bool mpClockSynced = false;
+    double mpClockOffset = 0.0;
+    bool mpHostPaused = false;
+    double mpFrozenTime = 0.0;
+    std::string mpStatus;       // room status line
+    double frameSongTime = 0.0; // this frame's chart clock, resolved once
+    // --party-auto bookkeeping: the host's 确定 fires 1.8s in (the song list has
+    // settled by then), the room's difficulty pick one second after it shows.
+    bool partyAutoConfirmed = false;
+    double partyAutoAtSec = 1.8;
+    double partyAutoRoomAt = 0.0;
+
+    auto partyUsable = [&]() { return party.active() && party.playerCount() >= 2; };
+
+    // The chart clock every consumer in the frame loop reads. Resolved once per
+    // frame: following the host involves a correction step, and applying that
+    // step several times per frame would speed it up.
+    auto resolveSongClock = [&]() -> double {
+        const double local = wallSongTime();
+        if (!mpFollowing) {
+            frameSongTime = audio.hasMusic() ? audio.songTime() : local;
+        } else {
+            double hostTime = 0.0;
+            Uint64 hostCounter = 0;
+            const bool havePacket = party.readHostClock(hostTime, hostCounter);
+            if (mpHostPaused) {
+                // The host's clock is standing still; mirror it exactly instead
+                // of extrapolating, or this window would run away while paused.
+                if (havePacket) {
+                    mpFrozenTime = hostTime;
+                }
+                frameSongTime = mpFrozenTime;
+            } else {
+                if (havePacket) {
+                    const double nowSec = platform::PartyLink::counterToSeconds(
+                        platform::PartyLink::nowCounter());
+                    const double hostNow = hostTime
+                        + (nowSec - platform::PartyLink::counterToSeconds(hostCounter));
+                    const double error = hostNow - local;
+                    if (std::fabs(error) > 5.0) {
+                        // Nothing legitimate is hours away: that is a torn read
+                        // or a packet from another run. Ignore it - taking it
+                        // would throw this window's chart clock into the future
+                        // and mark every remaining note as a miss.
+                        std::printf("[party] clock sample rejected (%.3fs off)\n", error);
+                        std::fflush(stdout);
+                    } else if (!mpClockSynced || local < 0.5) {
+                        // First packet, and everything before the chart starts
+                        // (the opening card does not care about a 50 ms jump):
+                        // follow the host exactly, so the residual is down to
+                        // noise by the time the first note is judged. Waiting
+                        // out a slow slew here would leave the first notes tens
+                        // of milliseconds apart.
+                        mpClockOffset = error;
+                        mpClockSynced = true;
+                    } else if (std::fabs(error - mpClockOffset) > 0.20) {
+                        // A pause, a window that was stalled or a host that
+                        // restarted its clock: too far to walk, so jump.
+                        mpClockOffset = error;
+                    } else {
+                        // Speed limit. Normally 3% - far below what an eye can
+                        // notice - but the first seconds of the live get a much
+                        // faster one: the host's audio clock is re-anchored the
+                        // moment its music actually starts, which steps it by up
+                        // to a frame (25 ms at 30 fps) right around chart time 0,
+                        // and that is exactly where the first notes are judged.
+                        // Converging at 3% would leave them tens of ms apart for
+                        // seconds; at 50% the step is gone in ~50 ms.
+                        const double rate = local < 3.0 ? 0.50 : 0.03;
+                        const double step = rate * lastFrameDeltaSec;
+                        mpClockOffset += std::clamp(error - mpClockOffset, -step, step);
+                    }
+                }
+                frameSongTime = local + mpClockOffset;
+            }
+        }
+        return frameSongTime;
+    };
+
+    // The chart clock to judge / draw against. Identical to the host's own
+    // audio clock on the host; on a 多人游玩 member it is the synced value from
+    // resolveSongClock() (that window has no BGM of its own, so its raw clock
+    // is the wall clock).
+    auto songClock = [&]() -> double {
+        if (mpFollowing) {
+            return frameSongTime;
+        }
+        return audio.hasMusic() ? audio.songTime() : wallSongTime();
+    };
+
+    // File name of a chart path: the room identifies a song by it, because the
+    // host's "0374_master.sus" is the same file in every window.
+    auto chartFileName = [](const std::string& path) {
+        const std::size_t sep = path.find_last_of("\\/");
+        return sep == std::string::npos ? path : path.substr(sep + 1);
+    };
+    // Which difficulties of the locked song exist in *this* window's chart
+    // list. The room screen offers exactly these, so two windows never name a
+    // difficulty the other one cannot play.
+    auto buildPartyOptions = [&](int musicId, const std::string& songKey) {
+        mpOptions.clear();
+        const std::string key = chartFileName(songKey);
+        int target = musicId;
+        if (target <= 0) {
+            for (const game::ChartEntry& entry : entries) {
+                if (chartFileName(entry.susPath) == key) {
+                    target = entry.musicId;
+                    break;
+                }
+            }
+        }
+        for (std::size_t i = 0; i < entries.size(); ++i) {
+            const game::ChartEntry& entry = entries[i];
+            const bool same = target > 0 ? entry.musicId == target : chartFileName(entry.susPath) == key;
+            if (!same) {
+                continue;
+            }
+            const int index = game::difficultyIndex(entry.difficulty);
+            bool known = false;
+            for (const game::PartyDifficultyOption& option : mpOptions) {
+                known = known || option.index == index;
+            }
+            if (index < 0 || known) {
+                continue;
+            }
+            game::PartyDifficultyOption option;
+            option.index = index;
+            option.name = entry.difficulty;
+            option.entryIndex = static_cast<int>(i);
+            option.level = game::musicLevel(entry.musicId, entry.difficulty);
+            if (option.level <= 0) {
+                option.level = std::atoi(entry.level.c_str());
+            }
+            mpOptions.push_back(option);
+        }
+        std::sort(mpOptions.begin(), mpOptions.end(),
+            [](const game::PartyDifficultyOption& a, const game::PartyDifficultyOption& b) {
+                return a.index < b.index;
+            });
+        return mpOptions;
+    };
+    // Index into `entries` of the locked song's `difficultyIndex` chart
+    // (-1 = this window has no such chart).
+    auto findPartyEntry = [&](int musicId, const std::string& songKey, int difficultyIndexWanted) {
+        const std::string key = chartFileName(songKey);
+        int target = musicId;
+        if (target <= 0) {
+            for (const game::ChartEntry& entry : entries) {
+                if (chartFileName(entry.susPath) == key) {
+                    target = entry.musicId;
+                    break;
+                }
+            }
+        }
+        int fallback = -1;
+        for (std::size_t i = 0; i < entries.size(); ++i) {
+            const game::ChartEntry& entry = entries[i];
+            const bool same = target > 0 ? entry.musicId == target : chartFileName(entry.susPath) == key;
+            if (!same) {
+                continue;
+            }
+            if (game::difficultyIndex(entry.difficulty) == difficultyIndexWanted) {
+                return static_cast<int>(i);
+            }
+            if (fallback < 0) {
+                fallback = static_cast<int>(i);
+            }
+        }
+        return fallback;
+    };
+    // Back to the song select from the room screen (返回 / ESC). The host keeps
+    // the song locked for whoever is still in the room; this window just stops
+    // waiting, and the others see the seat go back to the lobby.
+    auto leavePartyRoom = [&]() {
+        mpInRoom = false;
+        mpReady = false;
+        mpMyDifficulty = -1;
+        if (party.active()) {
+            party.setReady(false);
+            party.setDifficulty(-1);
+            party.setSeat(platform::PartySeatLobby);
+        }
+        leadInSec = baseLeadInSec;
+        state = AppState::Select;
+        std::printf("[party] left the room\n");
+        std::fflush(stdout);
+    };
+    // The one way into the pause dialog. In 多人游玩 only the host may pause: it
+    // owns the clock everybody else follows, so a member pausing itself would
+    // do nothing but desync its own window.
+    auto requestPause = [&]() {
+        if (pauseDialogOpen) {
+            return;
+        }
+        if (party.active() && !party.isHost()) {
+            mpStatus = "多人游玩中：暂停由房主控制";
+            std::printf("[party] pause ignored (only the host can pause a shared live)\n");
+            std::fflush(stdout);
+            return;
+        }
+        if (party.active()) {
+            party.setHostPaused(true);
+        }
+        paused = true;
+        audio.pause();
+        pauseDialogOpen = true;
+    };
     double uiClock = 0.0;
     int fpsLimitLive = fpsLimit; // adjustable from the debug panel
     const double perfFreqD = static_cast<double>(perfFreq);
@@ -1956,6 +2275,8 @@ int main(int argc, char** argv)
         }
         userSettings.showProgressBar = showProgressBar;
         userSettings.hideTouchFeedback = hideTouchFeedback;
+        // (userSettings.multiplayer is a launch-time switch: the room is joined
+        // at startup, so --party never writes it back into the profile.)
         const game::JudgementWindows& w = judgement.windows();
         userSettings.perfectMs = w.perfectMs;
         userSettings.greatMs = w.greatMs;
@@ -2546,6 +2867,26 @@ int main(int argc, char** argv)
                         persistUserData();
                     }
                 }
+                contentLeft();
+                {
+                    bool partyBox = userSettings.multiplayer;
+                    ui::checkBox("多人游玩（同机多窗口一起打）", &partyBox, interior);
+                    if (partyBox != userSettings.multiplayer) {
+                        userSettings.multiplayer = partyBox;
+                        // 多人游玩 needs several windows, so it also switches
+                        // the instance policy to multi-open; each copy logs in
+                        // as its own user (they keep separate records).
+                        if (partyBox) {
+                            userSettings.instanceMode = 1;
+                        }
+                        std::printf("[settings] multiplayer %s\n", partyBox ? "on" : "off");
+                        std::fflush(stdout);
+                        persistUserData();
+                    }
+                }
+                contentLeft();
+                ImGui::TextWrapped("多人游玩：先开的窗口是房主（负责选曲与播放 BGM），"
+                                   "其它窗口选完难度准备后一起开始。重开所有窗口生效。");
             } else {
                 // 账户: the local profile. Nothing here leaves the machine, and
                 // none of it is drawn during play - see game/AccountData.
@@ -2785,7 +3126,7 @@ int main(int argc, char** argv)
             std::fflush(stdout);
             return true;
         }
-        const double pressSongTime = audio.hasMusic() ? audio.songTime() : wallSongTime();
+        const double pressSongTime = songClock();
         const float visibility = game::openingPlayfieldVisibility(
             static_cast<float>(pressSongTime + leadInSec), session.intro.hasContent);
         if (visibility <= 0.0f) {
@@ -2887,7 +3228,7 @@ int main(int argc, char** argv)
         track.lastMoveTimeMs = eventMs;
         touches.push_back(track);
         lanePress[static_cast<size_t>(track.laneIndex)] = 1.0f;
-        const double songTime = audio.hasMusic() ? audio.songTime() : wallSongTime();
+        const double songTime = songClock();
         const game::Judge result = judgement.tap(track.lanePos, static_cast<float>(songTime), false, 0.8f);
         if (gFlickLog.enabled) {
             gFlickLog.write("[touch] down finger=%u touch=%d screen=(%d,%d) lane=%.3f laneIndex=%d "
@@ -2993,7 +3334,7 @@ int main(int argc, char** argv)
                     static_cast<double>(track.travelSide), flickDirName(dir), static_cast<double>(lanePos));
             }
             if (dir != game::FlickNone && now - track.lastFlickFireTimeSec >= kFlickRefireSec) {
-                const double songTime = audio.hasMusic() ? audio.songTime() : wallSongTime();
+                const double songTime = songClock();
                 const game::Judge result = flickJudge(track, songTime, dir);
                 logFlickOutcome(track, songTime, dir, result, "fire/move");
                 if (result != game::Judge::None) {
@@ -3181,7 +3522,7 @@ int main(int argc, char** argv)
     // also the guard for "A does nothing else during the lead-in".
     // -----------------------------------------------------------------------
     auto introSkipAvailable = [&]() {
-        const double currentSongTime = audio.hasMusic() ? audio.songTime() : wallSongTime();
+        const double currentSongTime = songClock();
         return currentSongTime + leadInSec < static_cast<double>(game::kHudIntroDurationSec);
     };
     auto skipIntro = [&]() {
@@ -3210,6 +3551,63 @@ int main(int argc, char** argv)
         if (beginSessionClockPending) {
             beginSessionClockPending = false;
             beginSessionClock();
+        }
+
+        // 多人游玩: heartbeat first (it is the only thing that tells the other
+        // windows this one is still alive), then settle this frame's clock. The
+        // host publishes its clock with the QPC it was read on; the members
+        // steer onto it (see resolveSongClock).
+        party.update();
+        if (state == AppState::Play && session.active) {
+            // The host's window was closed mid-live: its clock stops being
+            // published, and following a frozen sample would freeze this window
+            // for the rest of the song. Fall back to our own clock instead (the
+            // room's host role moves on by itself, see PartyLink::update).
+            if (mpFollowing && !party.hostAlive()) {
+                mpFollowing = false;
+                mpClockSynced = false;
+                std::printf("[party] host gone: running on the local clock\n");
+                std::fflush(stdout);
+            }
+            const bool hostHeld = mpFollowing && party.read().paused;
+            if (hostHeld != mpHostPaused) {
+                // The host owns the chart clock, so a pause there has to stop
+                // this window's picture too - otherwise the notes keep sliding
+                // past while the music is silent.
+                std::printf("[party] host %s\n", hostHeld ? "paused: picture frozen" : "resumed");
+                std::fflush(stdout);
+            }
+            mpHostPaused = hostHeld;
+            resolveSongClock();
+            if (party.active() && party.isHost()) {
+                party.publishHostClock(frameSongTime);
+            }
+            // Diagnostic (CPSEKAI_MP_TRACE=1): one line per second carrying the
+            // shared QPC next to this window's chart time, so two logs can be
+            // diffed for how far the clocks actually drifted apart.
+            if (platform::traceEnabled()) {
+                static double traceAtSec = -1.0;
+                const double qpcSec = platform::PartyLink::counterToSeconds(
+                    platform::PartyLink::nowCounter());
+                if (traceAtSec < 0.0 || qpcSec - traceAtSec >= 1.0) {
+                    traceAtSec = qpcSec;
+                    // The other seats' live numbers ride along: the scoreboard
+                    // is a shared-memory read, so this proves the whole chain
+                    // (write -> other process -> read) and not just the clock.
+                    std::string peers;
+                    for (const platform::PartyPlayer& player : party.players()) {
+                        if (player.slot == party.slot()) {
+                            continue;
+                        }
+                        peers += " " + player.name + "=" + std::to_string(
+                            static_cast<long long>(player.score)) + "/" + std::to_string(player.combo);
+                    }
+                    std::printf("[sync] qpc=%.6f t=%.6f offset=%+.6f %s%s%s\n", qpcSec, frameSongTime,
+                        mpClockOffset, mpFollowing ? "follow" : "host", mpHostPaused ? " PAUSED" : "",
+                        peers.c_str());
+                    std::fflush(stdout);
+                }
+            }
         }
 
         auto saveScreenshot = [&]() {
@@ -3345,11 +3743,14 @@ int main(int argc, char** argv)
                         // (songTime < 0) a pause dialog could never be resumed
                         // properly - just go back to the song list with the
                         // sound off instead.
+                        // 多人游玩: never auto-pause. Several windows sit on one
+                        // screen, so every one of them is unfocused almost all
+                        // of the time and the live would never get going.
                         if (event.window.event == SDL_WINDOWEVENT_FOCUS_LOST && state == AppState::Play
                             && !paused && !pauseDialogOpen && screenshotPath.empty()
-                            && userSettings.autoPauseOnBlur) {
+                            && userSettings.autoPauseOnBlur && !party.active()) {
                             const double currentSongTime =
-                                audio.hasMusic() ? audio.songTime() : wallSongTime();
+                                songClock();
                             if (currentSongTime < 0.0) {
                                 audio.stopMusic();
                                 audio.setHoldLoop(false, false, 0.0f);
@@ -3409,13 +3810,9 @@ int main(int argc, char** argv)
                         && !countdownActive) {
                         // Space opens the pause dialog (same as the HUD button,
                         // previews included).
-                        if (!pauseDialogOpen) {
-                            paused = true;
-                            audio.pause();
-                            pauseDialogOpen = true;
-                        }
+                        requestPause();
                     } else if (state == AppState::Play && !autoPlay && !paused) {
-                        const double songTime = audio.hasMusic() ? audio.songTime() : wallSongTime();
+                        const double songTime = songClock();
                         for (int lane = 0; lane < 12; ++lane) {
                             if (event.key.keysym.sym == kLaneKeys[lane]) {
                                 keyHeld[lane] = true;
@@ -3490,7 +3887,7 @@ int main(int argc, char** argv)
                         const int fx = static_cast<int>(event.tfinger.x * static_cast<float>(windowW));
                         const int fy = static_cast<int>(event.tfinger.y * static_cast<float>(windowH));
                         const double currentSongTime =
-                            audio.hasMusic() ? audio.songTime() : wallSongTime();
+                            songClock();
                         if (!ImGui::GetIO().WantCaptureMouse
                             && currentSongTime + leadInSec < static_cast<double>(game::kHudIntroDurationSec)
                             && game::introSkipHitTest(windowW, windowH, fx, fy)) {
@@ -3550,7 +3947,7 @@ int main(int argc, char** argv)
                                 track.travelSide, track.isTouch, heightScale);
                             if (dir != game::FlickNone) {
                                 const double songTime =
-                                    audio.hasMusic() ? audio.songTime() : wallSongTime();
+                                    songClock();
                                 const game::Judge result = flickJudge(track, songTime, dir);
                                 logFlickOutcome(track, songTime, dir, result, "fire/up");
                                 if (result != game::Judge::None) {
@@ -3560,7 +3957,7 @@ int main(int argc, char** argv)
                                 // The lift-off safety net also found nothing -
                                 // this is the case a "touch flick feels dead"
                                 // report turns out to be, so keep the numbers.
-                                const double songTime = audio.hasMusic() ? audio.songTime() : wallSongTime();
+                                const double songTime = songClock();
                                 logFlickOutcome(track, songTime, game::FlickNone, game::Judge::None, "up/no-dir");
                             }
                         }
@@ -3574,6 +3971,15 @@ int main(int argc, char** argv)
                 // when it lands on the HUD pause button.
                 // ------------------------------------------------------
                 case SDL_MOUSEBUTTONDOWN: {
+                    // Diagnostic (CPSEKAI_UI_TRACE=1): proves a posted click
+                    // arrived at all - invaluable when driving the UI headless,
+                    // where a swallowed event and a mis-measured hit box look
+                    // exactly the same from the outside.
+                    if (std::getenv("CPSEKAI_UI_TRACE") != nullptr) {
+                        std::printf("[ui] mouse down at %d,%d (button %d)\n", event.button.x,
+                            event.button.y, event.button.button);
+                        std::fflush(stdout);
+                    }
                     // Synthetic event from a touch (hint above): the finger
                     // path already handled it, do not double-process. Some
                     // touch stacks only ever deliver this synthetic mouse
@@ -3613,7 +4019,7 @@ int main(int argc, char** argv)
                     // now. Works in autoplay previews too.
                     if (state == AppState::Play && !paused && !ImGui::GetIO().WantCaptureMouse) {
                         const double currentSongTime =
-                            audio.hasMusic() ? audio.songTime() : wallSongTime();
+                            songClock();
                         if (currentSongTime + leadInSec < static_cast<double>(game::kHudIntroDurationSec)
                             && game::introSkipHitTest(windowW, windowH, event.button.x, event.button.y)) {
                             skipIntro();
@@ -3835,9 +4241,7 @@ int main(int argc, char** argv)
                 if (state == AppState::Play && !pauseDialogOpen && !countdownActive) {
                     // Same as the HUD pause button / Space: the dialog appears
                     // and its window_open sound plays.
-                    paused = true;
-                    audio.pause();
-                    pauseDialogOpen = true;
+                    requestPause();
                 } else if (state == AppState::Result) {
                     resultContinueRequested = true;
                 } else if (state != AppState::Play) {
@@ -3861,9 +4265,7 @@ int main(int argc, char** argv)
             if (padBack) {
                 if (state == AppState::Play) {
                     if (!pauseDialogOpen && !countdownActive) {
-                        paused = true;
-                        audio.pause();
-                        pauseDialogOpen = true;
+                        requestPause();
                     }
                 } else if (state != AppState::Select) {
                     pulse(SDL_SCANCODE_ESCAPE);
@@ -3894,6 +4296,15 @@ int main(int argc, char** argv)
             // ----------------------------------------------------------
             // Song select
             // ----------------------------------------------------------
+            // 多人游玩: not on the room screen any more (after a run, or after
+            // backing out) - say so, so the others stop waiting for this seat.
+            if (party.active() && mpInRoom) {
+                mpInRoom = false;
+                mpReady = false;
+                mpMyDifficulty = -1;
+                party.setReady(false);
+                party.setSeat(platform::PartySeatLobby);
+            }
             if (!stageBackgroundFor.empty()) {
                 // Back to the default room plate: the song select is not a
                 // performance, and the next song generates its own anyway.
@@ -3911,7 +4322,11 @@ int main(int argc, char** argv)
             // frame's pick. Charts that ship only official vocal files have no
             // <id4>.mp3 for the scan to find, so the chip is what decides what
             // the preview plays.
-            if (selected >= 0 && selected < static_cast<int>(entries.size())) {
+            // Only the host plays the preview: two windows previewing the same
+            // clip a few milliseconds apart sound like a broken speaker, and
+            // the rule for the live is the same (BGM belongs to the host).
+            const bool playPreviewHere = !party.active() || party.isHost();
+            if (playPreviewHere && selected >= 0 && selected < static_cast<int>(entries.size())) {
                 const game::ChartEntry& playing = entries[static_cast<size_t>(selected)];
                 std::string previewPath = game::vocalAudioPath(playing, selectedVocal);
                 if (previewPath.empty()) {
@@ -3953,9 +4368,19 @@ int main(int argc, char** argv)
 
             const int prevSortMode = userSettings.sortMode;
             const int prevGroupMode = userSettings.groupMode;
-            const int action = game::drawSongSelect(renderer, entries, selected, windowW, windowH,
+            int action = game::drawSongSelect(renderer, entries, selected, windowW, windowH,
                 static_cast<float>(uiClock), userSettings.sortMode, userSettings.groupMode,
                 selectedVocal, userSettings.uiScale, &selectConfirmCenter, &account);
+            // Debug (--party-auto): the host's 确定, without a mouse. Waits for
+            // the list to settle so the chart it picks is the one the list
+            // starts on, not whatever a startup animation left selected.
+            if (partyAutoGiven && !partyAutoConfirmed && partyUsable() && selected >= 0
+                && uiClock >= partyAutoAtSec) {
+                partyAutoConfirmed = true;
+                action = selected;
+                std::printf("[party] auto-confirm chart #%d (debug)\n", selected);
+                std::fflush(stdout);
+            }
             // Diagnostic (CPSEKAI_UI_TRACE=1): where the 确定 button landed, in
             // window pixels - what an input-driving script has to click.
             if (std::getenv("CPSEKAI_UI_TRACE") != nullptr) {
@@ -3974,15 +4399,41 @@ int main(int argc, char** argv)
                 // goes in (the entries themselves are const here).
                 game::ChartEntry playEntry = entries[static_cast<size_t>(action)];
                 game::applyVocalVersion(playEntry, game::availableVocals(playEntry), selectedVocal);
-                // Kick off the white burst instead of loading right here: the load
-                // is what stalls, so it runs later, once the screen is white (see
-                // the confirm-flash block below).
-                confirmPendingEntry = playEntry;
-                confirmStartPending = true;
-                confirmFlashActive = true;
-                confirmFlashTime = 0.0f;
-                confirmFlashOrigin = selectConfirmCenter;
-                ui::se(ui::SeStart); // start.mp3, fires with the burst
+                if (partyUsable()) {
+                    // 多人游玩: this window is the host and somebody else is in
+                    // the room, so 确定 publishes the song instead of starting
+                    // it - the others get the difficulty picker and the live
+                    // starts once everybody is ready. The white burst still
+                    // plays; the load happens on the room screen.
+                    mpEntry = playEntry;
+                    mpEntryIndex = action;
+                    mpMyDifficulty = game::difficultyIndex(playEntry.difficulty);
+                    buildPartyOptions(playEntry.musicId, playEntry.susPath);
+                    mpReady = true; // the host's difficulty is its song-select pick
+                    mpInRoom = true;
+                    mpStatus = "等待其他玩家选择难度";
+                    party.setDifficulty(mpMyDifficulty);
+                    party.setReady(true);
+                    party.lockSong(playEntry.musicId, chartFileName(playEntry.susPath),
+                        playEntry.title.empty() ? playEntry.displayName : playEntry.title,
+                        mpMyDifficulty, static_cast<int>(std::lround(baseLeadInSec * 1000.0)));
+                    mpSeenLockEpoch = party.read().epoch;
+                    confirmFlashActive = true;
+                    confirmFlashTime = 0.0f;
+                    confirmFlashOrigin = selectConfirmCenter;
+                    ui::se(ui::SeStart);
+                    state = AppState::Party;
+                } else {
+                    // Kick off the white burst instead of loading right here: the
+                    // load is what stalls, so it runs later, once the screen is
+                    // white (see the confirm-flash block below).
+                    confirmPendingEntry = playEntry;
+                    confirmStartPending = true;
+                    confirmFlashActive = true;
+                    confirmFlashTime = 0.0f;
+                    confirmFlashOrigin = selectConfirmCenter;
+                    ui::se(ui::SeStart); // start.mp3, fires with the burst
+                }
             } else if (action == game::SelectSettings) {
                 showDebug = true;
             } else if (wantRescan) {
@@ -4006,8 +4457,40 @@ int main(int argc, char** argv)
                 std::fflush(stdout);
             }
 
+            // 多人游玩: the host locked a song -> walk over to the room screen
+            // and pick a difficulty (the epoch makes this happen once per song,
+            // so backing out of the room is respected).
+            if (!party.isHost() && party.active()) {
+                const platform::PartyState snap = party.read();
+                if (snap.phase == platform::PartySongLocked && snap.epoch != mpSeenLockEpoch) {
+                    mpSeenLockEpoch = snap.epoch;
+                    mpInRoom = true;
+                    mpReady = false;
+                    mpMyDifficulty = -1;
+                    mpEntryIndex = findPartyEntry(snap.musicId, snap.songKey, -1);
+                    if (mpEntryIndex >= 0) {
+                        mpEntry = entries[static_cast<size_t>(mpEntryIndex)];
+                        buildPartyOptions(snap.musicId, snap.songKey);
+                    }
+                    mpStatus = "选择难度后按“准备”";
+                    party.setDifficulty(-1);
+                    party.setReady(false);
+                    std::printf("[party] host picked '%s' (%s, %zu difficulty option(s)) - choose one\n",
+                        snap.songTitle.c_str(), snap.songKey.c_str(), mpOptions.size());
+                    std::fflush(stdout);
+                    state = AppState::Party;
+                }
+            }
+
             // Settings card, opened from the musicsetting button (or H).
             drawSettingsCard();
+            // Who else is in the room (hidden while the settings card is up:
+            // it draws on the foreground list, above the card).
+            if (party.active() && !showDebug && !mpInRoom) {
+                game::drawPartyBadge(party.players(), party.slot(), windowW, windowH,
+                    userSettings.uiScale,
+                    party.isHost() ? "你是房主 · 选好歌按确定" : "等待房主选曲");
+            }
             // Headless check: dump the song list shortly after startup. An
             // explicit --screenshot-time overrides the default 1.2s here as
             // well, which is how a scroll / animation is let to settle first.
@@ -4017,20 +4500,251 @@ int main(int argc, char** argv)
                     wantScreenshot = true;
                 }
             }
+        } else if (state == AppState::Party) {
+            // ----------------------------------------------------------
+            // 多人游玩 room
+            //
+            // The host locked a song; everybody is here to pick a difficulty
+            // and say 准备. Once every player parked on this screen is ready,
+            // the host publishes the instant the live starts on and all the
+            // windows load their chart and leave together.
+            // ----------------------------------------------------------
+            if (!stageBackgroundFor.empty()) {
+                stageBackgroundFor.clear();
+                renderer.setSongBackground(nullptr, 0, 0, error);
+                error.clear();
+            }
+            renderer.setLaneGlows({});
+            renderer.renderFrame(nullptr, 0, 0.85f);
+
+            const platform::PartyState snap = party.read();
+            std::vector<platform::PartyPlayer> roomPlayers = party.players();
+
+            // The song is identified by its file name (or its music id), so
+            // this window resolves it against its *own* chart list - the host
+            // never sends a path that only exists on its side.
+            if (mpEntryIndex < 0) {
+                mpEntryIndex = findPartyEntry(snap.musicId, snap.songKey, -1);
+                if (mpEntryIndex >= 0) {
+                    mpEntry = entries[static_cast<size_t>(mpEntryIndex)];
+                    buildPartyOptions(snap.musicId, snap.songKey);
+                }
+            }
+            if (mpEntryIndex >= 0 && !mpEntry.coverPath.empty()
+                && mpEntry.coverPath != loadedCoverPath) {
+                loadedCoverPath = mpEntry.coverPath;
+                renderer.loadCover(mpEntry.coverPath, error);
+                error.clear();
+            }
+
+            // ---- host: everybody ready -> publish the start instant --------
+            if (party.isHost() && snap.phase == platform::PartySongLocked && party.allReady()) {
+                // The charge window has to swallow the slowest window's chart
+                // load (the chart, the jacket and the generated stage plate are
+                // a good second of work) on top of the lead-in.
+                constexpr double kLoadGraceSec = 4.0;
+                const double hostLeadIn = std::max(static_cast<double>(game::kMinLeadInSec),
+                    static_cast<double>(snap.leadInMs) / 1000.0);
+                const Uint64 start = platform::PartyLink::nowCounter()
+                    + static_cast<Uint64>(
+                        (kLoadGraceSec + hostLeadIn) * platform::PartyLink::counterFrequency());
+                party.beginCharging(start);
+                std::printf("[party] all ready -> charging (start in %.1fs)\n",
+                    kLoadGraceSec + hostLeadIn);
+                std::fflush(stdout);
+            }
+
+            // ---- everybody: load the chart, then wait for the instant ------
+            if (snap.phase == platform::PartyCharging && snap.epoch != mpSeenChargeEpoch) {
+                mpSeenChargeEpoch = snap.epoch;
+                if (!party.isHost() && !mpReady) {
+                    // The host started without this window (its player never
+                    // readied up): sit this one out instead of dropping in on a
+                    // chart that has already begun.
+                    mpStatus = "房主已开始，你未准备";
+                    std::printf("[party] charge skipped (not ready)\n");
+                    std::fflush(stdout);
+                    leavePartyRoom();
+                } else {
+                    leadInSec = std::max(static_cast<double>(game::kMinLeadInSec),
+                        static_cast<double>(snap.leadInMs) / 1000.0);
+                    const int wanted = mpMyDifficulty;
+                    mpEntryIndex = findPartyEntry(snap.musicId, snap.songKey, wanted);
+                    if (mpEntryIndex < 0) {
+                        mpStatus = "本窗口没有这首曲子";
+                        std::printf("[party] charge failed: chart missing\n");
+                        std::fflush(stdout);
+                    } else {
+                        mpEntry = entries[static_cast<size_t>(mpEntryIndex)];
+                        if (party.isHost()) {
+                            // The host keeps the vocal version it picked in the
+                            // song select; a member has no BGM of its own, so
+                            // the scan's default is good enough.
+                            game::applyVocalVersion(mpEntry, game::availableVocals(mpEntry),
+                                selectedVocal);
+                        } else {
+                            game::applyDefaultVocal(mpEntry);
+                        }
+                        // Only the host decodes the BGM (see startSession).
+                        const bool host = party.isHost();
+                        if (!startSession(session, mpEntry, renderer, audio, judgement, noteSpeed, error,
+                                host)) {
+                            mpStatus = "谱面加载失败";
+                            std::printf("[party] charge failed: %s\n", error.c_str());
+                            std::fflush(stdout);
+                            error.clear();
+                        } else {
+                            mpFollowing = !host;
+                            mpClockSynced = false;
+                            mpHostPaused = false;
+                            mpStartPending = true;
+                            loadedCoverPath = session.entry.coverPath;
+                            touches.clear();
+                            std::fill(std::begin(keyHeld), std::end(keyHeld), false);
+                            lanePress.fill(0.0f);
+                            paused = false;
+                            resultScheduled = false;
+                            resultData = game::ResultData{};
+                            songEndBlackout = 0.0f;
+                            party.setSeat(platform::PartySeatPlaying);
+                            party.clearPlayingScore();
+                            std::printf("[party] chart loaded (%s, %s), waiting for the shared start\n",
+                                mpEntry.susPath.c_str(), mpEntry.difficulty.c_str());
+                            std::fflush(stdout);
+                        }
+                    }
+                }
+            }
+
+            // ---- everybody: the instant arrived -> go ----------------------
+            if (mpStartPending && snap.startCounter != 0
+                && platform::PartyLink::nowCounter() >= snap.startCounter) {
+                mpStartPending = false;
+                // The clock is armed on the *shared* counter, so every window
+                // reaches chart time 0 on the same beat (the host's audio clock
+                // is then what the members steer onto, see resolveSongClock).
+                beginSessionClockAt(snap.startCounter);
+                state = AppState::Play;
+                std::printf("[party] go (lead-in %.1fs, start counter %llu)\n", leadInSec,
+                    static_cast<unsigned long long>(snap.startCounter));
+                std::fflush(stdout);
+            }
+
+            // ---- room screen ------------------------------------------------
+            const bool interactive = snap.phase == platform::PartySongLocked;
+            game::PartyScreenInput room;
+            room.windowW = windowW;
+            room.windowH = windowH;
+            room.uiScale = userSettings.uiScale;
+            room.players = roomPlayers;
+            room.mySlot = party.slot();
+            room.host = party.isHost();
+            room.title = !mpEntry.title.empty() ? mpEntry.title : mpEntry.displayName;
+            room.songKey = chartFileName(mpEntry.susPath);
+            room.artist = mpEntry.artist;
+            room.hostDifficultyName = game::difficultyName(snap.hostDifficulty);
+            room.options = mpOptions;
+            room.myDifficulty = mpMyDifficulty;
+            room.ready = mpReady;
+            room.phase = snap.phase;
+            room.status = mpStatus;
+            if (snap.phase == platform::PartyCharging && snap.startCounter != 0) {
+                room.countdownSec = std::max(0.0, platform::PartyLink::counterToSeconds(snap.startCounter)
+                        - platform::PartyLink::counterToSeconds(platform::PartyLink::nowCounter()));
+            }
+            const platform::Renderer::HudSprite* jacket = renderer.cover();
+            room.cover = jacket != nullptr ? static_cast<ImTextureID>(jacket->id) : 0;
+            const game::PartyScreenOutput picked = game::drawPartyScreen(room);
+
+            // Keyboard / pad on the room screen. The pad reaches this through
+            // the key pulses it pushes (see the controller block above), so one
+            // handler covers both.
+            int keyDifficulty = mpMyDifficulty;
+            if (interactive) {
+                if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow, false)) {
+                    keyDifficulty = std::max(0, mpMyDifficulty - 1);
+                } else if (ImGui::IsKeyPressed(ImGuiKey_RightArrow, false)) {
+                    keyDifficulty = std::min(static_cast<int>(mpOptions.size()) - 1, mpMyDifficulty + 1);
+                }
+            }
+            int wanted = picked.difficulty >= 0 ? picked.difficulty : -1;
+            if (keyDifficulty != mpMyDifficulty && keyDifficulty >= 0
+                && keyDifficulty < static_cast<int>(mpOptions.size())) {
+                wanted = mpOptions[static_cast<size_t>(keyDifficulty)].index;
+            }
+            // Debug (--party-auto <n>): pick that difficulty from the code, so
+            // a room round runs headlessly (see the flag's help text).
+            if (interactive && partyAutoGiven && partyAutoDiff >= 0) {
+                if (partyAutoRoomAt <= 0.0) {
+                    partyAutoRoomAt = uiClock + 1.0;
+                } else if (uiClock >= partyAutoRoomAt && wanted < 0) {
+                    wanted = partyAutoDiff;
+                    if (findPartyEntry(snap.musicId, snap.songKey, wanted) < 0) {
+                        wanted = -1; // this window has no such chart
+                    }
+                }
+            }
+            if (interactive && wanted >= 0 && wanted != mpMyDifficulty) {
+                mpMyDifficulty = wanted;
+                mpEntryIndex = findPartyEntry(snap.musicId, snap.songKey, wanted);
+                if (mpEntryIndex >= 0) {
+                    mpEntry = entries[static_cast<size_t>(mpEntryIndex)];
+                }
+                party.setDifficulty(wanted);
+                // Picking a difficulty *is* readying up, the way the official
+                // co-op screen counts it - one less button to press.
+                mpReady = true;
+                party.setReady(true);
+                mpStatus = "已准备，等待房主开始";
+                std::printf("[party] difficulty %s (%d) ready\n", game::difficultyName(wanted), wanted);
+                std::fflush(stdout);
+            }
+            if (interactive && picked.readyToggle) {
+                mpReady = !mpReady;
+                party.setReady(mpReady);
+                mpStatus = mpReady ? "已准备，等待房主开始" : "选择难度后按“准备”";
+            }
+            if (interactive) {
+                if (party.isHost()) {
+                    mpStatus = party.allReady() ? "全员准备完毕，即将开始" : "等待其他玩家选择难度（可随时开始）";
+                }
+            }
+            if (interactive && party.isHost()
+                && (picked.startNow || ImGui::IsKeyPressed(ImGuiKey_Enter, false)
+                       || ImGui::IsKeyPressed(ImGuiKey_Space, false))) {
+                // The host can start without waiting for the rest (and without
+                // a second player at all, which is how the room is left after
+                // somebody else closed its window).
+                constexpr double kLoadGraceSec = 4.0;
+                const double hostLeadIn = std::max(static_cast<double>(game::kMinLeadInSec),
+                    static_cast<double>(snap.leadInMs) / 1000.0);
+                party.beginCharging(platform::PartyLink::nowCounter()
+                    + static_cast<Uint64>(
+                        (kLoadGraceSec + hostLeadIn) * platform::PartyLink::counterFrequency()));
+            }
+            if (interactive && picked.leave) {
+                leavePartyRoom(); // ESC / 返回 (the pad's B reaches this too)
+            }
+
         } else if (state == AppState::Play) {
             // ----------------------------------------------------------
             // Playing
             // ----------------------------------------------------------
-            const double songTime = audio.hasMusic() ? audio.songTime() : wallSongTime();
+            const double songTime = songClock();
             audio.update();
             const float outputTime = static_cast<float>(songTime + leadInSec);
 
             // Report to Windows: SMTC position + taskbar button progress.
-            if (userSettings.reportSmtc) {
+            // 多人游玩: only the host owns the live as far as Windows is
+            // concerned (see announceTrack).
+            const bool smtcHere = !party.active() || party.isHost();
+            if (userSettings.reportSmtc && smtcHere) {
                 systemMedia.updatePlayback(true, paused, songTime, trackDurationSec);
             }
-            systemMedia.setTaskbarProgress(
-                trackDurationSec > 1.0 ? songTime / trackDurationSec : -1.0, paused);
+            if (smtcHere) {
+                systemMedia.setTaskbarProgress(
+                    trackDurationSec > 1.0 ? songTime / trackDurationSec : -1.0, paused);
+            }
 
             // Debug (`--test-restart`): replay "give up -> pick another song"
             // in the middle of a run, i.e. a second loadMusic() on a live
@@ -4255,6 +4969,17 @@ int main(int argc, char** argv)
                 paused = false;
                 countdownActive = false;
                 systemMedia.setTaskbarProgress(-1.0, false);
+                if (party.active()) {
+                    // The live is over for this window. The host hands the room
+                    // back to the lobby so the others stop following a clock
+                    // that is about to stop; everybody shows up as 结算中.
+                    party.setHostPaused(false);
+                    party.setSeat(platform::PartySeatResult);
+                    if (party.isHost()) {
+                        party.releaseSong();
+                        mpFollowing = false;
+                    }
+                }
                 state = AppState::Result;
                 resultShownAt = uiClock;
                 std::printf("[result] shown (score=%.0f best=%.0f newRecord=%d)\n",
@@ -4358,6 +5083,13 @@ int main(int argc, char** argv)
             hudState.lifeRatio = judgement.lifeRatio();
             hudState.autoJudge = autoPlay;
 
+            // 多人游玩: hand this window's live numbers to the room, so the other
+            // windows can put them on screen (a plain store into the shared
+            // page - the reader sees it on its next frame).
+            if (party.active()) {
+                party.setPlayingScore(hudState.score, hudState.combo, hudState.lifeRatio);
+            }
+
             // Damage vignette state: any life drop flashes the edges, life
             // stuck at 0 keeps them dark.
             if (stats.life < lastSeenLife - 0.5f) {
@@ -4423,6 +5155,14 @@ int main(int argc, char** argv)
                     static_cast<float>(leadInSec), dumpJudgeSheet);
             }
             game::drawIntro(renderer, session.intro, outputTime, windowW, windowH);
+
+            // 多人游玩: the other players' score / combo, and - while the host
+            // has the shared clock on hold - why nothing is moving.
+            if (party.active() && visibility > 0.0f) {
+                const bool hostHeld = mpFollowing && mpHostPaused;
+                game::drawPartyScores(party.players(), party.slot(), windowW, windowH,
+                    hostHeld ? "房主已暂停" : std::string(), hostHeld);
+            }
 
             // Subtle playback progress bar along the very top edge of the
             // window (semi-transparent, can be turned off in the settings).
@@ -4497,11 +5237,7 @@ int main(int argc, char** argv)
             // here so the same click never also counts as a lane hit.
             if (pauseClickRequested) {
                 pauseClickRequested = false;
-                if (!pauseDialogOpen) {
-                    paused = true;
-                    audio.pause();
-                    pauseDialogOpen = true;
-                }
+                requestPause();
             }
 
             // Settings card (H key), shared with the song select state.
@@ -4511,9 +5247,7 @@ int main(int argc, char** argv)
             // Pause dialog: 重试 / 放弃 / 继续演出.
             // ----------------------------------------------------------
             if (showPauseDialogShot && !pauseDialogOpen && songTime > 0.5) {
-                paused = true;
-                audio.pause();
-                pauseDialogOpen = true;
+                requestPause();
             }
             // Alive flag keeps drawing while the close animation plays out.
             static bool pauseDialogAlive = false;
@@ -4585,6 +5319,12 @@ int main(int argc, char** argv)
                     countdownActive = false;
                     paused = false;
                     audio.resume();
+                    // 多人游玩: tell the members the shared clock is running
+                    // again (they hold their picture on the frozen time until
+                    // then, so a host pause stops every window at once).
+                    if (party.active()) {
+                        party.setHostPaused(false);
+                    }
                 } else {
                     const int number = 3 - static_cast<int>(elapsed);
                     if (number != countdownNumberShown) {
@@ -4892,6 +5632,11 @@ int main(int argc, char** argv)
     if (screenshotPath.empty()) {
         persistUserData();
     }
+
+    // Leave the 多人游玩 room before anything else: the other windows see the
+    // seat go and stop waiting for this one (a crash would leave them to time
+    // it out, see platform/Party.cpp).
+    party.shutdown();
 
     audio.shutdown();
     systemMedia.shutdown();

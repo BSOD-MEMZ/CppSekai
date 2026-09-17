@@ -41,11 +41,13 @@ SOURCES=(
     platform/CoreApi.cpp
     platform/Renderer.cpp
     platform/Audio.cpp
+    platform/Party.cpp
     platform/SystemMedia.cpp
     game/Judgement.cpp
     game/Hud.cpp
     game/Ui.cpp
     game/Intro.cpp
+    game/PartyScreen.cpp
     game/Result.cpp
     game/SongSelect.cpp
     game/TapEffect.cpp

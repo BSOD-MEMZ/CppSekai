@@ -136,6 +136,13 @@ struct UserSettings
     //       two windows ever write the same profile file. Costs one full copy
     //       of the assets and textures per window (~250 MB); see AGENTS.md.
     int instanceMode = 0;
+    // Multi-instance co-op ("多人游玩"). On: this window joins the shared room
+    // every other window on this machine is in (see platform/Party.hpp), and
+    // the instance policy allows several copies at once. The first window that
+    // comes up becomes the host: it picks the song, every window picks its own
+    // difficulty and they all start on the same beat, with the host alone
+    // playing the BGM. Off (default) = plain single-window play.
+    bool multiplayer = false;
     // Subtle playback progress bar along the top edge of the play screen.
     bool showProgressBar = true;
     // Hide the Windows touch ripple over our window (per-window setting).

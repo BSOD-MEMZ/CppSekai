@@ -714,6 +714,7 @@ void loadUserData(const std::string& path, UserSettings& settings,
             settings.renderScale = s.value("renderScale", settings.renderScale);
             settings.instanceMode = s.value("instanceMode", settings.instanceMode);
             settings.fpsLimit = s.value("fpsLimit", settings.fpsLimit);
+            settings.multiplayer = s.value("multiplayer", settings.multiplayer);
             settings.showProgressBar = s.value("showProgressBar", settings.showProgressBar);
             settings.hideTouchFeedback = s.value("hideTouchFeedback", settings.hideTouchFeedback);
             settings.perfectMs = s.value("perfectMs", settings.perfectMs);
@@ -795,6 +796,7 @@ void saveUserData(const std::string& path, const UserSettings& settings,
         {"renderScale", settings.renderScale},
         {"instanceMode", settings.instanceMode},
         {"fpsLimit", settings.fpsLimit},
+        {"multiplayer", settings.multiplayer},
         {"showProgressBar", settings.showProgressBar},
         {"hideTouchFeedback", settings.hideTouchFeedback},
         {"perfectMs", settings.perfectMs},

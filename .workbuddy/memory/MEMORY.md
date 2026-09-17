@@ -68,7 +68,10 @@
   `--result-preview` 会在结算出现后 ~2.6s 自动截图退出，点击要连点。
 
 ## 最近工作
-- 2026-09-13 结算画面 `game/Result.cpp`（参考官方截图 1:1 复刻，几何全是量出来的），
+- **2026-09-17 多人游玩**（`platform/Party.*` + `game/PartyScreen.*` + `AppState::Party`）：
+  同机多窗口一起打，房主选曲 / 各自选难度 / 绝对 QPC 起奏时刻 / 只有房主播 BGM。
+  详见 AGENTS.md「多人游玩」一节；回归脚本 `.workbuddy/tools/mp_verify.sh`（纯日志断言）。
+- 2026-09-13 结算画面 `game/Result.cpp`（参考官方截图 1:1 复刻，几何全是量出来的）,
   详见 `AGENTS.md` 的「结算画面」一节；调试入口 `--result-preview` / `--result-at`。
 - 2026-09-13 设置卡片加「系统」页（失焦自动暂停 / SMTC 汇报开关），页签内容移进裁剪 child；
   选曲分组改成「按读音」（假名行级 + 英文逐字母）。多歌手切换：上游没有，官方数据

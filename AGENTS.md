@@ -51,8 +51,15 @@ game/Intro.*      # ImGui 卡片/UI；字体跟随系统（注册表找字体文
                   # 是 CFF 轮廓 stb_truetype 渲染不了，会自动落到 Microsoft YaHei UI；--pjsk-font 回退）
 game/SongSelect.* # 选曲界面 + userdata.json 读写（settings / scores / account 三段）+ 等级曲线。
                   # 账户 / 等级 / 资料卡见下面「账户 / 等级」一节。
-main.cpp          # SDL2 窗口、事件循环、输入映射、ImGui HUD、截图模式
+platform/Party.*  # 多人游玩（同机多窗口联机）的共享内存总线：命名文件映射 + 每实例一个座位，
+                  # 主机选举、心跳、锁曲、难度、准备、绝对起奏时刻、暂停广播、实时分数。
+                  # 无 socket / 无管道 / 无序列化：一次状态变更就是往共享页写一个 LONG。
+game/PartyScreen.* # 多人游玩的三个画面：选曲界面上的房间条、锁定后的难度选择页（含准备/
+                  # 开始/倒计时）、游玩中其它玩家的分数条。1920x1080 虚拟画布，和选曲/结算同一套。
+main.cpp          # SDL2 窗口、事件循环、输入映射、ImGui HUD、截图模式、多人时钟跟随
 ```
+
+多人游玩（`AppState::Party`、`--party`）见下面「多人游玩」一节。
 
 数据流：`loadSusTextPrecise → render(t) → packedQuads → Renderer::renderFrame`；
 判定侧：`getHitEventBuffer → JudgementEngine::load → tap/flick/update`。
@@ -125,8 +132,12 @@ main.cpp          # SDL2 窗口、事件循环、输入映射、ImGui HUD、截�
   当功能验证；`char` 走的是 WM_CHAR，ImGui 那类读 SDL 事件的界面要用 `click`。
 - `.workbuddy/tools/gen_music_vocals.py` → `music-vocals.json`：从官方的 musicVocals +
   gameCharacters 表生成演唱版本表（`asset` 就是 unipjsk 的音频目录名）。
-- `.workbuddy/tools/winsend.c` → `build/winsend.exe`：按窗口标题 PostMessage 真鼠标消息，
-  无交互会话下驱动 UI（见「平台 / 输入相关的坑」）。
+- `.workbuddy/tools/winsend.c` → `build/winsend.exe`：按窗口标题找窗口再送假输入，
+  无交互会话下驱动 UI（动作：`click x y` / `move x y` / `key <vk>` / `focus` /
+  `place x y` / `rect`；见「平台 / 输入相关的坑」）。
+- `.workbuddy/tools/mp_verify.sh` → 多人游玩的端到端回归：开两个窗口（`--party-auto`），
+  断言同一 `start counter`、BGM 只在主机、时钟偏差、实时分数过进程、房主暂停后成员画面钉住。
+  纯文本 PASS/FAIL，不需要看截图。
 
 ## 构建
 
@@ -418,7 +429,26 @@ tio.AddMouseWheelEvent(0.0f, -2.0f);           // 滚轮两格
 ./build/winsend.exe CppSekai click 210 469      # 客户端坐标，点第一个段标题
 ./build/winsend.exe CppSekai key 27             # VK_ESC
 ./build/winsend.exe CppSekai move 300 500       # 只移动（测 hover）
+./build/winsend.exe "CppSekai - A" place 20 20  # 两个实例并排放（按标题区分窗口）
+./build/winsend.exe "CppSekai - A" rect         # 打印窗口/客户区矩形和客户区原点
 ```
+
+**假输入的三个坑（2026-09-17 一次多人回归里全踩了一遍，改 `winsend.c` 时别退化）**：
+
+1. **SDL 的按键事件要求窗口持有键盘焦点**，否则 `WM_KEYDOWN` 被静默丢弃。单纯
+   `SetForegroundWindow` 在"前台窗口属于别的进程"时会失败（脚本启动时永远如此），
+   要用 `AttachThreadInput(前台线程, 本线程, TRUE)` 再 `SetForegroundWindow`；
+   仍失败时补发 `WM_ACTIVATE`+`WM_SETFOCUS`（SDL 就是靠这两条维护焦点状态的）。
+2. **SDL 报告鼠标按键的位置取的是它自己记录的鼠标位置**（用系统光标刷新），
+   不是消息里的 lParam。所以 `click` 必须先用 `ClientToScreen`+`SetCursorPos` 把真光标
+   挪过去，再发消息；否则点到哪儿全看运气。
+3. **`ShowWindow(SW_RESTORE)` 会触发 Windows 的还原动画**，动画期间 `ClientToScreen`
+   拿到的是旧位置，点击会整体偏几十~上百像素。只在 `IsIconic()` 时还原，并且
+   `place` 之后要等 ~2s 再点。
+4. 键盘输入**没有坐标**，比点击可靠得多；能键盘走的路（选曲界面的方向键/回车、
+   房间页的左右键）优先用键盘。
+5. `CPSEKAI_UI_TRACE=1` 时会打 `[ui] mouse down at x,y`——**查"点了没反应"先看这行有没有、
+   坐标对不对**，它把"事件没到"和"到了但没命中"分开。
 
 配合 `.workbuddy/tools/pngcrop.py` 的 `read_png()` 做**像素断言**（比肉眼看图可靠，
 而且这个模型看不了图）：比如背景区均值、某个 UI 色的像素计数、两次截图同一区域的哈希
@@ -994,6 +1024,61 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
   - 实现注意：日志结构体 `FlickDebugLog` 在 main.cpp 匿名命名空间（文件级 `gFlickLog`），
     `setEnabled()` 里会 truncate；**变量别叫 `near`**（windef.h 把它定义成空宏，
     声明会被吃掉，直接编译不过）。
+
+## 多人游玩（2026-09-17，`platform/Party.*` + `game/PartyScreen.*`）
+
+同一台机器开多个窗口一起打。流程：**第一个窗口是房主**，在选曲界面选中曲子按确定
+→ 所有窗口进入房间页 → 各自选难度（选难度即"准备"）→ 全员准备后房主发布**绝对起奏时刻**
+→ 各窗口同时加载自己那份谱面 → 到点一起开始。BGM 只有房主播。
+
+- **传输**：一条命名文件映射 `Local\CppSekai.Party.v1`（`platform/Party.cpp`），
+  8 个座位 + 一个控制块。没有 socket、没有管道、没有序列化，也不 flush：**一次状态变更
+  就是往共享页写一个 LONG**，别的窗口下一帧就读到了——同机上这是延迟的物理下限
+  （只剩读者自己的一帧）。控制块用 seqlock（写者 `InterlockedIncrement(&seq)` 包住），
+  座位里每个字段只有主人写、天然无冲突。
+- **座位/主机**：进房间时 CAS 抢最低空位；`hostSlot` 谁都不是有效活人时，最低活位接管。
+  每帧写 `heartbeat`（GetTickCount64 低 32 位），超过 6 秒没心跳的座位被判死——但
+  **`PartyCharging` 阶段不回收**（那时所有窗口都在加载谱面，谁都不心跳，回收会把房间打散）；
+  被误判死掉的窗口会自己把座位抢回来（`update()` 开头）。
+- **起奏同步**：`startCounter` 是一个 **QPC 值**（不是相对时间）。QPC 全机唯一，所以
+  "T 时刻开始"对所有窗口意义相同。各窗口到点各自 `beginSessionClockAt(startCounter)`
+  （`perfStart = startCounter`），加载宽限 4s + 房主 lead-in（默认 6s）。
+- **时钟跟随**（`resolveSongClock` / `songClock`）：房主每帧把自己的 `songTime` **连同采样时的
+  QPC** 发到共享页（`publishHostClock`）；成员的本底时钟是 QPC（它没有 BGM，走 `wallSongTime`），
+  用包里的 QPC 差把房主时钟外推到"现在"，再把差值当作**偏移量**缓变跟上：
+  `t = 本底 + offset`。三点要注意：
+  - **房主未发布之前读到的包是 0**，直接拿去算会得到几个小时量级的误差（第一次实测就是：
+    成员时钟瞬间跳到 +3993s，整首歌全 MISS）。所以控制块里有 `hostClockValid`，
+    没发布就返回 false；另外 `|error| > 5s` 的包一律丢弃（`[party] clock sample rejected`）。
+  - **起奏前允许自由对齐**（`local < 0.5` 直接 snap）：那时只有开幕卡在看时钟，
+    跳一下没人看得出来，但可以把对齐误差压到噪声级——慢慢挪的话第一串音符会差几十毫秒。
+  - **起奏后 3 秒内用 50% 速率修正，之后 3%**。因为房主的音频时钟在**音乐真正开始**的那一刻
+    会被重新锚定（`AudioEngine::update` 里 `mMusicStartFrames = 现在`），一下子跳最多一帧
+    （30fps 下 25ms），而那一刻正是第一批音符要判的时候。3% 要好几秒才吃完这个台阶。
+  实测（`--party-auto` 两个窗口，`CPSEKAI_MP_TRACE=1` 对 QPC 轴）：**中位 3.4ms / 最差 6.7ms**。
+- **BGM 只有房主播**：成员的 `startSession(..., allowMusic=false)` —— 不 `loadMusic`、不检测
+  头部静音，`audio.hasMusic()` 为假，于是时钟自然落回 wall clock（正好被上面的跟随覆盖）。
+  选曲界面的试听也只有房主放（`playPreviewHere`）。同一份 mp3 在两个窗口差几毫秒放出来就是回声。
+- **暂停**：房主暂停时 `setHostPaused(true)`，成员看到后**把画面钉在房主报的那个 songTime 上**
+  （不外推，否则暂停期间会越跑越远）；恢复瞬间靠 `|error| > 0.2` 的 snap 重新对齐。
+  **成员按不动暂停**（`requestPause()` 直接拒绝并往 `mpStatus` 写一行提示）——时钟是房主的，
+  本地暂停只会让自己脱节。多人模式还会**强制关掉"失焦自动暂停"**（多个窗口并排，
+  几乎总有一个不在前台）。
+- **房主中途关窗**：成员发现 `hostAlive()` 为假就放弃跟随、退回自己的 QPC 时钟
+  （`[party] host gone: running on the local clock`），不会因为跟着一份冻结的包而卡死。
+- **SMTC / 任务栏进度只有房主汇报**（`smtcHere`），否则两个窗口抢同一个媒体控件。
+- **换歌靠文件名的**：房主广播的是**谱面文件名**（`0001_expert.sus`）+ `musicId`，
+  成员在自己的谱面表里找同 musicId 的同难度（`findPartyEntry` / `buildPartyOptions`）。
+  两台窗口读的是同一个 `charts\`，所以一定找得到；成员没有的难度不会出现在它的难度条里。
+- **多人模式下窗口标题带玩家名**（`CppSekai - <名字>`）：否则任务栏里几个窗口分不出来，
+  无头脚本也没法指定要点哪个（winsend 按标题子串找窗口）。
+- **开关**：`设置 -> 系统 -> 多人游玩`（`UserSettings::multiplayer`，写进档案）或命令行
+  `--party`（本次运行有效，不落盘）。打开它会**顺带把多开策略设成"允许多开"**——多人本来
+  就需要多个窗口，而多开时每个窗口登录不同用户（成绩各自记账）。
+- **只有一个人的房间 = 普通单机**：`partyUsable()` 要求 ≥2 个活人，否则按确定走原来的
+  单人流程，一行都没改。
+- **回归脚本**：`.workbuddy/tools/mp_verify.sh`（配合 `--party-auto` 全自动跑一轮 +
+  暂停广播 + 时钟偏差对比，全 PASS/FAIL 输出）。
 
 ## 待办（按优先级）
 
