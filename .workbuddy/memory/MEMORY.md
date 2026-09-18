@@ -72,8 +72,32 @@
   要拍结算就别加 `--party-auto`，或者改 `result-at` 拖时间。
 - 跑游戏的日志：**stdout 重定向到文件**（`> run.txt 2>&1`）时有时会落到 `cppsekai.log`
   （取决于 AttachConsole 成不成），两个地方都看一眼，别以为日志是旧的。
+- **2026-09-18：日志"跑着跑着不打了"是缓冲假死，不是真卡死**。这个 exe 是 Windows 子系统，
+  `AttachConsole` 成功后 `freopen("CONOUT$")` 会把 stdout 打回 msvcrt 默认缓冲，
+  shell 里 `> run.txt` 时就只在填满 4KB 才落盘。已改成无条件 `setvbuf(_IONBF)`——但**读旧日志
+  时仍要记住这点**，别把"日志停了"当成进程死了。
+- **探针的上限别设太小**。给临时条件探针加 `if (n < 8)` 这类计数上限，会掩盖
+  "条件一直不满足"和"条件满足了但分支没走"的区别——2026-09-18 排查多人"连不上"时
+  差点因此漏掉真根因（真凶是 `selected == -1`，不是 IPC）。
+- 无交互会话下 `winsend.exe` 的 PostMessage **到不了某些 ImGui 界面**（SDL 收不到注入输入）。
+  要验证的按钮就在代码里加个自动按的调试开关（如 `--chartdl-test`），别在输入注入上死磕。
 
 ## 最近工作
+- **2026-09-18 三件用户需求 + 挖出两个真 bug**（commit `3f1c2ba`）：
+  (a) 空谱面时选曲界面出「下载谱面（chartdl）」按钮（`SelectDownload`，退出后自动重扫；
+  `--chartdl-test` 可自动按）；(c) 首启 ELUA 弹窗（`ui::eulaDialog` + `UserSettings::eulaAccepted`）；
+  (b) **多人"有时候连不上"的真根因不在 IPC，在选曲界面**——`drawSongSelect` 每帧用
+  `selected = groups[gi].idx[diffIndex]` 反推选中项（`diffIndex` 默认 EXPERT），而
+  `buildGroups` 只把谱面放进它自己的难度槽；unipjsk 的谱面一律不写可识别的 `#DIFFICULTY`
+  → 所有槽 -1 → `selected` 每帧被写回 **-1**，把调用方开局的合法 `0` 冲掉。列表看着有歌、
+  实际"什么都没选中"：单机按确定没反应，房间里房主在 `publishHostSong()` 因 `selected < 0`
+  直接 return、从此静默、全房干等。**这是用户早就会遇到的 bug，跟多人无关，只是多人把它
+  放大成"连不上"**。修法：解析不出难度就塞进最低空槽 + `selected` 赋值后兜一层扫槽。
+  另修两个真 bug：暂停不冻主机的时钟（`wallSongTime()` 是纯 QPC 不知道暂停，无 BGM 谱面
+  一暂停房主就把"还在动的瞬间"发给全房，实测 2s 漂 2022ms）；日志缓冲假死（见「验证手法」）。
+  还修了 `platform/Party.cpp` 两个确实存在但不是本次根因的竞态（`init()` 先发 `alive`
+  后写 `heartbeat`；`update()` 无条件抢回座位）。`mp_verify.sh` 三回合全绿
+  （round2 成员暂停位移 2022ms → 0ms）。
 - **2026-09-18 多人游玩流程重做**：房间搬到选曲界面（房主光标即广播；成员列表只读 + 灰罩 +
   灰掉的随机；难度在手机面板里选；「确定」= 唯一的开始按钮，最后一个按下立刻开局，
   旧的 4s 加载宽限/10s 倒计时删了）；`AppState::Party` / `drawPartyScreen` 整个删掉。
