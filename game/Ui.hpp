@@ -41,6 +41,10 @@ enum SeKind
     SeWindowOpen,  // a card / dialog appeared
     SeWindowClose, // a card / dialog started closing
     SeStart,       // the white burst when 确定 launches a live (start.mp3)
+    // Sentinel: the number of real kinds. Keep it last, and let Ui.cpp size its
+    // request array from it - a hand-written count there is what silently
+    // dropped start.mp3 for a while.
+    SeKindCount,
 };
 
 // Wires the component library to the audio engine (call once after audio init).

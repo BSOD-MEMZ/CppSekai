@@ -136,6 +136,11 @@ struct UserSettings
     //       two windows ever write the same profile file. Costs one full copy
     //       of the assets and textures per window (~250 MB); see AGENTS.md.
     int instanceMode = 0;
+    // The user has been told that multi-open is experimental and said yes. The
+    // confirmation is asked once, the first time 允许多开 (or 多人游玩, which
+    // implies it) is turned on; afterwards the switch flips silently. Stored
+    // per profile so a fresh user gets asked again.
+    bool multiInstanceAccepted = false;
     // Multi-instance co-op ("多人游玩"). On: this window joins the shared room
     // every other window on this machine is in (see platform/Party.hpp), and
     // the instance policy allows several copies at once. The first window that

@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <unordered_map>
 
 namespace ui
@@ -29,8 +30,14 @@ namespace
 {
     platform::AudioEngine* gSeAudio = nullptr;
     float gSeVolume = 0.8f;
-    constexpr int kSeKindCount = 5; // ui::SeKind, in priority order
-    bool gSeRequest[kSeKindCount] = {};
+    // Must cover every ui::SeKind (SeClick .. SeStart). It used to be a
+    // hard-coded 5 while the enum already had 6 members, so SeStart fell off
+    // the end of both the request array and flushSe()'s scan - `确定`'s
+    // start.mp3 was queued and dropped in the same frame, silently. Deriving it
+    // from the enum keeps the two in step for good.
+    constexpr int kSeRequestCount = static_cast<int>(SeKindCount);
+    static_assert(kSeRequestCount == 6, "ui::SeKind grew: check the priority order below");
+    bool gSeRequest[kSeRequestCount] = {};
 } // namespace
 
 void bindSe(platform::AudioEngine* audio, float volume)
@@ -45,7 +52,7 @@ void se(SeKind kind)
         return;
     }
     const int index = static_cast<int>(kind);
-    if (index >= 0 && index < kSeKindCount) {
+    if (index >= 0 && index < kSeRequestCount) {
         gSeRequest[index] = true;
     }
 }
@@ -53,7 +60,7 @@ void se(SeKind kind)
 void flushSe()
 {
     int pick = -1;
-    for (int i = 0; i < kSeKindCount; ++i) {
+    for (int i = 0; i < kSeRequestCount; ++i) {
         if (gSeRequest[i]) {
             pick = i; // highest priority wins
         }
@@ -95,6 +102,17 @@ namespace
         bool ended = false;        // close anim finished; next call reopens
         bool soundOpen = false;    // the entrance sound was already played
         ImVec2 drag{0.0f, 0.0f};   // accumulated header-drag offset
+        // Whole-card transform (see beginCard/endCard). The card is laid out at
+        // its final size and position, then *every* vertex it produced - card
+        // body, title text, sprites, buttons, close X - is scaled around the
+        // card centre on the way out. That is what makes the dialog grow out of
+        // the middle exactly like the official one, instead of the card
+        // rectangle resizing while its contents sit still.
+        // vtxBase is the draw list's vertex count when the card started.
+        int vtxBase = -1;
+        ImDrawList* targetList = nullptr;
+        ImVec2 pivot{0.0f, 0.0f};
+        float k = 1.0f;            // the eased scale applied by endCard()
     };
 
     CardState& cardState(const char* id)
@@ -102,6 +120,11 @@ namespace
         static std::unordered_map<ImGuiID, CardState> states;
         return states[ImGui::GetID(id)];
     }
+
+    // The card beginCard() opened, so endCard() knows which vertex range to
+    // transform without a second id lookup (the id stack it was created under
+    // is gone by then).
+    CardState* gOpenCard = nullptr;
 
     // Starts closing a card: window_close is reported here (same frame as the
     // press that dismissed it, so it outranks that press's click) and the
@@ -179,12 +202,16 @@ bool beginCard(const char* id, ImVec2* center, ImVec2* size, bool showClose, boo
         requestClose(st);
     }
     st.t = std::clamp(st.t + (open ? 1.0f : -1.0f) * ImGui::GetIO().DeltaTime / kAnimSec, 0.0f, 1.0f);
-    const float k = easeInOut(st.t);
+    // Scale from a small dot in the middle (official dialogs start at roughly
+    // a third of their size, not 92%). At t == 1 this is exactly 1.0, so a
+    // settled card has no transform at all and its hit boxes are its own.
+    const float k = 0.34f + 0.66f * easeInOut(st.t);
+    st.k = k;
 
     // Animated geometry around the (dragged) center. Computed up front so the
     // hosting window can hug the card.
     const ImVec2 animCenter = ImVec2(center->x + st.drag.x, center->y + st.drag.y);
-    const ImVec2 animSize = ImVec2(size->x * (0.92f + 0.08f * k), size->y * (0.92f + 0.08f * k));
+    const ImVec2 animSize = ImVec2(size->x, size->y);
     *center = animCenter;
     *size = animSize;
 
@@ -218,6 +245,14 @@ bool beginCard(const char* id, ImVec2* center, ImVec2* size, bool showClose, boo
     ImGui::PopStyleVar(2);
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
+    // Everything drawn from here until endCard() gets scaled around the card
+    // centre. The pivot is the *window-space* card centre, which for a modal
+    // card is where the card lands on screen, and for a hugging window is the
+    // same point in that window's coordinates.
+    st.targetList = dl;
+    st.pivot = animCenter;
+    st.vtxBase = dl->VtxBuffer.Size;
+    gOpenCard = &st;
 
     if (st.t <= 0.0f && !open) {
         // Fully closed: draw the (invisible) backdrop only and report done.
@@ -225,6 +260,9 @@ bool beginCard(const char* id, ImVec2* center, ImVec2* size, bool showClose, boo
             dl->AddRectFilled(ImVec2(0.0f, 0.0f), ImGui::GetIO().DisplaySize, withAlpha(kBackdrop, k));
         }
         ImGui::Dummy(ImVec2(1.0f, 1.0f)); // keep ImGui happy: submit an item
+        st.vtxBase = -1;
+        st.targetList = nullptr;
+        gOpenCard = nullptr;
         ImGui::End();
         st.ended = true;
         return false;
@@ -296,6 +334,33 @@ bool beginCard(const char* id, ImVec2* center, ImVec2* size, bool showClose, boo
 
 void endCard()
 {
+    // Apply the whole-card scale (see beginCard). The vertices were emitted at
+    // their final positions, so the only thing left is to pull every one of
+    // them towards the card centre by `k`. Running it over the raw vertex
+    // buffer rather than over each Add* call is what keeps text, sprites and
+    // rounded corners all scaling by the same amount - and costs one pass over
+    // a few hundred vertices once per card per frame.
+    //
+    // ImGui::End() may have appended its own vertices (the window's scrollbar
+    // / decoration are off, so in practice nothing), and the ranges are per
+    // window draw list, which is exactly the scope of one card.
+    if (gOpenCard != nullptr) {
+        CardState& st = *gOpenCard;
+        gOpenCard = nullptr;
+        if (st.targetList != nullptr && st.vtxBase >= 0) {
+            ImDrawList* dl = st.targetList;
+            if (st.k < 0.9999f) {
+                const ImVec2 pivot = st.pivot;
+                for (int i = st.vtxBase; i < dl->VtxBuffer.Size; ++i) {
+                    ImDrawVert& v = dl->VtxBuffer[i];
+                    v.pos.x = pivot.x + (v.pos.x - pivot.x) * st.k;
+                    v.pos.y = pivot.y + (v.pos.y - pivot.y) * st.k;
+                }
+            }
+        }
+        st.targetList = nullptr;
+        st.vtxBase = -1;
+    }
     ImGui::End();
 }
 

@@ -713,6 +713,12 @@ void loadUserData(const std::string& path, UserSettings& settings,
             settings.windowHeight = s.value("windowHeight", settings.windowHeight);
             settings.renderScale = s.value("renderScale", settings.renderScale);
             settings.instanceMode = s.value("instanceMode", settings.instanceMode);
+            // An install that already had multi-open before this key existed
+            // must not be asked again: treat "already multi-open" as accepted.
+            // (Otherwise the prompt would show up for the very people who are
+            // mid-way through a 多人游玩 session.)
+            settings.multiInstanceAccepted = s.value("multiInstanceAccepted",
+                settings.instanceMode == 1 || settings.multiplayer);
             settings.fpsLimit = s.value("fpsLimit", settings.fpsLimit);
             settings.multiplayer = s.value("multiplayer", settings.multiplayer);
             settings.showProgressBar = s.value("showProgressBar", settings.showProgressBar);
@@ -827,6 +833,7 @@ void saveUserData(const std::string& path, const UserSettings& settings,
         {"windowHeight", settings.windowHeight},
         {"renderScale", settings.renderScale},
         {"instanceMode", settings.instanceMode},
+        {"multiInstanceAccepted", settings.multiInstanceAccepted},
         {"fpsLimit", settings.fpsLimit},
         {"multiplayer", settings.multiplayer},
         {"showProgressBar", settings.showProgressBar},
@@ -2393,9 +2400,10 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         const bool hovered = ImGui::IsItemHovered();
         ImGui::PopStyleVar();
         ImGui::PopStyleColor(3);
-        if (hovered) {
-            ImGui::SetTooltip("重新扫描 charts/ 目录（快捷键 F5）");
-        }
+        // No SetTooltip here on purpose. ImGui's default font atlas has no CJK
+        // glyphs, so a Chinese tooltip renders as a row of '?'; and the button
+        // already says 刷新 with F5 documented in the empty-state hint.
+        (void)hovered;
 
         // Circular arrow, drawn by hand so no icon asset is needed: an open
         // ring plus a solid head at its end.

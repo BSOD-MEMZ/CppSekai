@@ -1193,6 +1193,18 @@ int main(int argc, char** argv)
         if (partyGiven ? partyForced : userSettings.multiplayer) {
             instanceMode = 1;
         }
+        // 主实例已经开了多人游玩的房间：这个新实例不管自己的设置是什么，都得按
+        // 多开起来 —— 否则它拿着 single 策略去抢默认档案、或者干脆把手交回主窗口，
+        // 用户看到的就是"第二个窗口起不来 / 连不上"。房间在就是硬事实，优先级高于
+        // 本机的 settings.json。
+        {
+            const bool roomAlreadyOpen = platform::PartyLink::roomExists();
+            if (alreadyRunning && roomAlreadyOpen && instanceMode == 0) {
+                instanceMode = 1;
+                std::printf("[instance] a 多人游玩 room is already open -> multi-open forced\n");
+                std::fflush(stdout);
+            }
+        }
 
         if (alreadyRunning && instanceMode == 0) {
             // Hand the running window back to the user. The title is unique in
@@ -2665,6 +2677,10 @@ int main(int argc, char** argv)
     // are laid out - so last frame's value is kept here rather than inside the
     // card lambda, where it would only become visible one frame too late.
     bool settingsWasOpen = false;
+    // 开启多开（实验性）的确认框。选「允许多开」或勾「多人游玩」时先弹一张卡
+    // 说明这是实验性功能，确认后才真的写进设置。
+    bool multiInstanceAsk = false;
+    bool multiInstanceAskFromParty = false; // true = 用户点的是多人游玩
     auto drawSettingsCard = [&]() {
         static bool settingsAlive = false;
         if (showDebug) {
@@ -3090,8 +3106,8 @@ int main(int argc, char** argv)
                 contentLeft();
                 ImGui::Text("初始血量");
                 contentLeft();
-                if (ui::slider("initlife", &life, 100.0f, 1000.0f, 50.0f, "%.0f", interior)) {
-                    const float next = std::clamp(life, 100.0f, 1000.0f);
+                if (ui::slider("initlife", &life, 100.0f, game::kMaxInitialLife, 50.0f, "%.0f", interior)) {
+                    const float next = std::clamp(life, 100.0f, game::kMaxInitialLife);
                     if (next != userSettings.initialLife) {
                         userSettings.initialLife = next;
                         judgement.setInitialLife(next);
@@ -3164,16 +3180,24 @@ int main(int argc, char** argv)
                     if (ImGui::Combo("##instancemode", &mode,
                             "只允许一个实例（再启动就切回已有窗口）\0"
                             "允许多开，新实例登录另一个用户\0")) {
-                        userSettings.instanceMode = std::clamp(mode, 0, 1);
-                        // 多人游玩 only means something with several windows, so
-                        // switching to single-instance turns it off instead of
-                        // leaving a switch that can never do anything.
-                        if (userSettings.instanceMode == 0 && userSettings.multiplayer) {
-                            userSettings.multiplayer = false;
-                            std::printf("[settings] multiplayer off (single instance)\n");
-                            std::fflush(stdout);
+                        const int picked = std::clamp(mode, 0, 1);
+                        // 多开是实验性功能：第一次开启要先确认（已经确认过就直接写）。
+                        if (picked == 1 && userSettings.instanceMode == 0
+                            && !userSettings.multiInstanceAccepted) {
+                            multiInstanceAsk = true;
+                            multiInstanceAskFromParty = false;
+                        } else {
+                            userSettings.instanceMode = picked;
+                            // 多人游玩 only means something with several windows, so
+                            // switching to single-instance turns it off instead of
+                            // leaving a switch that can never do anything.
+                            if (userSettings.instanceMode == 0 && userSettings.multiplayer) {
+                                userSettings.multiplayer = false;
+                                std::printf("[settings] multiplayer off (single instance)\n");
+                                std::fflush(stdout);
+                            }
+                            persistUserData();
                         }
-                        persistUserData();
                     }
                 }
                 contentLeft();
@@ -3187,16 +3211,22 @@ int main(int argc, char** argv)
                     // instance the greyed box shows "off" and storing that would
                     // silently wipe the setting just for opening this page.
                     if (multiOpen && partyBox != userSettings.multiplayer) {
-                        userSettings.multiplayer = partyBox;
-                        // 多人游玩 needs several windows, so it also switches
-                        // the instance policy to multi-open; each copy logs in
-                        // as its own user (they keep separate records).
-                        if (partyBox) {
-                            userSettings.instanceMode = 1;
+                        // 勾上多人游玩同样要先确认多开是实验性功能（已经确认过就直接走）。
+                        if (partyBox && !userSettings.multiInstanceAccepted) {
+                            multiInstanceAsk = true;
+                            multiInstanceAskFromParty = true;
+                        } else {
+                            userSettings.multiplayer = partyBox;
+                            // 多人游玩 needs several windows, so it also switches
+                            // the instance policy to multi-open; each copy logs in
+                            // as its own user (they keep separate records).
+                            if (partyBox) {
+                                userSettings.instanceMode = 1;
+                            }
+                            std::printf("[settings] multiplayer %s\n", partyBox ? "on" : "off");
+                            std::fflush(stdout);
+                            persistUserData();
                         }
-                        std::printf("[settings] multiplayer %s\n", partyBox ? "on" : "off");
-                        std::fflush(stdout);
-                        persistUserData();
                     }
                 }
                 contentLeft();
@@ -3419,6 +3449,50 @@ int main(int argc, char** argv)
             ui::endCard();
         } else {
             settingsAlive = false;
+        }
+    };
+
+    // ------------------------------------------------------------------
+    // 开启多开（实验性）的确认框。
+    //
+    // 多开 / 多人游玩 都是实验性功能：同一个游戏开好几份窗口靠共享内存总线
+    // 同步，机器一忙就掉帧、时钟漂了也没人纠。所以第一次开启之前先说清楚，
+    // 用户确认过之后（multiInstanceAccepted）就不再拦。
+    // 「取消」什么也不改 —— 用户点错的 combo 会自己跳回去，因为 combo 的值
+    // 每帧都从 userSettings.instanceMode 重新读。
+    // ------------------------------------------------------------------
+    auto drawMultiInstanceAskDialog = [&]() {
+        if (!multiInstanceAsk) {
+            return;
+        }
+        // eulaDialog is the only card that takes body paragraphs (messageDialog
+        // is title + buttons only), so the notice reuses it with no checkbox.
+        const int action = ui::eulaDialog(renderer, "##multiask", "开启多开？",
+            {
+                "多开 / 多人游玩是实验性功能：同一台机器开几个窗口，靠共享内存总线同步"
+                "选曲、难度和起奏时刻。",
+                "它没有网络校验，机器一忙可能掉帧或时钟漂移；窗口越多越明显。",
+                "每个窗口各登录一个用户，各自记成绩。确定开启吗？",
+            },
+            nullptr, nullptr, {std::string("取消"), std::string("确定开启")}, {false, true});
+        if (action == 0) {
+            // 取消：什么也不存。combo / 复选框下一帧自己从 userSettings 归位。
+            std::printf("[instance] multi-open declined\n");
+            std::fflush(stdout);
+            multiInstanceAsk = false;
+            multiInstanceAskFromParty = false;
+        } else if (action == 1) {
+            userSettings.multiInstanceAccepted = true;
+            userSettings.instanceMode = 1;
+            if (multiInstanceAskFromParty) {
+                userSettings.multiplayer = true;
+            }
+            std::printf("[instance] multi-open accepted (fromParty=%d)\n",
+                multiInstanceAskFromParty ? 1 : 0);
+            std::fflush(stdout);
+            persistUserData();
+            multiInstanceAsk = false;
+            multiInstanceAskFromParty = false;
         }
     };
 
@@ -5244,6 +5318,8 @@ int main(int argc, char** argv)
 
             // Settings card, opened from the musicsetting button (or H).
             drawSettingsCard();
+            // 多开的实验性功能确认框（设置卡片里点出来的）。
+            drawMultiInstanceAskDialog();
             // Who else is in the room (hidden while the settings card is up:
             // it draws on the foreground list, above the card).
             if (party.active() && !showDebug) {
@@ -5683,13 +5759,15 @@ int main(int argc, char** argv)
                 party.setPlayingScore(hudState.score, hudState.combo, hudState.lifeRatio);
             }
 
-            // Damage vignette state: any life drop flashes the edges, life
-            // stuck at 0 keeps them dark.
+            // Damage vignette state: any life drop *flashes* the corners.
+            // Assign, never accumulate - a long bad streak must not build up a
+            // permanent black screen (life at 0 is the only thing that keeps it
+            // on, and that is handled where it is drawn).
             if (stats.life < lastSeenLife - 0.5f) {
                 damageVignette = 1.0f;
             }
             lastSeenLife = stats.life;
-            damageVignette = std::max(0.0f, damageVignette - frameDelta / 0.45f);
+            damageVignette = std::max(0.0f, damageVignette - frameDelta / 0.42f);
 
             // Debug (`--judge-frame N`): freeze the judge text on frame N of
             // its 60fps pop-in so the animation can be checked from a headless
@@ -5743,6 +5821,48 @@ int main(int argc, char** argv)
                 game::openingPlayfieldVisibility(outputTime, session.intro.hasContent);
             renderer.renderFrame(quads, quadCount, 0.85f, visibility);
 
+            // ----------------------------------------------------------
+            // Damage vignette: a dark corner shadow. A life loss *flashes* it
+            // (decays over ~0.42s); life at 0 leaves it on for good.
+            //
+            // Two rules this has to obey, both learned the hard way:
+            //   * it is a *flash*, not an accumulator. `damageVignette` is
+            //     assigned 1 on a drop, never `+=`, so a long bad streak cannot
+            //     pile up into a black screen.
+            //   * it sits UNDER the HUD. Drawn on the background list *before*
+            //     drawHud() below, so the score / life bar stay readable while
+            //     the corners darken. Afterwards (or on the foreground list) it
+            //     covered them.
+            //
+            // Geometry: one square per corner, sized off min(w,h), with a
+            // bilinear ramp that is dark at the corner and 0 at the inner
+            // vertex. Two of the four colours are always 0, so the four squares
+            // do not stack into a visible seam where they meet.
+            // ----------------------------------------------------------
+            const float damageVig = [&]() {
+                const float deadVignette = judgement.lifeRatio() <= 0.0f ? 1.0f : 0.0f;
+                return std::max(damageVignette * 0.85f, deadVignette);
+            }();
+            if (damageVig > 0.004f) {
+                ImDrawList* bg = ImGui::GetBackgroundDrawList();
+                const float w = static_cast<float>(windowW);
+                const float h = static_cast<float>(windowH);
+                const int a = static_cast<int>(150.0f * std::clamp(damageVig, 0.0f, 1.0f));
+                const ImU32 dark = IM_COL32(0, 0, 0, a);
+                const ImU32 none = IM_COL32(0, 0, 0, 0);
+                // Square-ish corner patch: long enough to read as a vignette,
+                // short enough that the middle of a 16:9 screen stays clear.
+                const float rc = std::min(w, h) * 0.55f;
+                // Top-left: dark at (0,0), 0 at (rc,rc).
+                bg->AddRectFilledMultiColor(ImVec2(0.0f, 0.0f), ImVec2(rc, rc), dark, dark, none, dark);
+                // Top-right: dark at (w,0), 0 at (w-rc,rc).
+                bg->AddRectFilledMultiColor(ImVec2(w - rc, 0.0f), ImVec2(w, rc), dark, dark, dark, none);
+                // Bottom-left: dark at (0,h), 0 at (rc,h-rc).
+                bg->AddRectFilledMultiColor(ImVec2(0.0f, h - rc), ImVec2(rc, h), dark, none, dark, dark);
+                // Bottom-right: dark at (w,h), 0 at (w-rc,h-rc).
+                bg->AddRectFilledMultiColor(ImVec2(w - rc, h - rc), ImVec2(w, h), none, dark, dark, dark);
+            }
+
             if (visibility > 0.0f) {
                 game::drawHud(renderer, hudState, static_cast<float>(songTime), windowW, windowH,
                     static_cast<float>(leadInSec), dumpJudgeSheet);
@@ -5775,55 +5895,6 @@ int main(int argc, char** argv)
             }
 
             // ----------------------------------------------------------
-            // Damage vignette: dark inner shadow around the screen edges.
-            // A life loss flashes it (decays over ~0.45s); life at 0 keeps
-            // it permanently on (original-game feedback). The shadow has to
-            // hug all four window edges, corners included:
-            //   * the four edge bands are inset so they never overlap,
-            //   * the four corner squares carry a two-colour gradient (dark on
-            //     the two outer edges, 0 at the inner corner) so the darkening
-            //     is continuous around the perimeter without stacking.
-            // Insetting the bands WITHOUT the corner squares (what this used
-            // to do) left the top/bottom edges undarkened in the corners, which
-            // read as "the shadow is not around the window".
-            // ----------------------------------------------------------
-            {
-                const float deadVignette = judgement.lifeRatio() <= 0.0f ? 0.8f : 0.0f;
-                const float vig = std::clamp(damageVignette * 0.55f + deadVignette, 0.0f, 1.0f);
-                if (vig > 0.004f) {
-                    ImDrawList* fg = ImGui::GetForegroundDrawList();
-                    const float w = static_cast<float>(windowW);
-                    const float h = static_cast<float>(windowH);
-                    const int a = static_cast<int>(90.0f * vig);
-                    const int z = 0;
-                    const ImU32 dark = IM_COL32(0, 0, 0, a);
-                    const ImU32 none = IM_COL32(0, 0, 0, z);
-                    const float bandV = h * 0.16f; // top / bottom band height
-                    const float bandH = w * 0.12f; // left / right band width
-                    // Top / bottom, between the corner squares.
-                    fg->AddRectFilledMultiColor(ImVec2(bandH, 0.0f), ImVec2(w - bandH, bandV),
-                        dark, dark, none, none);
-                    fg->AddRectFilledMultiColor(ImVec2(bandH, h - bandV), ImVec2(w - bandH, h),
-                        none, none, dark, dark);
-                    // Left / right, between the corner squares.
-                    fg->AddRectFilledMultiColor(ImVec2(0.0f, bandV), ImVec2(bandH, h - bandV),
-                        dark, none, none, dark);
-                    fg->AddRectFilledMultiColor(ImVec2(w - bandH, bandV), ImVec2(w, h - bandV),
-                        none, dark, dark, none);
-                    // Corners: dark along the two outer edges, fading to the
-                    // window's inside (bilinear between the four colours).
-                    fg->AddRectFilledMultiColor(ImVec2(0.0f, 0.0f), ImVec2(bandH, bandV),
-                        dark, dark, none, dark); // top-left
-                    fg->AddRectFilledMultiColor(ImVec2(w - bandH, 0.0f), ImVec2(w, bandV),
-                        dark, dark, dark, none); // top-right
-                    fg->AddRectFilledMultiColor(ImVec2(0.0f, h - bandV), ImVec2(bandH, h),
-                        dark, none, dark, dark); // bottom-left
-                    fg->AddRectFilledMultiColor(ImVec2(w - bandH, h - bandV), ImVec2(w, h),
-                        none, dark, dark, dark); // bottom-right
-                }
-            }
-
-            // ----------------------------------------------------------
             // Pause button zone (right end of the life bar).
             // ----------------------------------------------------------
             // The press was already hit-tested in the event handler; act on it
@@ -5835,6 +5906,7 @@ int main(int argc, char** argv)
 
             // Settings card (H key), shared with the song select state.
             drawSettingsCard();
+            drawMultiInstanceAskDialog();
 
             // ----------------------------------------------------------
             // Pause dialog: 重试 / 放弃 / 继续演出.
@@ -6040,7 +6112,13 @@ int main(int argc, char** argv)
         // it comes with the source), so the card states facts instead.
         // ------------------------------------------------------------------
         static bool eulaAlive = false;
-        if (state == AppState::Select && !userSettings.eulaAccepted) {
+        // 这次运行里已经关掉过了。以前没有这个标志：eulaAlive 每帧被
+        // `state == Select && !eulaAccepted` 重新置真，而「知道了」按未勾选的
+        // 复选框写入 eulaAccepted = false —— 于是关掉的下一帧又被打开，
+        // 无限弹。「不再提示」的复选框是**下次启动**要不要再看到的记录，
+        // 不是「能不能关掉这一张」的开关，两者必须分开。
+        static bool eulaDismissedThisRun = false;
+        if (state == AppState::Select && !userSettings.eulaAccepted && !eulaDismissedThisRun) {
             eulaAlive = true;
         }
         if (eulaAlive) {
@@ -6050,9 +6128,13 @@ int main(int argc, char** argv)
                 // without animating: it may not reappear over the live.
                 eulaAlive = false;
             } else {
+                // Seeded from the profile each time the card is (re)raised, so
+                // the box shows what is actually stored.
                 static bool eulaNoShow = false;
-                if (!eulaAlive) {
-                    eulaNoShow = false;
+                static bool eulaSeeded = false;
+                if (!eulaSeeded) {
+                    eulaSeeded = true;
+                    eulaNoShow = userSettings.eulaAccepted;
                 }
                 const int eulaAction = ui::eulaDialog(renderer, "##eula", "关于本软件",
                     {
@@ -6066,14 +6148,20 @@ int main(int argc, char** argv)
                             "不会上传到任何服务器。",
                     },
                     "以后不再显示", &eulaNoShow, {std::string("知道了")}, {true}, -1);
+                // Only act once the close animation is over (-2) or a button was
+                // pressed (>= 0). Acting on -3 (still closing) would relatch the
+                // flag mid-animation and the card would pop back up.
                 if (eulaAction >= 0 || eulaAction == -2) {
-                    // Dismissed (either button). The checkbox is what is stored:
-                    // ticking it silences the card for this profile from now on.
-                    userSettings.eulaAccepted = eulaNoShow;
-                    persistUserData();
-                    std::printf("[eula] dismissed (accepted=%d)\n", eulaNoShow ? 1 : 0);
+                    // 复选框是"下次还看不看"的记录；不管勾没勾，这一次都关掉。
+                    if (userSettings.eulaAccepted != eulaNoShow) {
+                        userSettings.eulaAccepted = eulaNoShow;
+                        persistUserData();
+                    }
+                    std::printf("[eula] dismissed (noShow=%d)\n", eulaNoShow ? 1 : 0);
                     std::fflush(stdout);
                     eulaAlive = false;
+                    eulaDismissedThisRun = true;
+                    eulaSeeded = false; // next raise re-reads the profile
                 }
             }
         }

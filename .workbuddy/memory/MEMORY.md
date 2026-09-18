@@ -7,6 +7,10 @@
 
 ## 协作约定
 - **改完 + 验证过就 commit**（用户明确要求），别攒着。
+- **别用 `git checkout <file>` / `git restore` 撤临时改动**：2026-09-18 我为撤一个
+  调试探针 checkout 了 main.cpp，把同一文件里**一大轮还没 commit 的需求改动全冲掉了**。
+  要撤探针就用 Edit 精确回退，或者先 commit 再动。用户原话：「不要乱 checkout，
+  有什么问题我们手动改」。
 - 加新 .cpp 到 `game/` 或 `platform/` 时**必须同时加进 `build.sh` 的 SOURCES**，否则
   链接期才报 undefined symbol（2026-09-13 加 `game/Result.cpp` 时踩过）。
 - 中文注释的脚本（build.sh 等）用 Git Bash 跑；涉及中文的 PowerShell 脚本用 pwsh。

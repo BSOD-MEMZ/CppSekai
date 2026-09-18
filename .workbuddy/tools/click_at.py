@@ -8,7 +8,7 @@ moves the physical cursor instead (ClientToScreen + SetCursorPos + mouse_event),
 which is what a scripted UI regression needs.
 
 Usage:
-    python click_at.py <window title> <client x> <client y> [--move-only]
+    python click_at.py <window title (substring ok)> <client x> <client y> [--move-only]
 """
 
 import ctypes
@@ -31,6 +31,40 @@ def main() -> int:
 
     user32 = ctypes.windll.user32
     hwnd = user32.FindWindowW(None, title)
+    if not hwnd:
+        # The game titles its window "CppSekai - 玩家 1" / "... - 玩家 2", so an
+        # exact-title lookup for plain "CppSekai" misses. Fall back to a
+        # substring match - but the downloader is also called "CppSekai 谱面
+        # 下载器", and clicking into *that* window silently does nothing useful
+        # (it ate a click at 788,513 during an EULA check on 2026-09-18).
+        # Collect every candidate and prefer the game's own title shape.
+        buf = ctypes.create_unicode_buffer(512)
+        EnumProc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+        def cb(h, _):
+            if not user32.IsWindowVisible(h):
+                return True
+            n = user32.GetWindowTextW(h, buf, 512)
+            if n and title in buf.value:
+                candidates.append((h, buf.value))
+            return True
+
+        candidates: list[tuple[int, str]] = []
+        user32.EnumWindows(EnumProc(cb), 0)
+        # "CppSekai - 玩家 1" first, then any other "CppSekai - ..." window,
+        # and only then a bare substring hit (the downloader).
+        def rank(item: tuple[int, str]) -> int:
+            t = item[1]
+            if t.startswith("CppSekai - "):
+                return 0
+            if t.startswith("CppSekai") and "谱面" not in t:
+                return 1
+            return 2
+
+        candidates.sort(key=rank)
+        hwnd = candidates[0][0] if candidates else 0
+        if hwnd and rank(candidates[0]) > 0:
+            print(f"note: matched {candidates[0][1]!r}, not the game window")
     if not hwnd:
         print("window not found:", title)
         return 1
