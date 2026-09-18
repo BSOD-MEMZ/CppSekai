@@ -5084,10 +5084,25 @@ int main(int argc, char** argv)
                 const platform::PartyState snap = party.read();
                 if (snap.phase == platform::PartyLobby && mpSeenChargeEpoch >= 0
                     && snap.epoch != mpSeenChargeEpoch) {
-                    party.setSeat(platform::PartySeatLobby);
-                    party.setReady(false);
-                    mpConfirmed = false;
-                    leaveLiveForRoom("房主已放弃本曲");
+                    // ... but the host dropping to the lobby right after a live is
+                    // the *result* hand-over, not a give-up: it puts its own seat
+                    // on 结算中 first. Both windows switch on the same chart time
+                    // but not in the same frame, so without this check the one
+                    // that is a frame behind would be yanked to the song select
+                    // instead of its own result screen.
+                    bool hostFinished = false;
+                    for (const platform::PartyPlayer& player : party.players()) {
+                        if (player.host && player.seat == platform::PartySeatResult) {
+                            hostFinished = true;
+                            break;
+                        }
+                    }
+                    if (!hostFinished) {
+                        party.setSeat(platform::PartySeatLobby);
+                        party.setReady(false);
+                        mpConfirmed = false;
+                        leaveLiveForRoom("房主已放弃本曲");
+                    }
                 }
             }
 
