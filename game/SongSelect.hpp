@@ -150,6 +150,21 @@ struct UserSettings
     float perfectMs = 40.0f;
     float greatMs = 90.0f;
     float goodMs = 140.0f;
+    // BAD window end, and the point where an untouched note auto-misses. With
+    // `linkBadMiss` on (default) the two are the same number: BAD stops exactly
+    // where the note gives up. Off lets them drift apart, so a press may still
+    // read as BAD for a moment after the note has already missed on its own.
+    // 200 = what the engine used to derive as goodMs + 60, so an untouched
+    // profile keeps feeling exactly like it did.
+    float badMs = 200.0f;
+    float missMs = 200.0f;
+    bool linkBadMiss = true;
+    // Long-note tolerance. Letting go earlier than holdTailGraceMs before a
+    // hold's end breaks it; the lane may be grabbed up to holdStartGraceMs
+    // after the hold start without counting as a break. Forgiving = the classic
+    // 180 / 140, tight = 120 / 80, strict = 60 / 40.
+    float holdTailGraceMs = 180.0f;
+    float holdStartGraceMs = 140.0f;
     // Life a run starts with (100..5000). The HUD bar is normalised against it,
     // so whatever the value the bar reads 100% when the live starts; a bigger
     // pool just takes longer to drain. Pushed to the judgement engine, which

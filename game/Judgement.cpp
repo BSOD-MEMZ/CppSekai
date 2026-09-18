@@ -16,12 +16,9 @@ namespace
     constexpr float kLifeBad = -50.0f;
     constexpr float kLifeHoldBreak = -40.0f;
 
-    // Release grace: a hold whose lane is released inside this window before
-    // its end still gets a tail judgement instead of breaking.
-    constexpr float kHoldGraceSec = 0.18f;
-    // The lane may be grabbed a little after the hold start without counting
-    // as a break (mirrors the tap judgement window).
-    constexpr float kHoldStartGraceSec = 0.14f;
+    // Release grace / grab grace now live in JudgementWindows
+    // (holdTailGraceMs / holdStartGraceMs) so they can be tuned in the settings
+    // dialog; see Judgement.hpp.
 
     // Lane coordinates: `center` is the middle of the note, `width` its span.
     // Two notes whose spans touch belong to the same lane area - which is how
@@ -702,8 +699,8 @@ void JudgementEngine::update(float songTimeSec)
             hold.releaseTimeSec = songTimeSec;
         }
 
-        if (!held && engaged && songTimeSec >= hold.startTimeSec + kHoldStartGraceSec
-            && songTimeSec < hold.endTimeSec - kHoldGraceSec) {
+        if (!held && engaged && songTimeSec >= hold.startTimeSec + mWindows.holdStartGraceMs / 1000.0f
+            && songTimeSec < hold.endTimeSec - mWindows.holdTailGraceMs / 1000.0f) {
             // Let go too early: the hold breaks (mid-hold miss, -40 life) and
             // is drawn washed out from here on - unless the player presses the
             // lane again, which reconnects it (see the broken branch above).

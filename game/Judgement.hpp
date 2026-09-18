@@ -71,10 +71,18 @@ struct JudgementWindows
     float goodMs = 140.0f;
     // BAD window end. The official table puts BAD at 108.3..125 ms with MISS
     // past that; this engine's windows are wider, so BAD fills the gap between
-    // goodMs and the auto-miss window (missAfterMs). Keep badMs == missAfterMs:
-    // the moment the BAD window closes is the moment the note auto-misses.
+    // goodMs and the auto-miss window (missAfterMs). The two are tied together
+    // in the settings UI, but they are separate knobs on purpose: badMs is how
+    // late a press may land and still count as BAD, missAfterMs is when an
+    // untouched note gives up. Both end at the same place in the stock config.
     float badMs = 180.0f;
     float missAfterMs = 180.0f;
+    // Long notes (settings > 判定 > 长条容错). A hold that is let go earlier
+    // than tailGraceMs before its end breaks mid-way, and the lane may be
+    // grabbed up to startGraceMs after the hold start without counting as a
+    // break. Both used to be hard-coded (180 / 140 ms).
+    float holdTailGraceMs = 180.0f;
+    float holdStartGraceMs = 140.0f;
 };
 
 // Life pool. pjsk starts every live at 1000 life (skills can push it to

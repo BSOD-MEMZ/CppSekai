@@ -720,6 +720,22 @@ void loadUserData(const std::string& path, UserSettings& settings,
             settings.perfectMs = s.value("perfectMs", settings.perfectMs);
             settings.greatMs = s.value("greatMs", settings.greatMs);
             settings.goodMs = s.value("goodMs", settings.goodMs);
+            // badMs / missMs are newer than the rest. Profiles written before
+            // they existed carry no such keys, and the old engine derived both
+            // from goodMs + 60 - so a missing key must keep deriving, not fall
+            // back to the struct default (which would silently tighten the
+            // window for everyone who already had a profile).
+            settings.badMs = s.value("badMs", -1.0f);
+            settings.missMs = s.value("missMs", -1.0f);
+            settings.linkBadMiss = s.value("linkBadMiss", settings.linkBadMiss);
+            if (settings.badMs < 0.0f) {
+                settings.badMs = settings.goodMs + 60.0f;
+            }
+            if (settings.missMs < 0.0f) {
+                settings.missMs = settings.goodMs + 60.0f;
+            }
+            settings.holdTailGraceMs = s.value("holdTailGraceMs", settings.holdTailGraceMs);
+            settings.holdStartGraceMs = s.value("holdStartGraceMs", settings.holdStartGraceMs);
             settings.initialLife = s.value("initialLife", settings.initialLife);
             settings.strictFlick = s.value("strictFlick", settings.strictFlick);
             settings.debugLog = s.value("debugLog", settings.debugLog);
@@ -751,6 +767,12 @@ void loadUserData(const std::string& path, UserSettings& settings,
     settings.perfectMs = std::clamp(settings.perfectMs, 10.0f, 100.0f);
     settings.greatMs = std::max(settings.greatMs, settings.perfectMs + 10.0f);
     settings.goodMs = std::max(settings.goodMs, settings.greatMs + 10.0f);
+    // BAD and MISS both sit outside GOOD. Linked (the default) they are one
+    // number; unlinked each keeps its own value, still outside GOOD.
+    settings.badMs = std::max(settings.badMs, settings.goodMs + 10.0f);
+    settings.missMs = std::max(settings.missMs, settings.goodMs + 10.0f);
+    settings.holdTailGraceMs = std::clamp(settings.holdTailGraceMs, 20.0f, 300.0f);
+    settings.holdStartGraceMs = std::clamp(settings.holdStartGraceMs, 20.0f, 300.0f);
     // 100 = one MISS from failing, 5000 = the practice-pool maximum. The HUD bar
     // is normalised against the value itself, so it always starts full.
     settings.initialLife = std::clamp(settings.initialLife, 100.0f, 5000.0f);
@@ -809,6 +831,11 @@ void saveUserData(const std::string& path, const UserSettings& settings,
         {"perfectMs", settings.perfectMs},
         {"greatMs", settings.greatMs},
         {"goodMs", settings.goodMs},
+        {"badMs", settings.badMs},
+        {"missMs", settings.missMs},
+        {"linkBadMiss", settings.linkBadMiss},
+        {"holdTailGraceMs", settings.holdTailGraceMs},
+        {"holdStartGraceMs", settings.holdStartGraceMs},
         {"initialLife", settings.initialLife},
         {"strictFlick", settings.strictFlick},
         {"debugLog", settings.debugLog},

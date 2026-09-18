@@ -25,7 +25,15 @@ game/Judgement.*  # 判定引擎（本项目新增，判定逻辑都在这）
                   # （kind 0/1/2/3，即 SUS 的 NoteType::HoldEnd），load() 里把它按「同时间同轨道
                   # 对上 kind 5 标记的 endTimeSec」打上 holdTail 标记，之后只由松手判定：
                   # 结束前 ≤perfect/great/good 松手给 Perfect/Great/Good，一直按到底也是 Perfect；
-                  # 提前松手（超过 180ms）才算断连。holdTail 事件不走 findCandidate / 自动 miss。
+                  # 提前松手才算断连 —— 具体窗口可调（`holdTailGraceMs` / `holdStartGraceMs`，
+                  # 设置 → 判定 → 长条容错；默认 180 / 140，就是原来的硬编码常量）。
+                  # holdTail 事件不走 findCandidate / 自动 miss。
+                  # 判定窗口全部走 `JudgementWindows`：perfect/great/good 之外还有 badMs
+                  # （迟按还能算 BAD 的边界）和 missAfterMs（没人碰的音符自动 MISS 的时刻），
+                  # 设置 → 判定 里两个都能量；勾上「Bad 与 Miss 同步」时 missAfterMs = badMs
+                  # （老行为），不勾就各管各的。启动打一行
+                  # `[settings] windows perfect=.. bad=.. missAfter=.. holdTail=.. linked=..`，
+                  # 判定手感不对先看它。
                   # 分数/血量：分数用上游 TEAM_POWER/weightedCount/comboFactor 公式
                   # （kTeamPower 等常量见 Judgement.hpp），血量 1000 起，整音 MISS -80、长条中断 -40。
 game/Ui.*         # pjsk 风格弹窗组件库：beginCard（缩放入/出场动画 + 标题栏拖动）、
@@ -40,6 +48,13 @@ game/Ui.*         # pjsk 风格弹窗组件库：beginCard（缩放入/出场动
                   # 暴露，给屏幕自绘的部件用：选曲列表行、分组标题条、跳转面板字母、右下角
                   # 圆形按钮（随机/设置）的悬停淡入都走它。id 空间是本模块私有的常量，
                   # `0x4a55x000u + index` 这种写法就行，不必去凑 ImGui 的 ID 栈。
+                  # 两个「按状态灰掉 / 当选择器用」的开关，判定页两边都用到了：
+                  # `slider(..., enabled=false)` 画成灰的并吞掉所有点击（值仍然显示），
+                  # 给「这个数现在由别人决定」的场合，比如 Bad 与 Miss 同步时的 Miss 滑杆；
+                  # `checkBox(..., enabled=false)` 同理。`stepper` 多了一档 pick-one：
+                  # `presets` 和 `deltas` 一样长时，*value 被当成"选中第几项"（-1 = 没选中），
+                  # 每个胶囊就是它自己那一项、按一下就选它，中间的灰 pill 显示 `presets[i]`
+                  # 而不是数字；胶囊宽度按 rowW 和最长标签现算，三字标签也不会顶出卡片。
 game/Result.*     # 结算画面（PRESENT/RESULT）：参考原版截图 1:1 复刻，全部画在 ImGui
                   # background draw list 上的 1920x1080 虚拟画布（和 HUD 同一套 px/py/ps 变换）。
                   # 左半边（RESULT 水印、曲目卡、得分、判定行）用参考截图的绝对 x；

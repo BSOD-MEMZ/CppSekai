@@ -1716,10 +1716,20 @@ int main(int argc, char** argv)
         windows.perfectMs = userSettings.perfectMs;
         windows.greatMs = userSettings.greatMs;
         windows.goodMs = userSettings.goodMs;
-        windows.missAfterMs = userSettings.goodMs + 60.0f;
-        windows.badMs = windows.missAfterMs; // BAD closes exactly where the auto-miss starts
+        windows.badMs = userSettings.badMs;
+        windows.missAfterMs = userSettings.linkBadMiss ? userSettings.badMs : userSettings.missMs;
+        windows.holdTailGraceMs = userSettings.holdTailGraceMs;
+        windows.holdStartGraceMs = userSettings.holdStartGraceMs;
         judgement.setWindows(windows);
         judgement.setStrictFlick(userSettings.strictFlick);
+        // One line that says exactly what is in force, so a "the judgement feels
+        // wrong" report can be checked against the numbers without opening the
+        // dialog. missAfter is what an untouched note waits for.
+        std::printf("[settings] windows perfect=%.0f great=%.0f good=%.0f bad=%.0f missAfter=%.0f "
+                    "holdTail=%.0f holdStart=%.0f linked=%d\n",
+            windows.perfectMs, windows.greatMs, windows.goodMs, windows.badMs, windows.missAfterMs,
+            windows.holdTailGraceMs, windows.holdStartGraceMs, userSettings.linkBadMiss ? 1 : 0);
+        std::fflush(stdout);
     }
 
     // Play results (cleared / full combo) + song select UI assets.
@@ -2318,6 +2328,10 @@ int main(int argc, char** argv)
         userSettings.perfectMs = w.perfectMs;
         userSettings.greatMs = w.greatMs;
         userSettings.goodMs = w.goodMs;
+        userSettings.badMs = w.badMs;
+        userSettings.missMs = w.missAfterMs;
+        userSettings.holdTailGraceMs = w.holdTailGraceMs;
+        userSettings.holdStartGraceMs = w.holdStartGraceMs;
         userSettings.strictFlick = judgement.strictFlick();
         game::saveUserData(userDataFile, userSettings, scores, account);
     };
@@ -2476,8 +2490,10 @@ int main(int argc, char** argv)
             windows.perfectMs = userSettings.perfectMs;
             windows.greatMs = userSettings.greatMs;
             windows.goodMs = userSettings.goodMs;
-            windows.missAfterMs = userSettings.goodMs + 60.0f;
-            windows.badMs = windows.missAfterMs;
+            windows.badMs = userSettings.badMs;
+            windows.missAfterMs = userSettings.linkBadMiss ? userSettings.badMs : userSettings.missMs;
+            windows.holdTailGraceMs = userSettings.holdTailGraceMs;
+            windows.holdStartGraceMs = userSettings.holdStartGraceMs;
             judgement.setWindows(windows);
         }
         core_api::setPreviewConfig(0, 1, 1, 1, 0, 0, noteSpeed, 1.0f, 0.6f, 0.0f, 1.0f, 0.85f);
@@ -2501,8 +2517,25 @@ int main(int argc, char** argv)
     // ------------------------------------------------------------------
     // 演奏 / 画面 / 判定 / 系统 / 账户. Hoisted out of the card lambda so the
     // pad's shoulder buttons can switch pages from the input side.
+    // Long-note tolerance presets (settings > 判定 > 长条容错): {松手容错, 起按容错}.
+    // Index 0 is the classic feel the engine shipped with, 2 the tightest.
+    static constexpr float kHoldGracePresets[3][2] = {
+        {180.0f, 140.0f}, // 宽容
+        {120.0f, 80.0f},  // 较紧
+        {60.0f, 40.0f},   // 严格
+    };
+    const std::vector<std::string> kHoldPresetLabels = {"宽容", "较紧", "严格"};
+    // One slot per preset, in list order. In pick-one mode the capsules are
+    // drawn in this order (left to right) and a press walks the selection by
+    // one - so the signs only say which way each capsule moves the selection.
+    const std::vector<float> kPresetChoiceDeltas = {-1.0f, -1.0f, -1.0f};
     constexpr int kSettingsTabCount = 5;
     int settingsTab = settingsTabShot >= 0 ? settingsTabShot : 0;
+    // True only on the frame the card opens. The judgement page rebuilds its
+    // working copy then (see tab 2), which must happen *before* the sliders
+    // are laid out - so last frame's value is kept here rather than inside the
+    // card lambda, where it would only become visible one frame too late.
+    bool settingsWasOpen = false;
     auto drawSettingsCard = [&]() {
         static bool settingsAlive = false;
         if (showDebug) {
@@ -2511,14 +2544,17 @@ int main(int argc, char** argv)
         if (!settingsAlive) {
             return;
         }
+        const bool settingsJustOpened = !settingsWasOpen;
+        settingsWasOpen = true;
         // pjsk style settings panel (tabbed card, pjsk sliders).
         const float s = ui::scale();
         const ImVec2 display = ImGui::GetIO().DisplaySize;
-        // 700 tall (was 520 -> 640 -> 700): the 画面 tab is the tallest one
-        // (resolution + window mode + fps slider + 4 checkboxes) and has to fit
-        // without scrolling; the tab content is still clipped by a child, so a
-        // future row can never run under the 关闭 button.
-        ImVec2 cardSize = ImVec2(360.0f * s, 700.0f * s);
+        // 760 tall (was 520 -> 640 -> 700): the 判定 tab now carries seven rows
+        // (Perfect/Great/Good/Bad/Miss + the long-note preset stepper and its
+        // two sliders) and 画面 is also deep, so the card has to hold both
+        // without immediately scrolling. The tab content is still clipped by a
+        // child, so a future row can never run under the 关闭 button.
+        ImVec2 cardSize = ImVec2(380.0f * s, 780.0f * s);
         ImVec2 cardCenter = ImVec2(18.0f * s + cardSize.x * 0.5f, 18.0f * s + cardSize.y * 0.5f);
         const float interior = cardSize.x - 56.0f * s;
         const float padX = 28.0f * s;
@@ -2834,16 +2870,88 @@ int main(int argc, char** argv)
                 // 判定: judgement windows.
                 contentLeft();
                 ImGui::Text("判定窗口 (ms)");
-                static float perfect = judgement.windows().perfectMs;
-                static float great = judgement.windows().greatMs;
-                static float good = judgement.windows().goodMs;
+                // The working copy is rebuilt from the engine whenever the
+                // dialog opens, so the sliders always show what is in force
+                // (and a linked BAD/MISS always moves as one).
+                static float perfect = 40.0f;
+                static float great = 90.0f;
+                static float good = 140.0f;
+                static float bad = 200.0f;
+                static float miss = 200.0f;
+                static float holdTail = 180.0f;
+                static float holdStart = 140.0f;
+                static float holdPreset = 0.0f;
+                static bool linkBadMiss = true;
+                if (settingsJustOpened) {
+                    const game::JudgementWindows& cur = judgement.windows();
+                    perfect = cur.perfectMs;
+                    great = cur.greatMs;
+                    good = cur.goodMs;
+                    bad = cur.badMs;
+                    miss = cur.missAfterMs;
+                    holdTail = cur.holdTailGraceMs;
+                    holdStart = cur.holdStartGraceMs;
+                    linkBadMiss = userSettings.linkBadMiss;
+                    holdPreset = -1.0f;
+                    for (int i = 0; i < 3; ++i) {
+                        if (std::fabs(holdTail - kHoldGracePresets[i][0]) < 1.0f
+                            && std::fabs(holdStart - kHoldGracePresets[i][1]) < 1.0f) {
+                            holdPreset = static_cast<float>(i);
+                        }
+                    }
+                }
                 bool windowsChanged = false;
                 contentLeft();
                 windowsChanged |= ui::slider("perfect", &perfect, 10.0f, 100.0f, 1.0f, "Perfect %.0f", interior);
                 contentLeft();
-                windowsChanged |= ui::slider("great", &great, 20.0f, 160.0f, 1.0f, "Great %.0f", interior);
+                windowsChanged |= ui::slider("great", &great, 20.0f, 200.0f, 1.0f, "Great %.0f", interior);
                 contentLeft();
-                windowsChanged |= ui::slider("goodw", &good, 30.0f, 220.0f, 1.0f, "Good %.0f", interior);
+                windowsChanged |= ui::slider("goodw", &good, 30.0f, 260.0f, 1.0f, "Good %.0f", interior);
+                good = std::max(good, great + 10.0f);
+                contentLeft();
+                windowsChanged |= ui::slider("badw", &bad, 40.0f, 400.0f, 5.0f, "Bad %.0f", interior);
+                bad = std::max(bad, good + 10.0f);
+                contentLeft();
+                bool linkBox = linkBadMiss;
+                ui::checkBox("Bad 与 Miss 同步", &linkBox, interior);
+                if (linkBox != linkBadMiss) {
+                    linkBadMiss = linkBox;
+                    userSettings.linkBadMiss = linkBox;
+                    if (linkBox) {
+                        miss = bad; // linked: the two are one number
+                    }
+                    persistUserData();
+                }
+                if (linkBadMiss) {
+                    miss = bad;
+                }
+                contentLeft();
+                windowsChanged |= ui::slider("missw", &miss, 40.0f, 500.0f, 5.0f, "Miss %.0f", interior,
+                    /*enabled=*/!linkBadMiss);
+                miss = std::max(miss, good + 10.0f);
+
+                contentLeft();
+                ImGui::Text("长条容错 (ms)");
+                // Pick-one stepper (see ui::stepper): -1 = the current values
+                // match no preset, i.e. 松手/起按 were dragged by hand. The pill
+                // shows the preset name and each capsule jumps to its own.
+                contentLeft();
+                if (ui::stepper("holdpreset", &holdPreset, kPresetChoiceDeltas, "%.0f", interior,
+                        kHoldPresetLabels)) {
+                    const int target = std::clamp(static_cast<int>(std::lround(holdPreset)), 0, 2);
+                    holdPreset = static_cast<float>(target);
+                    holdTail = kHoldGracePresets[target][0];
+                    holdStart = kHoldGracePresets[target][1];
+                    windowsChanged = true;
+                }
+                contentLeft();
+                bool tailChanged = ui::slider("holdtail", &holdTail, 20.0f, 300.0f, 10.0f, "松手容错 %.0f", interior);
+                contentLeft();
+                bool startChanged = ui::slider("holdstart", &holdStart, 20.0f, 300.0f, 10.0f, "起按容错 %.0f", interior);
+                if (tailChanged || startChanged) {
+                    windowsChanged = true;
+                    holdPreset = -1.0f; // dragged off the presets
+                }
                 static bool strictFlick = judgement.strictFlick();
                 ui::checkBox("严格 Flick 方向", &strictFlick, interior);
                 judgement.setStrictFlick(strictFlick);
@@ -2861,16 +2969,39 @@ int main(int argc, char** argv)
                         persistUserData();
                     }
                 }
+                // Keep the ladder monotonic: a GREAT window narrower than
+                // PERFECT (or a GOOD one narrower than GREAT) would silently
+                // delete a judgement tier. Built upwards from PERFECT so the
+                // result can never satisfy lo > hi (which std::clamp hates).
+                perfect = std::clamp(perfect, 10.0f, 100.0f);
+                great = std::max(great, perfect + 10.0f);
+                good = std::max(good, great + 10.0f);
+                bad = std::max(bad, good + 10.0f);
+                if (linkBadMiss) {
+                    miss = bad;
+                } else {
+                    miss = std::max(miss, good + 10.0f);
+                }
                 if (windowsChanged) {
                     game::JudgementWindows windows;
                     windows.perfectMs = perfect;
-                    windows.greatMs = std::max(great, perfect + 10.0f);
-                    windows.goodMs = std::max(good, great + 10.0f);
-                    windows.missAfterMs = good + 60.0f;
-                    // Keep BAD closing exactly where the auto-miss window starts,
-                    // otherwise the extra tier silently disappears.
-                    windows.badMs = windows.missAfterMs;
+                    windows.greatMs = great;
+                    windows.goodMs = good;
+                    windows.badMs = bad;
+                    windows.missAfterMs = miss;
+                    windows.holdTailGraceMs = holdTail;
+                    windows.holdStartGraceMs = holdStart;
                     judgement.setWindows(windows);
+                    // Mirror into the profile immediately so closing the game
+                    // never loses a window tweak.
+                    userSettings.perfectMs = perfect;
+                    userSettings.greatMs = great;
+                    userSettings.goodMs = good;
+                    userSettings.badMs = bad;
+                    userSettings.missMs = miss;
+                    userSettings.holdTailGraceMs = holdTail;
+                    userSettings.holdStartGraceMs = holdStart;
+                    persistUserData();
                 }
             } else if (tab == 3) {
                 // 系统: how the game behaves towards Windows and the desktop.

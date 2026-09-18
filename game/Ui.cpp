@@ -353,7 +353,7 @@ int tabBar(const char* id, const std::vector<std::string>& tabs, int* active, fl
 }
 
 bool slider(const char* id, float* value, float minV, float maxV, float step, const char* fmt,
-    float width)
+    float width, bool enabled)
 {
     if (value == nullptr) {
         return false;
@@ -372,6 +372,12 @@ bool slider(const char* id, float* value, float minV, float maxV, float step, co
     const float rowW = width > 0.0f ? width : ImGui::GetContentRegionAvail().x;
     ImGui::Dummy(ImVec2(rowW, rowH)); // reserve the block
     ImGui::PushID(id);
+    // A disabled row is drawn washed out and eats every click: it is meant for
+    // values that are currently derived from another setting (BAD while it is
+    // slaved to MISS), where letting the user drag it would be a lie.
+    if (!enabled) {
+        ImGui::BeginDisabled();
+    }
 
     const float trackY = pos.y + rowH * 0.68f;
     const float trackX0 = pos.x + btnSize + 16.0f * s;
@@ -383,19 +389,20 @@ bool slider(const char* id, float* value, float minV, float maxV, float step, co
     std::snprintf(valueText, sizeof(valueText), fmt, *value);
     const ImVec2 ts = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, valueText);
     dl->AddText(font, fontSize,
-        ImVec2(pos.x + (rowW - ts.x) * 0.5f, trackY - thumbR - ts.y - 8.0f * s), kNotePink, valueText);
+        ImVec2(pos.x + (rowW - ts.x) * 0.5f, trackY - thumbR - ts.y - 8.0f * s),
+        enabled ? kNotePink : kDisabledText, valueText);
 
     // Track + thumb.
     const float frac = std::clamp((*value - minV) / std::max(1e-6f, maxV - minV), 0.0f, 1.0f);
     const float thumbX = trackX0 + (trackX1 - trackX0) * frac;
     dl->AddRectFilled(ImVec2(trackX0, trackY - trackH * 0.5f), ImVec2(trackX1, trackY + trackH * 0.5f),
-        kPrimary, trackH * 0.5f);
+        enabled ? kPrimary : kDisabledFill, trackH * 0.5f);
 
     // Drag the thumb. The thumb itself is drawn further down, after the buttons,
     // so its hover growth is already known by the time it is painted.
     ImGui::SetCursorScreenPos(ImVec2(trackX0 - thumbR, trackY - thumbR * 2.0f));
     ImGui::InvisibleButton("##track", ImVec2(trackX1 - trackX0 + thumbR * 2.0f, thumbR * 4.0f));
-    const bool trackHot = ImGui::IsItemHovered() || ImGui::IsItemActive();
+    const bool trackHot = enabled && (ImGui::IsItemHovered() || ImGui::IsItemActive());
     if (ImGui::IsItemActive()) {
         if (ImGui::IsItemActivated()) {
             se(SeClick);
@@ -423,11 +430,13 @@ bool slider(const char* id, float* value, float minV, float maxV, float step, co
             se(SeClick);
         }
         ImGui::SetCursorScreenPos(ImVec2(0.0f, 0.0f));
-        ImU32 fill = kDarkBtn;
+        ImU32 fill = enabled ? kDarkBtn : kDisabledFill;
         // Hover / press blend rather than snap, so the row does not flicker when
         // the pointer sweeps across the two buttons.
-        fill = mixColor(fill, IM_COL32(96, 96, 114, 255), animToggle(btnKey ^ 0x32u, hovered, 18.0f));
-        fill = mixColor(fill, IM_COL32(72, 72, 86, 255), animToggle(btnKey ^ 0x33u, held, 26.0f));
+        if (enabled) {
+            fill = mixColor(fill, IM_COL32(96, 96, 114, 255), animToggle(btnKey ^ 0x32u, hovered, 18.0f));
+            fill = mixColor(fill, IM_COL32(72, 72, 86, 255), animToggle(btnKey ^ 0x33u, held, 26.0f));
+        }
         dl->AddRectFilled(lo, hi, fill, btnRadius);
         // White glyph.
         const float c = btnSize * 0.5f;
@@ -451,11 +460,14 @@ bool slider(const char* id, float* value, float minV, float maxV, float step, co
     }
 
     // Thumb last: it swells a little while the row is hovered or dragged.
-    const float hot = animToggle(ImGui::GetID("##thumb"), trackHot, 16.0f);
+    const float hot = enabled ? animToggle(ImGui::GetID("##thumb"), trackHot, 16.0f) : 0.0f;
     const float thumbScale = 1.0f + 0.16f * hot;
     dl->AddCircleFilled(ImVec2(thumbX, trackY), (thumbR + 2.0f * s) * thumbScale,
         IM_COL32(150, 150, 170, static_cast<int>(60.0f + 60.0f * hot)));
-    dl->AddCircleFilled(ImVec2(thumbX, trackY), thumbR * thumbScale, kWhiteBtn);
+    dl->AddCircleFilled(ImVec2(thumbX, trackY), thumbR * thumbScale, enabled ? kWhiteBtn : kDisabledFill);
+    if (!enabled) {
+        ImGui::EndDisabled();
+    }
     ImGui::PopID();
     ImGui::SetCursorScreenPos(ImVec2(pos.x, pos.y + rowH));
     return changed;
@@ -728,25 +740,45 @@ bool checkBox(const char* label, bool* value, float rowWidth, bool enabled)
     return checked;
 }
 
-bool stepper(const char* id, float* value, const std::vector<float>& deltas, const char* fmt, float rowWidth)
+bool stepper(const char* id, float* value, const std::vector<float>& deltas, const char* fmt, float rowWidth,
+    const std::vector<std::string>& presets)
 {
     if (value == nullptr || deltas.empty()) {
         return false;
     }
+    // Pick-one mode (see Ui.hpp): the value is a selected slot, not a number.
+    const bool pickOne = presets.size() == deltas.size();
     const float s = scale();
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImFont* font = game::bodyFont();
     const float fontSize = 28.0f * s;
-    const float btnW = 104.0f * s;
-    const float btnH = 62.0f * s;
-    const float pillW = 132.0f * s;
-    const float gap = 14.0f * s;
 
     const ImVec2 pos = ImGui::GetCursorScreenPos();
     const float rowW = rowWidth > 0.0f ? rowWidth : ImGui::GetContentRegionAvail().x;
     const float y = pos.y;
-    ImGui::Dummy(ImVec2(rowW, btnH + 8.0f * s)); // reserve the row
+    ImGui::Dummy(ImVec2(rowW, 62.0f * s + 8.0f * s)); // reserve the row
     ImGui::PushID(id);
+
+    // Capsule widths. Numeric mode is fixed (a "+1" label is narrow). Pick-one
+    // measures the widest preset name and splits whatever is left over, so
+    // three Chinese labels plus the value pill always fit inside `rowW`
+    // instead of running off the card at small UI scales.
+    const float btnH = 62.0f * s;
+    float btnW = 104.0f * s;
+    float pillW = 132.0f * s;
+    float gap = 14.0f * s;
+    if (pickOne) {
+        gap = 10.0f * s;
+        float widest = 0.0f;
+        for (const std::string& label : presets) {
+            widest = std::max(widest, font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, label.c_str()).x);
+        }
+        const float n = static_cast<float>(presets.size());
+        // total = n * btnW + pillW + n * gap  (the pill sits in slot 0's place)
+        const float usable = rowW - gap * n;
+        pillW = std::clamp(widest + 40.0f * s, 70.0f * s, usable / (n + 1.0f));
+        btnW = std::clamp((usable - pillW) / n, widest + 22.0f * s, 200.0f * s);
+    }
 
     bool changed = false;
     auto drawCapsule = [&](const char* label, float cx, float w, ImU32 fill, ImU32 textColor) {
@@ -783,12 +815,53 @@ bool stepper(const char* id, float* value, const std::vector<float>& deltas, con
 
     const float blockW = pillW + static_cast<float>(neg.size() + posD.size()) * (btnW + gap);
     float cx = pos.x + std::max(0.0f, (rowW - blockW) * 0.5f);
-    for (float d : neg) {
+    // The selection is carried as a *slot*: -1 = nothing selected (the value
+    // was customised), 0..N-1 = that preset. Capsules are drawn in the same
+    // visual order the slots were stored in (deltas order), so slot i is always
+    // the capsule `deltas[i]` - no negative/positive reordering in pick-one
+    // mode, which would make "left capsule = last preset" for no reason.
+    int pickIdx = static_cast<int>(std::lround(*value));
+    if (pickIdx < -1 || pickIdx >= static_cast<int>(deltas.size())) {
+        pickIdx = -1;
+    }
+    const auto press = [&](float d, int slot, bool* selectedOut) {
+        if (!pickOne) {
+            se(SeClick);
+            *value += d;
+            return true;
+        }
+        // Pick-one: a capsule *is* its preset, so pressing it selects that slot
+        // outright - the deltas are only used for their signs, which is why
+        // they no longer move the selection.
+        const int cur = static_cast<int>(std::lround(*value));
+        if (cur == slot) {
+            return false; // already selected
+        }
+        se(SeClick);
+        *value = static_cast<float>(slot);
+        if (selectedOut != nullptr) {
+            *selectedOut = true;
+        }
+        return true;
+    };
+
+    int slot = 0;
+    // Pick-one walks presets in list order; the value-based layout keeps the
+    // -N..+N split (negatives left of the pill).
+    std::vector<float> order;
+    if (pickOne) {
+        order = deltas;
+    } else {
+        order.insert(order.end(), neg.begin(), neg.end());
+    }
+    for (float d : order) {
         char label[16];
         std::snprintf(label, sizeof(label), "%+g", d);
-        if (drawCapsule(label, cx, btnW, kWhiteBtn, kBtnText)) {
-            *value += d;
-            changed = true;
+        const int mySlot = slot++;
+        const bool selected = pickOne && pickIdx == mySlot;
+        if (drawCapsule(pickOne ? presets[mySlot].c_str() : label, cx, btnW,
+                selected ? kPrimary : kWhiteBtn, kBtnText)) {
+            changed |= press(d, mySlot, nullptr);
         }
         cx += btnW + gap;
     }
@@ -799,18 +872,30 @@ bool stepper(const char* id, float* value, const std::vector<float>& deltas, con
             IM_COL32(150, 150, 170, 50), btnH * 0.5f);
         dl->AddRectFilled(lo, hi, kPillBg, btnH * 0.5f);
         char valueText[32];
-        std::snprintf(valueText, sizeof(valueText), fmt, *value);
+        if (pickOne) {
+            const int idx = static_cast<int>(std::lround(*value));
+            std::snprintf(valueText, sizeof(valueText), "%s",
+                (idx >= 0 && idx < static_cast<int>(presets.size())) ? presets[idx].c_str() : "--");
+        } else {
+            std::snprintf(valueText, sizeof(valueText), fmt, *value);
+        }
         const ImVec2 ts = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, valueText);
         dl->AddText(font, fontSize, ImVec2((lo.x + hi.x - ts.x) * 0.5f, (lo.y + hi.y - ts.y) * 0.5f),
             kBtnText, valueText);
         cx += pillW + gap;
     }
-    for (float d : posD) {
+    std::vector<float> order2;
+    if (!pickOne) {
+        order2 = posD;
+    }
+    for (float d : order2) {
         char label[16];
         std::snprintf(label, sizeof(label), "%+g", d);
-        if (drawCapsule(label, cx, btnW, kWhiteBtn, kBtnText)) {
-            *value += d;
-            changed = true;
+        const int mySlot = slot++;
+        const bool selected = pickOne && pickIdx == mySlot;
+        if (drawCapsule(pickOne ? presets[mySlot].c_str() : label, cx, btnW,
+                selected ? kPrimary : kWhiteBtn, kBtnText)) {
+            changed |= press(d, mySlot, nullptr);
         }
         cx += btnW + gap;
     }

@@ -72,6 +72,8 @@ constexpr ImU32 kPillBg = IM_COL32(199, 199, 212, 255);     // gray value pill (
 constexpr ImU32 kTabIdle = IM_COL32(203, 204, 222, 255);    // inactive tab fill
 constexpr ImU32 kDarkBtn = IM_COL32(96, 96, 110, 255);      // dark -/+ slider buttons
 constexpr ImU32 kRowsBg = IM_COL32(222, 222, 232, 255);     // infoRows box
+constexpr ImU32 kDisabledFill = IM_COL32(198, 198, 210, 255); // greyed-out control body
+constexpr ImU32 kDisabledText = IM_COL32(158, 158, 175, 255); // greyed-out label / value
 
 // UI scale factor relative to the 720p design resolution.
 float scale();
@@ -123,8 +125,10 @@ int tabBar(const char* id, const std::vector<std::string>& tabs, int* active, fl
 // pjsk slider: dark rounded -/+ buttons flanking a teal track with a white
 // round thumb; the value is drawn above the track in pink. `step` is applied
 // per button click, dragging is free. Returns true when *value changed.
+// `enabled = false` greys the whole row out and swallows every click - for a
+// value that is currently derived from another setting.
 bool slider(const char* id, float* value, float minV, float maxV, float step, const char* fmt,
-    float width);
+    float width, bool enabled = true);
 
 // Gray rounded box of "label | value" rows, the value in pink, each row with
 // its own thin vertical divider. rowWidth <= 0 uses the remaining width.
@@ -151,8 +155,17 @@ bool checkBox(const char* label, bool* value, float rowWidth = 0.0f, bool enable
 // pjsk number stepper: a row of small white capsules with the +/- deltas
 // around a gray pill showing the current value, all centered in rowWidth.
 // Applies the pressed delta to *value and returns true when it changed.
+//
+// Pick-one mode: pass `presets` (same length as `deltas`) and the value is a
+// *selected slot* instead of a number - `deltas[i]` labels capsule i, and
+// pressing that capsule selects slot i (the delta signs are ignored). The row
+// then reads left to right in `deltas` order and the pill shows `presets[slot]`
+// rather than a number. Pass -1 to start with nothing selected; the pill then
+// reads "--". Every capsule is sized to fit `rowWidth`, so labels cannot run
+// off the card.
 bool stepper(const char* id, float* value, const std::vector<float>& deltas,
-    const char* fmt = "%.2f", float rowWidth = 0.0f);
+    const char* fmt = "%.2f", float rowWidth = 0.0f,
+    const std::vector<std::string>& presets = {});
 
 // Themed combo box: ImGui's popup plus an eased fade-in and a chevron that
 // rotates while the list is open. `index` is read and written; returns true
