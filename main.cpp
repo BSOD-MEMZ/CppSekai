@@ -3724,6 +3724,36 @@ int main(int argc, char** argv)
     // A choice made with the pad on the pause dialog, handed to
     // ui::messageDialog() as a forced click (see the dialog below).
     int pauseDialogChoice = -1;
+    // 多人游玩: stop playing because the *room* moved on (the host gave up, or
+    // re-armed the round) - this window goes back to the song select with a
+    // reason on its panel, without touching anybody else's seat: the caller has
+    // already done that part.
+    auto leaveLiveForRoom = [&](const std::string& status) {
+        audio.stopMusic();
+        audio.stopResultBgm();
+        audio.setHoldLoop(false, false, 0.0f);
+        touches.clear();
+        std::fill(std::begin(keyHeld), std::end(keyHeld), false);
+        lanePress.fill(0.0f);
+        pauseDialogOpen = false;
+        paused = false;
+        countdownActive = false;
+        session.active = false;
+        resultScheduled = false;
+        resultData = game::ResultData{};
+        songEndBlackout = 0.0f;
+        lastSeenJudgeTime = -100.0f;
+        hudState = game::HudState{};
+        mpFollowing = false;
+        mpStartPending = false;
+        mpHostPaused = false;
+        mpStatus = status;
+        party.clearPlayingScore();
+        systemMedia.setTaskbarProgress(-1.0, false);
+        state = AppState::Select;
+        std::printf("[party] left the live: %s\n", status.c_str());
+        std::fflush(stdout);
+    };
 
     while (running) {
         const Uint64 nowCounter = SDL_GetPerformanceCounter();
@@ -3929,10 +3959,13 @@ int main(int argc, char** argv)
                         // sound off instead.
                         // 多人游玩: never auto-pause. Several windows sit on one
                         // screen, so every one of them is unfocused almost all
-                        // of the time and the live would never get going.
+                        // of the time and the live would never get going. This
+                        // covers a window that found a room on the machine even
+                        // if it never joined it (`roomOpen`): the room is on,
+                        // so focus means nothing here.
                         if (event.window.event == SDL_WINDOWEVENT_FOCUS_LOST && state == AppState::Play
                             && !paused && !pauseDialogOpen && screenshotPath.empty()
-                            && userSettings.autoPauseOnBlur && !party.active()) {
+                            && userSettings.autoPauseOnBlur && !party.active() && !roomOpen) {
                             const double currentSongTime =
                                 songClock();
                             if (currentSongTime < 0.0) {
@@ -4539,7 +4572,12 @@ int main(int argc, char** argv)
             // Only the host plays the preview: two windows previewing the same
             // clip a few milliseconds apart sound like a broken speaker, and
             // the rule for the live is the same (BGM belongs to the host).
-            const bool playPreviewHere = !party.active() || party.isHost();
+            // 多人游玩: the preview is off the moment a charge is armed. The
+            // host stays on this screen for the whole lead-in *with the live's
+            // BGM already loaded*, so a preview that kept restarting here mixed
+            // the song-select clip into the running track (the "有概率混一起"
+            // report: it depended on which frame the charge landed in).
+            const bool playPreviewHere = (!party.active() || party.isHost()) && !mpStartPending;
             if (playPreviewHere && selected >= 0 && selected < static_cast<int>(entries.size())) {
                 const game::ChartEntry& playing = entries[static_cast<size_t>(selected)];
                 std::string previewPath = game::vocalAudioPath(playing, selectedVocal);
@@ -5037,6 +5075,22 @@ int main(int argc, char** argv)
             audio.update();
             const float outputTime = static_cast<float>(songTime + leadInSec);
 
+            // 多人游玩: the room can move on while this window is playing. The
+            // host's 放弃 / 重试 on its pause dialog hands the room back to the
+            // lobby (phase Lobby + a new epoch) - without watching for that, a
+            // member would keep playing a live nobody is timing any more and
+            // never come back to the list.
+            if (party.active() && !party.isHost()) {
+                const platform::PartyState snap = party.read();
+                if (snap.phase == platform::PartyLobby && mpSeenChargeEpoch >= 0
+                    && snap.epoch != mpSeenChargeEpoch) {
+                    party.setSeat(platform::PartySeatLobby);
+                    party.setReady(false);
+                    mpConfirmed = false;
+                    leaveLiveForRoom("房主已放弃本曲");
+                }
+            }
+
             // 多人游玩 member: the run length comes from the host. This window
             // has no BGM, so its own guess would be the chart's last note -
             // seconds away from the host's track, which is what the result
@@ -5225,7 +5279,7 @@ int main(int argc, char** argv)
             // chart keeps running past the last note while the track plays
             // out), then the result screen takes over with its own clock.
             // ----------------------------------------------------------
-            const bool resultDue = trackDurationSec > 1.0
+            const bool resultDue = state == AppState::Play && trackDurationSec > 1.0
                 && songTime >= (resultAtSec > 0.0 ? resultAtSec : trackDurationSec - 0.15);
             if (resultDue && !resultScheduled) {
                 resultScheduled = true;
@@ -5590,10 +5644,24 @@ int main(int argc, char** argv)
                     {false, false, true}, pauseDialogChoice);
                 pauseDialogChoice = -1;
                 if (action == 0) {
-                    // Retry: reload the current chart from the top.
+                    // Retry: reload the current chart from the top. 多人游玩:
+                    // a shared live cannot be restarted by one window - the
+                    // clock, the chart and the start instant all belong to the
+                    // room - so 重试 means "re-arm the round": the host hands the
+                    // room back to the lobby and re-publishes the same song, and
+                    // everybody picks up their 确定 again (which is also what
+                    // makes a retry reach the other windows, see the play state).
                     pauseDialogOpen = false;
                     paused = false;
-                    if (startSession(session, session.entry, renderer, audio, judgement, noteSpeed, error)) {
+                    if (party.active()) {
+                        pauseDialogAlive = false;
+                        party.setHostPaused(false);
+                        party.setSeat(platform::PartySeatLobby);
+                        party.setReady(false);
+                        mpConfirmed = false;
+                        party.releaseSong();
+                        leaveLiveForRoom("房主重开本曲");
+                    } else if (startSession(session, session.entry, renderer, audio, judgement, noteSpeed, error)) {
                         announceTrack();
                         beginSessionClock();
                     } else {
@@ -5606,6 +5674,16 @@ int main(int argc, char** argv)
                     // Without this the dialog's alive flag stays set and the
                     // next session redraws a half-closed dialog.
                     pauseDialogAlive = false;
+                    if (party.active()) {
+                        // The room follows: the host drops back to the lobby,
+                        // which is what tells every other window to stop playing
+                        // (see the play state's room watch).
+                        party.setHostPaused(false);
+                        party.setSeat(platform::PartySeatLobby);
+                        party.setReady(false);
+                        mpConfirmed = false;
+                        party.releaseSong();
+                    }
                     audio.stopMusic();
                     audio.setHoldLoop(false, false, 0.0f);
                     touches.clear();
@@ -5787,6 +5865,33 @@ int main(int argc, char** argv)
             if (songEndBlackout > 0.002f) {
                 fg->AddRectFilled(ImVec2(0.0f, 0.0f), ImVec2(w, h),
                     IM_COL32(0, 0, 0, static_cast<int>(std::clamp(songEndBlackout, 0.0f, 1.0f) * 255.0f)));
+            }
+            // 多人游玩 charge: the chart loads and then everybody waits for the
+            // shared instant *while still on the song select*. Without this the
+            // screen just sits on the list, which reads as "按了确定怎么又回到
+            // 选歌" - so cover it with the countdown, the way the room used to.
+            if (state == AppState::Select && party.active() && (mpConfirmed || party.isHost())) {
+                const platform::PartyState snap = party.read();
+                if (snap.phase == platform::PartyCharging && snap.startCounter != 0) {
+                    const double left = platform::PartyLink::counterToSeconds(snap.startCounter)
+                        - platform::PartyLink::counterToSeconds(platform::PartyLink::nowCounter());
+                    if (left > 0.0) {
+                        fg->AddRectFilled(ImVec2(0.0f, 0.0f), ImVec2(w, h), IM_COL32(6, 8, 18, 165));
+                        ImFont* big = game::titleFont() != nullptr ? game::titleFont() : ImGui::GetFont();
+                        ImFont* small = game::bodyFont() != nullptr ? game::bodyFont() : ImGui::GetFont();
+                        char text[24];
+                        std::snprintf(text, sizeof(text), "%.1f", left);
+                        const float bigPx = std::min(w, h) * 0.16f;
+                        const ImVec2 ts = big->CalcTextSizeA(bigPx, FLT_MAX, 0.0f, text);
+                        fg->AddText(big, bigPx, ImVec2((w - ts.x) * 0.5f, h * 0.34f),
+                            IM_COL32(255, 255, 255, 240), text);
+                        const float smallPx = std::min(w, h) * 0.030f;
+                        const char* label = "即将开始";
+                        const ImVec2 ls = small->CalcTextSizeA(smallPx, FLT_MAX, 0.0f, label);
+                        fg->AddText(small, smallPx, ImVec2((w - ls.x) * 0.5f, h * 0.34f + bigPx * 1.05f),
+                            IM_COL32(176, 232, 220, 235), label);
+                    }
+                }
             }
             if (confirmFlashActive) {
                 const float t = confirmFlashTime;

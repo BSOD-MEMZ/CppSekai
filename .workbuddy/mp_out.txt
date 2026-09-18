@@ -1,0 +1,44 @@
+########## round 1: one full round ##########
+-- host:
+[profile] active='default' (2 user(s), dir D:\Dev\CppSekai)
+[party] ready: seat 0 as host ('A'), 1 player(s) so far
+[party] song locked: 0153_easy.sus (Miku) diff 0
+[party] song locked: 0153_expert.sus (Miku) diff 3
+[party] song locked: 0001_expert.sus (Tell your world) diff 3
+[party] auto-confirm chart #7 (debug)
+[party] host confirmed (epoch 3)
+[party] charging: start counter 43692056452 (epoch 4)
+[party] all ready -> charging (start in 6.0s)
+[audio] bgm: D:\Dev\CppSekai\build\..\charts\0001_01.mp3
+[party] run length 123.23s published
+[party] chart loaded (D:\Dev\CppSekai\build\..\charts\0001_expert.sus, EXPERT), waiting for the shared start
+[party] go (lead-in 6.0s, start counter 43692056452)
+-- member:
+[party] ready: seat 1 as member ('B'), 2 player(s) so far
+[party] host picked 'Tell your world' (0001_expert.sus) - pick a difficulty in the phone panel
+[party] auto difficulty MASTER (debug)
+[party] auto confirm (debug)
+[audio] bgm muted (multiplayer member; the host plays it)
+[party] chart loaded (D:\Dev\CppSekai\build\..\charts\0001_master.sus, MASTER), waiting for the shared start
+[party] auto-confirm chart #5 (debug)
+[party] confirm ignored (the round is already on)
+[party] go (lead-in 6.0s, start counter 43692056452)
+[party] run length from the host: 123.23s
+clock samples: host=30 member=33
+PASS  both windows published a clock
+PASS  identical start instant + lead-in on both  [('6.0', '43692056452')]
+PASS  member received the host's song
+PASS  member muted its BGM
+PASS  host played the BGM
+PASS  no clock sample was rejected
+host-vs-member skew: 28 instants, median 3.3 ms, worst 6.5 ms (at host t=-3.1s)
+member clock corrections seen: up to 20 ms (snap/slew onto the host)
+PASS  clock skew under 25 ms
+host sees the member scoreboard: 210671/52
+PASS  live scoreboard crossed the process boundary
+ROUND 1 PASS
+########## round 2: host pauses mid-live ##########
+[party] host paused: picture frozen
+member frozen samples: 14
+member chart clock moved 0 ms while the host was paused
+ROUND 2 PASS
