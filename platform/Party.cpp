@@ -21,7 +21,10 @@ constexpr int kTitleBytes = 192;
 // purpose: a window that is busy decoding a chart does not tick either, and
 // reaping a live player mid-load would be far worse than a late cleanup.
 constexpr LONG kStaleMs = 6000;
-constexpr wchar_t kMappingName[] = L"Local\\CppSekai.Party.v1";
+// v2: added trackEndMs (the host's run length). The layout is part of the
+// protocol, so an old build simply opens a different mapping instead of reading
+// these fields at the wrong offsets.
+constexpr wchar_t kMappingName[] = L"Local\\CppSekai.Party.v2";
 
 struct SharedSeat
 {
@@ -63,6 +66,9 @@ struct SharedBlock
     // QPC worth of error (~hours), which snaps its chart clock into the future
     // and marks the entire chart missed.
     volatile LONG hostClockValid;
+    // Length of the live the host is running, in milliseconds (0 = not
+    // published yet). Written once per run, right after the host's chart loads.
+    volatile LONG trackEndMs;
     char songKey[kSongKeyBytes];
     char songTitle[kTitleBytes];
     SharedSeat seats[kPartyMaxSlots];
@@ -177,7 +183,11 @@ bool PartyLink::init()
         seat.heartbeat = tick;
         seat.ready = 0;
         seat.difficulty = -1;
-        seat.seat = PartySeatLobby;
+        // A window that just joined is *in* the round from this moment (it is
+        // sitting in the room, on the song select), so the host waits for its
+        // 确定 instead of starting without it. 旁观 is what puts a seat back to
+        // the lobby.
+        seat.seat = PartySeatChoosing;
         seat.score = 0;
         seat.combo = 0;
         seat.lifePermille = 1000;
@@ -428,6 +438,7 @@ void PartyLink::lockSong(int musicId, const std::string& songKey, const std::str
     gBlock->startHi = 0;
     gBlock->hostSongMs = 0;
     gBlock->hostClockValid = 0; // no clock for the new song until the host runs it
+    gBlock->trackEndMs = 0;     // and no run length either
     copyUtf8(gBlock->songKey, kSongKeyBytes, songKey);
     copyUtf8(gBlock->songTitle, kTitleBytes, title);
     gBlock->epoch = gBlock->epoch + 1;
@@ -475,6 +486,26 @@ void PartyLink::setHostPaused(bool paused)
     gBlock->paused = paused ? 1 : 0;
 }
 
+void PartyLink::publishTrackEnd(double seconds)
+{
+    if (!mActive || gBlock == nullptr || !isHost()) {
+        return;
+    }
+    gBlock->trackEndMs = static_cast<LONG>(std::llround(std::max(0.0, seconds) * 1000.0));
+    if (seconds > 1.0) {
+        std::printf("[party] run length %.2fs published\n", seconds);
+        std::fflush(stdout);
+    }
+}
+
+double PartyLink::readTrackEnd() const
+{
+    if (!mActive || gBlock == nullptr) {
+        return 0.0;
+    }
+    return static_cast<double>(gBlock->trackEndMs) / 1000.0;
+}
+
 void PartyLink::releaseSong()
 {
     if (!mActive || gBlock == nullptr || !isHost()) {
@@ -488,6 +519,7 @@ void PartyLink::releaseSong()
     gBlock->startHi = 0;
     gBlock->hostSongMs = 0;
     gBlock->hostClockValid = 0;
+    gBlock->trackEndMs = 0;
     InterlockedIncrement(&gBlock->seq);
     std::printf("[party] back to the lobby\n");
     std::fflush(stdout);
@@ -564,14 +596,17 @@ bool PartyLink::allReady() const
     int inRoom = 0;
     for (const PartyPlayer& player : list) {
         if (player.seat == PartySeatLobby) {
-            continue; // back on the song select: not part of this round
+            continue; // opted out of this round (旁观): not part of it
         }
         ++inRoom;
         if (!player.ready) {
             return false;
         }
     }
-    return inRoom >= 2;
+    // One player is enough: the host alone in the room starts the moment it
+    // confirms, exactly like the single-window case, and a second window that
+    // joins later catches the charge instead of blocking it.
+    return inRoom >= 1;
 }
 
 } // namespace platform

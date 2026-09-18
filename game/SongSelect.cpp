@@ -2074,9 +2074,19 @@ void loadMusicVocals(const std::string& path)
 
 int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& entries, int& selected,
     int windowW, int windowH, float timeSec, int& sortMode, int& groupMode, int& vocalIndex,
-    float uiScale, ImVec2* confirmCenter, const AccountData* account)
+    float uiScale, ImVec2* confirmCenter, const AccountData* account, const SelectPartyInfo* party,
+    SelectPartyResult* partyOut)
 {
     int action = SelectNone;
+    // 多人游玩: the room owns the song. The host keeps a normal, fully
+    // interactive list (it is the one choosing); every other window gets a
+    // greyed-out, read-only list whose phone panel shows whatever the host is
+    // parked on, so the difficulty can be picked without a second screen.
+    const bool partyRoom = party != nullptr && party->active;
+    const bool partyReadOnly = partyRoom && !party->host;
+    // A member can only pick a difficulty once the room actually has a song its
+    // window can play - before that there is nothing to pick for.
+    const bool partyPickable = partyReadOnly && party->songLocked && party->lockedEntry >= 0;
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     const float w = viewport->WorkSize.x;
     const float h = viewport->WorkSize.y;
@@ -2156,6 +2166,43 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         selected = -1;
     }
 
+    // 多人游玩 member: the room decides what is on screen. Park the list (and
+    // therefore the phone panel, the jacket and the score badge) on the chart
+    // the host is sitting on, whatever this window's own cursor would say - the
+    // list then glides over to it like any other outside selection.
+    //
+    // The group a chart belongs to is read off the difficulty slots, with the
+    // song id as a fallback for a chart no slot claims (an APPEND / ETERNAL
+    // one): the list has no row of its own for those.
+    const auto groupOf = [&](int entryIndex) {
+        for (std::size_t gi = 0; gi < groups.size(); ++gi) {
+            for (int d = 0; d < kDiffCount; ++d) {
+                if (groups[gi].idx[d] == entryIndex) {
+                    return static_cast<int>(gi);
+                }
+            }
+        }
+        if (entryIndex >= 0 && entryIndex < static_cast<int>(entries.size())) {
+            const int wantedId = entries[static_cast<size_t>(entryIndex)].musicId;
+            if (wantedId > 0) {
+                for (std::size_t gi = 0; gi < groups.size(); ++gi) {
+                    if (groups[gi].musicId == wantedId) {
+                        return static_cast<int>(gi);
+                    }
+                }
+            }
+        }
+        return -1;
+    };
+    if (partyReadOnly && party->songLocked && party->lockedEntry >= 0
+        && party->lockedEntry < static_cast<int>(entries.size())) {
+        selected = party->lockedEntry;
+        const int lockedGroup = groupOf(party->lockedEntry);
+        if (lockedGroup >= 0) {
+            groupIndex = lockedGroup;
+        }
+    }
+
     ImGui::SetNextWindowPos(viewport->WorkPos);
     ImGui::SetNextWindowSize(viewport->WorkSize);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
@@ -2211,6 +2258,11 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     static char searchBuf[64] = "";
     const float searchW = listW;
     const float searchH = 46.0f * k;
+    // 多人游玩 member: the header row (search box, sort / grouping, 刷新) all
+    // work on the list, and the list is the host's. Everything is disabled
+    // rather than skipped so the geometry below stays where it is, and the room
+    // banner is drawn over it (see after the 刷新 button).
+    ImGui::BeginDisabled(partyReadOnly);
     ImGui::SetCursorScreenPos(ImVec2(listX, listTop));
     ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(250, 250, 253, 210));
     ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, IM_COL32(255, 255, 255, 235));
@@ -2282,10 +2334,16 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     // Rescan button, in the same row as the selectors. F5 has always done this
     // but nothing on screen said so; a chart dropped into charts/ while the
     // game is running is exactly what a player reaches for.
+    //
+    // The geometry is computed out here because the 多人游玩 banner has to cover
+    // the whole header row, this button included.
+    const float headerRowH = 36.0f * k;
+    const float rescanW = 104.0f * k;
+    const float rescanX = comboX0 + (comboW + comboGap) * 2.0f + 4.0f * k;
     {
-        const float rowH = 36.0f * k;
-        const float btnW = 104.0f * k;
-        const float btnX = comboX0 + (comboW + comboGap) * 2.0f + 4.0f * k;
+        const float rowH = headerRowH;
+        const float btnW = rescanW;
+        const float btnX = rescanX;
         const ImU32 fg = IM_COL32(238, 238, 248, 255);
         ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(58, 52, 92, 235));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(76, 68, 118, 245));
@@ -2321,10 +2379,74 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         dl->AddTriangleFilled(tip, wingA, wingB, fg);
         addTextLeft(dl, body, 17.0f * k, ImVec2(c.x + 16.0f * k, c.y), fg, "刷新");
     }
+    ImGui::EndDisabled();
 
-    // Groups matching the search filter.
+    // ------------------------------------------------------------------
+    // 多人游玩: the banner takes the header row over on a member's window.
+    // Drawn after the (disabled) widgets, so it covers them - which is also how
+    // a member never sees a search filter it could not have typed.
+    // ------------------------------------------------------------------
+    if (partyReadOnly) {
+        const float bannerH = headerRowH + 12.0f * k;
+        const ImVec2 b0(listX, headerRowY - 6.0f * k);
+        const ImVec2 b1(rescanX + rescanW, b0.y + bannerH);
+        const float cy = (b0.y + b1.y) * 0.5f;
+        dl->AddRectFilled(b0, b1, IM_COL32(18, 20, 38, 246), 12.0f * k);
+        dl->AddRect(b0, b1, IM_COL32(255, 255, 255, 46), 12.0f * k, 0, 1.5f * k);
+        // The same teal dot the room badge carries: "the room is live".
+        dl->AddCircleFilled(ImVec2(b0.x + 22.0f * k, cy), 6.0f * k, IM_COL32(106, 232, 208, 255));
+        float textX = b0.x + 40.0f * k;
+        const char* head = "多人游玩 · 列表只读";
+        addTextLeft(dl, body, 17.0f * k, ImVec2(textX, cy), IM_COL32(236, 238, 248, 255), head);
+        textX += body->CalcTextSizeA(17.0f * k, FLT_MAX, 0.0f, head).x + 14.0f * k;
+
+        // 旁观 / 加入 (right end of the banner): out of this round without
+        // leaving the room, so an idle window never blocks the host's start.
+        const float pillW = 88.0f * k;
+        const float pillH = 30.0f * k;
+        const ImVec2 p0(b1.x - pillW - 10.0f * k, cy - pillH * 0.5f);
+        const ImVec2 p1(p0.x + pillW, p0.y + pillH);
+        const bool spectating = party->spectating;
+        ImGui::SetCursorScreenPos(p0);
+        ImGui::PushID("spectate");
+        ImGui::InvisibleButton("spectate", ImVec2(pillW, pillH));
+        const bool pillHovered = ImGui::IsItemHovered();
+        const bool pillPressed = ImGui::IsItemClicked();
+        ImGui::PopID();
+        dl->AddRectFilled(p0, p1,
+            spectating ? IM_COL32(56, 62, 92, 255) : IM_COL32(32, 36, 60, 255), pillH * 0.5f);
+        dl->AddRect(p0, p1,
+            spectating ? IM_COL32(255, 255, 255, 60)
+                       : (pillHovered ? IM_COL32(255, 255, 255, 90) : IM_COL32(255, 255, 255, 36)),
+            pillH * 0.5f, 0, 1.5f * k);
+        addTextCentered(dl, body, 15.0f * k, ImVec2((p0.x + p1.x) * 0.5f, cy),
+            spectating ? IM_COL32(178, 178, 198, 255) : IM_COL32(236, 238, 248, 255),
+            spectating ? "加入" : "旁观");
+        if (pillPressed && partyOut != nullptr) {
+            ui::se(ui::SeClick);
+            partyOut->spectate = true;
+        }
+
+        // Room status, between the title and the pill ("等待房主选曲" /
+        // "已确定，等待其他玩家" / "本窗口没有这首曲子").
+        const float statusMax = p0.x - textX - 16.0f * k;
+        if (statusMax > 40.0f * k) {
+            const std::string line = ellipsize(body, 15.0f * k, party->status, statusMax);
+            addTextLeft(dl, body, 15.0f * k, ImVec2(textX, cy), grayText, line.c_str());
+        }
+        if (std::getenv("CPSEKAI_UI_TRACE") != nullptr) {
+            std::printf("[ui] room banner %.0f,%.0f - %.0f,%.0f (spectate pill %.0f,%.0f)\n", b0.x,
+                b0.y, b1.x, b1.y, (p0.x + p1.x) * 0.5f, cy);
+        }
+    }
+
+    // Groups matching the search filter. A 多人游玩 member has no search box (it
+    // is disabled and covered by the room banner), and a stale filter would be
+    // free to hide the very song the room is on - so the filter is ignored
+    // there, not just un-editable.
+    const bool filterOn = !partyReadOnly && searchBuf[0] != '\0';
     std::vector<int> visible;
-    if (searchBuf[0] == '\0') {
+    if (!filterOn) {
         for (int gi = 0; gi < static_cast<int>(groups.size()); ++gi) {
             visible.push_back(gi);
         }
@@ -2392,7 +2514,8 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             ? kOrderByName
             : sortMode;
     const std::string listSignature = std::string(searchBuf) + "|" + std::to_string(order) + "|"
-        + std::to_string(groupMode) + "|" + std::to_string(diffIndex) + "|" + std::to_string(entries.size());
+        + std::to_string(groupMode) + "|" + std::to_string(diffIndex) + "|" + std::to_string(entries.size())
+        + "|ro" + std::to_string(partyReadOnly ? 1 : 0);
     if (listSignature != lastSignature) {
         lastSignature = listSignature;
         cachedRows = buildRows(groups, visible, entries, diffIndex, order, groupMode);
@@ -2483,7 +2606,12 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     // A touch contact arrives as a synthetic mouse event (SDL's touch->mouse
     // synthesis), so this one path serves mouse and finger alike.
     // While the jump panel is up the list behind it must not react.
-    const bool listHovered = !indexOpen && (dragging || (inViewRect && ImGui::IsWindowHovered()));
+    //
+    // 多人游玩: a member's list is a read-only mirror of the host's song, not a
+    // control surface - gating the one flag that every pointer path below asks
+    // for is what turns "no drag" into "no wheel, no tap, no fling" as well.
+    const bool listHovered = !partyReadOnly && !indexOpen
+        && (dragging || (inViewRect && ImGui::IsWindowHovered()));
 
     // Intro animation: this function redraws every frame while the Select state
     // is active, so a long gap since the previous frame means we just entered
@@ -3012,7 +3140,10 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     }
 
 
-    // Keyboard navigation over the (cyclically) listed rows.
+    // Keyboard navigation over the (cyclically) listed rows. A 多人游玩 member
+    // has no say over the list (the room's song is what it shows), so nothing
+    // here moves it - but 确定 is still theirs to press, and that is the whole
+    // point of the read-only screen.
     if (rowCount > 0) {
         const auto moveTo = [&](int step) {
             int slot = (scrolling || cardSlot >= 1000000 ? slotOfGroup(groupIndex) : cardSlot) + step;
@@ -3025,19 +3156,46 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             scrolling = false;
             lastInputTime = timeSec;
         };
-        if (ImGui::IsKeyPressed(ImGuiKey_DownArrow) || ImGui::IsKeyPressed(ImGuiKey_GamepadDpadDown)) {
+        if (!partyReadOnly
+            && (ImGui::IsKeyPressed(ImGuiKey_DownArrow)
+                || ImGui::IsKeyPressed(ImGuiKey_GamepadDpadDown))) {
             ui::se(ui::SeSelect);
             moveTo(1);
         }
-        if (ImGui::IsKeyPressed(ImGuiKey_UpArrow) || ImGui::IsKeyPressed(ImGuiKey_GamepadDpadUp)) {
+        if (!partyReadOnly
+            && (ImGui::IsKeyPressed(ImGuiKey_UpArrow) || ImGui::IsKeyPressed(ImGuiKey_GamepadDpadUp))) {
             ui::se(ui::SeSelect);
             moveTo(-1);
         }
         if (ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter)) {
-            if (selected >= 0) {
+            if (partyReadOnly) {
+                if (partyOut != nullptr) {
+                    partyOut->confirm = true;
+                }
+            } else if (selected >= 0) {
                 action = selected;
             }
         }
+    }
+
+    // 多人游玩: the list is already drawn - a translucent veil over the whole
+    // viewport says "you cannot work this" far more clearly than dimming the
+    // rows one by one would, and it is the honest picture: the highlight, the
+    // scroll position and the section index all belong to the host now.
+    // Drawn into the child's own draw list, which is rendered *after* its
+    // parent's: anything put on `dl` here would end up under the rows.
+    if (partyReadOnly) {
+        const ImVec2 v0(rowX, viewPos.y);
+        const ImVec2 v1(rowX + listW + 24.0f * k, viewBottom);
+        listDl->AddRectFilled(v0, v1, IM_COL32(8, 10, 22, 130));
+        const float chipH = 30.0f * k;
+        const float chipW = 150.0f * k;
+        const ImVec2 c0((v0.x + v1.x) * 0.5f - chipW * 0.5f, v0.y + 14.0f * k);
+        const ImVec2 c1(c0.x + chipW, c0.y + chipH);
+        listDl->AddRectFilled(c0, c1, IM_COL32(14, 16, 30, 210), chipH * 0.5f);
+        listDl->AddRect(c0, c1, IM_COL32(255, 255, 255, 40), chipH * 0.5f, 0, 1.5f * k);
+        addTextCentered(listDl, body, 15.0f * k, ImVec2((c0.x + c1.x) * 0.5f, (c0.y + c1.y) * 0.5f),
+            IM_COL32(200, 204, 224, 255), "只读 · 由房主选曲");
     }
     ImGui::EndChild();
 
@@ -3266,7 +3424,12 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             }
         }
 
-        // Difficulty buttons
+        // Difficulty buttons. 多人游玩: this row is the member's difficulty
+        // picker - it *is* the room screen the panel replaces - so the filled
+        // ring follows the player's own pick instead of the list cursor, and a
+        // click is reported to the caller rather than moving the (read-only)
+        // list. Only the five difficulties the list can name are offered.
+        const bool partyPick = partyReadOnly;
         const float dcD = 60.0f * k;
         const float dcGap = 9.0f * k;
         const float rowW = kDiffCount * dcD + (kDiffCount - 1) * dcGap;
@@ -3276,15 +3439,18 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         const float dcY = std::max(scrY0 + phoneH * 0.500f, ty + dcD * 0.5f + 34.0f * k);
         for (int d = 0; d < kDiffCount; ++d) {
             const bool avail = group.idx[d] >= 0;
-            const bool active = d == diffIndex && avail;
+            const bool active = avail && (partyPick ? party->myDifficulty == d : d == diffIndex);
             const ImVec2 c(dx, dcY);
 
             ImGui::SetCursorScreenPos(tiltedItemPos(c, ImVec2(dcD, dcD)));
             ImGui::PushID(d);
-            if (avail) {
+            if (avail && (!partyPick || partyPickable)) {
                 ImGui::InvisibleButton("diff", ImVec2(dcD, dcD));
                 if (ImGui::IsItemClicked()) {
                     ui::se(ui::SeLevelChoose);
+                    if (partyPick && partyOut != nullptr) {
+                        partyOut->difficulty = d;
+                    }
                     diffIndex = d;
                     selected = group.idx[d];
                 }
@@ -3313,6 +3479,12 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         }
 
         // 确定 button (mint capsule, drawn by hand so it tilts with the phone).
+        // 多人游玩: this is the room's button, not a local "play this" - the
+        // press goes to the caller (the host locks the round, a member confirms
+        // itself) and nothing is loaded here. It is drawn dimmed while there is
+        // nothing to confirm yet (no song from the host, or no difficulty
+        // picked), so the rule is visible instead of just rejected.
+        const bool okReady = !partyPick || (partyPickable && party->myDifficulty >= 0);
         const float okW = sw * 0.58f;
         const float okH = 56.0f * k;
         const float okTop = std::max(scrY0 + phoneH * 0.600f, dcY + dcD * 0.5f + 44.0f * k);
@@ -3324,8 +3496,11 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         const bool okHovered = ImGui::IsItemHovered();
         const bool okPressed = ImGui::IsItemClicked();
         ImGui::PopID();
-        dl->AddRectFilled(okA, okB, okHovered ? ui::kPrimaryHover : ui::kPrimary, okH * 0.5f);
-        addTextCentered(dl, body, 22.0f * k, ImVec2(cx, (okA.y + okB.y) * 0.5f), ui::kBtnText, "确定");
+        dl->AddRectFilled(okA, okB,
+            okReady ? (okHovered ? ui::kPrimaryHover : ui::kPrimary) : IM_COL32(94, 108, 116, 255),
+            okH * 0.5f);
+        addTextCentered(dl, body, 22.0f * k, ImVec2(cx, (okA.y + okB.y) * 0.5f),
+            okReady ? ui::kBtnText : IM_COL32(206, 210, 220, 255), "确定");
         // Where the button actually lands on screen (it is tilted with the phone),
         // so main.cpp can start the confirm flash from it.
         if (confirmCenter != nullptr) {
@@ -3333,25 +3508,36 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         }
         if (okPressed) {
             ui::se(ui::SeClick);
-            action = selected;
+            if (partyRoom) {
+                if (partyOut != nullptr) {
+                    partyOut->confirm = true;
+                }
+            } else {
+                action = selected;
+            }
         }
 
         // Shuffle + music settings buttons (pjsk round dark buttons).
+        // 多人游玩: the shuffle decides *which song the room plays*, so a member
+        // gets a dimmed, inert one. 设置 stays live - volume and judgement
+        // windows are this window's own business.
         const float ibD = 64.0f * k;
         const float ibY = std::max(scrY0 + phoneH * 0.700f, okB.y + 62.0f * k);
         const float ibGap = ibD * 1.7f;
         for (int i = 0; i < 2; ++i) {
+            const bool lockedOut = partyReadOnly && i == 0;
             const ImVec2 c(cx + (i == 0 ? -ibGap * 0.5f : ibGap * 0.5f), ibY);
             ImGui::SetCursorScreenPos(tiltedItemPos(c, ImVec2(ibD, ibD)));
             ImGui::PushID(i);
             ImGui::InvisibleButton("iconbtn", ImVec2(ibD, ibD));
-            const bool pressed = ImGui::IsItemClicked();
-            const bool hovered = ImGui::IsItemHovered();
+            const bool pressed = !lockedOut && ImGui::IsItemClicked();
+            const bool hovered = !lockedOut && ImGui::IsItemHovered();
             const float hot = ui::anim(ImGui::GetItemID() ^ 0x71u, hovered, 18.0f);
             ImGui::PopID();
             // The disc swells a little and brightens as the pointer comes over it.
             dl->AddCircleFilled(c, ibD * 0.5f * (1.0f + 0.06f * hot),
-                ui::mix(IM_COL32(74, 68, 112, 255), IM_COL32(122, 116, 168, 255), hot));
+                lockedOut ? IM_COL32(52, 50, 74, 255)
+                          : ui::mix(IM_COL32(74, 68, 112, 255), IM_COL32(122, 116, 168, 255), hot));
             const char* texName = i == 0 ? "shufflebutton" : "musicsetting";
             const GLuint tex = selectTex(renderer, texName);
             if (tex != 0) {
@@ -3363,6 +3549,10 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
                 }
                 dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(tex)),
                     ImVec2(c.x - iw * 0.5f, c.y - ih * 0.5f), ImVec2(c.x + iw * 0.5f, c.y + ih * 0.5f));
+            }
+            if (lockedOut) {
+                // A dark wash over the icon: "this one is not yours to press".
+                dl->AddCircleFilled(c, ibD * 0.5f, IM_COL32(10, 12, 24, 150));
             }
             if (pressed) {
                 ui::se(ui::SeClick);
@@ -3379,6 +3569,17 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
                     action = SelectSettings;
                 }
             }
+        }
+
+        // 多人游玩 status line, under both round buttons so it can never land on
+        // one: what the room is waiting for ("等待房主选曲" / "已确定 · 等待其他
+        // 玩家" / "本窗口没有这首曲子"). Mint once this window has confirmed.
+        if (partyRoom && !party->status.empty()) {
+            const float statusY = ibY + ibD * 0.5f + 26.0f * k;
+            const std::string line = ellipsize(body, 16.0f * k, party->status, sw * 0.96f);
+            addTextCentered(dl, body, 16.0f * k, ImVec2(cx, statusY),
+                party->confirmed ? IM_COL32(106, 232, 208, 255) : IM_COL32(178, 178, 198, 255),
+                line.c_str());
         }
     }
 
@@ -3420,27 +3621,28 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     }
 
     // F5 rescan is handled by main; Enter handled above. Left/right switch
-    // difficulty when the phone panel is showing.
-    if (!groups.empty() && selected >= 0) {
-        if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow)) {
-            for (int d = diffIndex - 1; d >= 0; --d) {
-                if (groups[static_cast<size_t>(groupIndex)].idx[d] >= 0) {
-                    ui::se(ui::SeLevelChoose);
-                    diffIndex = d;
-                    selected = groups[static_cast<size_t>(groupIndex)].idx[d];
-                    break;
+    // difficulty when the phone panel is showing - and for a 多人游玩 member this
+    // is the *only* meaning the arrows have, since the list does not move, so
+    // the pick is reported to the caller as well.
+    const auto nudgeDifficulty = [&](int step) {
+        for (int d = diffIndex + step; d >= 0 && d < kDiffCount; d += step) {
+            if (groups[static_cast<size_t>(groupIndex)].idx[d] >= 0) {
+                ui::se(ui::SeLevelChoose);
+                diffIndex = d;
+                selected = groups[static_cast<size_t>(groupIndex)].idx[d];
+                if (partyReadOnly && partyOut != nullptr) {
+                    partyOut->difficulty = d;
                 }
+                return;
             }
         }
+    };
+    if (!groups.empty() && selected >= 0 && (!partyReadOnly || partyPickable)) {
+        if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow)) {
+            nudgeDifficulty(-1);
+        }
         if (ImGui::IsKeyPressed(ImGuiKey_RightArrow)) {
-            for (int d = diffIndex + 1; d < kDiffCount; ++d) {
-                if (groups[static_cast<size_t>(groupIndex)].idx[d] >= 0) {
-                    ui::se(ui::SeLevelChoose);
-                    diffIndex = d;
-                    selected = groups[static_cast<size_t>(groupIndex)].idx[d];
-                    break;
-                }
-            }
+            nudgeDifficulty(1);
         }
     }
 

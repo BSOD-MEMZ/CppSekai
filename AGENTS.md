@@ -67,14 +67,16 @@ game/Intro.*      # ImGui 卡片/UI；字体跟随系统（注册表找字体文
 game/SongSelect.* # 选曲界面 + userdata.json 读写（settings / scores / account 三段）+ 等级曲线。
                   # 账户 / 等级 / 资料卡见下面「账户 / 等级」一节。
 platform/Party.*  # 多人游玩（同机多窗口联机）的共享内存总线：命名文件映射 + 每实例一个座位，
-                  # 主机选举、心跳、锁曲、难度、准备、绝对起奏时刻、暂停广播、实时分数。
+                  # 主机选举、心跳、锁曲、难度、确定、绝对起奏时刻、暂停广播、实时分数、
+                  # 本局曲长（成员靠它和房主同时切结算）。
                   # 无 socket / 无管道 / 无序列化：一次状态变更就是往共享页写一个 LONG。
-game/PartyScreen.* # 多人游玩的三个画面：选曲界面上的房间条、锁定后的难度选择页（含准备/
-                  # 开始/倒计时）、游玩中其它玩家的分数条。1920x1080 虚拟画布，和选曲/结算同一套。
+game/PartyScreen.* # 多人游玩的浮层：选曲界面左下角的房间条（谁在房里）与演奏中的队友分数条。
+                  # 房间自己没有页面——它就在选曲界面上（见「多人游玩」一节）。
+                  # 难度名/序号（`difficultyIndex` / `difficultyName`）也在这，房间协议与手机面板共用。
 main.cpp          # SDL2 窗口、事件循环、输入映射、ImGui HUD、截图模式、多人时钟跟随
 ```
 
-多人游玩（`AppState::Party`、`--party`）见下面「多人游玩」一节。
+多人游玩（`--party` / `--no-party`，房间在选曲界面上）见下面「多人游玩」一节。
 
 数据流：`loadSusTextPrecise → render(t) → packedQuads → Renderer::renderFrame`；
 判定侧：`getHitEventBuffer → JudgementEngine::load → tap/flick/update`。
@@ -151,8 +153,9 @@ main.cpp          # SDL2 窗口、事件循环、输入映射、ImGui HUD、截�
   无交互会话下驱动 UI（动作：`click x y` / `move x y` / `key <vk>` / `focus` /
   `place x y` / `rect`；见「平台 / 输入相关的坑」）。
 - `.workbuddy/tools/mp_verify.sh` → 多人游玩的端到端回归：开两个窗口（`--party-auto`），
-  断言同一 `start counter`、BGM 只在主机、时钟偏差、实时分数过进程、房主暂停后成员画面钉住。
-  纯文本 PASS/FAIL，不需要看截图。
+  断言同一 `start counter`、BGM 只在主机、时钟偏差、实时分数过进程、房主暂停后成员画面钉住、
+  **打到结算画面（两边同一 chart time）并回到选曲、房间重新武装**。
+  纯文本 PASS/FAIL，不需要看截图（三轮约 4 分钟）。
 
 ## 构建
 
@@ -1040,13 +1043,35 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
     `setEnabled()` 里会 truncate；**变量别叫 `near`**（windef.h 把它定义成空宏，
     声明会被吃掉，直接编译不过）。
 
-## 多人游玩（2026-09-17，`platform/Party.*` + `game/PartyScreen.*`）
+## 多人游玩（`platform/Party.*` + `game/PartyScreen.*`）
 
-同一台机器开多个窗口一起打。流程：**第一个窗口是房主**，在选曲界面选中曲子按确定
-→ 所有窗口进入房间页 → 各自选难度（选难度即"准备"）→ 全员准备后房主发布**绝对起奏时刻**
-→ 各窗口同时加载自己那份谱面 → 到点一起开始。BGM 只有房主播。
+同一台机器开多个窗口一起打。房间**没有自己的页面**：它就在选曲界面上。
 
-- **传输**：一条命名文件映射 `Local\CppSekai.Party.v1`（`platform/Party.cpp`），
+流程（2026-09-18 定稿，之前的"房间页 + 准备 + 10s 倒计时"已删）：
+**第一个窗口是房主**，选曲列表归它（它的光标停在哪个曲目，就立刻广播哪个曲目）；
+其他窗口的列表是**只读**的（灰罩 + 「只读·由房主选曲」+ 一律禁用的搜索/排序/刷新 + 灰掉的随机按钮），
+它们的**手机面板显示房主的曲目**，难度就在那里点；**所有人的「确定」= 已经决定的信号**，
+房主也按确定，最后一个按下去就**立刻**开打（只有 lead-in，没有额外等待）。
+
+- **谁按了什么**（`mpConfirmed` / `mpSpectating` / `mpPublished`，都在 main.cpp）：
+  - 房主：光标换曲 → `publishHostSong()`（`lockSong`，epoch++，成员据此清空自己的难度/确定）；
+    按确定 → 自己 ready + 记住 `mpConfirmedEpoch`；再按一次且没全 ready → **强制开始**。
+  - 成员：手机里点难度 → `party.setDifficulty`；按确定 → ready。换曲/回到大厅时自己的答案作废。
+  - 旁观：banner 右侧的胶囊把座位退回 `PartySeatLobby`，**这样它就不会卡住房主的开局**
+    （`allReady()` 只看非 Lobby 座位；`inRoom >= 1`，所以房里只剩房主时它自己确定就开）。
+  - 进房间时座位直接是 `PartySeatChoosing`：刚加入的窗口也算"在局里"，房主要等它按确定
+    （否则房主会在新窗口还没看清楚前就开局）。
+- **加载宽限没了**：老代码是 `4s 宽限 + lead-in`（默认 10s），现在只有 lead-in（默认 6s）。
+  各窗口在 `PartyCharging` 那一帧加载自己的谱面（**白色确定闪光就是盖这次加载的**，
+  在 charge 里手动点亮 `confirmFlashActive`，不要设 `confirmStartPending`——这里没有异步加载），
+  然后等共享 QPC 时刻。起奏时刻在面板状态行上倒计时（"即将开始 3.2s"）。
+- **结算画面进不去了（2026-09-18 修）**：多人路径从来没调 `announceTrack()`，
+  `trackDurationSec` 一直是 0，于是 `resultDue` 恒假 —— 歌放完就停在演奏画面。
+  现在 charge 加载成功后两边都调 `announceTrack()`，并且**房主把 `trackDurationSec`
+  也写进共享页**（`publishTrackEnd` / `readTrackEnd`，共享块多了一个 `trackEndMs`，
+  映射名升到 `Local\CppSekai.Party.v2`；v1 的旧窗口不会读错偏移）。
+  成员每帧读它——成员没有 BGM，自己算的话会拿谱面最后一个音符当曲终，比房主早好几秒切结算。
+- **传输**：一条命名文件映射（`platform/Party.cpp`），
   8 个座位 + 一个控制块。没有 socket、没有管道、没有序列化，也不 flush：**一次状态变更
   就是往共享页写一个 LONG**，别的窗口下一帧就读到了——同机上这是延迟的物理下限
   （只剩读者自己的一帧）。控制块用 seqlock（写者 `InterlockedIncrement(&seq)` 包住），
@@ -1090,13 +1115,16 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
 - **开关**：`设置 -> 系统 -> 多人游玩`（`UserSettings::multiplayer`，写进档案）或命令行
   `--party`（本次运行有效，不落盘）。打开它会**顺带把多开策略设成"允许多开"**——多人本来
   就需要多个窗口，而多开时每个窗口登录不同用户（成绩各自记账）。
-- **只有一个人的房间 = 普通单机**：`partyUsable()` 要求 ≥2 个活人，否则按确定走原来的
-  单人流程，一行都没改。
-- **回归脚本**：`.workbuddy/tools/mp_verify.sh`（配合 `--party-auto` 全自动跑一轮 +
-  暂停广播 + 时钟偏差对比，全 PASS/FAIL 输出）。
-- **房间页可以截图**（2026-09-17 补）：`AppState::Party` 里加了和选曲界面同一套的
-  `--screenshot-time` 触发（`--party-auto` 让房主自动按确定，`--screenshot-time` 到点抓），
-  之前只能在选曲/演奏态抓，房主页拍不到。
+- **只有一个人的房间**：房主自己按确定就开局（`allReady()` 的 `inRoom >= 1`），
+  日志写 `[party] all ready -> charging (...) [solo in the room]`。中途加入的窗口会落在
+  **charge 已经过了**的那一侧，就本曲不参加（`[party] charge skipped (...)`），
+  不会半路掉进已经开始的谱面。
+- **回归脚本**：`.workbuddy/tools/mp_verify.sh`（三轮全自动：一轮完整对局 + 暂停广播 +
+  **打到结算画面并回选曲**，全 PASS/FAIL 输出）。`--party-auto <难度>` 现在也能当单机用：
+  没有房间时它就是在 1.8s 按一下确定（配 `--no-party` 可以测纯单机流程）。
+- **房间状态在选曲界面上**（2026-09-18）：`game::SelectPartyInfo/Result` 是选曲界面
+  与房间之间的接口（`drawSongSelect` 最后两个参数，不传就是纯单机）。
+  `--screenshot-time` 在选曲态就能拍到 banner / 灰罩 / 手机面板（不再需要房间页）。
 - **偏差断言要绕开"成员追赶"那一下**：mp_verify 里插值时如果成员这段 offset 变了 >20ms
   就单独统计（`member clock corrections seen`），不算进 skew——那是它按设计跳到房主时钟上，
   插值会把一个 350ms 的假偏差报出来（真机上两窗口始终是同一条时间轴）。

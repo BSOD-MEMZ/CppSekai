@@ -10,6 +10,8 @@
 #            clock skew, and that the live scoreboard crosses the process
 #            boundary (shared memory write -> other window -> read).
 #   round 2  the host pauses mid-live; the member's picture must hold still.
+#   round 3  a round played to the end: both windows must reach the result
+#            screen on the same chart time and the room must re-arm afterwards.
 #
 # Usage:  bash .workbuddy/tools/mp_verify.sh
 # Exit code: 0 = every check passed.
@@ -147,5 +149,67 @@ if len(frozen) >= 2:
     print('ROUND 2', 'PASS' if drift < 50 else 'FAIL')
 else:
     print('ROUND 2 FAIL: member never saw the host pause')
+PY
+
+# Round 3: one round played *to the end*. Both windows have to hand over to the
+# result screen on the same chart time (a member has no BGM, so left alone it
+# would call the song over at its chart's last note - seconds early), then walk
+# back to the song select with the room re-armed. --result-at shortens the wait
+# and --party-auto presses 继续.
+ROUND3_ARGS="--result-at 22"
+kill_all
+sleep 1
+rm -f "$A_DIR/out.txt" "$B_DIR/out.txt"
+(cd "$A_DIR" && CPSEKAI_MP_TRACE=1 "$EXE" --party --party-name A --party-auto 3 --auto \
+    --instance multi --width 900 --height 520 --fps 30 $ROUND3_ARGS >"$A_DIR/out.txt" 2>&1) &
+sleep 7
+(cd "$B_DIR" && CPSEKAI_MP_TRACE=1 "$EXE" --party --party-name B --party-auto 4 --auto \
+    --instance multi --width 900 --height 520 --fps 30 $ROUND3_ARGS >"$B_DIR/out.txt" 2>&1) &
+sleep 50
+kill_all
+echo "########## round 3: result screen in a room ##########"
+echo "-- host:"
+grep -h "go (\|run length\|\[result\]\|back to the lobby" "$A_DIR/out.txt" | head -8
+echo "-- member:"
+grep -h "go (\|run length\|\[result\]\|back to the lobby" "$B_DIR/out.txt" | head -8
+
+python - "$ROOT_WIN" <<'PY'
+import re, sys
+root = sys.argv[1]
+a = open(f"{root}/build/_mp/a/out.txt", encoding='utf-8', errors='replace').read()
+b = open(f"{root}/build/_mp/b/out.txt", encoding='utf-8', errors='replace').read()
+ok = True
+
+def check(label, passed, detail=''):
+    global ok
+    print(('PASS  ' if passed else 'FAIL  ') + label + (('  ' + detail) if detail else ''))
+    ok = ok and passed
+
+check('both windows reached the result screen',
+      '[result] shown' in a and '[result] shown' in b)
+host_len = re.findall(r'run length ([\d.]+)s published', a)
+member_len = re.findall(r'run length from the host: ([\d.]+)s', b)
+check('the run length crossed the process boundary',
+      bool(host_len) and host_len == member_len, f'host={host_len} member={member_len}')
+
+def last_t(text):
+    """Chart time of the last trace sample before the hand-over."""
+    head = text.split('[result] shown')[0]
+    ts = re.findall(r'\[sync\] qpc=[\d.]+ t=(-?[\d.]+)', head)
+    return float(ts[-1]) if ts else None
+
+ta, tb = last_t(a), last_t(b)
+check('same chart time at the hand-over',
+      ta is not None and tb is not None and abs(ta - tb) < 1.5, f'host t={ta} member t={tb}')
+check('both walked back to the song select',
+      a.count('continue -> song select') >= 1 and b.count('continue -> song select') >= 1)
+# Re-armed = the host publishes the song it is parked on again, and the members
+# follow it (their answer for the finished round is void, so they see it as a
+# fresh lock).
+after_a = a.split('[result] shown')[-1]
+after_b = b.split('[result] shown')[-1]
+check('the room was re-armed for the next song',
+      'back to the lobby' in a and 'song locked' in after_a and 'host picked' in after_b)
+print('ROUND 3', 'PASS' if ok else 'FAIL')
 PY
 echo "########## done ##########"

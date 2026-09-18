@@ -4,6 +4,12 @@
 // instance (the host) picks a song, every window picks its own difficulty, and
 // all of them start on the same beat — with only the host playing the BGM.
 //
+// The room lives on the song-select screen: the host owns the list (and as it
+// moves the cursor the song is published, so everybody else's phone panel shows
+// it), a member's list is read-only and it picks a difficulty in the panel it
+// already has, and 确定 is what starts the round — every window presses it once
+// and the live begins as soon as the last player has.
+//
 // Transport is one named file mapping (Local\CppSekai.Party.v1) that every
 // instance maps into its own address space, with one seat per player inside it.
 // A state change is a plain store into those shared pages: no socket, no pipe,
@@ -131,14 +137,23 @@ class PartyLink
     void beginCharging(std::uint64_t startCounter);
     void setPhase(int phase);
     void setHostPaused(bool paused);
+    // Host only: how long this live lasts (its own track's length), published
+    // once the host has loaded the chart. A member has no BGM of its own, so
+    // without this it would guess the end from its chart's last note and switch
+    // to the result screen seconds away from the host.
+    void publishTrackEnd(double seconds);
+    // Latest published run length in seconds (0 = none published yet).
+    double readTrackEnd() const;
     // Back to a free lobby (after a run, or when the host backs out).
     void releaseSong();
 
     // ---- shared reads ----------------------------------------------------
     PartyState read() const;
     std::vector<PartyPlayer> players() const;
-    // True when every player parked on the room screen has picked a difficulty
-    // (players who went back to the song select are skipped).
+    // True when every player still in this round has pressed 确定. A seat that
+    // opted out (旁观) or walked back to the lobby is skipped, so a spectator
+    // never blocks the room - and a host that is alone counts as soon as it has
+    // confirmed itself.
     bool allReady() const;
 
     static std::uint64_t nowCounter();

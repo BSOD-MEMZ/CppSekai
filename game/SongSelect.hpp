@@ -379,6 +379,40 @@ enum SelectAction
     SelectSettings = -4, // the musicsetting button was pressed (open settings)
 };
 
+// ---------------------------------------------------------------------------
+// 多人游玩 on the song select (see platform/Party.hpp).
+//
+// The room has no screen of its own: the list belongs to the host, everybody
+// else sees it greyed out and read-only, and the phone panel shows the song the
+// host is parked on so a member picks a difficulty right there. 确定 is what
+// starts the round - every window presses it once and the live begins as soon
+// as the last player has.
+//
+// Pass `party` (and `partyOut`) only when the shared room is live; leaving them
+// out is plain single-window play.
+// ---------------------------------------------------------------------------
+struct SelectPartyInfo
+{
+    bool active = false; // the shared room is live
+    bool host = false;   // this window is the host, so it keeps the list
+    // The song the room is locked on, resolved against *this* window's own
+    // chart list (-1 = this window does not have that chart, or nothing is
+    // locked yet - `songLocked` tells the two apart).
+    bool songLocked = false;
+    int lockedEntry = -1;
+    int myDifficulty = -1;  // canonical index (see game::difficultyIndex), -1 = none
+    bool confirmed = false; // this window already pressed 确定 for this song
+    bool spectating = false; // opted out of this round (观察)
+    std::string status;     // room line under the 确定 button
+};
+
+struct SelectPartyResult
+{
+    int difficulty = -1;   // the player picked this canonical difficulty index
+    bool confirm = false;  // 确定 was pressed (confirm / start the round)
+    bool spectate = false; // 旁观 was pressed (leave this round, stay in the room)
+};
+
 // Draws the screen. `selected` is kept between frames; returns the index of
 // the chart to start, SelectNone, or SelectQuit.
 // `sortMode` / `groupMode` are in/out: the list's sort and grouping live in the
@@ -391,9 +425,13 @@ enum SelectAction
 // the on-screen centre of the 确定 button, which main.cpp uses as the origin of
 // the white confirm flash (the button is drawn tilted, so this is the tilted
 // position, not the layout one).
+//
+// In 多人游玩 a member's 确定 never comes back as a chart index: it arrives in
+// `partyOut` instead (the room decides what starts, see SelectPartyInfo).
 int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& entries, int& selected,
     int windowW, int windowH, float timeSec, int& sortMode, int& groupMode, int& vocalIndex,
-    float uiScale = 1.0f, ImVec2* confirmCenter = nullptr, const AccountData* account = nullptr);
+    float uiScale = 1.0f, ImVec2* confirmCenter = nullptr, const AccountData* account = nullptr,
+    const SelectPartyInfo* party = nullptr, SelectPartyResult* partyOut = nullptr);
 
 // Debug (`--profile`): force the profile card open. It normally only appears
 // when the level chip is clicked, which a --screenshot run cannot do.
