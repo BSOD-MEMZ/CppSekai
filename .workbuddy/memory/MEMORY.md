@@ -66,11 +66,22 @@
   （`resultContinueHitTest` 的矩形写死，能算出窗口像素），两种模式下同一个像素都要命中。
 - `winsend` 的 `click` 会先发 WM_MOUSEMOVE（SDL 用最后一次移动的位置）；
   `--result-preview` 会在结算出现后 ~2.6s 自动截图退出，点击要连点。
+- **2026-09-18 更正：截图是能直接看的**（Read 一张 PNG 即可，模型这边有视觉），
+  选曲/房间这类界面改动直接用 `--screenshot` 抓图人工确认，比像素探针快得多。
+  抓图时注意：`--party-auto` 会在结算 2s 后自动按「继续」，结算态的截图触发在 2.6s——
+  要拍结算就别加 `--party-auto`，或者改 `result-at` 拖时间。
+- 跑游戏的日志：**stdout 重定向到文件**（`> run.txt 2>&1`）时有时会落到 `cppsekai.log`
+  （取决于 AttachConsole 成不成），两个地方都看一眼，别以为日志是旧的。
 
 ## 最近工作
+- **2026-09-18 多人游玩流程重做**：房间搬到选曲界面（房主光标即广播；成员列表只读 + 灰罩 +
+  灰掉的随机；难度在手机面板里选；「确定」= 唯一的开始按钮，最后一个按下立刻开局，
+  旧的 4s 加载宽限/10s 倒计时删了）；`AppState::Party` / `drawPartyScreen` 整个删掉。
+  同时修了「多人打完不进结算」（根因：多人路径没调 `announceTrack()` → `trackDurationSec`
+  恒 0 → `resultDue` 永远假；现在房主把曲长写进共享页给成员）。详见 AGENTS.md「多人游玩」。
 - **2026-09-17 多人游玩**（`platform/Party.*` + `game/PartyScreen.*` + `AppState::Party`）：
   同机多窗口一起打，房主选曲 / 各自选难度 / 绝对 QPC 起奏时刻 / 只有房主播 BGM。
-  详见 AGENTS.md「多人游玩」一节；回归脚本 `.workbuddy/tools/mp_verify.sh`（纯日志断言）。
+  回归脚本 `.workbuddy/tools/mp_verify.sh`（现已扩到三轮，含结算轮）。
 - 2026-09-13 结算画面 `game/Result.cpp`（参考官方截图 1:1 复刻，几何全是量出来的）,
   详见 `AGENTS.md` 的「结算画面」一节；调试入口 `--result-preview` / `--result-at`。
 - 2026-09-13 设置卡片加「系统」页（失焦自动暂停 / SMTC 汇报开关），页签内容移进裁剪 child；
