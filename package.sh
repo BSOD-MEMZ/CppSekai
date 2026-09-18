@@ -59,7 +59,7 @@ if [ "$WITH_ASSETS" = "1" ]; then
 fi
 
 # Documents + the asset fetcher (only useful in the lean build).
-cp -f README.md SETUP.md COPYRIGHT.md LICENSE setup.sh "$OUT/"
+cp -f README.md SETUP.md COPYRIGHT.md CREDITS.md LICENSE setup.sh "$OUT/"
 
 # Keep the (empty) charts folder in the archive.
 cat > "$OUT/charts/放谱面到这里.txt" <<'EOF'

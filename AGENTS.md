@@ -4,6 +4,12 @@ CppSekai：Project SEKAI 风格 SUS 谱面 Windows 原生游玩器。
 上游是 [sekai-mmw-preview-web](https://github.com/watagashi-uni/sekai-mmw-preview-web)（AGPL-3.0），
 其谱面核心从 MikuMikuWorld（MIT）移植。**本仓库整体遵循 AGPL-3.0-only，改动必须保持开源。**
 
+配套文档（改代码时按需查）：
+- `CODE-REVIEW.md` —— **代码体检（2026-09-18）**：体量分布、巨型函数清单、
+  按改动成本排的处置顺序。**动手前扫一眼第二节**，能省很多定位时间。
+- `CREDITS.md` —— 借用清单：每个来源是谁的、什么许可、放在哪（含 Fontworks 字体这条独立风险）。
+- `COPYRIGHT.md` —— 版权与风险：什么能发、什么不能发。
+
 ## 架构（改代码前先读这段）
 
 ```
@@ -89,6 +95,26 @@ main.cpp          # SDL2 窗口、事件循环、输入映射、ImGui HUD、截�
   ≥3 = effect.png（已是裁剪空间坐标，id==4 为加法混合）。
 - packed HitEvent（7 floats）：timeSec, center(轨道坐标), width, kind, flags, endTimeSec, volume。
   kind：0=tap 1=critical tap 2=flick 3=trace 4=hold tick(自动) 5=hold 标记(endTimeSec 有效)。
+
+## 代码体量（2026-09-18 实测，改大东西前看这里）
+
+原创代码 23,840 行。**问题不在文件多，在两个巨型函数**：
+
+| 位置 | 行数 | 说明 |
+|---|---|---|
+| `main.cpp` → `main()` | **5,713**（`:730` 起） | 参数解析 + 初始化 + 启动决策 + 帧循环 + 关停全在一个函数 |
+| `main.cpp` 帧循环体 | ~2,500（`:3989` 起） | `if/else if (state == ...)` 串起 Select/Play/Result，三者变量共享作用域 |
+| `main.cpp` → `drawSettingsCard` lambda | ~769（`:2684-3453`） | 4 个页签用 `if (tab == N)` 展开 |
+| `game/SongSelect.cpp` → `drawSongSelect()` | ~1,746（`:2104` 起） | 13 参数含 5 个 in/out 引用（`selected`/`sortMode`/`groupMode`/`vocalIndex`/`confirmCenter`/`partyOut`） |
+
+**健康的部分**（别顺手"优化"）：`game/` `platform/` 分层清楚，绝大多数文件 ≤1000 行；
+模块级可变全局全项目只有 9 个（`main.cpp` 3 个），其余文件级状态都关在匿名 namespace 里；
+**0 个 TODO/FIXME**；注释质量高（每个非显然决定都写了理由与踩过的坑）——注释是这仓库
+最值钱的东西，重构时**跟着搬，别丢**。
+
+详细清单与处置顺序见 **`CODE-REVIEW.md`**。
+
+---
 
 ## 工具
 

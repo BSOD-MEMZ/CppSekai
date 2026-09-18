@@ -374,7 +374,7 @@ bash package.sh --no-assets  # 精简包（约 2.7 MB，用户侧跑 setup.sh �
 | `assets/` | 贴图 / 字体 / UI 音效 / 开屏图。**默认打包**（游戏启动就从 `<exe>/assets` 读，不带跑不起来）；`--no-assets` 则不带 |
 | `musics.json` `music-vocals.json` `music-levels.json` | 官方**事实数据**：曲名 / 读音 / 定数 / 演唱版本表。缺了也能开，但曲名会退化成文件名、分组排序失效 |
 | `setup.sh` | 精简包用：用户跑一次 `bash setup.sh --assets-only` 拉取贴图与音效 |
-| `README.md` `SETUP.md` `COPYRIGHT.md` `LICENSE` | 说明与许可（AGPL-3.0-only，发二进制必须附带） |
+| `README.md` `SETUP.md` `COPYRIGHT.md` `CREDITS.md` `LICENSE` | 说明与许可（AGPL-3.0-only，发二进制必须附带） |
 | `charts/`（空目录 + 说明） | 谱面放这里，或用 chartdl 下载 |
 
 **不要上传**：
@@ -441,6 +441,8 @@ CppSekai/
   SETUP.md            环境配置
   CHARTS.md           怎么下载 / 整理谱面（给玩家看的）
   COPYRIGHT.md        版权与合规说明：素材审计、风险矩阵、规避措施
+  CREDITS.md          借用清单：代码谱系 / 第三方库 / 素材 / 数据 / 字体逐个列来源
+  CODE-REVIEW.md      代码体检（2026-09）：体量分布、主要问题、按成本排的处置顺序
 ```
 
 ---
@@ -463,8 +465,11 @@ CppSekai/
 - 代码遵循 **AGPL-3.0-only**（许可证全文不随仓库分发，见 GitHub 仓库侧栏或 gnu.org；任何分发（包括发 exe）都要求附上该许可并提供对应源码——指回本仓库链接即可）。
   - 上游：[sekai-mmw-preview-web](https://github.com/watagashi-uni/sekai-mmw-preview-web)（AGPL-3.0）——谱面核心与渲染布局来自这里
   - 再上游：MikuMikuWorld（MIT）——`core/native/mmw_port/` 的移植来源
-  - 第三方库（imgui / miniaudio / stb / nlohmann-json / DirectXMath）各自遵循 MIT 等宽松许可，声明保留在 `third_party/` 各源文件头部
+  - 第三方库（imgui / miniaudio / stb / nlohmann-json / DirectXMath）各自遵循 MIT 等宽松许可，声明保留在 `third_party/` 各源文件头部；SDL2 是 **zlib** 许可，发 DLL 时要一并带上
+  - **逐个来源的完整台账见 [CREDITS.md](CREDITS.md)**（谁的东西、什么许可、放在哪）
 - **素材全部属于 SEGA / Colorful Palette**：`assets/` 与 `charts/` 是官方游戏素材与数据，仅限本地游玩。
-  - ⚠️ **审计实情（2026-09）**：`assets/mmw/**`（305 个文件）与 `Drafts/`（22 个）因历史提交**实际被 git 跟踪**——README 早期「素材不入库」的说法对这两个目录不成立。风险等级与清理方案（`git filter-repo` 步骤、备选方案）见 **[COPYRIGHT.md](COPYRIGHT.md)**。
+  - ⚠️ **审计实情（2026-09-18 实测）**：`assets/**`（**669** 个 mmw 文件 + select 11 + se 20 + fx 4 + ost 2 + splashscreen）与 `Drafts/**`（64 个）因历史提交**实际被 git 跟踪**——README 早期「素材不入库」的说法对这些目录不成立。
+  - ⚠️ 另有一条**独立**的风险：`assets/mmw/font/` 里的两个 **FOT-Rodin** 是 Fontworks 商业字体（运行时默认用系统字体绕开了它，但文件在仓库里 = 仍在分发）。
+  - 风险等级与清理方案（`git filter-repo` 步骤、备选方案）见 **[COPYRIGHT.md](COPYRIGHT.md)**。
 - 发布纪律：任何 Release **只传源码或裸 exe**（资源按 exe 旁目录解析，裸 exe 里不含素材），永远不要打包 `assets/` 或 `charts/`。
 - 本项目与官方无关；如有侵权请联系移除。

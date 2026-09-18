@@ -1,7 +1,12 @@
 # 版权与合规说明（COPYRIGHT.md）
 
 > 本文档回答两个问题：**这个仓库里到底有什么东西是别人的**，以及**怎样发布/使用才能把法律风险压到最低**。
-> 写于 2026-09-12，基于当天的 `git ls-files` 审计。这不是法律意见书，但每一条都给出了理由。
+>
+> **来源台账看 [CREDITS.md](CREDITS.md)**——那份按来源逐个列出「谁的东西、什么许可、放在哪」。
+> 本文讲的是**风险和处置**，两份配合看。
+>
+> 写于 2026-09-12，基于当天的 `git ls-files` 审计；**2026-09-18 复审计过一次**
+> （素材与数据一节已更新为实测数字）。这不是法律意见书，但每一条都给出了理由。
 
 ---
 
@@ -10,13 +15,15 @@
 | 问题 | 答案 |
 |---|---|
 | 代码能随便开源吗 | **能**。本仓库代码遵循 AGPL-3.0-only，公开源码本身就是合规动作 |
-| 能把 exe 直接发给别人吗 | 裸 exe（不带素材）可以，但要附源码链接（AGPL 义务） |
+| 能把 exe 直接发给别人吗 | 裸 exe（不带素材）可以，但要附源码链接（AGPL 义务）+ SDL2 的 zlib 许可 |
 | 能把 `assets/`、`charts/` 一起打包发吗 | **不能**。这是全部风险里最大的一块，明确不要做 |
-| 仓库现在干净吗 | **不干净**：305 个官方素材文件 + `Drafts/` 22 个官方图 + 官方数据表已被 git 跟踪（见下文第三节） |
+| 仓库现在干净吗 | **不干净**：**772** 个官方素材/数据文件被 git 跟踪（2026-09-18 实测，见第三节） |
 
 ---
 
 ## 二、代码授权谱系（这部分是干净的）
+
+详细台账（每个文件放哪、第三方库逐条）见 **[CREDITS.md](CREDITS.md)**。这里是结论：
 
 ```
 CppSekai（本仓库）            AGPL-3.0-only
@@ -29,28 +36,64 @@ CppSekai（本仓库）            AGPL-3.0-only
  └─ third_party/DirectXMath  MIT          （Microsoft，仅用其头文件）
 ```
 
+工具链（不进仓库，但发布包会带其中的 DLL）：
+
+```
+ ├─ SDL2 2.32.10              zlib        发布时 package.sh 会拷 SDL2.dll -> 记得附 zlib 许可
+ └─ zig 0.14.1                MIT         只当编译器，产物里不含它的代码
+```
+
 - **AGPL 的义务只有三条**，对本项目来说全部容易满足：
   1. 分发（包括发 exe）时**附上许可证文本和版权声明**——AGPL-3.0 全文由仓库持有者在 GitHub 仓库页提供，发布二进制时记得带上；
   2. 以任何形式分发二进制时，**必须同时提供（或指明获取方式）对应完整源码**——把 GitHub 仓库链接写在 Release 说明里即可；
   3. AGPL 多一条「网络使用也要给源码」：即便只搭了个网页让别人在线玩（本项目的上游就是这么用的），同样要公开源码。本地 exe 不涉及这条。
-- **MIT 部分**（MikuMikuWorld、第三方库）：保留版权与许可声明即可，`third_party/` 里各库自带的头文件注释就是声明，别删。
+- **MIT / zlib 部分**（MikuMikuWorld、第三方库、SDL2）：保留版权与许可声明即可，
+  `third_party/` 里各库自带的头文件注释就是声明，别删。**SDL2 是 zlib 不是 MIT**，
+  发 DLL 时一样要带许可文本。
 - 注意：**没有任何代码是「SEGA 的」**。谱面解析、判定、渲染全部来自 AGPL/MIT 的开源项目，法律上这叫独立著作权作品，官方无法对代码本身主张权利。他们能主张的是**素材和数据**。
+
+> ⚠️ **已知小缺口**：`core/native/src/mmw_preview.cpp` 与 `core/native/mmw_port/**`
+> 的**文件头没有许可声明**（移植时上游的版权行被删了）。整仓 `LICENSE` 覆盖得住，
+> 但严格做法是在这两处补「派生自 XXX，依据 XXX 许可」的头注释。详见 CREDITS.md 第一节。
 
 ---
 
 ## 三、素材与数据：哪些是官方的，现在实际在哪里
 
-这是本项目**全部的真实风险**所在。逐项审计（2026-09-12，`git ls-files`）：
+这是本项目**全部的真实风险**所在。逐项审计（**2026-09-18 实测**，`git ls-files`；
+内容细分见 **[CREDITS.md](CREDITS.md)** 第四~七节）：
 
 | 内容 | 版权归属 | 是否已被 git 跟踪 | 说明 |
 |---|---|---|---|
-| `assets/mmw/**`（305 个文件：notes 贴图、HUD 精灵图、effect.png、**ap.mp4 官方 MV 视频**等） | SEGA / Colorful Palette | **是（在库！）** | 早期先 commit 后加 gitignore，规则管不了已跟踪文件。README 里写的「素材不入库」与事实不符 |
-| `Drafts/**`（22 个文件：clear/fullcombo 指示灯、官方活动图等） | SEGA / Colorful Palette | **是（在库！）** | 素材暂存区，一直被跟踪 |
-| `assets/se/**`、`assets/select/**`、`assets/fx/**`、`charts/**`、`toolchain/` | 同上 / 谱面数据 | 否 | gitignore 生效，安全 |
-| `musics.json`、`music-levels.json` | 官方数据（曲库元数据 / 难度定数表） | **是** | 事实数据（标题、数字），著作权风险低，但属于官方数据库的整表复制 |
-| `docs/preview*.png` 截图 | 截图里含官方 UI 贴图 | 是 | 游戏截图的著作权风险普遍被视作低（合理使用倾向），但严格说含官方美术 |
+| `assets/mmw/**`（**669** 个文件：overlay HUD 全套 566、特效 75、notes/长条/触摸线/stage 顶层 13、uo 关闭键、sound 11、font 3） | SEGA / Colorful Palette | **是（在库！）** | 早期先 commit 后加 gitignore，规则管不了已跟踪文件。README 里写的「素材不入库」与事实不符 |
+| `Drafts/**`（**64** 个文件：官方头像 `profile_icon_*` 42、活动图、clear/FC 指示灯草稿） | SEGA / Colorful Palette | **是（在库！）** | 素材暂存区，一直被跟踪 |
+| `assets/select/**`（11：选曲界面全套） | SEGA / Colorful Palette | **是** | 与 2026-09-12 的结论不同——当天它还是「否」，后来进了库 |
+| `assets/se/**`（20：UI + 判定音效）、`assets/ost/**`（2：结算 BGM + 一首 OST） | SEGA / Colorful Palette | **是** | 同上，当天标的是「否」 |
+| `assets/fx/**`（4：打击特效）、`assets/splashscreen.png` | SEGA / Colorful Palette | **是** | 同上 |
+| `assets/mmw/overlay/ap.mp4`、`ap-native/all-perfect.m4a` | SEGA / Colorful Palette | **是** | 官方 MV 视频与语音 |
+| `musics.json`（392 KB）、`music-levels.json`（17 KB）、`music-vocals.json`（241 KB） | 官方数据（曲库元数据 / 难度定数表 / 演唱版本表） | **是** | 事实数据（标题、数字），著作权风险低，但属于官方数据库的整表复制 |
+| `assets/mmw/font/FOT-RodinNTLG Pro EB.otf`、`FOT-RodinNTLGPro-DB.ttf` | **Fontworks（第三方，非 SEGA）** | **是** | ⚠️ 商业字体。**2026-09-12 那版漏了这条**：它只写了「运行时默认用系统字体，绕开了嵌入式分发」，但没查这两个文件其实躺在仓库里。见下方说明 |
+| `assets/mmw/font/NotoSansCJKSC-Black.ttf` | Google，SIL OFL 1.1 | 是 | OFL 允许再分发，合规 |
+| `docs/preview*.png`（10 张截图） | 截图里含官方 UI 贴图 | 是 | 游戏截图的著作权风险普遍被视作低（合理使用倾向），但严格说含官方美术 |
+| `charts/**`、`toolchain/` | 谱面数据 / 工具链 | 否 | gitignore 生效 |
 
 **为什么这是个问题**：官方素材的复制权在权利人手里。哪怕免费、哪怕非商业、哪怕声明"版权归官方"，**未经许可的再分发仍然是侵权**。GitHub 上大量 pjsk 谱面模拟器存活至今，是因为权利人**没有执法**，不是因为他们**不能**。SEGA 对《メントルコ》歌包泄露、外挂工具等都有过 DMCA 前科。
+
+### 单独说 FOT-Rodin：运行时绕开了，文件没绕开
+
+`game/Intro.cpp` 的行为是对的——不加 `--pjsk-font` 时走系统字体（注册表找字体文件 +
+CJK 字形探测），FOT-Rodin 只是 opt-in。但**「运行时默认不用」和「不再分发」是两件事**：
+把字体文件放进公开仓库、并塞进 Release（`package.sh` 默认带 `assets/`），
+本身就是嵌入分发，同样需要 Fontworks 的授权。
+
+处置选项（按省事排序）：
+
+1. **只留 Noto**：删掉两个 FOT-Rodin 文件，把 `--pjsk-font` 的字体查找顺序里的 FOT 项
+   改成「从本地游戏目录读」（玩家自己的机器上有没有是他的事），或干脆去掉该选项。
+   Noto 是 OFL，随便发。
+2. **保留但在 Release 里排除**：`--no-assets` 打包，让用户自己丢字体进去。
+3. 什么都不动，接受这个额外风险 —— 但要知道这是**两条独立的线**（SEGA 的素材 + Fontworks 的字体），
+   被任一方找上门都要处理。
 
 ---
 
@@ -76,19 +119,26 @@ CppSekai（本仓库）            AGPL-3.0-only
 
 - ✅ 代码 AGPL-3.0（许可证全文由仓库持有者在 GitHub 提供）
 - ✅ README / CHARTS 反复写明「素材仅限本地游玩、不再分发」
-- ✅ `charts/`、`assets/se|select|fx`、`toolchain/` 确实不在库里
+- ✅ `charts/`、`toolchain/` 确实不在库里
 - ✅ UI 内有「与官方无关」声明（README §11）
 - ✅ 不收费、无广告、无统计
-- ✅ 默认用系统字体，绕开了 FOT-Rodin（Fontworks 商业字体）的嵌入式分发问题——`--pjsk-font` 是可选 opt-in
+- ✅ **运行时**默认用系统字体，FOT-Rodin 是 `--pjsk-font` 的 opt-in
+  ⚠️ 但字体文件在仓库里，这条只解决运行时、没解决分发（见第三节末）
 
 ### 建议补齐的（按性价比排序）
 
-1. **决定 `assets/mmw/**` 与 `Drafts/` 的去留**（见第六节，二选一，别拖着）。
-2. **发 Release 的纪律**：永远只传「源码 zip」或「裸 exe + SETUP 说明」。传之前 `git archive` 或检查 zip 内容，别把本地 build/ 目录（里面被 build.sh 拷了 assets）直接压上去。**这是最容易手滑翻车的一步。**
-3. **EXE 图标与名称**：别用官方 logo / 曲绘做 `cppsekai.ico`。想好看就自己画（你本来就会）。
-4. **第三方许可声明**：在 README 或 `NOTICE` 里列一张第三方库清单（第二节那张表就行），MIT 要求"保留许可声明"，一张表是最省事的满足方式。
-5. **`musics.json` / `music-levels.json`**：保留没问题（事实数据 + 可由 `setup.sh` 从官方公开接口重建），但别再往里加更多官方表的拷贝。
-6. **声明措辞**：保留现有「本项目与 SEGA / Colorful Palette 无关，素材版权归原作者」之外，建议加一句「如有侵权请联系移除」——这是同人圈标准姿势，能显著降低被投诉时的对抗性。
+1. **决定 `assets/**` 与 `Drafts/` 的去留**（见第六节，二选一，别拖着）。
+2. **决定 FOT-Rodin 两个字体文件的去留**（第三节末给了三个选项）。这条独立于素材，
+   而且**最容易被忽略**——Noto 是 OFL 可以留。
+3. **发 Release 的纪律**：永远只传「源码 zip」或「裸 exe + SETUP 说明」。传之前 `git archive` 或检查 zip 内容，别把本地 build/ 目录（里面被 build.sh 拷了 assets）直接压上去。**这是最容易手滑翻车的一步。**
+4. **EXE 图标与名称**：别用官方 logo / 曲绘做 `cppsekai.ico`。想好看就自己画（你本来就会）。
+5. **第三方许可声明**：`CREDITS.md` 第二、七节那张表就是满足方式；SDL2 是 zlib，
+   发 DLL 时要带上它的许可文本（AGPL 文本 + 源码链接 + SDL2 许可，三样一起）。
+6. **给上游代码补文件头**：`mmw_preview.cpp` 与 `mmw_port/**` 加「派生自 XXX，依据 XXX 许可」
+   （CREDITS.md 第一节末），把移植时丢掉的版权行补回去。
+7. **`musics.json` / `music-levels.json` / `music-vocals.json`**：保留没问题（事实数据 +
+   可由 `setup.sh` 从官方公开接口重建），但别再往里加更多官方表的拷贝。
+8. **声明措辞**：保留现有「本项目与 SEGA / Colorful Palette 无关，素材版权归原作者」之外，建议加一句「如有侵权请联系移除」——这是同人圈标准姿势，能显著降低被投诉时的对抗性。
 
 ### 不要做的
 
@@ -136,8 +186,14 @@ pip install git-filter-repo
 
 # 2. 从全部历史中抹掉官方素材与数据表
 cd CppSekai
-git filter-repo --invert-paths --path assets/mmw --path Drafts \
-    --path musics.json --path music-levels.json --force
+git filter-repo --invert-paths --path assets/mmw --path assets/se --path assets/select \
+    --path assets/fx --path assets/ost --path assets/splashscreen.png --path Drafts \
+    --path musics.json --path music-levels.json --path music-vocals.json --force
+
+# 2b. 想连 FOT-Rodin 一起清（Fontworks 商业字体，独立的一条线）：
+#     git filter-repo --invert-paths \
+#         --path "assets/mmw/font/FOT-RodinNTLG Pro EB.otf" \
+#         --path assets/mmw/font/FOT-RodinNTLGPro-DB.ttf --force
 
 # 3. setup.sh 需要相应升级：改为从上游 sekai-mmw-preview-web 拉
 #    assets/mmw/（它本来就是这么干的，脚本里已有现成逻辑）
