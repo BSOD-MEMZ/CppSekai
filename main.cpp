@@ -427,6 +427,10 @@ namespace
             "                多人游玩.\n"
             "--no-party: force 多人游玩 off for this run (plain single window),\n"
             "                whatever the profile says.\n"
+            "--chartdl-test [<sec>]: debug - press the empty song list's\n"
+            "                下载谱面 button from the log (a posted click cannot\n"
+            "                reach that screen), so the chartdl launch and the\n"
+            "                re-scan on its exit can be checked headlessly.\n"
             "--party-auto [<difficulty 0-6>]: drive a room round without touching\n"
             "                the window: the host presses 确定 on whatever chart the\n"
             "                list is sitting on, a member picks that difficulty in\n"
@@ -748,6 +752,18 @@ int main(int argc, char** argv)
         }
     }
 #endif
+    // Windows tools either hand a GUI-subsystem child no console handles at all
+    // (then the block above sent everything to cppsekai.log), or - the usual
+    // case for a redirection from a shell / driver script - they hand down a
+    // console that msvcrt will happily line-buffer. `> run.txt` in any ordinary
+    // shell (cmd, PowerShell, Git Bash) is exactly that: the process owns a
+    // console *and* a redirected stdout, and the log only reaches the file once
+    // a 4 KB buffer happens to fill. That is why a run that stops logging looks
+    // like a hang: the last minutes of output are still sitting in msvcrt's
+    // buffer when the process is killed. Unbuffered costs one write per line
+    // and makes every [party] / [sync] line land the moment it is printed.
+    setvbuf(stdout, nullptr, _IONBF, 0);
+    setvbuf(stderr, nullptr, _IONBF, 0);
     // MinGW's argv is ANSI-codepage; the UI is UTF-8. Re-fetch the command
     // line as UTF-16 and convert, so --title with Japanese text survives.
     int utf8Argc = argc;
@@ -817,6 +833,11 @@ int main(int argc, char** argv)
     // the only way to inspect that transition from a --screenshot run.
     bool confirmFlashShot = false;
     double confirmFlashAtSec = 1.0;
+    // Debug: press the empty-list 下载谱面 button without a mouse. A posted
+    // click cannot reach this one (the button only exists on a screen that needs
+    // an interactive session to be driven by PostMessage), so the launch path
+    // gets its own switch.
+    double chartDlTestAtSec = -1.0;
     int winWidth = 1366;
     int winHeight = 768;
     float uiScaleArg = 1.0f;      // --ui-scale: song-select / result zoom
@@ -1003,6 +1024,12 @@ int main(int argc, char** argv)
             confirmFlashShot = true;
             if (i + 1 < utf8Argc && utf8Argv[i + 1][0] != '-') {
                 confirmFlashAtSec = std::atof(utf8Argv[++i]);
+            }
+        } else if (arg == "--chartdl-test") {
+            // Debug: press 下载谱面 (the empty-list button) at this second.
+            chartDlTestAtSec = 1.5;
+            if (i + 1 < utf8Argc && utf8Argv[i + 1][0] != '-') {
+                chartDlTestAtSec = std::atof(utf8Argv[++i]);
             }
         } else if (arg == "--title" && i + 1 < utf8Argc) {
             gCardMetadata.title = utf8Argv[++i];
@@ -2097,6 +2124,11 @@ int main(int argc, char** argv)
     double mpClockOffset = 0.0;
     bool mpHostPaused = false;
     double mpFrozenTime = 0.0;
+    // Host-side freeze for a chart whose clock is the wall clock (no BGM): the
+    // pause has to hold *this* window's time still as well, because this is the
+    // value it publishes for the members to follow.
+    bool mpHostFreezeValid = false;
+    double mpHostFreezeTime = 0.0;
     std::string mpStatus;       // room status line (banner + phone panel)
     double frameSongTime = 0.0; // this frame's chart clock, resolved once
     // --party-auto bookkeeping: the host's 确定 fires 1.8s in (the song list has
@@ -2107,16 +2139,141 @@ int main(int argc, char** argv)
     double partyAutoMemberAt = 0.0;
     bool partyAutoContinued = false; // --party-auto: 继续 on the result screen
     bool partyAutoReady = false;
+    bool chartDlTestFired = false;   // --chartdl-test: the auto-press ran once
 
     auto partyUsable = [&]() { return party.active() && party.playerCount() >= 2; };
+    // ---- chartdl (the standalone chart downloader) --------------------------
+    // The empty song list offers a 下载谱面 button (game::SelectDownload); this
+    // is what it does. chartdl.exe sits *next to* the game exe, and like the
+    // game it must be started with the exe's own directory as the working
+    // directory - it resolves its data files and its default download folder
+    // relative to that, not to whatever directory the game was launched from.
+    // The child is a totally separate GUI process, so the game keeps drawing
+    // behind it; its handle is polled in the frame loop and the chart scan runs
+    // again once it exits (that is what the player expects after picking songs
+    // in the downloader).
+    void* chartDlProcess = nullptr; // HANDLE of the running downloader, 0 = none
+    std::string chartDlPath;        // resolved exe path, so the search runs once
+    bool chartDlMissing = false;    // reported once, not every frame
 
-    // The chart clock every consumer in the frame loop reads. Resolved once per
+    auto chartDlWindow = []() -> HWND {
+#ifdef _WIN32
+        // The downloader's window title is a fixed string (chartdl.cpp), which
+        // is the only handle we have without a process -> window enumeration.
+        return FindWindowW(L"#32770", L"CppSekai 谱面下载器");
+#else
+        return nullptr;
+#endif
+    };
+
+    auto launchChartDownloader = [&]() -> bool {
+#ifdef _WIN32
+        if (chartDlProcess != nullptr) {
+            // Already open: bring it back to the front instead of starting a
+            // second copy (two downloaders would fight over the same files).
+            if (HWND window = chartDlWindow()) {
+                SetForegroundWindow(window);
+            }
+            return true;
+        }
+        if (chartDlPath.empty() && !chartDlMissing) {
+            // <exe>\chartdl.exe, with the dev-tree fallback: a packaged build
+            // keeps it next to the game, a build/ layout keeps the game in
+            // build/ and the downloader right there with it.
+            const std::string candidates[] = {
+                baseDir + "chartdl.exe",
+                baseDir + "build\\chartdl.exe",
+                baseDir + "..\\build\\chartdl.exe",
+            };
+            for (const std::string& candidate : candidates) {
+                std::error_code ec;
+                if (std::filesystem::is_regular_file(path_utf8::toPath(candidate), ec)) {
+                    chartDlPath = candidate;
+                    break;
+                }
+            }
+            if (chartDlPath.empty()) {
+                chartDlMissing = true;
+                std::printf("[chartdl] chartdl.exe not found next to %s\n", baseDir.c_str());
+                std::fflush(stdout);
+                return false;
+            }
+        }
+        if (chartDlPath.empty()) {
+            return false;
+        }
+        // UTF-8 -> wide throughout: CreateProcessW is the only path that
+        // survives a non-ASCII install directory (the ANSI one mangles it).
+        const std::wstring wide = path_utf8::widen(chartDlPath);
+        const std::wstring cwd = path_utf8::widen(baseDir);
+        std::vector<wchar_t> cmd(wide.begin(), wide.end());
+        cmd.push_back(L'\0');
+        STARTUPINFOW si{};
+        si.cb = sizeof(si);
+        PROCESS_INFORMATION pi{};
+        // lpApplicationName = the exe, lpCommandLine = its own path (the argv
+        // the child sees), so quoting inside the command line is a non-issue.
+        if (CreateProcessW(wide.c_str(), cmd.data(), nullptr, nullptr, FALSE, 0, nullptr, cwd.c_str(),
+                &si, &pi)) {
+            CloseHandle(pi.hThread);
+            chartDlProcess = pi.hProcess;
+            std::printf("[chartdl] launched %s\n", chartDlPath.c_str());
+            std::fflush(stdout);
+            return true;
+        }
+        std::printf("[chartdl] CreateProcessW failed (%lu)\n",
+            static_cast<unsigned long>(GetLastError()));
+        std::fflush(stdout);
+        return false;
+#else
+        return false;
+#endif
+    };
+
+    // Once per frame; true exactly on the frame the downloader exited.
+    auto pollChartDownloader = [&]() -> bool {
+#ifdef _WIN32
+        if (chartDlProcess == nullptr) {
+            return false;
+        }
+        HANDLE process = static_cast<HANDLE>(chartDlProcess);
+        if (WaitForSingleObject(process, 0) != WAIT_OBJECT_0) {
+            return false;
+        }
+        DWORD code = 0;
+        GetExitCodeProcess(process, &code);
+        CloseHandle(process);
+        chartDlProcess = nullptr;
+        std::printf("[chartdl] exited (%lu); re-scanning charts\n",
+            static_cast<unsigned long>(code));
+        std::fflush(stdout);
+        return true;
+#else
+        return false;
+#endif
+    };
     // frame: following the host involves a correction step, and applying that
     // step several times per frame would speed it up.
     auto resolveSongClock = [&]() -> double {
         const double local = wallSongTime();
         if (!mpFollowing) {
+            // Host (or a solo window). The audio clock is the good one when
+            // there is a track, but it is not the only case: a chart with no BGM
+            // (or one still in its lead-in) runs on the wall clock, and the wall
+            // clock knows nothing about the pause. Freezing here is what makes
+            // 暂停 stop the picture *and* the published clock - without it the
+            // host kept publishing an advancing instant while its own window sat
+            // still, and every member's chart clock was dragged along with it.
             frameSongTime = audio.hasMusic() ? audio.songTime() : local;
+            if (paused && !audio.hasMusic()) {
+                if (!mpHostFreezeValid) {
+                    mpHostFreezeTime = frameSongTime;
+                    mpHostFreezeValid = true;
+                }
+                frameSongTime = mpHostFreezeTime;
+            } else if (!paused) {
+                mpHostFreezeValid = false;
+            }
         } else {
             double hostTime = 0.0;
             Uint64 hostCounter = 0;
@@ -3761,6 +3918,24 @@ int main(int argc, char** argv)
         lastFrameCounter = nowCounter;
         const float frameDelta = static_cast<float>(lastFrameDeltaSec);
         uiClock += lastFrameDeltaSec;
+        // Diagnostic (CPSEKAI_MP_TRACE=1): "the frame loop is still turning"
+        // stamp for a window that goes quiet in a room. Two reasons it matters:
+        // a [party] line that just stops is otherwise indistinguishable from a
+        // crashed process, and gBlock->seats[slot].alive covers every *other*
+        // member's view of us - the loop exiting while alive still reads 1 is
+        // exactly the "连不上" shape (the room keeps waiting for a window that
+        // is not there any more).
+        if (platform::traceEnabled() && party.active()) {
+            static double alivePrintAtSec = -1.0;
+            const double qpcSec = platform::PartyLink::counterToSeconds(
+                platform::PartyLink::nowCounter());
+            if (alivePrintAtSec < 0.0 || qpcSec - alivePrintAtSec >= 1.0) {
+                alivePrintAtSec = qpcSec;
+                std::printf("[alive] seat %d %s qpc=%.3f frame %.1f ms uiClock=%.3f loop=run\n", party.slot(),
+                    party.isHost() ? "host" : "member", qpcSec, lastFrameDeltaSec * 1000.0, uiClock);
+                std::fflush(stdout);
+            }
+        }
 
         if (beginSessionClockPending) {
             beginSessionClockPending = false;
@@ -4748,7 +4923,12 @@ int main(int argc, char** argv)
                 persistUserData();
             }
             // Consume the F5 request here so it cannot leak into a later frame.
-            const bool wantRescan = rescanRequested || action == game::SelectRescan;
+            // The chartdl hand-off counts as a rescan request too: the moment
+            // the downloader process is gone, whatever it fetched has to show
+            // up in the list (that is the whole point of the empty-list button).
+            const bool chartDlFinished = pollChartDownloader();
+            const bool wantRescan =
+                rescanRequested || action == game::SelectRescan || chartDlFinished;
             rescanRequested = false;
             if (action >= 0 && action < static_cast<int>(entries.size())) {
                 if (party.active()) {
@@ -4775,6 +4955,28 @@ int main(int argc, char** argv)
                 }
             } else if (action == game::SelectSettings) {
                 showDebug = true;
+            } else if (action == game::SelectDownload) {
+                // The list is empty and 下载谱面 was pressed: hand off to the
+                // standalone downloader. It runs as its own process (a window,
+                // not a child dialog) so this frame loop keeps rendering behind
+                // it; the handle is polled further down and the chart scan runs
+                // again once the downloader exits, which is exactly what the
+                // player expects after picking songs in it.
+                if (!launchChartDownloader()) {
+                    std::printf("[chartdl] could not start the downloader\n");
+                    std::fflush(stdout);
+                }
+            }
+            // Debug (--chartdl-test): press the empty-list button from the log,
+            // since a posted click cannot reach a screen that needs a real
+            // interactive session. Fires at most once, and only when the list is
+            // actually empty (which is the only state the button exists in).
+            if (chartDlTestAtSec >= 0.0 && uiClock >= chartDlTestAtSec && entries.empty()
+                && !chartDlTestFired) {
+                chartDlTestFired = true;
+                std::printf("[chartdl] auto-pressed 下载谱面 (debug)\n");
+                std::fflush(stdout);
+                launchChartDownloader();
             } else if (wantRescan) {
                 entries = scanAllChartDirs();
                 selected = entries.empty() ? -1 : 0;
@@ -5819,6 +6021,60 @@ int main(int argc, char** argv)
             // Headless check: dump the settled result screen.
             if (!screenshotPath.empty() && !wantScreenshot && resultElapsed >= 2.6f) {
                 wantScreenshot = true;
+            }
+        }
+
+        // ------------------------------------------------------------------
+        // ELUA - the license / disclaimer card.
+        //
+        // Shown over the song select the first time a profile comes up (and
+        // again for a profile that has never ticked the box). It sits *outside*
+        // the AppState::Select branch above so the result screen's 继续 cannot
+        // reveal it mid-transition, but it is still only drawn while the song
+        // select is on screen - that is what "主界面出现时" means, and it keeps
+        // the card from landing on top of a running live.
+        //
+        // Nothing here gates playing: the checkbox is the record, the buttons
+        // just dismiss the card. It is deliberately not a 我同意 / 我不同意 pair
+        // (this program has no EULA to agree to - the license is the AGPL, and
+        // it comes with the source), so the card states facts instead.
+        // ------------------------------------------------------------------
+        static bool eulaAlive = false;
+        if (state == AppState::Select && !userSettings.eulaAccepted) {
+            eulaAlive = true;
+        }
+        if (eulaAlive) {
+            if (state != AppState::Select) {
+                // The player got into a song while the card was up (the host
+                // started the round, or the list was confirmed). Drop it
+                // without animating: it may not reappear over the live.
+                eulaAlive = false;
+            } else {
+                static bool eulaNoShow = false;
+                if (!eulaAlive) {
+                    eulaNoShow = false;
+                }
+                const int eulaAction = ui::eulaDialog(renderer, "##eula", "关于本软件",
+                    {
+                        "CppSekai 是免费、开源、非营利的同人练习工具（AGPL-3.0）。"
+                            "它与 SEGA、Colorful Palette 以及《世界计划》官方没有任何关系。",
+                        "本程序不含官方游戏的任何代码、音频、曲绘或谱面；谱面与素材需由使用者"
+                            "自行下载，仅供本地学习与练习使用。",
+                        "请勿将本程序用于任何商业用途，也请勿传播你无权传播的素材。"
+                            "一切权利归各自权利人所有。",
+                        "程序按现状提供，不附带任何担保；本机数据（成绩、设置）只保存在本地，"
+                            "不会上传到任何服务器。",
+                    },
+                    "以后不再显示", &eulaNoShow, {std::string("知道了")}, {true}, -1);
+                if (eulaAction >= 0 || eulaAction == -2) {
+                    // Dismissed (either button). The checkbox is what is stored:
+                    // ticking it silences the card for this profile from now on.
+                    userSettings.eulaAccepted = eulaNoShow;
+                    persistUserData();
+                    std::printf("[eula] dismissed (accepted=%d)\n", eulaNoShow ? 1 : 0);
+                    std::fflush(stdout);
+                    eulaAlive = false;
+                }
             }
         }
 

@@ -4,6 +4,7 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -174,9 +175,18 @@ bool PartyLink::init()
     // Claim the lowest free seat. The owner of seat 0 that nobody else can take
     // is what makes the first window the host; if that window dies the role
     // moves on (see update()).
+    //
+    // The claim is a CAS on `alive`, and it is the *last* thing written for the
+    // seat: everything else goes in first and `alive` is published with a
+    // release fence. Publishing it first (the obvious `CAS(alive,1,0)` then
+    // fill the fields) opens a window where another window's reaper sees
+    // alive==1 next to the previous owner's stale heartbeat - which may already
+    // be past kStaleMs - and reaps the seat before the joiner has written a
+    // single field. That is the "连不上": the room loses members as fast as
+    // they join, so the host never sees a second player and waits forever.
     const LONG tick = nowMs();
     for (int i = 0; i < kPartyMaxSlots; ++i) {
-        if (InterlockedCompareExchange(&gBlock->seats[i].alive, 1, 0) != 0) {
+        if (gBlock->seats[i].alive != 0) {
             continue;
         }
         SharedSeat& seat = gBlock->seats[i];
@@ -192,6 +202,10 @@ bool PartyLink::init()
         seat.combo = 0;
         seat.lifePermille = 1000;
         seat.name[0] = '\0';
+        std::atomic_thread_fence(std::memory_order_release);
+        if (InterlockedCompareExchange(&seat.alive, 1, 0) != 0) {
+            continue; // somebody else took this one while we were writing it
+        }
         mSlot = i;
         break;
     }
@@ -260,8 +274,35 @@ void PartyLink::update()
     const LONG tick = nowMs();
     // A long chart load blocks this loop, and another window may have written
     // us off meanwhile: take the seat back instead of vanishing from the room.
+    // Only if it is still marked free: between the reap and this line, a third
+    // window can have gone through init() and legitimately claimed this seat,
+    // and two processes both believing they own it is worse than being kicked
+    // out (both would overwrite each other's heartbeat, name and difficulty
+    // every frame - the member that "keeps dropping out" while still being
+    // visible). If somebody is there, we lost the seat for real and rejoin.
     if (gBlock->seats[mSlot].alive == 0) {
-        InterlockedExchange(&gBlock->seats[mSlot].alive, 1);
+        if (InterlockedCompareExchange(&gBlock->seats[mSlot].alive, 1, 0) != 0) {
+            gBlock = nullptr;
+            mActive = false;
+            if (mView != nullptr) {
+                UnmapViewOfFile(mView);
+                mView = nullptr;
+            }
+            if (mMapping != nullptr) {
+                CloseHandle(static_cast<HANDLE>(mMapping));
+                mMapping = nullptr;
+            }
+            std::printf("[party] seat %d went to somebody else, rejoining\n", mSlot);
+            std::fflush(stdout);
+            if (init()) {
+                std::printf("[party] rejoined as seat %d (%s)\n", mSlot,
+                    isHost() ? "host" : "member");
+            } else {
+                std::printf("[party] rejoin failed, continuing solo\n");
+            }
+            std::fflush(stdout);
+            return;
+        }
         std::printf("[party] seat %d reclaimed after a stall\n", mSlot);
         std::fflush(stdout);
     }

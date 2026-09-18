@@ -39,6 +39,7 @@ game/Judgement.*  # 判定引擎（本项目新增，判定逻辑都在这）
 game/Ui.*         # pjsk 风格弹窗组件库：beginCard（缩放入/出场动画 + 标题栏拖动）、
                   # tabBar、slider（深色±按钮+薄荷轨道）、infoRows、capsuleButton、
                   # cardTitle、checkBox、stepper、messageDialog（-3=动画中 -2=关闭完成）、
+                  # eulaDialog（关于本软件的首次启动弹窗，见下面「ELUA」一节）、
                   # combo（= BeginCombo + 淡入 + 自绘旋转箭头；最后一个参数 scaleHint 用来
                   # 适配调用方自己的 px-per-unit，比如选曲界面的 k）。动画统一走文件顶部的
                   # animValue / animToggle（按 ImGuiID 存一个"指数逼近"值：步长由 DeltaTime
@@ -1181,6 +1182,87 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
   解法是并排放（不重叠），或者给从属窗口点 `WS_EX_NOACTIVATE`（还没做，需要时再加开关）。
 - 验收办法：两个窗口都开 `--flick-log`（各自 cwd 下的 `flick_debug.log`，**要放不同目录**
   否则互相覆盖），或者直接看 HUD 左下角队友分数条——某个窗口如果摸不到，它的分数就一直是 0。
+
+## ELUA（首次启动的「关于本软件」弹窗）2026-09-18
+
+- `ui::eulaDialog`（`game/Ui.*`）就是 `messageDialog` 的加强版：可带一段说明文字 +
+  一个勾选框（"以后不再显示"）+ 一行按钮。**内容按 UTF-8 码点边界贪心折行**
+  （`CalcTextSizeA(fontSize, FLT_MAX, 0, candidate)` 逐段量、取最长可容纳前缀）——
+  用字节下标 `substr` 折行会把多字节序列切断，量出来的宽度是错的，中文文案必现溢出。
+- 卡片宽度 = `max(660*s, buttonsW+56*s)`，高度由折行数推出；`beginCard(..., false, true, ...)`
+  = 没有右上角关闭 X（必须点按钮才能走）。
+- 开关存在 **profile 里**：`UserSettings::eulaAccepted`（`userdata.json` 的 `eulaAccepted`）。
+  主界面首帧弹出（`main.cpp` 的 `AppState::Select` 分支之后），
+  关闭时 `userSettings.eulaAccepted = eulaNoShow; persistUserData();`，日志 `[eula] dismissed (accepted=%d)`。
+- 文案四段：① 免费开源非营利（AGPL-3.0）、与 SEGA / Colorful Palette / 《世界计划》官方无关；
+  ② 不含官方代码/音频/曲绘/谱面，素材自行下载仅供本地学习；③ 勿商用、勿传播无权素材；
+  ④ 按现状提供无担保，本机数据只存本地不上传。
+
+## 空谱面时的「下载谱面（chartdl）」按钮 2026-09-18
+
+- 列表为空时（`rowCount == 0`）在选曲界面画一句提示 + 一个
+  `ui::capsuleButton("下载谱面（chartdl）")`，返回 `SelectAction::SelectDownload(-5)`。
+  **`emptyAction` 优先于列表本身产出的 action 返回**（列表为空，本来就产不出别的）。
+- `main.cpp` 收到后 `launchChartDownloader()`：先 `FindWindowW(L"#32770", L"CppSekai 谱面下载器")`
+  找已开的窗口（有就 `SetForegroundWindow`），否则依次试 `baseDir + "chartdl.exe"` /
+  `baseDir + "build\\chartdl.exe"` / `baseDir + "..\\build\\chartdl.exe"`，
+  `CreateProcessW` 起独立进程（工作目录 = `baseDir`，所以它写到 `<baseDir>\charts`）。
+- 每帧 `pollChartDownloader()` 轮询进程句柄，退出后 **自动重扫谱面**——这就是这个按钮的
+  全部意义（下完回来列表里就该有东西）。`wantRescan` 的三个来源：
+  `rescanRequested || action == SelectRescan || chartDlFinished`。
+- 调试：`--chartdl-test [<sec>]`（默认 1.5s）在列表为空时自动按一次这个按钮。
+  **为什么需要它**：`winsend.exe` 的 PostMessage 点击到不了这个界面（无交互会话下 SDL 不收注入输入），
+  所以验证只能从代码里按。
+
+## 暂停必须冻住"主机发布的时钟"2026-09-18（多人 + 无 BGM 谱面）
+
+- 症状：房主按暂停，**成员画面继续走**（实测 2 秒内漂 2022ms），房主自己也还在往前推。
+- 根因不在 `Party`，在时钟来源：`resolveSongClock()` 的非 follower 分支是
+  `audio.hasMusic() ? audio.songTime() : wallSongTime()`。`AudioEngine::songTime()` 认 `mPaused`
+  并返回冻结的 `mPauseSongTime`，**但 `wallSongTime()` 是纯 QPC 差值，完全不知道暂停这回事**。
+  于是任何没有 BGM 的谱面（或还在 lead-in 阶段的）一暂停，房主的 `frameSongTime` 照涨，
+  `publishHostClock()` 就把这个"还在动的瞬间"发给全房，成员跟着一起跑。
+- 修法：`main.cpp` 里加了主机侧冻结 `mpHostFreezeValid` / `mpHostFreezeTime`——
+  仅当 `paused && !audio.hasMusic()` 时锁住当前值，`!paused` 时解锁。
+  **别删**：没有它，"无 BGM 的谱面 + 暂停"就是必然的前后场不同步。
+- 回归：`mp_verify.sh` 的 round 2 断言「host paused 期间成员 chart clock 位移 < 50ms」，现在是 0ms。
+
+## 难度槽位解析失败会让歌**整个不可选** 2026-09-18（"多人有时候连不上"的真正根因）
+
+- 症状：房间组起来了（seat 0 host / seat 1 member 都在），谱面也 `song locked` 了，
+  **但房主从此一行日志都不再打**，这一局永远开不起来。看着像 IPC 挂了。
+- 根因在选曲界面，不在 `Party`：`drawSongSelect()` 每帧用
+  `selected = groups[groupIndex].idx[diffIndex]` 反推选中项，`diffIndex` 默认 3（EXPERT）。
+  `buildGroups()` 只把谱面放进**它自己的难度槽**（`diffIndexOf(item.difficulty)`）。
+  于是 `#DIFFICULTY` 缺失 / 写成 `0` / 是表里不认识的字符串时（**unipjsk 的谱面一律如此**），
+  `idx[全部] == -1` → `selected = -1` 每帧被写回，**把调用方开局的合法 `selected = 0` 冲掉**。
+  列表看着有一首歌在屏幕上，实际"什么都没选中"：单机按确定没反应，
+  房间里 `publishHostSong()` 因为 `selected < 0` 直接 return，房主静默，全房干等。
+- 修法两处（`game/SongSelect.cpp`）：
+  1. `buildGroups()` 里 `d < 0` 时**把这个 entry 塞进最低的空槽**——行变得可选，
+     而 `difficultyIndex()` 仍然如实报 -1，不假装知道它是哪档。
+  2. `selected` 赋值后补一层兜底：扫一遍该 group 的槽位，取第一个非负的。
+- **踩坑教训（重要）**：这次差点被自己的诊断工具带偏。我给帧循环加的 `[alive]` 心跳显示
+  `uiClock` 一路涨到 29s、帧率 33.3ms 稳定，于是先入为主认定"帧循环没停，是别的地方卡住"，
+  转头去查 `Party::init()` 的 CAS 竞态。真正的线索是那行被我**加了 8 帧上限**的条件探针
+  ——它打印的 `sel=-1 entries=1` 才是答案。**探针的上限别设太小，它会掩盖"条件一直不满足"
+  和"条件满足了但分支没走"的区别。**
+- 顺带修掉的两个真竞态（`platform/Party.cpp`，都不是本次根因但确实存在）：
+  - `init()` 原来是先 `InterlockedCompareExchange(&seats[i].alive, 1, 0)` **发布 alive**、
+    之后才写 `heartbeat` 等字段。窗口期内别的进程会看到 `alive==1` + 上一个宿主的陈旧心跳
+    （可能已超 `kStaleMs`）立刻回收它。现在改成**先写全部字段、`release` 栅栏之后再用 CAS 发布 alive**。
+  - `update()` 里"发现自己被回收就无条件抢回 seat"改为 CAS：若已被第三个进程合法拿走，
+    就**放弃这个 seat 重新 `init()` 入房**，而不是两个进程都自认拥有同一个座位、逐帧互相覆盖。
+
+## 日志缓冲（2026-09-18，排查多人问题时的副产品）
+
+- `main.cpp` 启动早期现在无条件 `setvbuf(stdout/stderr, _IONBF)`。
+- 原因：这个 exe 是 **Windows 子系统**，`AttachConsole(ATTACH_PARENT_PROCESS)` 成功后会
+  `freopen("CONOUT$", ...)`，**而那一步会把 stdout 打回 msvcrt 的默认（行/全）缓冲**。
+  从 cmd / PowerShell / Git Bash 里 `> run.txt` 时它同时拥有控制台和被重定向的 stdout，
+  日志只在缓冲填满（4KB）时才落到文件——**表现就是"跑着跑着不打了，像卡死"**，
+  实际最后几分钟的输出还躺在用户态缓冲里，进程被 kill 就永远丢了。
+  排查多人问题花的时间有一半耗在这上面。
 
 ## 待办（按优先级）
 

@@ -201,4 +201,16 @@ int messageDialog(platform::Renderer& renderer, const char* id, const char* titl
     const std::vector<std::string>& buttons, const std::vector<bool>& primary,
     int forcedChoice = -1);
 
+// The ELUA card: messageDialog with a scroll-free paragraph of body text and a
+// "以后不再显示" checkbox pinned above the button row. Same return contract as
+// messageDialog, plus:
+//   `accepted` mirrors the checkbox every frame (in and out). `accepted` is
+//   *in/out*: the caller seeds it from the profile and stores it when the
+//   dialog is dismissed, so the flag survives no matter which button closed it.
+// `forcedChoice` is the controller's pick, as above.
+int eulaDialog(platform::Renderer& renderer, const char* id, const char* title,
+    const std::vector<std::string>& lines, const char* checkLabel, bool* accepted,
+    const std::vector<std::string>& buttons, const std::vector<bool>& primary,
+    int forcedChoice = -1);
+
 } // namespace ui

@@ -749,6 +749,9 @@ void loadUserData(const std::string& path, UserSettings& settings,
             settings.uiScale = s.value("uiScale", settings.uiScale);
             settings.sortMode = s.value("sortMode", settings.sortMode);
             settings.groupMode = s.value("groupMode", settings.groupMode);
+            // Missing in an old profile: the ELUA shows once, which is exactly
+            // what an existing install should see after this version lands.
+            settings.eulaAccepted = s.value("eulaAccepted", settings.eulaAccepted);
         }
         if (wrapped && doc.contains("account") && doc["account"].is_object()) {
             const nlohmann::json& a = doc["account"];
@@ -849,6 +852,7 @@ void saveUserData(const std::string& path, const UserSettings& settings,
         {"uiScale", settings.uiScale},
         {"sortMode", settings.sortMode},
         {"groupMode", settings.groupMode},
+        {"eulaAccepted", settings.eulaAccepted},
     };
     doc["scores"] = scoreDoc;
     doc["account"] = {
@@ -1450,6 +1454,24 @@ namespace
             const int d = diffIndexOf(item.difficulty);
             if (d >= 0 && group.idx[d] < 0) {
                 group.idx[d] = i;
+            } else if (d < 0) {
+                // The chart's difficulty did not map to a slot - an empty or
+                // unknown #DIFFICULTY, which unipjsk charts ship as a rule
+                // ("#DIFFICULTY 0" with no name this table knows). Without a
+                // slot the row is unreachable: the selection is derived from
+                // groups[..].idx[diffIndex], so *every* difficulty reads -1 and
+                // the list ends up with nothing selected - the song cannot be
+                // started at all, and in a room the host can never publish it
+                // (the whole round then waits forever on a song that is on
+                // screen). Park it in the lowest free slot instead: the row
+                // stays selectable, and difficultyIndex() below reports -1 for
+                // it, so nothing pretends to know which difficulty it is.
+                for (int slot = 0; slot < kDiffCount; ++slot) {
+                    if (group.idx[slot] < 0) {
+                        group.idx[slot] = i;
+                        break;
+                    }
+                }
             }
         }
         return groups;
@@ -2162,6 +2184,20 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             diffIndex = best < 0 ? 3 : best;
         }
         selected = groups[static_cast<size_t>(groupIndex)].idx[diffIndex];
+        if (selected < 0) {
+            // Last resort: the fallback above picks a *slot* only from ones that
+            // hold an entry, so this can only be reached with a group that has
+            // no chart at all - which the group builder does not produce. Kept
+            // anyway so a future slot layout can never silently leave the list
+            // with nothing selected (that state starts no song and, in a room,
+            // stalls the host).
+            for (int d = 0; d < kDiffCount; ++d) {
+                if (groups[static_cast<size_t>(groupIndex)].idx[d] >= 0) {
+                    selected = groups[static_cast<size_t>(groupIndex)].idx[d];
+                    break;
+                }
+            }
+        }
     } else {
         selected = -1;
     }
@@ -2780,11 +2816,43 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         return buf;
     };
 
+    int emptyAction = SelectNone;
     if (rowCount == 0) {
-        ImGui::SetCursorScreenPos(ImVec2(rowX, rowY + 20.0f * k));
-        ImGui::PushFont(body);
-        ImGui::TextColored(ImVec4(0.75f, 0.75f, 0.82f, 1.0f),
+        // The list column is narrow (450 virtual units) and these two lines are
+        // long, so they wrap with ImGui's own wrapper against an explicit ItemWidth
+        // - TextColored does not wrap, which is what used to cut the sentence off
+        // at the right edge of the column.
+        const auto emptyText = [&](float x, float y, ImVec4 color, const char* text) {
+            ImGui::SetCursorScreenPos(ImVec2(x, y));
+            // Flush the wrapped block against the left edge of the column: the
+            // default centering would scatter the two lines against each other.
+            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.0f * k, 4.0f * k));
+            ImGui::PushTextWrapPos(x + listW);
+            ImGui::PushStyleColor(ImGuiCol_Text, color);
+            ImGui::TextUnformatted(text);
+            ImGui::PopStyleColor();
+            ImGui::PopTextWrapPos();
+            ImGui::PopStyleVar();
+        };
+        ImGui::PushFont(body, 19.0f * k);
+        emptyText(rowX, rowY + 20.0f * k, ImVec4(0.75f, 0.75f, 0.82f, 1.0f),
             "没有找到谱面。把 .sus 放到 charts/ 目录下，再按 F5 重新扫描（命名规则见 CHARTS.md）。");
+        ImGui::PopFont();
+        // A dead end otherwise: the player just installed the game and has no
+        // charts at all, so offer the bundled downloader right here instead of
+        // making them find chartdl.exe in the folder by hand. The host launches
+        // it (main.cpp polls the process and re-scans when it exits).
+        ImGui::SetCursorScreenPos(ImVec2(rowX, rowY + 78.0f * k));
+        ImGui::PushFont(body, 19.0f * k);
+        if (ui::capsuleButton("下载谱面（chartdl）", ImVec2(268.0f * k, 46.0f * k), true)) {
+            emptyAction = SelectDownload;
+            std::printf("[select] 下载谱面 pressed\n");
+            std::fflush(stdout);
+        }
+        ImGui::PopFont();
+        ImGui::PushFont(body, 17.0f * k);
+        emptyText(rowX, rowY + 138.0f * k, ImVec4(0.6f, 0.6f, 0.68f, 1.0f),
+            "会打开独立的下载器；关掉它之后这里会自动重新扫描。");
         ImGui::PopFont();
     }
 
@@ -3768,6 +3836,11 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
 
     (void)windowW;
     (void)windowH;
+    // The empty-list 下载谱面 button outranks anything the (non-existent) list
+    // could have produced this frame.
+    if (emptyAction != SelectNone) {
+        return emptyAction;
+    }
     return action;
 }
 

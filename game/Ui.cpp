@@ -970,6 +970,147 @@ int messageDialog(platform::Renderer& renderer, const char* id, const char* titl
     return result >= 0 ? result : -3;
 }
 
+int eulaDialog(platform::Renderer& renderer, const char* id, const char* title,
+    const std::vector<std::string>& lines, const char* checkLabel, bool* accepted,
+    const std::vector<std::string>& buttons, const std::vector<bool>& primary, int forcedChoice)
+{
+    const float s = scale();
+    const ImVec2 display = ImGui::GetIO().DisplaySize;
+    const float btnH = kCapsuleH * s * 0.62f;
+    const float btnW = 146.0f * s;
+    const float gap = 20.0f * s;
+    const float buttonsW = static_cast<float>(buttons.size()) * btnW
+        + (static_cast<float>(buttons.size()) - 1) * gap;
+    const float cardW = std::max(660.0f * s, buttonsW + 56.0f * s);
+    const float padX = 30.0f * s;
+    const float interior = cardW - padX * 2.0f;
+    const float fontSize = 22.0f * s;
+    const float lineH = 30.0f * s;
+
+    ImFont* font = game::bodyFont();
+    // Wrap every paragraph against the interior width, so the card never has to
+    // guess how long the disclaimer runs (a longer translation just makes the
+    // card taller).
+    //
+    // Two things make this more than a std::string::find(' '):
+    //   * the text is mixed CJK + latin and CJK has no spaces to break on, so
+    //     the break is chosen by *measuring* a prefix, not by finding a space;
+    //   * a prefix taken on a byte index cuts a UTF-8 sequence in half, and
+    //     CalcTextSizeA then measures a broken tail (which is how the first
+    //     version produced lines that still ran off the card). So the candidate
+    //     lengths walked are code-point boundaries only.
+    std::vector<std::string> wrapped;
+    for (const std::string& line : lines) {
+        if (line.empty()) {
+            wrapped.push_back(std::string());
+            continue;
+        }
+        // Byte offsets of every code-point start, plus the end.
+        std::vector<std::size_t> stops;
+        for (std::size_t i = 0; i < line.size();) {
+            stops.push_back(i);
+            const unsigned char c = static_cast<unsigned char>(line[i]);
+            i += c < 0x80 ? 1 : (c < 0xE0 ? 2 : (c < 0xF0 ? 3 : 4));
+        }
+        stops.push_back(line.size());
+
+        std::size_t begin = 0;
+        while (begin < line.size()) {
+            std::size_t best = begin + 1;
+            for (std::size_t k = stops.size(); k-- > 0;) {
+                if (stops[k] <= begin) {
+                    break;
+                }
+                const std::string candidate = line.substr(begin, stops[k] - begin);
+                if (font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, candidate.c_str()).x <= interior) {
+                    best = stops[k];
+                    break;
+                }
+            }
+            wrapped.push_back(line.substr(begin, best - begin));
+            begin = best;
+        }
+    }
+
+    const float cardH = 96.0f * s + static_cast<float>(wrapped.size()) * lineH + 62.0f * s
+        + btnH + 24.0f * s;
+
+    ImVec2 center = ImVec2(display.x * 0.5f, display.y * 0.5f);
+    ImVec2 size = ImVec2(cardW, cardH);
+
+    CardState& st = cardState(id);
+    if (st.ended) {
+        st.ended = false;
+        st.t = 0.0f;
+        st.drag = ImVec2(0.0f, 0.0f);
+        st.open = true;
+    } else if (!st.open && st.t <= 0.0f) {
+        st.open = true; // fresh dialog
+    }
+    bool closeClicked = false;
+    // No close X: this card is a notice. Dismissing it is what the button is
+    // for, and the checkbox is the record of whether it should come back.
+    if (!beginCard(id, &center, &size, false, true, &closeClicked, st.open)) {
+        return -2; // close animation finished
+    }
+    int result = -1;
+
+    ImGui::PushFont(font, fontSize);
+    ImGui::PushStyleColor(ImGuiCol_Text, kBodyText);
+
+    const float left = center.x - size.x * 0.5f + padX;
+    ImGui::SetCursorScreenPos(ImVec2(left, center.y - size.y * 0.5f + 20.0f * s));
+    cardTitle(title, interior);
+
+    float y = ImGui::GetCursorScreenPos().y + 6.0f * s;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    for (const std::string& line : wrapped) {
+        if (line.empty()) {
+            y += lineH * 0.5f;
+            continue;
+        }
+        dl->AddText(font, fontSize, ImVec2(left, y), kBodyText, line.c_str());
+        y += lineH;
+    }
+
+    // Button row along the bottom; the checkbox shares that row, right-aligned,
+    // so neither can ever sit on top of the other whatever the window size is.
+    const float rowY = center.y + size.y * 0.5f - btnH - 24.0f * s;
+    const float totalW = buttonsW;
+    const float btnX = center.x - totalW * 0.5f;
+    if (checkLabel != nullptr && accepted != nullptr) {
+        const float checkW = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, checkLabel).x
+            + 34.0f * s; // box + gap
+        ImGui::SetCursorScreenPos(
+            ImVec2(center.x + size.x * 0.5f - padX - checkW, rowY + (btnH - 24.0f * s) * 0.5f - 4.0f * s));
+        // rowWidth 0 = the checkBox centers itself in the space left, which in a
+        // tight layout is the same as flushing it against the right edge; tell
+        // it the exact width instead so it lands where we just measured.
+        checkBox(checkLabel, accepted, checkW);
+    }
+    float bx = btnX;
+    for (size_t i = 0; i < buttons.size(); ++i) {
+        const bool isPrimary = i < primary.size() && primary[i];
+        ImGui::SetCursorScreenPos(ImVec2(bx, rowY));
+        if (capsuleButton(buttons[i].c_str(), ImVec2(btnW, btnH), isPrimary)) {
+            result = static_cast<int>(i);
+            requestClose(st);
+        }
+        bx += btnW + gap;
+    }
+    if (result < 0 && forcedChoice >= 0 && forcedChoice < static_cast<int>(buttons.size())) {
+        result = forcedChoice;
+        se(SeClick);
+        requestClose(st);
+    }
+
+    ImGui::PopStyleColor();
+    ImGui::PopFont();
+    endCard();
+    (void)renderer;
+    return result >= 0 ? result : -3;
+}
+
 void setCloseTexture(ImTextureID texture)
 {
     closeTexture() = texture;

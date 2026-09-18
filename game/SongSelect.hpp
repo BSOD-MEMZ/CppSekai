@@ -207,6 +207,12 @@ struct UserSettings
     // latin letters one section each), 3 = by first character (one section per
     // kana).
     int groupMode = 0;
+    // The 许可 / 免责声明 card (the ELUA) comes up over the song select on the
+    // first run. Tick "以后不再显示" in it and this goes true, so the card never
+    // appears again. It is a *picked* flag (the dialog does not have to be
+    // dismissed to keep playing), so it lives per profile, like the settings it
+    // is part of: a second user gets told once as well.
+    bool eulaAccepted = false;
 };
 
 // Path of userdata.json: <exeDir>\.. \userdata.json when a charts\ folder sits
@@ -377,6 +383,9 @@ enum SelectAction
     SelectQuit = -2,
     SelectRescan = -3,
     SelectSettings = -4, // the musicsetting button was pressed (open settings)
+    // The list is empty and the player pressed 下载谱面: the host launches
+    // chartdl.exe (the standalone downloader) and re-scans when it exits.
+    SelectDownload = -5,
 };
 
 // ---------------------------------------------------------------------------
