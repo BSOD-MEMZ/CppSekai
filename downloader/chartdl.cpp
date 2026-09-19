@@ -1120,6 +1120,8 @@ namespace
     constexpr int kIdSidecar = 1014;
     constexpr int kIdSettings = 1015;
     constexpr int kIdTrayIcon = 1016;
+    constexpr int kIdAliasGroup = 1017;
+    constexpr int kIdAliasList = 1018;
     constexpr int kIdDiffBase = 1100;  // 1100..1104 = EASY..MASTER
     constexpr int kIdVocalBase = 1120; // 1120.. = one per vocal version
 
@@ -1148,6 +1150,7 @@ namespace
     HWND gStatus = nullptr;
     HWND gLogList = nullptr;
     HWND gDetailTitle = nullptr;
+    HWND gAliasList = nullptr;
     HWND gJacketCheck = nullptr;
     HWND gSidecarCheck = nullptr;
     HWND gSettingsButton = nullptr;
@@ -1164,12 +1167,21 @@ namespace
     // Splitter positions, in real pixels. -1 = not laid out yet, so the first
     // WM_SIZE picks the default and later ones keep whatever the user dragged.
     // gListWidth = the song table's own width, gBottomHeight = the height of
-    // the log/progress strip along the bottom.
+    // the log/progress strip along the bottom, gDetailHeight = how much of the
+    // right-hand panel the 下载内容 group takes (the alias list is the rest).
     int gListWidth = -1;
     int gBottomHeight = -1;
-    int gDragSplitter = 0; // 0 = none, 1 = list/detail, 2 = top/bottom
+    int gDetailHeight = -1;
+    int gDragSplitter = 0; // 0 = none, 1 = list/detail, 2 = top/bottom, 3 = detail/alias
     int gDragOrigin = 0;
     int gDragStart = 0;
+
+    // Rows of the alias panel: (alias, song title). Flattened from gAliasIndex
+    // once after every loadData(), already in display order - the index is a
+    // std::map, so the aliases come out sorted. The list itself is virtual
+    // (LVS_OWNERDATA): 12k rows through ListView_InsertItem takes a visible
+    // moment to fill and the data never changes while the window is up.
+    std::vector<std::pair<std::string, std::string>> gAliasRows;
 
     DlSettings gDlSettings;
     HWND gSettingsWindow = nullptr;
@@ -1566,6 +1578,31 @@ namespace
     // are the parent window's own client area, so a drag on one arrives here
     // (a control would swallow it).
     // -----------------------------------------------------------------------
+    // Flattens the alias index into the panel's rows: one row per alias, with
+    // the song(s) it resolves to on the right. Called after every loadData().
+    // gAliasIndex is a std::map keyed by alias, so the rows come out sorted
+    // already - no explicit sort needed.
+    void rebuildAliasRows()
+    {
+        gAliasRows.clear();
+        gAliasRows.reserve(gAliasIndex.size());
+        std::map<int, std::string> titles;
+        for (const Song& song : gSongs) {
+            titles[song.id] = song.title;
+        }
+        for (const auto& entry : gAliasIndex) {
+            std::string songs;
+            for (const int id : entry.second) {
+                const auto it = titles.find(id);
+                if (!songs.empty()) {
+                    songs += " / ";
+                }
+                songs += it == titles.end() ? std::to_string(id) : it->second;
+            }
+            gAliasRows.emplace_back(entry.first, songs);
+        }
+    }
+
     int splitterThickness()
     {
         return dp(8);
@@ -1577,7 +1614,7 @@ namespace
     // The bars are not painted: the gaps stay plain background and the only
     // affordance is the standard resize cursor (WM_SETCURSOR). Drawn grips
     // looked like yet another control in a dialog that is mostly controls.
-    void splitterRects(HWND hwnd, RECT& vertical, RECT& horizontal)
+    void splitterRects(HWND hwnd, RECT& vertical, RECT& horizontal, RECT& detailAlias)
     {
         RECT client{};
         GetClientRect(hwnd, &client);
@@ -1589,32 +1626,36 @@ namespace
             std::max(topY, topY + topHeight)};
         const int barY = topY + std::max(0, topHeight);
         horizontal = {margin, barY, client.right - margin, barY + band};
+        // The bar between 下载内容 and 别名 lives inside the right panel only,
+        // so it runs from the panel's left edge to its right edge.
+        const int panelX = margin + gListWidth + band;
+        const int panelW = std::max(dp(120),
+            static_cast<int>(client.right - panelX - margin));
+        const int aliasBarY = topY + std::max(0, gDetailHeight);
+        detailAlias = {panelX, aliasBarY, panelX + panelW, aliasBarY + band};
     }
 
-    // 0 = nowhere, 1 = list/detail (vertical bar), 2 = top/bottom (horizontal).
+    // 0 = nowhere, 1 = list/detail (vertical bar), 2 = top/bottom (horizontal),
+    // 3 = 下载内容/别名 (horizontal bar inside the right panel).
     int hitSplitter(HWND hwnd, int x, int y)
     {
-        if (gListWidth < 0 || gBottomHeight < 0) {
+        if (gListWidth < 0 || gBottomHeight < 0 || gDetailHeight < 0) {
             return 0; // not laid out yet
         }
-        RECT client{};
-        GetClientRect(hwnd, &client);
-        const int margin = dp(10);
-        const int topY = dp(68);
-        const int band = splitterThickness();
-        const int topHeight = client.bottom - topY - band - gBottomHeight - margin;
-        if (client.bottom <= topY || topHeight <= 0) {
-            return 0;
-        }
-        const int barX = margin + gListWidth;
-        if (x >= barX && x < barX + band && y >= topY && y < topY + topHeight) {
+        RECT vertical{};
+        RECT horizontal{};
+        RECT detailAlias{};
+        splitterRects(hwnd, vertical, horizontal, detailAlias);
+        const auto inside = [&](const RECT& r) {
+            return x >= r.left && x < r.right && y >= r.top && y < r.bottom;
+        };
+        if (inside(vertical)) {
             return 1;
         }
-        const int barY = topY + topHeight;
-        if (y >= barY && y < barY + band && x >= margin && x < client.right - margin) {
+        if (inside(horizontal)) {
             return 2;
         }
-        return 0;
+        return inside(detailAlias) ? 3 : 0;
     }
 
     void layoutChildren(HWND hwnd, int width, int height)
@@ -1644,8 +1685,25 @@ namespace
         const int panelX = listX + gListWidth + band;
         const int panelW = std::max(dp(120), width - panelX - margin);
 
-        SetWindowPos(GetDlgItem(hwnd, kIdDetailGroup), nullptr, panelX, topY, panelW, topHeight,
+        // The right panel is split in two: 下载内容 on top, 别名 below, with the
+        // same draggable bar the other two seams use. -1 on the first layout
+        // means "give the detail panel 55%"; after that the user's drag wins.
+        const int detailMin = dp(120);
+        const int aliasMin = dp(110);
+        if (gDetailHeight < 0) {
+            gDetailHeight = std::max(detailMin, topHeight * 55 / 100);
+        }
+        gDetailHeight = std::clamp(gDetailHeight, detailMin,
+            std::max(detailMin, topHeight - band - aliasMin));
+        const int aliasY = topY + gDetailHeight + band;
+        const int aliasH = std::max(dp(40), topHeight - gDetailHeight - band);
+
+        SetWindowPos(GetDlgItem(hwnd, kIdDetailGroup), nullptr, panelX, topY, panelW,
+            gDetailHeight, SWP_NOZORDER);
+        SetWindowPos(GetDlgItem(hwnd, kIdAliasGroup), nullptr, panelX, aliasY, panelW, aliasH,
             SWP_NOZORDER);
+        SetWindowPos(gAliasList, nullptr, panelX + dp(10), aliasY + dp(22),
+            std::max(dp(40), panelW - dp(20)), std::max(dp(20), aliasH - dp(32)), SWP_NOZORDER);
         SetWindowPos(gList, nullptr, listX, topY, gListWidth, topHeight, SWP_NOZORDER);
 
         place(gOutDirLabel, margin, 15, 62, 20);
@@ -1938,6 +1996,34 @@ namespace
                 SendMessageW(gJacketCheck, BM_SETCHECK, BST_CHECKED, 0);
                 SendMessageW(gSidecarCheck, BM_SETCHECK, BST_CHECKED, 0);
 
+                // Alias panel: what the community actually calls these songs
+                // ("tyw", "mmj团歌", "即刻轮回"). Read-only reference - the
+                // group box is created first so it stays behind the list.
+                create(L"BUTTON", L"别名", BS_GROUPBOX, kIdAliasGroup);
+                gAliasList = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"",
+                    WS_CHILD | WS_VISIBLE | LVS_REPORT | LVS_SINGLESEL | LVS_OWNERDATA
+                        | LVS_SHOWSELALWAYS | LVS_NOSORTHEADER,
+                    0, 0, 10, 10, hwnd,
+                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdAliasList)), nullptr,
+                    nullptr);
+                SendMessageW(gAliasList, WM_SETFONT, reinterpret_cast<WPARAM>(gFont), TRUE);
+                ListView_SetExtendedListViewStyle(gAliasList,
+                    LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
+                {
+                    LVCOLUMNW column{};
+                    column.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM;
+                    column.pszText = const_cast<wchar_t*>(L"别名");
+                    column.cx = dp(170);
+                    column.iSubItem = 0;
+                    ListView_InsertColumn(gAliasList, 0, &column);
+                    column.pszText = const_cast<wchar_t*>(L"曲目");
+                    column.cx = dp(230);
+                    column.iSubItem = 1;
+                    ListView_InsertColumn(gAliasList, 1, &column);
+                }
+                ListView_SetItemCountEx(gAliasList, static_cast<int>(gAliasRows.size()),
+                    LVSICF_NOSCROLL);
+
                 gProgress = CreateWindowExW(0, PROGRESS_CLASSW, L"", WS_CHILD | WS_VISIBLE, 0, 0, 10, 10,
                     hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdProgress)), nullptr, nullptr);
                 SendMessageW(gProgress, PBM_SETRANGE, 0, MAKELPARAM(0, 1000));
@@ -1980,7 +2066,8 @@ namespace
                 if (which != 0) {
                     gDragSplitter = which;
                     gDragOrigin = which == 1 ? x : y;
-                    gDragStart = which == 1 ? gListWidth : gBottomHeight;
+                    gDragStart = which == 1 ? gListWidth
+                                            : (which == 2 ? gBottomHeight : gDetailHeight);
                     SetCapture(hwnd);
                     return 0;
                 }
@@ -1990,11 +2077,15 @@ namespace
                 if (gDragSplitter != 0) {
                     RECT client{};
                     GetClientRect(hwnd, &client);
+                    const int deltaY = GET_Y_LPARAM(lParam) - gDragOrigin;
                     if (gDragSplitter == 1) {
                         gListWidth = gDragStart + GET_X_LPARAM(lParam) - gDragOrigin;
-                    } else {
+                    } else if (gDragSplitter == 2) {
                         // Dragging the bar down makes the bottom strip shorter.
-                        gBottomHeight = gDragStart - (GET_Y_LPARAM(lParam) - gDragOrigin);
+                        gBottomHeight = gDragStart - deltaY;
+                    } else {
+                        // 下载内容 / 别名: dragging down grows the panel above it.
+                        gDetailHeight = gDragStart + deltaY;
                     }
                     layoutChildren(hwnd, client.right, client.bottom);
                     return 0;
@@ -2288,6 +2379,23 @@ namespace
                         }
                     }
                 }
+                if (header->idFrom == kIdAliasList && header->hwndFrom == gAliasList) {
+                    if (header->code == LVN_GETDISPINFOW) {
+                        auto* info = reinterpret_cast<NMLVDISPINFOW*>(lParam);
+                        const int row = info->item.iItem;
+                        if (row >= 0 && row < static_cast<int>(gAliasRows.size())
+                            && (info->item.mask & LVIF_TEXT) != 0) {
+                            const auto& entry = gAliasRows[static_cast<std::size_t>(row)];
+                            // The pointer has to stay valid until the control is
+                            // done with it. This call is synchronous, so a
+                            // function-local static is the usual trick.
+                            static std::wstring text;
+                            text = widen(info->item.iSubItem == 0 ? entry.first : entry.second);
+                            info->item.pszText = const_cast<wchar_t*>(text.c_str());
+                        }
+                    }
+                    return 0;
+                }
                 return 0;
             }
             case WM_TIMER: {
@@ -2572,6 +2680,9 @@ namespace
         if (gDuplicateIds > 0) {
             appendLog("[data] dropped " + std::to_string(gDuplicateIds) + " duplicate song id(s)");
         }
+        // Flatten the alias index before the window exists: WM_CREATE hands the
+        // row count to the virtual list, and it must be right from the start.
+        rebuildAliasRows();
 
         // Settings window class (see settingsProc): not registered until now
         // because it needs the main font/DPI, which WM_CREATE sets.
