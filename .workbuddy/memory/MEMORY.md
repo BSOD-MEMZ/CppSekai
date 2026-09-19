@@ -68,7 +68,9 @@
 - 别名表来自 HarukiBot 的公开 API（社区提交 + 审核），703 首 / 1.3 万条，搜 `tyw`、
   `梦开始的地方`、`mmj团歌` 都能命中。**匹配是精确的**（表里全是两字母词），
   两个界面的搜索顺序都是：标题 → 作者 → 别名 → 读音原文 → 读音（罗马音折假名）。
-  重抓跑 `.workbuddy/tools/fetch_music_aliases.py`。
+  重抓跑 `.workbuddy/tools/fetch_music_aliases.py`。chartdl 里还有一块「别名」分组框
+  （下载内容下面，两者之间有可拖的分隔条），把这张表整个列出来（1.2 万行，
+  **用 LVS_OWNERDATA 虚拟列表**，普通插入会卡）。
 - 谱面只认 **exe 同级的 `charts\`**（下载器默认输出）；游戏扫 `chartCandidates` 全部候选**合并**、
   按 .sus 文件名去重。下载器设置存 `<exe>\chartdl.json`。
 - 多用户：`<dataDir>\profiles\<id>.json`（`{settings, scores, account}`）+ `index.json`；
