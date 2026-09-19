@@ -2587,75 +2587,6 @@ int main(int argc, char** argv)
     double countdownStartClock = 0.0;
     int countdownNumberShown = -1;
 
-#ifdef _WIN32
-    // ------------------------------------------------------------------
-    // Dragging the window: Windows runs its own modal loop inside DefWindowProc
-    // for a title-bar drag or a border resize, so our message pump - and with it
-    // the whole frame loop - stays parked until the mouse button comes up and the
-    // picture freezes. The audio keeps playing in miniaudio's own thread and the
-    // chart clock rides on it, so a drag during a live was worse than a frozen
-    // picture: on release the chart had jumped ahead and every note in between
-    // had been judged unseen.
-    // SDL calls this hook from its window procedure, which makes it the only code
-    // of ours that still runs inside that modal loop, so the drag becomes a
-    // *silent* pause: audio + clock stop on WM_ENTERSIZEMOVE, resume on
-    // WM_EXITSIZEMOVE. `paused` alone draws nothing (the pause dialog is what
-    // draws the overlay), so nothing flashes on screen either way.
-    // Rendering cannot continue this way - that would need the frame body out of
-    // main() so it can be re-entered from here; see AGENTS.md.
-    // ------------------------------------------------------------------
-    bool dragPauseActive = false;
-    struct WindowDragPause
-    {
-        bool* paused;
-        bool* suspended;
-        AppState* state;
-        platform::AudioEngine* audio;
-        platform::PartyLink* party;
-        const bool* roomOpen;
-        const bool* countdownActive;
-    };
-    WindowDragPause dragPause{&paused, &dragPauseActive, &state, &audio, &party, &roomOpen,
-        &countdownActive};
-    SDL_SetWindowsMessageHook(
-        [](void* userdata, void*, unsigned int message, Uint64, Sint64) {
-            WindowDragPause* c = static_cast<WindowDragPause*>(userdata);
-            if (message == WM_ENTERSIZEMOVE) {
-                // Same exclusions as the focus-loss auto pause: several windows
-                // sit on one screen in 多人游玩, so a room must never stop just
-                // because one seat's window is being moved. During the resume
-                // countdown the clock is already frozen, so leave it alone.
-                const bool pausable = *c->state == AppState::Play && !*c->paused && !*c->countdownActive
-                    && !c->party->active() && !*c->roomOpen;
-                if (pausable) {
-                    *c->paused = true;
-                    c->audio->pause();
-                    *c->suspended = true;
-                }
-                // Always logged, including the refusals: this is the only trace
-                // of a drag, and "why did the song not stop" / "why did it stop"
-                // both need the numbers.
-                std::printf("[window] WM_ENTERSIZEMOVE state=%d paused=%d countdown=%d party=%d room=%d"
-                            " -> %s\n",
-                    static_cast<int>(*c->state), *c->paused ? 1 : 0, *c->countdownActive ? 1 : 0,
-                    c->party->active() ? 1 : 0, *c->roomOpen ? 1 : 0,
-                    pausable ? "song paused" : "left running");
-                std::fflush(stdout);
-            } else if (message == WM_EXITSIZEMOVE) {
-                if (*c->suspended) {
-                    *c->suspended = false;
-                    *c->paused = false;
-                    c->audio->resume();
-                    std::printf("[window] WM_EXITSIZEMOVE: song resumed\n");
-                } else {
-                    std::printf("[window] WM_EXITSIZEMOVE: nothing was suspended\n");
-                }
-                std::fflush(stdout);
-            }
-        },
-        &dragPause);
-#endif
-
     // Damage vignette: brief dark inner shadow around the screen edges on
     // life loss (BAD / MISS / broken hold), a constant dark state at 0 life -
     // same feedback the original game gives.
@@ -4130,7 +4061,27 @@ int main(int argc, char** argv)
         std::fflush(stdout);
     };
 
-    while (running) {
+    // ------------------------------------------------------------------
+    // One frame of the main loop, wrapped so it can also be served from inside
+    // Windows' modal move/size loop (see the message hook right below).
+    //
+    // Why this exists: a title-bar drag or a border resize makes DefWindowProc
+    // run its *own* message loop, and our pump (SDL_PollEvent -> DispatchMessage)
+    // stays parked inside it for as long as the mouse button is held - the frame
+    // loop does not run, the picture freezes, while the audio and the chart clock
+    // ride on in miniaudio's own thread. Releasing the mouse then jumped the
+    // chart forward over a stretch of notes that had never been on screen.
+    //
+    // The one-shot `for` around the body is load-bearing: the body uses
+    // `continue` and `break`, and the compiler reads those as "next round of this
+    // loop" / "leave this loop". With a loop that runs exactly once, `continue`
+    // leaves the wrapper - which is what it used to do to the main loop - and so
+    // does `break`; the three places that end the loop all set `running = false`
+    // first and the condition is checked right after the call. That is why the
+    // body itself needed no edits at all.
+    // ------------------------------------------------------------------
+    auto runFrame = [&]() {
+    for (bool once = true; once; once = false) {
         const Uint64 nowCounter = SDL_GetPerformanceCounter();
         lastFrameDeltaSec = static_cast<double>(nowCounter - lastFrameCounter) / static_cast<double>(perfFreq);
         lastFrameCounter = nowCounter;
@@ -6647,6 +6598,63 @@ int main(int argc, char** argv)
                     - static_cast<double>(SDL_GetPerformanceCounter() - lastFrameCounter) / perfFreqD;
             }
         }
+    } // the one-shot wrapper loop: `continue` / `break` in the body land here
+    }; // end runFrame
+
+#ifdef _WIN32
+    // ------------------------------------------------------------------
+    // Serving frames while Windows has our message pump parked.
+    //
+    // During a modal move/size loop the system still delivers WM_TIMER to the
+    // window procedure, and SDL calls this hook before it handles anything, so a
+    // timer turns the drag back into a normal run: one frame per tick, straight
+    // out of the modal loop. No pause cleverness any more - the chart simply
+    // keeps playing, which is what the player expects; the pause version existed
+    // only because nothing could be drawn without this.
+    //
+    // The depth guard matters: the frame we serve here pumps messages itself (it
+    // is the ordinary frame body, SDL_PollEvent and all), so it can dispatch the
+    // next WM_TIMER - and that one has to be dropped, not turned into a second
+    // nested frame.
+    // ------------------------------------------------------------------
+    constexpr UINT_PTR kDragTimerId = 0x4353; // 'CS'
+    constexpr UINT kDragFrameMs = 16;
+    struct DragFrameHook
+    {
+        decltype(runFrame)* frame = nullptr;
+        int depth = 0;
+        int framesServed = 0;
+    };
+    DragFrameHook dragFrame{&runFrame, 0, 0};
+    SDL_SetWindowsMessageHook(
+        [](void* userdata, void* hWnd, unsigned int message, Uint64 wParam, Sint64) {
+            DragFrameHook* c = static_cast<DragFrameHook*>(userdata);
+            if (message == WM_ENTERSIZEMOVE) {
+                SetTimer(static_cast<HWND>(hWnd), kDragTimerId, kDragFrameMs, nullptr);
+                c->framesServed = 0;
+                std::printf("[window] WM_ENTERSIZEMOVE: frame loop parked, serving frames from a %u ms "
+                            "timer\n",
+                    kDragFrameMs);
+                std::fflush(stdout);
+            } else if (message == WM_TIMER && wParam == kDragTimerId) {
+                if (c->depth == 0) {
+                    ++c->depth;
+                    (*c->frame)();
+                    --c->depth;
+                    ++c->framesServed;
+                }
+            } else if (message == WM_EXITSIZEMOVE) {
+                KillTimer(static_cast<HWND>(hWnd), kDragTimerId);
+                std::printf("[window] WM_EXITSIZEMOVE: %d frame(s) served during the drag\n",
+                    c->framesServed);
+                std::fflush(stdout);
+            }
+        },
+        &dragFrame);
+#endif
+
+    while (running) {
+        runFrame();
     }
 
     // Headless checks (--screenshot) must not touch the player's data file.

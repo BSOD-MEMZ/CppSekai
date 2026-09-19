@@ -105,7 +105,7 @@ main.cpp          # SDL2 窗口、事件循环、输入映射、ImGui HUD、截�
 | 位置 | 行数 | 说明 |
 |---|---|---|
 | `main.cpp` → `main()` | **5,713**（`:730` 起） | 参数解析 + 初始化 + 启动决策 + 帧循环 + 关停全在一个函数 |
-| `main.cpp` 帧循环体 | ~2,500（`:3989` 起） | `if/else if (state == ...)` 串起 Select/Play/Result，三者变量共享作用域 |
+| `main.cpp` 帧循环体 | ~2,500（`:3989` 起） | `if/else if (state == ...)` 串起 Select/Play/Result，三者变量共享作用域。**2026-09-19 起这段正文被 `runFrame` lambda 包住**（拖动窗口时要从消息钩子里重入，见「拖动窗口」一节），行数与作用域都没变 |
 | `main.cpp` → `drawSettingsCard` lambda | ~769（`:2684-3453`） | 4 个页签用 `if (tab == N)` 展开 |
 | `game/SongSelect.cpp` → `drawSongSelect()` | ~1,746（`:2104` 起） | 13 参数含 5 个 in/out 引用（`selected`/`sortMode`/`groupMode`/`vocalIndex`/`confirmCenter`/`partyOut`） |
 
@@ -924,31 +924,46 @@ Windows 在 `DefWindowProc` 里为标题栏拖动和边框缩放跑了一个**�
 挂起，主循环一帧都不跑 —— 画面冻住。音频在 miniaudio 自己的线程里照放，谱面时钟又骑在音频上，
 所以演奏中拖窗口比"卡一下"严重得多：**松手瞬间钟表往前跳，中间的音符全被判 MISS**。
 
-**已落地**（`main.cpp` 里 `SDL_SetWindowsMessageHook` + `WindowDragPause`）：钩子是那段时间里
-唯一还在跑的自家代码，把拖动变成一次**静默暂停** —— `WM_ENTERSIZEMOVE` 时 `paused = true` +
-`audio.pause()`，`WM_EXITSIZEMOVE` 时恢复。`paused` 单独用不会画任何东西（暂停面板是
-`pauseDialogOpen` 画的），所以屏幕上不会闪东西。排除条件和失焦自动暂停一致：**多人房间里不停**
-（多个窗口常年失焦）、倒计时中不动、不在演奏态不管。每次进出都打
-`[window] WM_ENTERSIZEMOVE state=.. paused=.. countdown=.. party=.. room=.. -> song paused/left running`，
-"歌为什么没停/为什么停了"先看这行。
+**已落地（方案 a，帧体抽成 lambda + WM_TIMER 喂帧）**：`main.cpp` 里
+`SDL_SetWindowsMessageHook` 加上一个 16ms 的 `SetTimer`。那段模态循环里**系统照样会给窗口
+过程投递 WM_TIMER**，而 SDL 的钩子在它处理任何消息之前被调用，于是拖动期间一个 tick 出一帧，
+直接从那里面跑。实测拖动期间能稳定出帧（模拟测试 6 秒出 148 帧），**画面继续动、谱面钟继续走，
+不再需要暂停**（上一版那个"静默暂停"已删掉 —— 它只是因为当时没法画才存在）。
 
-验证（可复用，`winmsg.exe` 新加的 `raw` verb）：
+实现键点（改这段之前先读完，容易踩）：
+
+1. **帧体包成 `auto runFrame = [&]() { for (bool once = true; once; once = false) { …正文原样… } };`**，
+   主循环变成 `while (running) { runFrame(); }`。外面那层**只跑一次的 for 是必须的**：
+   正文里的 `continue` / `break` 在编译器眼里是"下一轮这个循环 / 离开这个循环"，
+   套一层单次循环后 `continue` = 离开包装 = 一帧结束（正好等于原来对主循环 `continue` 的效果），
+   `break` 同理；而三处真正要结束主循环的地方都是先 `running = false`，条件紧接着在调用后检查。
+   **正文一个字都没改** —— 别"顺手重构"里面那 2500 行。
+2. **重入保护是 `depth`**：喂进去的这一帧自己会泵消息（它就是正常的帧体，`SDL_PollEvent` 全在里面），
+   于是它可能再派发下一个 WM_TIMER —— 那个必须丢掉，不能变成第二层嵌套帧。
+3. `WM_ENTERSIZEMOVE` 开表 + 计数清零，`WM_EXITSIZEMOVE` 关表，进出都打
+   `[window] WM_ENTERSIZEMOVE: … serving frames from a 16 ms timer` /
+   `[window] WM_EXITSIZEMOVE: N frame(s) served during the drag` —— **N 是"拖动期间画面有没有在动"
+   的直接证据**。
+4. 定时器只挂在拖动/缩放期间，平时完全不存在，所以普通帧循环的行为与以前逐字节一致。
+
+验证（`winmsg.exe` 的 `raw` verb，PostMessage 的消息**同样会走 SDL 的窗口过程**，所以钩子能被无头驱动）：
 
 ```bash
-# 单机进演奏（--no-party 必须加：多人默认是开的，party.active() 为真就不暂停）
-build/cppsekai.exe --sus charts/test.sus --auto --no-party --lead-in 1 \
-    --screenshot build/shots/x.png --screenshot-time 6 &
+# 单机进演奏（--no-party 必须加：多人默认是开的；另外 --sus 的路径相对 CWD，
+# build/charts/ 里没有 test.sus，要从仓库根跑 charts/test.sus）
+build/cppsekai.exe --sus charts/test.sus --auto --no-party --lead-in 1     --screenshot build/shots/x.png --screenshot-time 6 &
 build/winmsg.exe SDL_app raw 0231 --pid <pid>   # 伪造 WM_ENTERSIZEMOVE
-sleep 5
+sleep 6
 build/winmsg.exe SDL_app raw 0232 --pid <pid>   # 伪造 WM_EXITSIZEMOVE
 ```
-实测：到达「谱面时间 6s」的墙钟耗时 **13.35s（不拖）→ 18.49s（拖 5 秒）**，差值 5.13s ≈ 拖动
-时长；那次截图里 `miss=0`。也就是说**钟真的冻住了**。
+判别指标用「到谱面时间 6s 的墙钟耗时」：**12.97s（不拖）→ 12.69s（"拖"6 秒）**，即拖动期间
+谱面钟照走（上一版静默暂停时这个差值是 +5.13s，正好等于拖动时长）。
+**这个测试比真实拖动还狠**：外层循环同时也在跑，等于 148 个重入帧与外层帧并发，没崩没花。
+真拖动时外层被系统挂住、只有这一条渲染路径，帧率只会更高（模拟里 148 帧/6s 是被双重渲染拖慢的）。
 
-**还没做、也不打算顺手做**：拖动期间画面仍然不动。要让画面继续渲染，得把 `main()` 里那个
-~2500 行的帧循环体抽成函数、再从消息钩子里重入调用（现在的体量是 `CODE-REVIEW.md` 里点名的
-问题），属于大改；或者接管标题栏拖动（自己 `SetCapture` + `SetWindowPos`，代价是丢 Aero Snap）。
-用户问过一次，停在"要不要上大的"这一步。
+**还没做**：拖**边框缩放**走的同一条模态循环、同一个定时器，但缩放期间窗口尺寸在变，
+`SDL_PollEvent` 拿到的 `WM_SIZE` 会带着新尺寸重建 FBO —— 这条路径没人真的拖过边框验证。
+
 
 验证（不用眼睛也能看）：`--screenshot` 写的是 RGBA PNG（`glReadPixels(..., GL_RGBA, ...)` +
 `stbi_write_png(..., 4, ...)`），所以**直接量 alpha** 就知道透明生效没有 ——
