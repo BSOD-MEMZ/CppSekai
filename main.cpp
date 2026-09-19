@@ -6584,12 +6584,13 @@ int main(int argc, char** argv)
             }
         } else if (state == AppState::Result) {
             // ----------------------------------------------------------
-            // Result screen. The stage keeps rendering behind it (the panel is
-            // translucent), so the same renderFrame() call as the play state
-            // is used with the playfield frozen.
+            // Result screen. playfieldVisibility 0 stops renderFrame() right
+            // after the background plate, so neither stage.png nor the song's
+            // own stage backdrop shows through - the screen is the result
+            // panel over the plain background art and nothing else.
             // ----------------------------------------------------------
             renderer.setLaneGlows({});
-            renderer.renderFrame(nullptr, 0, 0.85f);
+            renderer.renderFrame(nullptr, 0, 0.85f, 0.0f);
 
             const float resultElapsed = static_cast<float>(uiClock - resultShownAt);
             // Looping result track; a no-op while it is already playing, and

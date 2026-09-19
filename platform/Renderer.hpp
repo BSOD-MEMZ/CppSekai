@@ -141,6 +141,12 @@ class Renderer
     GLuint loadBackdropTexture(const std::string& path, float blur01, int& outW, int& outH,
         std::string& outError);
 
+    // Uploads an RGBA8 buffer as a GL texture (linear, clamped). For UI art the
+    // game builds at runtime instead of loading from disk - the result screen's
+    // RESULT watermark, see platform/FontOutline.hpp. Not cached; the caller
+    // owns the id. Returns 0 for an empty buffer.
+    GLuint createTextureFromRgba(const unsigned char* rgba, int width, int height);
+
     Renderer(const Renderer&) = delete;
     Renderer& operator=(const Renderer&) = delete;
 

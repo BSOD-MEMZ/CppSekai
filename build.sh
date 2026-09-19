@@ -42,6 +42,7 @@ SOURCES=(
     main.cpp
     platform/CoreApi.cpp
     platform/Renderer.cpp
+    platform/FontOutline.cpp
     platform/Audio.cpp
     platform/Party.cpp
     platform/SystemMedia.cpp

@@ -56,6 +56,9 @@ namespace
     ImFont* gDiffFont = nullptr;
     ImFont* gBoldFont = nullptr;
     ImFont* gCondFont = nullptr;
+    // The file the body face came from, so platform::buildTextOutline() can
+    // rasterise from the same glyphs the UI draws ("" = ImGui's default face).
+    std::string gBodyFontPath;
 
     float clamp01(float value)
     {
@@ -416,20 +419,21 @@ void loadIntroFonts()
         if (gBodyFont == nullptr) {
             gBodyFont = io.Fonts->AddFontDefault();
         }
-        for (const char* file : {"msyhbd.ttc", "Dengb.ttf", "simhei.ttf", "msjhbd.ttc"}) {
-            openFont(file, gBoldFont, "bold", io.Fonts->GetGlyphRangesJapanese());
-            if (gBoldFont == nullptr) {
-                continue;
-            }
-            // Merge the simplified-Chinese set for 纪 / 录 / 级 / 继 / 续.
-            ImFontConfig merge;
-            merge.MergeMode = true;
-            merge.OversampleH = 2;
-            merge.OversampleV = 2;
-            io.Fonts->AddFontFromFileTTF((fontRoot + file).c_str(), 42.0f, &merge,
-                io.Fonts->GetGlyphRangesChineseSimplifiedCommon());
-            break;
-        }
+        // Heavy CJK (得分 / 最高得分 / 歌曲等级 / 继续) used to be loaded here
+        // (msyhbd.ttc and friends). 2026-09-19, by request: dropped, so those
+        // labels now fall back to the body face at the bottom of this lambda.
+        //
+        // Measured, not guessed: msyhbd.ttc is 16.1 MB of *resident* TTF data
+        // (ImGui 1.92 rasterises glyphs on demand, so it keeps the whole file)
+        // and the old code loaded the same file *twice* - once for the Japanese
+        // ranges and again in MergeMode for the simplified-Chinese ones - so
+        // dropping it is -31.9 MB of working set (0.6 s after boot and at
+        // steady state alike). What it costs is a lighter stroke: the CJK
+        // advances are identical in both faces (every CJK glyph is 1 em, so
+        // 得分 84 / 最高得分 168 either way), the latin ones differ by 3-7%,
+        // and every label over there is centred or left-aligned at a fixed
+        // position - nothing moves on screen. Numbers and screenshots:
+        // .workbuddy/memory/2026-09-19.md
         // Condensed bold latin (PERFECT/GREAT/.../SCORERANK/RESULT).
         for (const char* file : {"ARIALNB.TTF", "ARIALN.TTF"}) {
             openFont(file, gCondFont, "condensed", nullptr);
@@ -531,6 +535,7 @@ void loadIntroFonts()
             gBodyFont = font;
             gTitleFont = font;
             gDiffFont = font;
+            gBodyFontPath = candidate.path;
             addResultFonts();
             io.Fonts->Build();
             std::printf("[intro] system font %s @42px loaded (%s)\n", candidate.face.c_str(),
@@ -576,6 +581,11 @@ ImFont* difficultyFont()
 ImFont* boldFont()
 {
     return gBoldFont;
+}
+
+const std::string& bodyFontPath()
+{
+    return gBodyFontPath;
 }
 
 ImFont* condensedFont()

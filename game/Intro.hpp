@@ -59,12 +59,21 @@ ImFont* difficultyFont();
 
 // Extra faces used by the result screen, loaded by loadIntroFonts() when the
 // system provides them (both fall back to bodyFont()):
-//   boldFont()      - heavy CJK (YaHei Bold / SimHei) for 得分 / 最高得分 / 继续
+//   boldFont()      - 2026-09-19: the heavy CJK face is no longer loaded (it
+//                     was 16.1 MB of resident TTF data, and the old code loaded
+//                     the same file twice), so this hands back the body face.
+//                     Kept as an accessor because the result screen asks for it
+//                     in 16 places and the fallback is the documented behaviour.
 //   condensedFont() - condensed bold latin (Arial Narrow Bold), the closest
 //                     Windows face to pjsk's Roboto Condensed UI font, used by
-//                     PERFECT/GREAT/... and the giant RESULT watermark.
+//                     the score-bar C/B/A/S markers.
 ImFont* boldFont();
 ImFont* condensedFont();
+
+// The file the body face was loaded from, or "" when ImGui's built-in face is
+// in use. platform::buildTextOutline() rasterises the RESULT watermark from it
+// so the outline matches the glyphs the UI draws.
+const std::string& bodyFontPath();
 
 // Builds the card content. Mirrors buildIntroCardState() upstream, including
 // the 0..6 difficulty codes and the file-name fallback.

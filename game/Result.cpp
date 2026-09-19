@@ -17,13 +17,17 @@
 #include "game/SongSelect.hpp" // difficultyColor()
 #include "game/Ui.hpp"         // player level chip + exp bar
 
+#include "platform/FontOutline.hpp"
+
 #include "imgui.h"
 
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <string>
+#include <vector>
 
 namespace game
 {
@@ -143,9 +147,11 @@ constexpr float kRowLabelX = 472.0f;
 // were measured with ImageMagick, see kJudgeSprite below.
 constexpr float kRowLabelInkH = 30.0f;
 constexpr float kRowNumberRight = 785.0f;
-// The digits of the rows and the combo are the condensed face: its numerals
-// match the reference's ink proportions (0.59 wide/high) than the heavy CJK
-// face does (0.62).
+// 2026-09-19, by request: the row counts and the combo read-out use the system
+// UI face now - the same one as every other label on this screen - instead of
+// the condensed latin face. `advance` is only the slot pitch and each glyph is
+// centred inside its own slot, so the right-aligned run keeps its anchor and
+// the numbers cannot drift off the reference's positions.
 constexpr float kRowNumberFontSize = 40.0f;
 // Digits sit slightly above the centre of ImGui's line box; nudge them back
 // down so their ink is centred on the row.
@@ -216,18 +222,6 @@ ImU32 withAlpha(ImU32 col, float alpha)
     const int a = static_cast<int>(
         clamp01(alpha) * static_cast<float>((col >> IM_COL32_A_SHIFT) & 0xFF));
     return (col & ~IM_COL32_A_MASK) | (static_cast<ImU32>(a) << IM_COL32_A_SHIFT);
-}
-
-ImU32 lerpColor(ImU32 a, ImU32 b, float t)
-{
-    const float u = clamp01(t);
-    const auto channel = [&](int shift) {
-        const float ca = static_cast<float>((a >> shift) & 0xFF);
-        const float cb = static_cast<float>((b >> shift) & 0xFF);
-        return static_cast<ImU32>(ca + (cb - ca) * u + 0.5f) << shift;
-    };
-    return channel(IM_COL32_R_SHIFT) | channel(IM_COL32_G_SHIFT) | channel(IM_COL32_B_SHIFT)
-        | (static_cast<ImU32>(255) << IM_COL32_A_SHIFT);
 }
 
 std::string utf8Glyph(const std::string& text, std::size_t& cursor)
@@ -347,42 +341,6 @@ void textCenteredTracked(const Canvas& c, ImFont* font, float size, float cx, fl
 
 // Draws `text` with a per-glyph colour from `ramp` (0..1 across the string) -
 // that is how the reference builds its rainbow PERFECT row.
-// The backdrop is a bilinear wash of four corner colours; the RESULT
-// watermark's outline needs its interior filled with exactly that colour, so
-// the same interpolation is reproduced here.
-ImU32 bgColorAt(float vx, float vy)
-{
-    const float u = clamp01(vx / kCanvasW);
-    const float v = clamp01(vy / kCanvasH);
-    const ImU32 tl = IM_COL32(46, 47, 74, 255);
-    const ImU32 tr = IM_COL32(47, 47, 78, 255);
-    const ImU32 br = IM_COL32(74, 62, 124, 255);
-    const ImU32 bl = IM_COL32(48, 48, 72, 255);
-    return lerpColor(lerpColor(tl, tr, u), lerpColor(bl, br, u), v);
-}
-
-// Outline (stroke-only) text: the glyph silhouette is stamped around a circle
-// in `stroke`, then punched out with the backdrop colour - the way the
-// reference's giant RESULT watermark is built.
-void textOutlined(const Canvas& c, ImFont* font, float size, float vx, float centerVy,
-    const std::string& text, ImU32 stroke, float thickness)
-{
-    if (font == nullptr || text.empty()) {
-        return;
-    }
-    const float px = size * c.scale;
-    const float top = textTopForCenterPx(font, px, c.y(centerVy), text);
-    const ImVec2 base(c.x(vx), top);
-    const float r = c.s(thickness);
-    const int steps = 12;
-    for (int i = 0; i < steps; ++i) {
-        const float a = (static_cast<float>(i) / steps) * 6.2831853f;
-        c.dl->AddText(font, px, ImVec2(base.x + std::cos(a) * r, base.y + std::sin(a) * r), stroke,
-            text.c_str());
-    }
-    c.dl->AddText(font, px, base, bgColorAt(vx, centerVy), text.c_str());
-}
-
 void addRoundedRect(const Canvas& c, float vx, float vy, float vw, float vh, float vround,
     ImU32 fill)
 {
@@ -538,56 +496,70 @@ void drawResult(platform::Renderer& renderer, const ResultData& data, float elap
 
     ImFont* bold = boldFont() != nullptr ? boldFont() : bodyFont();
     ImFont* cond = condensedFont() != nullptr ? condensedFont() : bodyFont();
-    // The heavy CJK face also carries the latin labels: its cap width/height
+    // The heavy CJK face carries the latin labels too: its cap width/height
     // ratio matches the reference's UI font (~0.83), which a latin-only
-    // condensed face does not. `cond` stays in use for the RESULT watermark
-    // and the score-bar marker letters, where the reference really is narrow.
+    // condensed face does not. `cond` is only left on the score-bar marker
+    // letters (C/B/A/S), where the reference really is narrow.
 
     // -----------------------------------------------------------------------
-    // Background: diagonal navy -> purple wash, the faint collage pattern and
-    // the giant RESULT watermark.
+    // Background: whatever renderer.renderFrame() drew below (the flat
+    // background art) is all there is - the result panel sits straight on it.
     //
-    // The wash is deliberately not opaque: the stage plate that
-    // renderer.renderFrame() drew below (the song's own backdrop, or the default
-    // room) is supposed to stay visible through it. At 255 it buried the plate
-    // completely; 0.7 keeps the screen readable and lets it read through.
+    // 2026-09-19, by request: the diagonal navy -> purple wash, the decorative
+    // "photo frame" outlines and the two wide diagonal bands used to be painted
+    // here. All three are gone, so nothing tints or covers the background art
+    // any more. The wash was what kept the screen readable when a (dark) stage
+    // plate showed through; with the stage off for this state the background
+    // *is* the plate, so there is nothing left to tone down.
     // -----------------------------------------------------------------------
-    {
-        const int a = static_cast<int>(appear * 255.0f * 0.70f);
-        dl->AddRectFilledMultiColor(c.p(0.0f, 0.0f), c.p(kCanvasW, kCanvasH), IM_COL32(46, 47, 74, a),
-            IM_COL32(47, 47, 78, a), IM_COL32(74, 62, 124, a), IM_COL32(48, 48, 72, a));
-    }
-    {
-        // Decorative "photo frame" outlines + two wide diagonal bands: the
-        // texture the official background art carries.
-        const ImU32 line = IM_COL32(255, 255, 255, static_cast<int>(appear * 6.0f));
-        const ImU32 band = IM_COL32(255, 255, 255, static_cast<int>(appear * 5.0f));
-        const float frames[][4] = {
-            {688.0f, 262.0f, 402.0f, 208.0f},
-            {-80.0f, 250.0f, 360.0f, 390.0f},
-            {1230.0f, 640.0f, 380.0f, 260.0f},
-            {560.0f, 720.0f, 300.0f, 300.0f},
-            {1500.0f, 120.0f, 300.0f, 420.0f},
-            {120.0f, 860.0f, 420.0f, 240.0f},
-        };
-        for (const auto& f : frames) {
-            dl->AddRect(c.p(f[0], f[1]), c.p(f[0] + f[2], f[1] + f[3]), line, c.s(18.0f), 0,
-                c.s(2.0f));
-        }
-        dl->AddTriangleFilled(c.p(-120.0f, 620.0f), c.p(760.0f, -60.0f), c.p(980.0f, 300.0f), band);
-        dl->AddTriangleFilled(c.p(1920.0f, 60.0f), c.p(1420.0f, 1080.0f), c.p(1920.0f, 1080.0f), band);
-    }
     {
         // Giant RESULT watermark: outline-only letters on a fixed 166u advance
         // with their cap tops at y=20 and the letter bodies nearly touching.
-        constexpr const char* kLetters[6] = {"R", "E", "S", "U", "L", "T"};
+        //
+        // 2026-09-19: the letters come from a texture built by
+        // platform/FontOutline instead of being stamped as text. ImGui can only
+        // stamp *filled* glyphs, so the old outline trick was "stamp the
+        // silhouette around a circle, then punch the body out with the backdrop
+        // colour" - which needs a flat backdrop. Over the background art the
+        // body showed as a solid block in a colour that had nothing to do with
+        // it. The outline texture leaves the body empty, so the art reads
+        // through and no fill colour is involved. Built once per process.
         constexpr float kLetterSize = 322.0f;
         constexpr float kAdvance = 166.0f;
         constexpr float kInkCenterY = 101.0f;
-        const ImU32 stroke = IM_COL32(255, 255, 255, static_cast<int>(appear * 56.0f));
-        for (int i = 0; i < 6; ++i) {
-            textOutlined(c, bold, kLetterSize, -9.0f + static_cast<float>(i) * kAdvance,
-                kInkCenterY + kLetterSize * 0.03f, kLetters[i], stroke, 3.0f);
+        constexpr float kOriginX = -9.0f;
+        constexpr float kStrokePx = 3.0f;
+        static GLuint watermarkTex = 0;
+        static int watermarkW = 0;
+        static int watermarkH = 0;
+        static bool watermarkBuilt = false;
+        if (!watermarkBuilt) {
+            watermarkBuilt = true;
+            platform::OutlineRequest request;
+            request.ttfPath = bodyFontPath();
+            request.text = "RESULT";
+            request.pixelHeight = kLetterSize;
+            request.originX = kOriginX;
+            request.advance = kAdvance;
+            request.centerY = kInkCenterY + kLetterSize * 0.03f;
+            request.strokePx = kStrokePx;
+            int builtW = 0;
+            int builtH = 0;
+            const std::vector<unsigned char> rgba = platform::buildTextOutline(request, builtW, builtH);
+            if (!rgba.empty()) {
+                watermarkTex = renderer.createTextureFromRgba(rgba.data(), builtW, builtH);
+                watermarkW = builtW;
+                watermarkH = builtH;
+                std::printf("[result] RESULT outline %dx%d from '%s'\n", builtW, builtH,
+                    request.ttfPath.c_str());
+                std::fflush(stdout);
+            }
+        }
+        if (watermarkTex != 0) {
+            const ImU32 tint = IM_COL32(255, 255, 255, static_cast<int>(appear * 190.0f));
+            dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(watermarkTex)),
+                c.p(0.0f, 0.0f), c.p(static_cast<float>(watermarkW), static_cast<float>(watermarkH)),
+                ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), tint);
         }
     }
 
@@ -789,7 +761,7 @@ void drawResult(platform::Renderer& renderer, const ResultData& data, float elap
                 js.inkW, js.inkH, kRowLabelX, cy, kRowLabelInkH, withAlpha(kWhite, alpha));
             char value[16];
             std::snprintf(value, sizeof(value), "%04d", rows[i].value);
-            drawFontDigits(c, cond, kRowNumberFontSize, value, kRowNumberRight,
+            drawFontDigits(c, bold, kRowNumberFontSize, value, kRowNumberRight,
                 cy + kRowNumberFontSize * kDigitBaselineNudge, kRowNumberAdvance, kDigitGray, kWhite,
                 alpha);
 
@@ -798,7 +770,7 @@ void drawResult(platform::Renderer& renderer, const ResultData& data, float elap
                     withAlpha(kWhite, alpha), "COMBO", kComboLabelTracking);
                 char combo[16];
                 std::snprintf(combo, sizeof(combo), "%04d", data.maxCombo);
-                drawFontDigits(c, cond, kComboFontSize, combo, kComboRight,
+                drawFontDigits(c, bold, kComboFontSize, combo, kComboRight,
                     cy + kComboFontSize * kDigitBaselineNudge, kComboAdvance, kDigitGray, kWhite,
                     alpha);
             }

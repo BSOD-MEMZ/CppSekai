@@ -67,7 +67,12 @@ game/Result.*     # 结算画面（PRESENT/RESULT）：参考原版截图 1:1 �
                   # 左半边（RESULT 水印、曲目卡、得分、判定行）用参考截图的绝对 x；
                   # 右半边（进度条、SCORERANK 牌、继续按钮）挂在上方面板右缘上——手机版那块
                   # 是留给 live2d 的，16:9 里没有角色，所以面板直接铺到右边。
-                  # 数字全部用游戏自带精灵（score/digit/*、combo/p*），不是字体。
+                  # 数字：分数/最高分用游戏自带精灵（score/digit/*），判定计数与 combo 用
+                  # 系统字体（2026-09-19 起，原来是 condensed 窄体）。
+                  # 2026-09-19 改版：自绘装饰（背景 wash / 装饰框线 / 斜带）全删、不画舞台
+                  # （结算时 renderFrame 传 visibility 0），背景只剩 background_overlay.png；
+                  # RESULT 大字的空心轮廓来自 platform/FontOutline.cpp（ImGui 只会盖实心
+                  # 字形，"描边 + 背景色挖空"那套在带图案的背景上必露馅）。
                   # 详细测量笔记见下面「结算画面」一节。
 game/Intro.*      # ImGui 卡片/UI；字体**只走系统**（注册表找字体文件 + 按文件名兜底 +
                   # 日文/简中字形探测。Yu Gothic UI 是 CFF 轮廓，stb_truetype 渲染不了，
@@ -444,9 +449,14 @@ bash build.sh          # 仅需 Git Bash；产物 build/cppsekai.exe + SDL2.dll 
   窗口只包住卡片本身，所以演奏时 HUD/轨道照样可点。
 - **字体只用系统字体**（2026-09-19）：`assets/mmw/font/` 整个删了（两个 Fontworks 商业
   FOT-Rodin + 16.9 MB 的 Noto），`--pjsk-font` 选项一并去掉，`loadIntroFonts()` 不再收参数。
-  现在是「注册表读系统 UI 字体 → 探 CJK 字形 → 不行就按下面的候选表依次试」，结果页那几块
-  （得分/最高得分/继续）另外从 `%WINDIR%\Fonts` 按文件名取 `msyhbd.ttc` / `ARIALNB.TTF`；
-  全失败才落 ImGui 内置位图字（只有 ASCII，但至少不是"一个字都没有"）。
+  现在是「注册表读系统 UI 字体 → 探 CJK 字形 → 不行就按下面的候选表依次试」，结果页那条
+  condensed 窄体另外从 `%WINDIR%\Fonts` 按文件名取 `ARIALNB.TTF`；全失败才落 ImGui 内置
+  位图字（只有 ASCII，但至少不是"一个字都没有"）。
+  **2026-09-19 晚：`msyhbd.ttc`（粗体 face）也删了** —— 它原来被加载了*两遍*（一次 ja
+  ranges、一次 MergeMode 简中），各 16.1 MB，实测省下 **31.9 MB** 工作集（峰值 291.6→258.1、
+  稳态 245.4→212.3）。`boldFont()` 现在返回 bodyFont。代价只是「得分 / 最高得分 / COMBO」
+  笔画细一档：CJK 字宽两套完全一致（全角 1 em，得分 84 / 最高得分 168 都一样），latin 差
+  3-7%，且每处都是居中或左对齐的固定位置，布局不动。
   **COPYRIGHT.md 里那条"商业字体嵌入分发"的风险至此关闭**——别再往仓库里放字体文件。
 - **字体候选表（2026-09-19 晚修 Win7 时扩的）**：`systemFontCandidates()` 现在三层，
   按顺序去重后逐个试：
@@ -729,6 +739,20 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
 
 
 ## 结算画面（2026-09-13，`game/Result.cpp`）
+
+**2026-09-19 改版（用户点名的四条）**：
+1. **自绘装饰全删**：背景 wash（`AddRectFilledMultiColor`）、6 个装饰框线、两条斜带
+   （`AddTriangleFilled`）。背景只剩 `renderFrame()` 画的 `background_overlay.png`
+   （紫蓝渐变**带彩色图案**，别以为它是纯色）。
+2. **不画舞台**：`main.cpp` 的 `AppState::Result` 分支传 `playfieldVisibility = 0.0f`，
+   renderFrame 画完 background 就 return。
+3. **判定计数 + COMBO 计数改用系统字体**（原来是 condensed 窄体）；`cond` 只剩 score-bar
+   的 C/B/A/S 标记。`drawFontDigits` 的 `advance` 只是槽宽、字形在槽内居中，所以锚点不动。
+4. **RESULT 大字只留 border**：`platform/FontOutline.cpp` 用 stb_truetype 光栅化再取
+   「圆形膨胀 − 原覆盖」得到**真空心**轮廓，`Renderer::createTextureFromRgba()` 上传，
+   结算时 `AddImage`（960x210，一次构建约 0.77 MB）。
+   **不要改回"描边 + 背景色挖空"那一套** —— 挖空色必须精确等于背景色，而背景是带图案的
+   图片，任何近似都露出色块。
 
 **几何来自像素测量，不要凭感觉改。** 参考图是 2388x1080 的手机截图（Project SEKAI 官方
 结算画面），用 `.workbuddy/tools/` 里的 python 脚本逐区域扫出来的数值，全部换算到

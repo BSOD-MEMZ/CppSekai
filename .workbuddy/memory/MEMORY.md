@@ -51,6 +51,10 @@
   `\Fonts\`。字形探测是日文+简中混合（初/ミ/詞/设），日文字体会因缺 `设` 被拒 —— 故意的。
   「字体变点阵 + 中文变问号」= 所有候选都没过 → 看 `cppsekai.log` 的 `[intro]` 几行
   （候选表 + 拒绝原因），`CPSEKAI_FONT_FILE=<路径>` 可强制指定。
+  **粗体 face 已删**（2026-09-19：msyhbd.ttc 被加载两遍、各 16.1MB → 省 31.9MB），
+  `boldFont()` 现在返回 bodyFont。结算画面的 RESULT 大字**不走字体**，走
+  `platform/FontOutline.cpp` 生成的真空心轮廓纹理（ImGui 只会盖实心字形，挖空色在带图案的
+  背景上会露出色块）。
 - `assets/se/**` 是白名单，用户自己加的，哪怕没接线也不许删。
 - **精灵图集不许缩**：`notes*` / `effect.png` / `longNoteLine*` / `touchLine*`
   —— 精灵矩形是像素坐标写死在 `core/native/generated/generated_resources.h`，缩文件 = 音符错位。
@@ -99,6 +103,10 @@
   另：**渲染质量档评估过，用户拍板先不做** —— 实测瓶颈不在填充率（窗口 1920x1080 + autoplay，
   渲染 1080p 与 540p 都是 ~1.0ms/帧、950+fps），只对弱 GPU/VM 有意义。已知待办：拖动窗口时
   38~51fps（见「验证手法」）。
+  另二：**内存审计 + 结算界面改版** —— 壁纸背景只值 2.2MB（「切背景省 50MB」其实是启动期临时
+  分配在 10~12s 的延迟归还，bgStyle 0/1 都有）；删粗体 face 后稳态 **245.4 → 212.3MB**；
+  结算界面去掉 wash/框线/斜带、不画舞台、判定与 combo 计数换系统字体、RESET 大字改真空心轮廓
+  纹理。新工具 `.workbuddy/tools/mem_sample.py`（峰值/工作集采样）。
 - **2026-09-18**：空谱面「下载谱面」按钮、首启 ELUA 弹窗、**多人"连不上"真根因在选曲界面**
   （`selected` 被 `diffIndex` 反推成 -1）、暂停没冻住主机时钟、多人流程重做、多人不进结算。
 - **2026-09-17**：多人游玩（`platform/Party.*` + `game/PartyScreen.*`，同机多窗口共享内存总线）。

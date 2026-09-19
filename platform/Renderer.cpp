@@ -790,6 +790,24 @@ GLuint Renderer::loadBackdropTexture(const std::string& path, float blur01, int&
     return id;
 }
 
+GLuint Renderer::createTextureFromRgba(const unsigned char* rgba, int width, int height)
+{
+    if (rgba == nullptr || width <= 0 || height <= 0) {
+        return 0;
+    }
+    GLuint id = 0;
+    glGenTextures(1, &id);
+    glBindTexture(GL_TEXTURE_2D, id);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    textureBytes() += static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 4u;
+    return id;
+}
+
 bool Renderer::loadSplash(const std::string& assetDir, std::string& outError){
     // Only what drawStaticScene() needs for the very first frame.
     mDefaultBackgroundPath = assetDir + "/background_overlay.png";
