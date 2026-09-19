@@ -1006,6 +1006,16 @@ the drag (moving=126 sizing=0 timer=1)` —— 拖动期间约 60fps（受 vsync
 最长帧从 **2264ms 掉到 19~29ms** ✓。Win10 22H2 那边等用户复测（模态循环更经典，消息一定会
 送到窗口过程）。
 
+**3b. 拖动的卡顿（2026-09-19 修）**：喂进去的每一帧都会把模态循环堵住整帧时间，所以
+最初"每个 WM_MOVING 一帧 + vsync 开着"等于 97% 的时间在阻塞循环 —— 用户的原话是"拖动和 resize
+会很卡"。三个改动：① 拖动期间**关掉 vsync**（`dragFramePacing`，由子类在 ENTERSIZEMOVE/
+EXITSIZEMOVE 置位，帧体的 vsync 决策读它），每帧只花渲染本身的时间；② 喂帧下限从 8ms 提到
+**30ms**（约 33fps），给循环留出时间跟手；③ `WM_TIMER` 里查 `GetAsyncKeyState(VK_LBUTTON)`，
+**按键一松就 KillTimer + 恢复 vsync** —— 模态循环有时不给我们 `WM_EXITSIZEMOVE`（松手那条消息
+会落在我们服务的那一帧里、被 SDL 的泵吃掉），没有这个收尾会留下"定时器永远在跑 + vsync 一直关"
+的坑。改完实测：拖 2.1s / 280px → **63 帧（约 30fps）、`WM_EXITSIZEMOVE` 正常到达**，
+探针里最长帧 50ms 上下（≈喂帧间隔，不再是整段拖动）。
+
 **4. 常驻探针**（`main.cpp` 帧体开头，默认安静，不需要环境变量）：那一秒里窗口几何动过就打印
 `[frame] geometry changed: N frame(s)/s, longest frame M ms, window moved P px`，
 否则只在出现 >60ms 长帧时打印。**判据**：`M` ≈ 拖动时长 ⇒ 泵被挂住且没人喂帧；`M` 只有
@@ -1037,6 +1047,69 @@ python -c "..."                      # 改 profiles/default.json 的 bgStyle=2
 ./cppsekai.exe --screenshot shots/g.png --screenshot-time 4
 # 注意 --screenshot 的参数是**文件路径**（不是目录！给目录会静默写失败）
 ```
+
+## 窗口外观：整块玻璃 / 原生材质 / Vista 成本（2026-09-19 调查）
+
+### 「整块玻璃」= 无边框 + 自己做 hit-test
+
+用户看到的是：客户区已经是玻璃了，但窗口**自带 caption 和边框**，于是玻璃被框在一个"窗框"里
+（caption 的玻璃有自己的高光/底边，外面还有 DWM 的一圈 outline）—— 他要的是 Explorer / 桌面
+小组件那种"整个窗口就是一块玻璃"。**这不是 `DwmExtendFrameIntoClientArea` 能解决的**（它只能
+让客户区变玻璃，caption 还在）。
+
+要那种感觉只能**去掉窗口的非客户区**，而"无边框"不等于"不能拖"：经典的组合是
+**borderless (`WS_POPUP`) + `WM_NCHITTEST` 返回 `HTCAPTION`（顶部一条）+ `HTBOTTOMRIGHT` 等
+（四边/角给缩放）** —— 系统照样给原生的拖动、Aero Snap（拖到顶最大化、拖到边半屏）和缩放，
+但窗口不画任何 frame，于是 `-1` margin 的玻璃铺满整块 = 整块玻璃 ✓。我们的消息泵不会被挂住
+（系统那种模态循环仍然会发生，但已经有子类化喂帧兜着，画面照动）。
+
+**代价**：① 得自己维护 hit-test 区域（顶部多少 px 算 caption、边缘多少 px 算缩放），DPI 缩放时
+要乘 `scale`；② 最大化后没有原生标题栏就不能双击还原？——hmm，双击 caption 是系统行为，
+`HTCAPTION` 依然给 ✓；③ 多人模式多窗口时，每块玻璃都透桌面，视觉上更乱。
+
+### 原生材质（Win10 亚克力 / Win11 Mica）：可以做，分系统一条
+
+我们现在做的"透明 + DWM 玻璃"只在 Win7 Aero 上有模糊；Win8+ 是纯透（没有模糊）。各系统的
+官方/事实标准做法：
+
+| 系统 | 做法 | 备注 |
+|---|---|---|
+| Win7 / Vista | `DwmExtendFrameIntoClientArea(-1)` | Aero 模糊就是它，已实现 ✓ |
+| Win8 / 8.1 | 同上，但只得到透明（无模糊） | Aero 玻璃在 Win8 被砍了 |
+| Win10 1803+ | `SetWindowCompositionAttribute` + `ACCENT_ENABLE_BLURBEHIND`（轻）或 `ACCENT_ENABLE_ACRYLICBLURBEHIND`（亚克力，重、有历史 bug） | **未文档化**，user32 导出，得 GetProcAddress |
+| Win11 22000+ | `DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE=38, DWMSBT_MAINWINDOW=2 /*mica*/、DWMSBT_TRANSIENTWINDOW=3 /*acrylic*/)`；配 `DWMWA_WINDOW_CORNER_PREFERENCE=33` 圆角、`DWMWA_BORDER_COLOR=34` 去掉那条边框线 | 官方 API（21H2 上是 `DWMWA_MICA_EFFECT=1029`） |
+
+全部都是 `GetProcAddress` 动态取（我们的工具链没有对应导入库），加一块 `platform/WindowMaterial.cpp`
+按系统分派即可，约 100~150 行。**Win11 的 Mica 我这边就能实测**（`--screenshot` 抓不到合成
+结果，得人眼看），Win10 亚克力需要用户那台 22H2 验证。
+注意：材质只在"背景不填充"（`bgStyle == 2`）时才看得见 —— 铺满的窗口没有材质可言。
+
+### 兼容 Vista 的成本（2026-09-19 实测）
+
+**已经免费达标的部分**（实测，不是推测）：
+
+- **导入表**：`pe_imports.py` 现在带一组"Win7 独占"名单（`GetLogicalProcessorInformationEx` /
+  `SetThreadGroupAffinity` / `GetActiveProcessorCount` / `SetThreadErrorMode` …）。
+  三个 PE（cppsekai.exe / chartdl.exe / SDL2.dll）**都没有 Win7 独占导入，也没有 Win8+ 独占导入**；
+  源码里也没有直接调用 `SetThreadDescription` / `GetDpiForWindow` / `PathCchCanonicalize` 这类新 API
+  （SMTC 那套本来就有 Win10 门）。
+- **UCRT**：Vista SP2 **有官方包** —— `Windows6.0-KB2999226-x64.msu`（微软下载中心 id=48234，
+  写明支持 Vista SP2 / Server 2008）。也就是和 Win7 一样的处理：装一次 redist，或随包带 app-local。
+- **SDL2 2.32**：导入表同样干净（对新 API 一律动态加载），官方口径一直是 Vista+；
+  **miniaudio** 走 WASAPI，而 WASAPI 正是 Vista 引入的。
+- **Aero / DWM**：`DwmExtendFrameIntoClientArea` 在 Vista 上就有（Aero 就是 Vista 的东西）。
+
+**真正的阻塞是 GPU 驱动，不在我们这边**：
+
+- **Intel 集显在 Vista 上的最后一个驱动（15.22.54，2012-01）只暴露 OpenGL 3.1**（GLSL 1.40）
+  —— 而 CppSekai 是 **GL 3.3 core**（shader `#version 330`、ImGui 的 GL3 后端用 `glBindSampler`）。
+  Intel 集显的 Vista 机器**跑不起来**。
+- 独显（NVIDIA / AMD 最后一批 Vista 驱动）到 GL 4.x，能跑 ✓。
+
+**结论**：API 层面已经"顺带干净"，所以**继续只承诺 Win7 SP1+** 是最省事的；如果哪天想收 Vista，
+先决定"要不要为 Intel 集显把渲染器降到 GL 3.1"（shader 改 1.40 + 手动 `glBindAttribLocation` +
+ImGui 后端降级 + 去掉 `glBindSampler`），那是一块真活儿，而目标机器（Vista + Intel 集显）基本
+只剩虚拟机。**我的判断：不值得**。要收就只承诺"独显机器可以试"，并把 UCRT 前置条件写清楚。
 
 ## UI 音效（2026-09-15，`ui::se` / `ui::flushSe`）
 

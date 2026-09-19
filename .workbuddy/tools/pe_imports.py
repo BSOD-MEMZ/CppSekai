@@ -101,6 +101,17 @@ def parse(path):
 
 
 API_SETS = {
+    # Windows 7 才有的导入：Win7 兼容做完之后还要支持 Vista 就得看这一组。
+    # （Vista = 6.0，Win7 = 6.1；SRWLock / FlsAlloc / GetFileInformationByHandleEx /
+    #  GetFinalPathNameByHandleW / InitOnceExecuteOnce / GetTickCount64 都是 Vista 就有的，
+    #  不要放进这一组。）
+    "win7": [
+        "GetLogicalProcessorInformationEx", "SetThreadGroupAffinity",
+        "GetActiveProcessorCount", "GetMaximumProcessorCount",
+        "GetActiveProcessorGroupCount", "SetThreadErrorMode", "GetThreadErrorMode",
+        "Wow64GetThreadContext", "Wow64SetThreadContext", "GetSystemDefaultLocaleName",
+        "CreateFileMappingNumaW", "CreateFile2", "GetPackageFullName",
+    ],
     # 关键 Win8 / Win8.1 / Win10+ 才有的导入，Win7 上加载即失败。
     # 注意 win7 基线是 **Vista+**：GetFileInformationByHandleEx / SetFileInformationByHandle /
     # GetFinalPathNameByHandleW / FlsAlloc / InitOnceExecuteOnce / SRWLock 这一批都是 Vista 就有，
@@ -136,7 +147,13 @@ def main():
         for dll in sorted(imps):
             fns = imps[dll]
             print(f"  {dll}: {len(fns)} imports")
+            # win7 组单独报：它只是"比 Vista 新"，不是"Win8 独占"
+            win7 = [(dll, n) for n in API_SETS.get("win7", []) if n in fns]
+            for _dll, n in win7:
+                print(f"  [win7-only] {_dll}!{n}")
             for level, names in API_SETS.items():
+                if level == "win7":
+                    continue
                 for n in names:
                     if n in fns:
                         hits.append((level, dll, n))

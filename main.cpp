@@ -1394,6 +1394,14 @@ int main(int argc, char** argv)
     // two share the checks below.
     const bool glassBackground = userSettings.bgStyle == 2;
 
+    // Set by the window subclass (WM_ENTERSIZEMOVE / WM_EXITSIZEMOVE) and read by
+    // the frame pacing: while the window is being dragged, every frame we serve
+    // from inside the modal loop blocks that loop for its whole duration, so
+    // vsync - which pads every frame out to a vblank - is what makes a drag feel
+    // sticky. Off, the frames are only as long as the rendering itself, which
+    // gives the modal loop the time to move the window. Declared here because
+    // runFrame captures it by reference.
+
     int windowW = std::max(320, winWidth);
     int windowH = std::max(240, winHeight);
     // Image splash + fullscreen: the boot window must also not span the whole
@@ -4061,9 +4069,10 @@ int main(int argc, char** argv)
         std::fflush(stdout);
     };
 
+    bool dragFramePacing = false; // true while the window subclass is feeding frames
     // ------------------------------------------------------------------
     // One frame of the main loop, wrapped so it can also be served from inside
-    // Windows' modal move/size loop (see the message hook right below).
+    // Windows' modal move/size loop (see the window subclass right below).
     //
     // Why this exists: a title-bar drag or a border resize makes DefWindowProc
     // run its *own* message loop, and our pump (SDL_PollEvent -> DispatchMessage)
@@ -6643,7 +6652,8 @@ int main(int argc, char** argv)
         // on a 60 Hz panel any cap above 60 is physically impossible and the
         // limiter's sleep just jitters around the vblank (fps "乱跳"). Past
         // the refresh rate we drop vsync and pace purely with the limiter.
-        const bool wantVsync = !(fpsLimitLive > 0 && fpsLimitLive > displayRefreshHz);
+        const bool wantVsync =
+            !dragFramePacing && !(fpsLimitLive > 0 && fpsLimitLive > displayRefreshHz);
         if (wantVsync != vsyncActive) {
             SDL_GL_SetSwapInterval(wantVsync ? 1 : 0);
             vsyncActive = wantVsync;
@@ -6697,7 +6707,12 @@ int main(int argc, char** argv)
     // window. CPSEKAI_MSG_LOG=1 dumps every message the subclass sees.
     constexpr UINT_PTR kDragTimerId = 0x4353; // 'CS'
     constexpr UINT kDragFrameMs = 16;         // WM_TIMER period while dragging
-    constexpr Uint64 kDragMinGapMs = 8;       // never serve two frames faster than this
+    // Frame rate while dragging: every frame served from inside the modal loop
+    // blocks it for its whole duration, so a 60 fps animation leaves the loop no
+    // time to move the window at all - that is what "拖动很卡" was. ~33 fps with
+    // vsync off (below) is the balance: the picture keeps moving and the loop
+    // keeps ~3/4 of the wall clock to follow the cursor.
+    constexpr Uint64 kDragMinGapMs = 30;      // never serve two frames faster than this
     struct SubclassState
     {
         WNDPROC chain = nullptr;             // SDL's procedure; we forward to it
@@ -6708,9 +6723,11 @@ int main(int argc, char** argv)
         int fromSizing = 0;
         Uint64 lastServedMs = 0;
         bool logMessages = false;
+        bool* dragPacing = nullptr; // vsync off while a drag is in progress
     };
     SubclassState subclass;
     subclass.frame = &runFrame;
+    subclass.dragPacing = &dragFramePacing;
     subclass.logMessages = std::getenv("CPSEKAI_MSG_LOG") != nullptr;
     SDL_SysWMinfo mainWmi;
     SDL_VERSION(&mainWmi.version);
@@ -6733,6 +6750,7 @@ int main(int argc, char** argv)
                         std::fflush(stdout);
                     }
                     if (message == WM_ENTERSIZEMOVE) {
+                        *st->dragPacing = true;
                         st->fromTimer = 0;
                         st->fromMoving = 0;
                         st->fromSizing = 0;
@@ -6743,6 +6761,7 @@ int main(int argc, char** argv)
                             kDragFrameMs);
                         std::fflush(stdout);
                     } else if (message == WM_EXITSIZEMOVE) {
+                        *st->dragPacing = false;
                         KillTimer(hwnd, kDragTimerId);
                         std::printf("[window] WM_EXITSIZEMOVE: %d frame(s) served during the drag "
                                     "(moving=%d sizing=%d timer=%d)\n",
@@ -6756,6 +6775,22 @@ int main(int argc, char** argv)
                         } else if (message == WM_SIZING || message == WM_SIZE) {
                             counter = &st->fromSizing;
                         } else if (message == WM_TIMER && wParam == kDragTimerId) {
+                            // The modal loop can be entered and left without our
+                            // seeing WM_EXITSIZEMOVE (the release lands in the
+                            // middle of a frame we served, and SDL's pump eats it),
+                            // which used to leave the timer running and vsync off
+                            // forever. The button state is the ground truth, so
+                            // check it here and clean up if the drag is over.
+                            if ((GetAsyncKeyState(VK_LBUTTON) & 0x8000) == 0) {
+                                KillTimer(hwnd, kDragTimerId);
+                                *st->dragPacing = false;
+                                std::printf("[window] drag over (button released): %d frame(s) served "
+                                            "(moving=%d sizing=%d timer=%d)\n",
+                                    st->fromMoving + st->fromSizing + st->fromTimer, st->fromMoving,
+                                    st->fromSizing, st->fromTimer);
+                                std::fflush(stdout);
+                                return CallWindowProcW(st->chain, hwnd, message, wParam, lParam);
+                            }
                             counter = &st->fromTimer;
                         }
                         if (counter != nullptr) {
