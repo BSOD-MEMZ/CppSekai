@@ -54,6 +54,14 @@ cp -f musics.json music-vocals.json music-levels.json "$OUT/"
 # exe, so the folder has to keep its name).
 if [ "$WITH_ASSETS" = "1" ]; then
     cp -r assets "$OUT/assets"
+    # assets/mmw/overlay/** is never read at runtime: Renderer::loadHud() looks in
+    # overlay_opt/ first and the whole overlay_opt tree exists, so the upstream
+    # originals there are only the source shrink_hud regenerates from. That is
+    # ~5 MB of official art that does not belong in a download (see COPYRIGHT.md).
+    rm -rf "$OUT/assets/mmw/overlay"
+    # assets/mmw/effects/*.json are compiled into the exe as C++ strings and
+    # assets/mmw/sound is the upstream copy of assets/se - neither is read.
+    rm -rf "$OUT/assets/mmw/effects" "$OUT/assets/mmw/sound"
     rm -f "$OUT/assets/test.sus" # dev chart, not part of the game
     echo "[package] assets bundled ($(du -sh "$OUT/assets" | cut -f1)) - official game art/audio, see COPYRIGHT.md"
 fi
@@ -65,7 +73,7 @@ cp -f README.md SETUP.md COPYRIGHT.md CREDITS.md LICENSE setup.sh "$OUT/"
 cat > "$OUT/charts/放谱面到这里.txt" <<'EOF'
 这个文件夹就是游戏的谱面目录。
 
-游戏本体解压即玩（贴图、字体、音效已随包提供），只差谱面。
+游戏本体解压即玩（贴图、音效已随包提供；字体用系统自带的），只差谱面。
 
 两种拿谱面的办法：
 

@@ -46,10 +46,26 @@ sys.stdout.reconfigure(encoding='utf-8')
 BACKUP = os.path.join('.workbuddy', 'backup', 'assets-' + date.today().strftime('%Y%m%d'))
 
 # (glob, target longer side, why) - aspect preserved, LANCZOS.
+# (glob, target longer side, why) - aspect preserved, LANCZOS.
+# 目标定的都是「1080p 下还有 ~2 倍余量」（虚拟画布 1920x1080，绘制尺寸见 game/Hud.cpp
+# / game/Result.cpp 的常量）。用户 2026-09-19 明确说"只要求 1080P 能看清"。
 RESIZE = [
-    ('assets/mmw/overlay_opt/life/v3/digit/*.png', 128,
-     'drawn at 34px (37px shadow) on the 1920x1080 canvas; the file was 333x444, '
-     'i.e. a 13x oversample - 128 still gives 3.8x at 1080p and 1.9x at 4K'),
+    ('assets/mmw/overlay_opt/life/v3/digit/*.png', 68,
+     'life 面板的数字按 34px（阴影 37px）画，68 = 2 倍余量'),
+    ('assets/mmw/overlay_opt/score/rank/txt/en/*.png', 200,
+     'HUD 的 SCORERANK 小字按 90x12 画（game/Hud.cpp: scoreS(60) x scoreS(8)）；'
+     'jp 那套是结算画面的 952x114 大字，不在这里'),
+    ('assets/mmw/overlay_opt/bggen/v3/base.png', 256,
+     '舞台底板，最终铺成 2048x2048 再缩放上屏，本来就被糊过；'
+     'mask 两张（side_mask/center_mask）不缩，怕合成边缘出锯齿'),
+    ('assets/mmw/overlay_opt/bggen/v3/bottom.png', 256, '同上'),
+    ('assets/mmw/overlay_opt/bggen/v3/center_cover.png', 256, '同上'),
+    ('assets/mmw/overlay_opt/bggen/v3/side_cover.png', 256, '同上'),
+    ('assets/mmw/overlay_opt/bggen/v3/windows.png', 256, '同上'),
+    ('assets/mmw/stage.png', 1024,
+     '2048x1176 -> 1024x588；舞台上那层，用户已同意'),
+    ('assets/mmw/background_overlay.png', 512,
+     '1024x1024 -> 512x512；默认房间底板，画上去就是被冲淡的'),
 ]
 
 # Sprite atlases / images the request said to leave alone (or that would break).

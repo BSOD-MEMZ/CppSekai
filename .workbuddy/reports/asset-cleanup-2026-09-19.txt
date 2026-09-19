@@ -52,3 +52,30 @@ assets/mmw/sound 的上游拷贝删；**assets/se 里自己加的音效保留**�
   2. stage.png 减半 + background_overlay.png 到 512：显存 13.8 -> 3.5 MB，
      代价是同一帧 1.1% 的像素差异 >16/255（舞台那层轻微变软）。没有做，等你说。
   3. ost/BGM_LIVE_RESULT_2.mp3 776 KB：降码率重编码（有损）。
+
+──────────────────────────────────────────────────────────────────────
+补充（同日稍后，用户明确同意"stage 那些可以压 + 只要求 1080P 能看清"）
+──────────────────────────────────────────────────────────────────────
+
+第二轮压缩：223 个文件 6.76 -> 6.25 MB（再省 0.52 MB）。加了这些 RESIZE 规则：
+
+  background_overlay.png      1024x1024 -> 512x512    403.5 -> 156.1 KB
+  stage.png                   2048x1176 -> 1024x588   206.8 -> 108.8 KB
+  overlay_opt/bggen/v3/base.png        512x292 -> 256x146   134.3 -> 37.5 KB
+  overlay_opt/bggen/v3/{center_cover,side_cover,bottom,windows}.png  同上
+  overlay_opt/life/v3/digit/*.png      96x128 -> 51x68（画的是 34px，2 倍余量）
+  overlay_opt/score/rank/txt/en/*.png  500x65 -> 200x26（HUD 里画 90x12）
+
+  没动的：bggen 的 side_mask / center_mask（怕合成边缘出锯齿）、
+  score/rank 的 jp 那套（结算画面按 952x114 画）、combo/judge/score 数字
+  （文件本来就约等于绘制尺寸，缩了就是实打实变糊）。
+
+assets/ 现在 10 MB（起点 56.1 MB）。
+
+package.sh：打包时排除这些（都在 assets/ 里，但运行时一个都不读）
+  - assets/mmw/overlay/**   5.2 MB，loader 只读 overlay_opt/**，原图只是 shrink_hud 的源
+  - assets/mmw/effects/**   75 个 json，已作为 C++ 字符串编译进 exe
+  - assets/mmw/sound/**     上游那份拷贝，游戏读 assets/se
+
+  实测：打包目录 13 MB、zip 6.8 MB（排除前会多 5 MB 官方美术）。
+  从包里直接跑：零加载失败，选曲/演奏画面正常。
