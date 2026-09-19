@@ -919,10 +919,11 @@ System32 里根本看不到这些文件，Win10 上一直无事），**Win7 上�
 
 ## 拖动窗口 / 改窗口大小 → 画面卡住、歌却继续跑 2026-09-19
 
-Windows 在 `DefWindowProc` 里为标题栏拖动和边框缩放跑了一个**自己的模态消息循环**：从
-`WM_NCLBUTTONDOWN` 到松手之间，我们的消息泵（`SDL_PollEvent` → `DispatchMessage`）整段被
-挂起，主循环一帧都不跑 —— 画面冻住。音频在 miniaudio 自己的线程里照放，谱面时钟又骑在音频上，
-所以演奏中拖窗口比"卡一下"严重得多：**松手瞬间钟表往前跳，中间的音符全被判 MISS**。
+**前提是经典说法**：Windows 在 `DefWindowProc` 里为标题栏拖动和边框缩放跑一个**自己的模态消息
+循环**，从 `WM_NCLBUTTONDOWN` 到松手之间我们的消息泵（`SDL_PollEvent` → `DispatchMessage`）
+整段被挂起 —— 主循环一帧不跑、画面冻住，而音频在 miniaudio 自己的线程里照放、谱面钟骑在音频
+上，松手瞬间钟表往前跳、中间的音符全被判 MISS。
+**但这个前提 2026-09-19 在 Win11 上实测没有成立**，见下面「实测记录」——先读那节再改代码。
 
 **已落地（方案 a，帧体抽成 lambda + WM_TIMER 喂帧）**：`main.cpp` 里
 `SDL_SetWindowsMessageHook` 加上一个 16ms 的 `SetTimer`。那段模态循环里**系统照样会给窗口
@@ -963,6 +964,37 @@ build/winmsg.exe SDL_app raw 0232 --pid <pid>   # 伪造 WM_EXITSIZEMOVE
 
 **还没做**：拖**边框缩放**走的同一条模态循环、同一个定时器，但缩放期间窗口尺寸在变，
 `SDL_PollEvent` 拿到的 `WM_SIZE` 会带着新尺寸重建 FBO —— 这条路径没人真的拖过边框验证。
+
+### 实测记录 2026-09-19（Win11，用户报"拖动窗口画面不会刷新"之后）
+
+为了不再靠猜，写了 `.workbuddy/tools/dragwin.c`：用 **SendInput** 注入真实鼠标事件拖窗口
+（`PostMessage` 伪造按钮状态骗不过系统的拖动逻辑 —— 系统看的是物理按键状态）。配套
+`.workbuddy/tools/capwin.c` 想抓"屏幕上的客户区"。实测结果：
+
+1. **拖动真的发生了**（拖前后 `GetWindowRect` 位移 = 注入的位移，例：312,148 → 492,220）。
+2. **消息泵没被挂住**：拖动期间 `[frame]` 每秒帧数 60 → **33 帧 / 2.9 秒**（≈11fps）→ 60，
+   `CPSEKAI_MP_TRACE` 的 `[sync]` 一行不漏，谱面钟一路平滑（`t` 连续，没有跳）。
+   也就是说 Win11 上主循环照跑，只是**帧率掉到 1/3~1/6**（swap 大概在等合成器）。
+3. **钩子一条拖动消息都没收到**：`CPSEKAI_MSG_LOG=1` 全程只有 24 条消息，没有
+   `WM_ENTERSIZEMOVE`、没有 `WM_MOVING`、没有 `WM_SIZE/WM_MOVE`（只有 3 条**不是我们 id 的**
+   `WM_TIMER`、2 条 `WM_PAINT`、几次鼠标）。**说明 Win11 的标题栏拖动是 shell/DWM 侧完成的，
+   根本不经过我们的窗口过程** —— 所以"方案 a"那套喂帧在 Win11 上是死代码（不触发），
+   它只在"真的把消息泵挂住"的系统（大概是 Win7 那种经典实现，**未验证**）才有意义。
+4. **屏幕上到底刷不刷新：没有数据。** `capwin.c` 的 `GetDC(NULL)` + `BitBlt` 在这个环境里抓到
+   的是**纯白**（GPU 合成的窗口抓不到）—— 注意这时"拖动中两张截图 0 像素差异"是假象，
+   是**抓屏方法失效**，不是"屏幕冻住"。要真测得换 `PrintWindow(hwnd, dc, PW_RENDERFULLCONTENT)`。
+   教训：**先做对照组**（不拖动时两张截图也该不同）—— 这一条把一次错误结论当场拦下来了。
+
+新增两个诊断开关（都默认关，只在排查时开）：
+
+- `CPSEKAI_FRAME_LOG=1`：每秒一行 `[frame] N frame(s) in the last second (state=.. uiClock=..)`。
+  **拖动时这些行有没有断档**，就是"消息泵有没有被挂住"的直接判据。
+- `CPSEKAI_MSG_LOG=1`：把钩子看到的每条窗口消息打出来（`[msg] 0xXXXX wparam=.. lparam=..`），
+  用来确认某个消息到底有没有送到我们窗口过程。
+
+**待办**：用户那边的 `[frame]` 日志（哪台机器/哪个系统上出现"不刷新"）还没拿到 —— 如果那台
+的 `[frame]` 在拖动期间断档，就是经典模态循环 + 方案 a 生效；如果不断档只是帧率掉，那就是
+合成/呈现的问题（跟 `SwapBuffers` 的 GDI 呈现路径有关，应用层能做的有限）。
 
 
 验证（不用眼睛也能看）：`--screenshot` 写的是 RGBA PNG（`glReadPixels(..., GL_RGBA, ...)` +

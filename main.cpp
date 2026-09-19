@@ -4080,6 +4080,12 @@ int main(int argc, char** argv)
     // first and the condition is checked right after the call. That is why the
     // body itself needed no edits at all.
     // ------------------------------------------------------------------
+    // Diagnostics that stay off unless asked for (see the frame body / the
+    // message hook): CPSEKAI_FRAME_LOG=1 prints a line a second from the frame
+    // loop, CPSEKAI_MSG_LOG=1 prints every window message the hook sees. Between
+    // them, a drag can be told apart as "the loop was parked and the hook did not
+    // feed it" / "the loop ran and something else did not refresh".
+    const bool frameLogEnabled = std::getenv("CPSEKAI_FRAME_LOG") != nullptr;
     auto runFrame = [&]() {
     for (bool once = true; once; once = false) {
         const Uint64 nowCounter = SDL_GetPerformanceCounter();
@@ -4087,6 +4093,24 @@ int main(int argc, char** argv)
         lastFrameCounter = nowCounter;
         const float frameDelta = static_cast<float>(lastFrameDeltaSec);
         uiClock += lastFrameDeltaSec;
+        // CPSEKAI_FRAME_LOG=1: one line a second with the frame count and the
+        // clock. This is the probe for "does the frame loop still turn while the
+        // window is being dragged": a drag that produces no gap in these lines
+        // means the loop was never parked (then a frozen *picture* would be a
+        // compositing question, not a loop one), while a gap means Windows' modal
+        // move loop is holding the thread and the message hook has to feed frames.
+        if (frameLogEnabled) {
+            static int framesThisSecond = 0;
+            static double frameLogAtSec = -1.0;
+            ++framesThisSecond;
+            if (uiClock >= frameLogAtSec) {
+                frameLogAtSec = uiClock + 1.0;
+                std::printf("[frame] %d frame(s) in the last second (state=%d uiClock=%.2f)\n",
+                    framesThisSecond, static_cast<int>(state), uiClock);
+                framesThisSecond = 0;
+                std::fflush(stdout);
+            }
+        }
         // Diagnostic (CPSEKAI_MP_TRACE=1): "the frame loop is still turning"
         // stamp for a window that goes quiet in a room. Two reasons it matters:
         // a [party] line that just stops is otherwise indistinguishable from a
@@ -6605,49 +6629,109 @@ int main(int argc, char** argv)
     // ------------------------------------------------------------------
     // Serving frames while Windows has our message pump parked.
     //
-    // During a modal move/size loop the system still delivers WM_TIMER to the
-    // window procedure, and SDL calls this hook before it handles anything, so a
-    // timer turns the drag back into a normal run: one frame per tick, straight
-    // out of the modal loop. No pause cleverness any more - the chart simply
-    // keeps playing, which is what the player expects; the pause version existed
-    // only because nothing could be drawn without this.
+    // A modal move/size loop (title-bar drag, border resize) runs inside
+    // DefWindowProc and parks our pump - SDL_PollEvent stays inside it for as
+    // long as the mouse button is held, so the frame loop does not run and the
+    // picture freezes while the audio and the chart clock keep going. SDL calls
+    // this hook from its window procedure, i.e. from inside that modal loop, and
+    // that is where the frames have to come from now.
     //
-    // The depth guard matters: the frame we serve here pumps messages itself (it
-    // is the ordinary frame body, SDL_PollEvent and all), so it can dispatch the
-    // next WM_TIMER - and that one has to be dropped, not turned into a second
-    // nested frame.
+    // Two triggers, deliberately:
+    //
+    //  * WM_MOVING / WM_SIZING are *sent* (not posted) by the modal loop on every
+    //    mouse move, so they cannot be filtered out or starved - this is what
+    //    actually carries a real drag, and it is verifiable: the counters below
+    //    say which one fired.
+    //  * WM_TIMER from a 16 ms timer covers the moments when the mouse is not
+    //    moving at all, so the picture keeps animating while the user holds the
+    //    window still. It is the weaker of the two - a real drag keeps the queue
+    //    busy with mouse messages, and WM_TIMER is only worked in when the queue
+    //    lets it through (that is how the first attempt at this ended up serving
+    //    frames in a synthetic test but none in a real drag).
+    //
+    // The depth guard matters: the frame served here pumps messages itself (it is
+    // the ordinary frame body, SDL_PollEvent and all), so it can dispatch the
+    // next trigger - and that one has to be dropped, not turned into a second
+    // nested frame. The elapsed-time floor does the same for the messages that
+    // arrive while no frame is running: without it every mouse move would ask for
+    // a frame and the window would follow the cursor in 16 ms steps.
     // ------------------------------------------------------------------
     constexpr UINT_PTR kDragTimerId = 0x4353; // 'CS'
-    constexpr UINT kDragFrameMs = 16;
+    constexpr UINT kDragFrameMs = 16;         // WM_TIMER period while dragging
+    constexpr Uint64 kDragMinGapMs = 8;       // never serve two frames faster than this
     struct DragFrameHook
     {
         decltype(runFrame)* frame = nullptr;
-        int depth = 0;
-        int framesServed = 0;
+        int depth = 0;      // frames currently running (only ever 0 or 1)
+        bool active = false; // between WM_ENTERSIZEMOVE and WM_EXITSIZEMOVE
+        int fromTimer = 0;
+        int fromMoving = 0;
+        int fromSizing = 0;
+        Uint64 lastServedMs = 0;
+        bool logMessages = false; // CPSEKAI_MSG_LOG=1, diagnosis only
     };
-    DragFrameHook dragFrame{&runFrame, 0, 0};
+    DragFrameHook dragFrame{&runFrame, 0, false, 0, 0, 0, 0,
+        std::getenv("CPSEKAI_MSG_LOG") != nullptr};
+    // CPSEKAI_MSG_LOG=1: dump every message the hook sees. Diagnosis only - which
+    // messages a *real* drag produces is decided by the OS (a modal move loop
+    // sends WM_ENTERSIZEMOVE / WM_MOVING; a posted fake one does not), and that
+    // question can only be answered from a real drag.
     SDL_SetWindowsMessageHook(
-        [](void* userdata, void* hWnd, unsigned int message, Uint64 wParam, Sint64) {
+        [](void* userdata, void* hWnd, unsigned int message, Uint64 wParam, Sint64 lParam) {
             DragFrameHook* c = static_cast<DragFrameHook*>(userdata);
+            if (c->logMessages) {
+                std::printf("[msg] 0x%04X wparam=%llu lparam=%lld\n", message,
+                    static_cast<unsigned long long>(wParam), static_cast<long long>(lParam));
+                std::fflush(stdout);
+            }
             if (message == WM_ENTERSIZEMOVE) {
+                c->active = true;
+                c->fromTimer = 0;
+                c->fromMoving = 0;
+                c->fromSizing = 0;
+                c->lastServedMs = 0;
                 SetTimer(static_cast<HWND>(hWnd), kDragTimerId, kDragFrameMs, nullptr);
-                c->framesServed = 0;
-                std::printf("[window] WM_ENTERSIZEMOVE: frame loop parked, serving frames from a %u ms "
-                            "timer\n",
+                std::printf("[window] WM_ENTERSIZEMOVE: frame loop parked, feeding frames from "
+                            "WM_MOVING/WM_SIZING + a %u ms WM_TIMER\n",
                     kDragFrameMs);
                 std::fflush(stdout);
-            } else if (message == WM_TIMER && wParam == kDragTimerId) {
-                if (c->depth == 0) {
-                    ++c->depth;
-                    (*c->frame)();
-                    --c->depth;
-                    ++c->framesServed;
-                }
             } else if (message == WM_EXITSIZEMOVE) {
                 KillTimer(static_cast<HWND>(hWnd), kDragTimerId);
-                std::printf("[window] WM_EXITSIZEMOVE: %d frame(s) served during the drag\n",
-                    c->framesServed);
+                c->active = false;
+                std::printf("[window] WM_EXITSIZEMOVE: %d frame(s) served during the drag "
+                            "(moving=%d sizing=%d timer=%d)\n",
+                    c->fromMoving + c->fromSizing + c->fromTimer, c->fromMoving, c->fromSizing,
+                    c->fromTimer);
                 std::fflush(stdout);
+            } else if (c->active && c->depth == 0) {
+                int* counter = nullptr;
+                if (message == WM_MOVING || message == WM_MOVE) {
+                    counter = &c->fromMoving;
+                } else if (message == WM_SIZING || message == WM_SIZE) {
+                    counter = &c->fromSizing;
+                } else if (message == WM_TIMER && wParam == kDragTimerId) {
+                    counter = &c->fromTimer;
+                }
+                if (counter == nullptr) {
+                    return;
+                }
+                const Uint64 nowMs = SDL_GetTicks64();
+                if (c->lastServedMs != 0 && nowMs - c->lastServedMs < kDragMinGapMs) {
+                    return; // this trigger arrived inside the same frame budget
+                }
+                c->lastServedMs = nowMs;
+                ++*counter;
+                ++c->depth;
+                (*c->frame)();
+                --c->depth;
+                // One line a second or so, so a drag that never ends (or a drag
+                // that serves nothing) is visible in the log instead of guessed.
+                const int total = c->fromMoving + c->fromSizing + c->fromTimer;
+                if (total % 30 == 0) {
+                    std::printf("[window] drag frames: %d (moving=%d sizing=%d timer=%d)\n", total,
+                        c->fromMoving, c->fromSizing, c->fromTimer);
+                    std::fflush(stdout);
+                }
             }
         },
         &dragFrame);
