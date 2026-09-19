@@ -45,6 +45,26 @@ int main(int argc, char** argv)
         print_state("rect");
         return 0;
     }
+    // 强行把自己提到前台。后台进程直接调 SetForegroundWindow 会被系统拒绝，但**先
+    // AttachThreadInput 到当前前台窗口的线程**（共享输入队列）再调就会被接受 —— 这是无交互
+    // 会话里唯一能拿到焦点的办法。没有它，拖动拖到的是压在上面的别的窗口，测试白做。
+    if (argc > 1 && strcmp(argv[1], "focus") == 0) {
+        SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+        HWND fg = GetForegroundWindow();
+        const DWORD fgThread = fg != NULL ? GetWindowThreadProcessId(fg, NULL) : 0;
+        const DWORD myThread = GetCurrentThreadId();
+        const BOOL attached = fgThread != 0 && fgThread != myThread
+            && AttachThreadInput(fgThread, myThread, TRUE);
+        BringWindowToTop(hwnd);
+        SetForegroundWindow(hwnd);
+        SetActiveWindow(hwnd);
+        if (attached) {
+            AttachThreadInput(fgThread, myThread, FALSE);
+        }
+        Sleep(300);
+        print_state("focus");
+        return 0;
+    }
     const int resizeMode = argc > 1 && strcmp(argv[1], "resize") == 0;
 
     const int steps = argc > (resizeMode ? 2 : 1) ? atoi(argv[resizeMode ? 2 : 1]) : 40;

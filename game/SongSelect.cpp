@@ -757,6 +757,7 @@ void loadUserData(const std::string& path, UserSettings& settings,
             settings.reportSmtc = s.value("reportSmtc", settings.reportSmtc);
             settings.splashStyle = s.value("splashStyle", settings.splashStyle);
             settings.bgStyle = s.value("bgStyle", settings.bgStyle);
+            settings.glassMode = s.value("glassMode", settings.glassMode);
             settings.bgBlur = s.value("bgBlur", settings.bgBlur);
             settings.bgDim = s.value("bgDim", settings.bgDim);
             settings.uiScale = s.value("uiScale", settings.uiScale);
@@ -804,6 +805,7 @@ void loadUserData(const std::string& path, UserSettings& settings,
         settings.instanceMode = 1;
     }
     settings.bgStyle = std::clamp(settings.bgStyle, 0, 2);
+    settings.glassMode = std::clamp(settings.glassMode, 0, 2);
     settings.bgBlur = std::clamp(settings.bgBlur, 0.0f, 1.0f);
     settings.bgDim = std::clamp(settings.bgDim, 0.0f, 1.0f);
     // Small range on purpose: this zooms the select / result canvas, and past
@@ -862,6 +864,7 @@ void saveUserData(const std::string& path, const UserSettings& settings,
         {"reportSmtc", settings.reportSmtc},
         {"splashStyle", settings.splashStyle},
         {"bgStyle", settings.bgStyle},
+        {"glassMode", settings.glassMode},
         {"bgBlur", settings.bgBlur},
         {"bgDim", settings.bgDim},
         {"uiScale", settings.uiScale},

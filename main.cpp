@@ -1440,12 +1440,21 @@ int main(int argc, char** argv)
     // without it, turning glass on at runtime would silently do nothing.
     // Non-glass runs ignore the extra channel entirely.
     SDL_GL_SetAttribute(SDL_GL_ALPHA_SIZE, 8);
+    // Which of the "整块玻璃" variants is in force (设置 -> 玻璃实现, see AGENTS.md
+    // 「窗口外观」). Non-const: the settings card changes it at runtime.
+    int glassMode = std::clamp(userSettings.glassMode, 0, 2);
+    // What the subclassed window procedure needs to know: 1 = "treat this window
+    // as frameless right now" (WM_NCCALCSIZE -> 0, WM_NCHITTEST does the rest).
+    // Kept separate from glassMode because fullscreen must stay out of it: with the
+    // non-client area gone, a window covering the screen would also cover the
+    // taskbar.
+    int noFrameMode = 0;
 #ifdef _WIN32
     // Windows SDK import libs are not part of the toolchain, so this is a
     // dynamic load. Also called again when the setting is toggled at runtime
     // (glass off = zero margins, which puts the frame back and makes the client
     // area opaque again).
-    auto applyWindowTransparency = [](SDL_Window* target, bool enable) {
+    auto applyWindowTransparency = [](SDL_Window* target, bool enable, int mode) {
         SDL_SysWMinfo wmi;
         SDL_VERSION(&wmi.version);
         if (!SDL_GetWindowWMInfo(target, &wmi) || wmi.subsystem != SDL_SYSWM_WINDOWS) {
@@ -1459,15 +1468,36 @@ int main(int argc, char** argv)
             int bottom;
         };
         using DwmExtendFn = long(__stdcall*)(HWND, const Margins*);
+        // DwmSetWindowAttribute(hwnd, DWMWA_NCRENDERING_POLICY = 2, &policy, size);
+        // DWMNCRENDERINGPOLICY: 0 = DWMNCRP_USEWINDOWSTYLE, 1 = ..._DISABLED.
+        using DwmSetAttrFn = long(__stdcall*)(HWND, unsigned, const void*, unsigned);
         if (HMODULE dwm = LoadLibraryA("dwmapi.dll")) {
             if (auto extend = reinterpret_cast<DwmExtendFn>(
                     reinterpret_cast<void*>(GetProcAddress(dwm, "DwmExtendFrameIntoClientArea"))); extend) {
                 const Margins full{-1, -1, -1, -1};
                 const Margins none{0, 0, 0, 0};
-                extend(wmi.info.win.window, enable ? &full : &none);
+                const long hr = extend(wmi.info.win.window, enable ? &full : &none);
+                std::printf("[window] DwmExtendFrameIntoClientArea(%s) -> 0x%lX\n",
+                    enable ? "-1 margins" : "no margins", static_cast<unsigned long>(hr));
+            }
+            if (auto setAttr = reinterpret_cast<DwmSetAttrFn>(
+                    reinterpret_cast<void*>(GetProcAddress(dwm, "DwmSetWindowAttribute"))); setAttr) {
+                // glassMode 1 is the experiment: let DWM skip the non-client area
+                // entirely, so the caption and the outline it draws around the
+                // client area are gone. The glass we see comes *from* the frame, so
+                // this may cost the blur as well - the log line plus a screenshot
+                // are what tell us which. Mode 2 wants the opposite: DWM keeps its
+                // frame logic (extended over the whole window) and *we* take the
+                // non-client area away.
+                const unsigned policy =
+                    (enable && mode == 1) ? 1u /* DWMNCRP_DISABLED */ : 0u /* USEWINDOWSTYLE */;
+                const long hr = setAttr(wmi.info.win.window, 2, &policy, sizeof(policy));
+                std::printf("[window] DwmSetWindowAttribute(NCRENDERING_POLICY=%u) -> 0x%lX\n",
+                    policy, static_cast<unsigned long>(hr));
             }
             FreeLibrary(dwm);
         }
+        std::fflush(stdout);
     };
 #endif
     // 多人游玩: several windows with the same title are indistinguishable in
@@ -1550,10 +1580,30 @@ int main(int argc, char** argv)
     glClear(GL_COLOR_BUFFER_BIT);
     SDL_GL_SwapWindow(window);
 #ifdef _WIN32
+    // One place that decides what the window looks like right now: the DWM side
+    // (transparency + NCR policy) and the frame removal are two halves of the same
+    // setting and always move together. Called once here and again whenever 背景
+    // 或 玻璃实现 changes in the settings.
+    auto applyGlassWindowMode = [&](bool enable) {
+        noFrameMode = (enable && glassMode == 2 && windowMode != 2) ? 1 : 0;
+        applyWindowTransparency(window, enable, glassMode);
+        // WM_NCCALCSIZE only runs when the window box changes, so a runtime switch
+        // has to ask for one - SWP_FRAMECHANGED is exactly that request.
+        SDL_SysWMinfo wmi;
+        SDL_VERSION(&wmi.version);
+        if (SDL_GetWindowWMInfo(window, &wmi) && wmi.subsystem == SDL_SYSWM_WINDOWS) {
+            SetWindowPos(wmi.info.win.window, nullptr, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+        }
+        std::printf("[window] glass mode %d (%s), frameless %d\n", glassMode,
+            glassMode == 0 ? "extend frame only" :
+            glassMode == 1 ? "DWM NCR off" : "own custom frame", noFrameMode);
+        std::fflush(stdout);
+    };
     // DWM: the first swap above is what the compositor keeps until the game
     // draws over it, so this goes right after it.
     if (splashStyle == 0 || glassBackground) {
-        applyWindowTransparency(window, true);
+        applyGlassWindowMode(true);
     }
 #endif
 
@@ -3033,16 +3083,32 @@ int main(int argc, char** argv)
                     // client area see-through in the first place.
                     renderer.setTransparentBackground(userSettings.bgStyle == 2);
 #ifdef _WIN32
-                    applyWindowTransparency(window,
-                        splashStyle == 0 || userSettings.bgStyle == 2);
+                    applyGlassWindowMode(splashStyle == 0 || userSettings.bgStyle == 2);
 #endif
                     persistUserData();
                 }
                 if (userSettings.bgStyle == 2) {
+                    // How far to go with the window chrome; see AGENTS.md「窗口外观」.
+                    contentLeft();
+                    ImGui::Text("玻璃实现");
+                    contentLeft();
+                    static int glassModeUi = userSettings.glassMode;
+                    ImGui::SetNextItemWidth(interior);
+                    if (ImGui::Combo("##glassmode", &glassModeUi,
+                            "extend frame（默认）\0不画窗框（DWM NCR off）\0自绘无框（实验）\0")) {
+                        userSettings.glassMode = glassModeUi;
+                        glassMode = glassModeUi; // the helper reads this one
+#ifdef _WIN32
+                        applyGlassWindowMode(true);
+#endif
+                        persistUserData();
+                    }
                     contentLeft();
                     ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyle().Colors[ImGuiCol_TextDisabled]);
                     ImGui::TextWrapped("背景不填充，窗口透到桌面（Win7 Aero 下是毛玻璃）。"
-                                       "全屏时会退化成普通深色背景——Windows 的全屏优化会绕过 DWM。");
+                                       "全屏时会退化成普通深色背景——Windows 的全屏优化会绕过 DWM。"
+                                       "「不画窗框」请 DWM 别画非客户区；「自绘无框」把非客户区算成零、"
+                                       "移动与缩放由我们自己接管（窗口顶部 23px 是拖动区）。");
                     ImGui::PopStyleColor();
                 }
                 if (userSettings.bgStyle == 1) {
@@ -6724,10 +6790,12 @@ int main(int argc, char** argv)
         Uint64 lastServedMs = 0;
         bool logMessages = false;
         bool* dragPacing = nullptr; // vsync off while a drag is in progress
+        int* noFrame = nullptr;     // glassMode 2: remove the non-client area
     };
     SubclassState subclass;
     subclass.frame = &runFrame;
     subclass.dragPacing = &dragFramePacing;
+    subclass.noFrame = &noFrameMode;
     subclass.logMessages = std::getenv("CPSEKAI_MSG_LOG") != nullptr;
     SDL_SysWMinfo mainWmi;
     SDL_VERSION(&mainWmi.version);
@@ -6748,6 +6816,70 @@ int main(int argc, char** argv)
                             static_cast<unsigned long long>(wParam),
                             static_cast<long long>(lParam));
                         std::fflush(stdout);
+                    }
+                    // ------------------------------------------------------
+                    // 玻璃实现 = 「自绘无框」: the recipe from Microsoft's
+                    // "Custom Window Frame Using DWM" - hand the whole window to
+                    // the client (WM_NCCALCSIZE -> 0) and then put moving and
+                    // resizing back by hand (WM_NCHITTEST), because "a side effect
+                    // of removing the standard frame is the loss of the default
+                    // resizing and moving behavior". Both messages do reach a window
+                    // whose non-client area is zero (the doc says so for the hit
+                    // test), and they are the only way to keep a frameless window
+                    // draggable without giving up the native drag loop, Aero Snap
+                    // and the DWM shadow.
+                    // ------------------------------------------------------
+                    if (st->noFrame != nullptr && *st->noFrame != 0) {
+                        if (message == WM_NCCALCSIZE && wParam != 0) {
+                            // A zoomed window whose client area is the whole window
+                            // would reach over the taskbar, so maximized keeps the
+                            // normal frame (and the setting is documented as a
+                            // windowed-mode thing anyway).
+                            if (IsZoomed(hwnd) || IsIconic(hwnd)) {
+                                return CallWindowProcW(st->chain, hwnd, message, wParam, lParam);
+                            }
+                            return 0; // every pixel of the window is client area
+                        }
+                        if (message == WM_NCHITTEST) {
+                            // lParam is a screen-space point in a packed pair of
+                            // 16-bit signed values; the LOWORD/HIWORD macros must
+                            // not be used raw (multi-monitor coordinates go
+                            // negative), and windowsx.h is not in the toolchain, so
+                            // decode them here.
+                            const int screenX = static_cast<int>(static_cast<short>(LOWORD(lParam)));
+                            const int screenY = static_cast<int>(static_cast<short>(HIWORD(lParam)));
+                            RECT wr{};
+                            GetWindowRect(hwnd, &wr);
+                            const int x = screenX - wr.left;
+                            const int y = screenY - wr.top;
+                            const int w = wr.right - wr.left;
+                            const int h = wr.bottom - wr.top;
+                            // Same numbers Windows itself uses for the grab area, so
+                            // grabbing an edge feels like it does on a framed window.
+                            int edge = GetSystemMetrics(SM_CXSIZEFRAME)
+                                + GetSystemMetrics(SM_CXPADDEDBORDER);
+                            if (edge < 4) {
+                                edge = 4;
+                            }
+                            const bool left = x < edge;
+                            const bool right = x >= w - edge;
+                            const bool top = y < edge;
+                            const bool bottom = y >= h - edge;
+                            if (top && left) return HTTOPLEFT;
+                            if (top && right) return HTTOPRIGHT;
+                            if (bottom && left) return HTBOTTOMLEFT;
+                            if (bottom && right) return HTBOTTOMRIGHT;
+                            if (left) return HTLEFT;
+                            if (right) return HTRIGHT;
+                            if (top) return HTTOP;
+                            if (bottom) return HTBOTTOM;
+                            // No caption exists any more, so the drag area is ours to
+                            // define: the top strip, as tall as a real caption. Below
+                            // it the window stays a normal client area.
+                            const int caption = std::max(22, static_cast<int>(GetSystemMetrics(SM_CYCAPTION)));
+                            if (y < caption) return HTCAPTION;
+                            return HTCLIENT;
+                        }
                     }
                     if (message == WM_ENTERSIZEMOVE) {
                         *st->dragPacing = true;
@@ -6819,6 +6951,22 @@ int main(int argc, char** argv)
                 })));
         std::printf("[window] window procedure subclassed for drag frames\n");
         std::fflush(stdout);
+        if (noFrameMode != 0) {
+            // The window was created long before this subclass existed, so the
+            // WM_NCCALCSIZE of its creation went to SDL's procedure (with a normal
+            // frame as the answer). Nothing recomputes the frame on its own, so ask
+            // for one now that we are in the chain - without this the setting looks
+            // like it did nothing at all.
+            RECT before{};
+            GetClientRect(gameWindow, &before);
+            SetWindowPos(gameWindow, nullptr, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+            RECT after{};
+            GetClientRect(gameWindow, &after);
+            std::printf("[window] frameless: client %ldx%ld -> %ldx%ld\n",
+                before.right, before.bottom, after.right, after.bottom);
+            std::fflush(stdout);
+        }
     }
 #endif
 

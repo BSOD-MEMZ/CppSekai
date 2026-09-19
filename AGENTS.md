@@ -1023,7 +1023,9 @@ EXITSIZEMOVE 置位，帧体的 vsync 决策读它），每帧只花渲染本身
 
 **5. 工具与踩过的坑**：
 
-- `.workbuddy/tools/dragwin.c` → `build/dragwin.exe`：**SendInput 真输入**拖窗口
+- `.workbuddy/tools/dragwin.c` → `build/dragwin.exe`
+  （verb：`rect` 打印外框+前台窗口、`focus` 用 `AttachThreadInput` 强行抢前台 —— 后台进程直接
+  调 `SetForegroundWindow` 会被系统拒绝，抢不到焦点时"拖动"拖的是压在上面的别的窗口）：**SendInput 真输入**拖窗口
   （`PostMessage` 伪造按钮状态骗不过系统，它看物理按键状态）。用法
   `dragwin.exe [rect|resize] [steps] [stepPx] [sleepMs]`、`dragwin.exe rect` 只看窗口位置。
   **两个坑**：① 后台进程的 `SetForegroundWindow` 会被系统拒 → 拖到的是压在上面的别的窗口，
@@ -1085,6 +1087,40 @@ with no window border"，它管的是**客户区**，非客户区照旧由 DWM �
 
 **2026-09-19 更正**：本段原先写的是 "borderless (`WS_POPUP`) + `WM_NCHITTEST`" —— 那是社区常见做法，
 能用但会丢掉 DWM 投影和窗口风格带来的行为。MS 官方配方走 `WM_NCCALCSIZE` 清零非客户区。
+
+### 玻璃实现（`glassMode`，2026-09-19 已落地，等 Win7 上验）
+
+设置 → 系统 → 选曲背景选「透明（Aero 玻璃）」之后会多一个「玻璃实现」下拉，三档：
+
+| `glassMode` | 做什么 | 本机实测（Win11，窗口 1280x720 带框） |
+|---|---|---|
+| 0 `extend frame（默认）` | 只有 `DwmExtendFrameIntoClientArea(-1)`（＝以前的行为） | 客户区 1280x720，透明像素 43.1% |
+| 1 `不画窗框（DWM NCR off）` | 再加 `DWMWA_NCRENDERING_POLICY = DWMNCRP_DISABLED`（叫 DWM 别画非客户区） | 客户区还是 1280x720 —— 框架那 16x40 **还在**，只是 DWM 不再画它，**可能变成一圈黑边**（所以才有第 2 档） |
+| 2 `自绘无框（实验）` | MS 官方 custom frame：`WM_NCCALCSIZE` 返回 0 + 自己 hit-test | 客户区 **1280x720 → 1296x760**，正好是窗框那 16x40 ⇒ 非客户区真的没了；透明像素 42.0%（玻璃还在） |
+
+实现要点（都在 `main.cpp`）：
+
+- 三档共用一个 `applyGlassWindowMode(enable)`：算 `noFrameMode` → `applyWindowTransparency(window,
+  enable, glassMode)` → `SetWindowPos(..., SWP_FRAMECHANGED)`。DWM 那两个调用都打了返回值和
+  policy 值（`[window] DwmSetWindowAttribute(NCRENDERING_POLICY=%u) -> 0x%lX`），`0x0` 就是 S_OK。
+- **`SWP_FRAMECHANGED` 不能省**：子类化是在窗口创建很久之后才装上的，创建时那次 `WM_NCCALCSIZE`
+  早跑完了、之后没人重算 —— 不逼一次的话设置看起来"什么都没发生"（第一版就是这样，客户区尺寸
+  一点没变，靠新加的 `[window] frameless: client 1280x720 -> ...` 那行才发现）。
+- 模式 2 的 hit-test 在子类里（`WM_NCHITTEST`）：边缘宽度用 `SM_CXSIZEFRAME + SM_CXPADDEDBORDER`
+  （Windows 自己用的数，手感才一致），顶部 `max(22, SM_CYCAPTION)` px 返回 `HTCAPTION`，其余
+  `HTCLIENT`。`lParam` 的两个坐标**必须按 16 位有符号解**（多显示器会是负坐标，文档明确说别用
+  裸 `LOWORD/HIWORD`），而 `windowsx.h` 不在工具链里，所以是手写的 `(short)LOWORD/HIWORD`。
+- **最大化 / 全屏不参与**：`IsZoomed || IsIconic` 时把 `WM_NCCALCSIZE` 转回 SDL 的过程（= 正常
+  框架），否则客户端铺满屏幕会把任务栏也盖住；`windowMode == 2`（全屏）在 `noFrameMode` 里直接排除。
+- 官方**没承诺过**的东西依然没有承诺：Aero Snap / 摇一摇是 shell 行为，`HTCAPTION` 文档只有
+  "In a title bar"。本机用 `dragwin`（SendInput 真拖动）实测：模式 2 下窗口精确位移 240px、
+  拖边框 +160px、拖动期间 53 帧由模态循环喂进去（`moving=30 sizing=0 timer=23`）——
+  **移动和缩放是好的**，Snap 得在他那台手动试。
+- 代价：顶部那 23px 变成拖动区，那里点不了 UI（本来也是标题栏的位置）。
+
+**待用户在 Win7 上验**：`glassMode` 依次试 1、2，看① 那圈内边框有没有消失 ② Aero 毛玻璃还在不在
+（模式 1 有黑边的风险，模式 2 才是文档保证的路径）。日志里 `[window] glass mode N (...)` 那行就是
+当时生效的是哪档。
 
 ### 原生材质（Win10 亚克力 / Win11 Mica）：一条官方、一条野生
 

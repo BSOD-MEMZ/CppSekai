@@ -205,6 +205,18 @@ struct UserSettings
     int bgStyle = 1;
     float bgBlur = 0.5f; // 0..1 blur amount for the wallpaper
     float bgDim = 0.45f; // 0..1 darkening on top of it (keeps the list readable)
+    // How "透明（Aero 玻璃）" (bgStyle 2) is put together; only read then, but
+    // stored always so the answer survives switching the background away:
+    //   0 = DwmExtendFrameIntoClientArea(-1) only. The client area is glass, but
+    //       the caption and the frame DWM draws around it stay - on Win7 the
+    //       window still looks like a sheet of glass *inside a window frame*.
+    //   1 = 0 + DWMWA_NCRENDERING_POLICY = DWMNCRP_DISABLED, i.e. ask DWM to stop
+    //       drawing the non-client area. Undocumented territory: it may also take
+    //       the glass (which comes from the frame) with it. Experiment.
+    //   2 = remove the non-client area ourselves (WM_NCCALCSIZE -> 0) and put
+    //       moving/resizing back by hand (WM_NCHITTEST): the recipe Microsoft
+    //       documents in "Custom Window Frame Using DWM". Experiment.
+    int glassMode = 0;
     // UI scale for the two screens laid out on a virtual canvas - song select and
     // the result screen (1.0 = fit the window). The play screen and the HUD
     // deliberately ignore it: those are played, not read, and a mis-scaled lane
