@@ -67,33 +67,24 @@ CppSekai（本仓库）            AGPL-3.0-only
 |---|---|---|---|
 | `assets/mmw/**`（**669** 个文件：overlay HUD 全套 566、特效 75、notes/长条/触摸线/stage 顶层 13、uo 关闭键、sound 11、font 3） | SEGA / Colorful Palette | **是（在库！）** | 早期先 commit 后加 gitignore，规则管不了已跟踪文件。README 里写的「素材不入库」与事实不符 |
 | `Drafts/**`（**64** 个文件：官方头像 `profile_icon_*` 42、活动图、clear/FC 指示灯草稿） | SEGA / Colorful Palette | **是（在库！）** | 素材暂存区，一直被跟踪 |
-| `assets/select/**`（11：选曲界面全套） | SEGA / Colorful Palette | **是** | 与 2026-09-12 的结论不同——当天它还是「否」，后来进了库 |
+| `assets/select/**`（12：选曲界面全套） | SEGA / Colorful Palette | **是** | 与 2026-09-12 的结论不同——当天它还是「否」，后来进了库 |
 | `assets/se/**`（20：UI + 判定音效）、`assets/ost/**`（2：结算 BGM + 一首 OST） | SEGA / Colorful Palette | **是** | 同上，当天标的是「否」 |
 | `assets/fx/**`（4：打击特效）、`assets/splashscreen.png` | SEGA / Colorful Palette | **是** | 同上 |
-| `assets/mmw/overlay/ap.mp4`、`ap-native/all-perfect.m4a` | SEGA / Colorful Palette | **是** | 官方 MV 视频与语音 |
 | `musics.json`（392 KB）、`music-levels.json`（17 KB）、`music-vocals.json`（241 KB） | 官方数据（曲库元数据 / 难度定数表 / 演唱版本表） | **是** | 事实数据（标题、数字），著作权风险低，但属于官方数据库的整表复制 |
-| `assets/mmw/font/FOT-RodinNTLG Pro EB.otf`、`FOT-RodinNTLGPro-DB.ttf` | **Fontworks（第三方，非 SEGA）** | **是** | ⚠️ 商业字体。**2026-09-12 那版漏了这条**：它只写了「运行时默认用系统字体，绕开了嵌入式分发」，但没查这两个文件其实躺在仓库里。见下方说明 |
-| `assets/mmw/font/NotoSansCJKSC-Black.ttf` | Google，SIL OFL 1.1 | 是 | OFL 允许再分发，合规 |
+| ~~`assets/mmw/font/**`~~（FOT-Rodin ×2 + Noto） | Fontworks / Google | **否（2026-09-19 已删）** | 三个字体文件都已从仓库移除，`--pjsk-font` 一并去掉；现在只读系统字体。详见下方 |
 | `docs/preview*.png`（10 张截图） | 截图里含官方 UI 贴图 | 是 | 游戏截图的著作权风险普遍被视作低（合理使用倾向），但严格说含官方美术 |
 | `charts/**`、`toolchain/` | 谱面数据 / 工具链 | 否 | gitignore 生效 |
 
 **为什么这是个问题**：官方素材的复制权在权利人手里。哪怕免费、哪怕非商业、哪怕声明"版权归官方"，**未经许可的再分发仍然是侵权**。GitHub 上大量 pjsk 谱面模拟器存活至今，是因为权利人**没有执法**，不是因为他们**不能**。SEGA 对《メントルコ》歌包泄露、外挂工具等都有过 DMCA 前科。
 
-### 单独说 FOT-Rodin：运行时绕开了，文件没绕开
+### FOT-Rodin：已彻底解决（2026-09-19）
 
-`game/Intro.cpp` 的行为是对的——不加 `--pjsk-font` 时走系统字体（注册表找字体文件 +
-CJK 字形探测），FOT-Rodin 只是 opt-in。但**「运行时默认不用」和「不再分发」是两件事**：
-把字体文件放进公开仓库、并塞进 Release（`package.sh` 默认带 `assets/`），
-本身就是嵌入分发，同样需要 Fontworks 的授权。
+原先 `game/Intro.cpp` 已经做到「运行时默认用系统字体」，但字体文件还在仓库里、
+还会被 `package.sh` 打进 Release —— 那仍是嵌入分发。**现在文件已经删掉了**：
+`assets/mmw/font/` 整个目录不再存在，`--pjsk-font` 选项也一起去掉，
+加载路径只保留系统字体（见 `game/Intro.cpp` 的注释）。
 
-处置选项（按省事排序）：
-
-1. **只留 Noto**：删掉两个 FOT-Rodin 文件，把 `--pjsk-font` 的字体查找顺序里的 FOT 项
-   改成「从本地游戏目录读」（玩家自己的机器上有没有是他的事），或干脆去掉该选项。
-   Noto 是 OFL，随便发。
-2. **保留但在 Release 里排除**：`--no-assets` 打包，让用户自己丢字体进去。
-3. 什么都不动，接受这个额外风险 —— 但要知道这是**两条独立的线**（SEGA 的素材 + Fontworks 的字体），
-   被任一方找上门都要处理。
+于是「两条独立的线」只剩一条：SEGA 的素材。
 
 ---
 
@@ -122,14 +113,13 @@ CJK 字形探测），FOT-Rodin 只是 opt-in。但**「运行时默认不用」
 - ✅ `charts/`、`toolchain/` 确实不在库里
 - ✅ UI 内有「与官方无关」声明（README §11）
 - ✅ 不收费、无广告、无统计
-- ✅ **运行时**默认用系统字体，FOT-Rodin 是 `--pjsk-font` 的 opt-in
-  ⚠️ 但字体文件在仓库里，这条只解决运行时、没解决分发（见第三节末）
+- ✅ 字体**只用系统字体**，仓库里一个字体文件都不带（`assets/mmw/font/` 已删），
+  商业字体（FOT-Rodin）的嵌入分发风险关闭
 
 ### 建议补齐的（按性价比排序）
 
 1. **决定 `assets/**` 与 `Drafts/` 的去留**（见第六节，二选一，别拖着）。
-2. **决定 FOT-Rodin 两个字体文件的去留**（第三节末给了三个选项）。这条独立于素材，
-   而且**最容易被忽略**——Noto 是 OFL 可以留。
+2. ~~决定 FOT-Rodin 两个字体文件的去留~~ —— **2026-09-19 已删**（连带 Noto），`--pjsk-font` 也去掉了。
 3. **发 Release 的纪律**：永远只传「源码 zip」或「裸 exe + SETUP 说明」。传之前 `git archive` 或检查 zip 内容，别把本地 build/ 目录（里面被 build.sh 拷了 assets）直接压上去。**这是最容易手滑翻车的一步。**
 4. **EXE 图标与名称**：别用官方 logo / 曲绘做 `cppsekai.ico`。想好看就自己画（你本来就会）。
 5. **第三方许可声明**：`CREDITS.md` 第二、七节那张表就是满足方式；SDL2 是 zlib，
@@ -190,10 +180,8 @@ git filter-repo --invert-paths --path assets/mmw --path assets/se --path assets/
     --path assets/fx --path assets/ost --path assets/splashscreen.png --path Drafts \
     --path musics.json --path music-levels.json --path music-vocals.json --force
 
-# 2b. 想连 FOT-Rodin 一起清（Fontworks 商业字体，独立的一条线）：
-#     git filter-repo --invert-paths \
-#         --path "assets/mmw/font/FOT-RodinNTLG Pro EB.otf" \
-#         --path assets/mmw/font/FOT-RodinNTLGPro-DB.ttf --force
+# 2b. 字体：assets/mmw/font 已在 2026-09-19 从工作区删除（连 --pjsk-font 一起去掉），
+#     但还在 git 历史里 —— 跟着上面的 `--path assets/mmw` 一起清掉即可。
 
 # 3. setup.sh 需要相应升级：改为从上游 sekai-mmw-preview-web 拉
 #    assets/mmw/（它本来就是这么干的，脚本里已有现成逻辑）

@@ -42,6 +42,20 @@
   像素探针——对齐截图用，**带 Pillow 回退**所以不需要 ImageMagick）。
 - `build/winsend.exe` / `build/winmsg.exe` 不在版本库里，要自己编（见 AGENTS.md 工具一节）。
 
+## 素材现状（2026-09-19 大清理后）
+- `assets/` **只剩 9.9 MB / 248 个文件**（清理前 56.1 MB）。清点工具
+  `.workbuddy/tools/asset_audit.py`，压缩工具 `.workbuddy/tools/shrink_assets.py`。
+- **字体只用系统字体**：`assets/mmw/font/` 已删，`--pjsk-font` 已从代码里去掉，
+  `loadIntroFonts()` 不收参数。别再往仓库里放字体文件（商业字体分发风险那条已关闭）。
+- **`assets/se/**` 是白名单**：里面是用户自己加的音效，哪怕现在没接线也不许删
+  （`asset_audit.py` 的 `KEEP`）。
+- **精灵图集两趟都不碰**：`notes*` / `effect.png` / `longNoteLine*` / `touchLine*`
+  —— 精灵矩形是像素坐标写死在 `core/native/generated/generated_resources.h`，
+  渲染端按**加载尺寸**归一化 UV，缩文件 = 所有音符错位。
+- 仍可优化的（用户还没拍板）：`assets/mmw/overlay/**` 5.2 MB 运行时完全不读
+  （只读 `overlay_opt/**`），发布包可排除；`stage.png` / `background_overlay.png` 可再缩但
+  有可见代价。
+
 ## 谱面目录（2026-09-16 改）
 - **只有 exe 同级的 `charts\`**（下载器默认输出）。游戏扫 `chartCandidates` 全部候选**合并**、
   按 .sus 文件名去重（`build\charts` 与仓库根 `charts` 同时可见）。

@@ -63,7 +63,7 @@ exe 是 **Windows 子系统**（不是控制台程序），所以：
 ```
 cppsekai [--sus <file.sus>] [--bgm <audio>] [--charts <dir>] [--cover <image>]
          [--offset <sec>] [--filler <sec>] [--auto] [--speed <1-12>]
-         [--se-volume <0-1>] [--lead-in <sec>] [--pjsk-font]
+         [--se-volume <0-1>] [--lead-in <sec>]
          [--title <text>] [--lyricist <text>] [--composer <text>]
          [--arranger <text>] [--vocal <text>] [--difficulty <text>]
          [--width <px>] [--height <px>] [--window borderless|windowed|fullscreen]
@@ -106,7 +106,6 @@ cppsekai [--sus <file.sus>] [--bgm <audio>] [--charts <dir>] [--cover <image>]
 | `--width <px>` `--height <px>` | 窗口尺寸，默认 1366×768 |
 | `--window borderless\|windowed\|fullscreen` | 默认 borderless（无边框铺满）；`fullscreen` 用桌面分辨率 |
 | `--fps <n>` | 在垂直同步之外再加帧率上限，`0` = 只靠垂直同步。超过显示器刷新率时会自动关掉垂直同步 |
-| `--pjsk-font` | 用自带的 pjsk 字体；默认跟随系统 UI 字体（会自动挑一个带中日文字形的） |
 
 ### 4.4 无头自检 / 调试
 

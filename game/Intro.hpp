@@ -46,11 +46,10 @@ struct IntroMetadata
     std::string susPath; // used to infer the difficulty from the file name
 };
 
-// Loads the UI fonts into the ImGui atlas. With preferSystemFont (the
-// default) the OS UI font is used so the game follows the system; otherwise
-// the bundled pjsk faces from assets/mmw/font are loaded.
+// Loads the UI fonts into the ImGui atlas - the OS UI font, and only that
+// (assets/mmw/font is gone since 2026-09-19; see game/Intro.cpp).
 // Must run after ImGui::CreateContext() and before the first frame.
-void loadIntroFonts(const std::string& fontDir, bool preferSystemFont = true);
+void loadIntroFonts();
 
 // Fonts from loadIntroFonts(), reused by other UI (song list etc.) so CJK
 // titles render instead of tofu.

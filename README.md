@@ -123,7 +123,7 @@ bash setup.sh --charts     # 额外下载 0075 / 0127 两张谱 + BGM 到 charts
 cppsekai [--sus <file.sus>] [--bgm <audio>] [--charts <dir>]
          [--offset <sec>] [--filler <sec>] [--auto] [--speed <1-12>]
          [--se-volume <0-1>] [--lead-in <sec>] [--cover <image>]
-         [--screenshot <png>] [--screenshot-time <sec>] [--pjsk-font]
+         [--screenshot <png>] [--screenshot-time <sec>]
          [--title/--lyricist/--composer/--arranger/--vocal/--difficulty <text>]
          [--width <px>] [--height <px>] [--window borderless|windowed|fullscreen]
          [--fps <n>] [--judge-sheet] [--test-hits] [--show-pause-dialog]
@@ -142,7 +142,6 @@ cppsekai [--sus <file.sus>] [--bgm <audio>] [--charts <dir>]
 | `--test-hits` | 不按键，按时间轴把每个音符自动喂给判定引擎（查特效链用） |
 | `--test-restart` `--restart-at <sec>` | 走到指定秒数执行「放弃 → 载入下一首」，回归测「重选曲卡死」 |
 | `--window/--width/--height/--fps` | 窗口模式与帧率上限（0 = 只靠垂直同步） |
-| `--pjsk-font` | 用自带的 pjsk 字体，默认跟随系统 UI 字体 |
 | `--help` / `-h` | 打印用法并退出 |
 
 > 完整手册（日志去哪、无头自检、退出码、坑）见 **[CLI.md](CLI.md)**。
@@ -326,7 +325,7 @@ HUD 和弹窗全部是 ImGui 立即模式画的，统一在 **1920×1080 虚拟�
   → 其余贴图 + HUD 精灵图 → CJK 字库图集 → 整备完成（约 1.3s~3.5s，看机器）
 ```
 
-细节：HUD 精灵图优先读 `assets/mmw/overlay_opt/`（离线用 `.workbuddy/tools/shrink_hud.cpp` 按整数倍 alpha 加权缩到 512px，把 HUD 加载从 ~1.0s 压到 ~0.3s）；字体先找系统字体文件，再探测是否有 CJK 字形——Yu Gothic UI 是 CFF 轮廓，stb_truetype 渲染不了，会自动落到 Microsoft YaHei UI。
+细节：HUD 精灵图优先读 `assets/mmw/overlay_opt/`（离线用 `.workbuddy/tools/shrink_hud.cpp` 按整数倍 alpha 加权缩到 512px，把 HUD 加载从 ~1.0s 压到 ~0.3s）；字体只走系统（`assets/mmw/font` 已在 2026-09-19 删除），先找系统字体文件、再探测是否有 CJK 字形——Yu Gothic UI 是 CFF 轮廓，stb_truetype 渲染不了，会自动落到 Microsoft YaHei UI。
 
 ---
 
@@ -372,7 +371,7 @@ bash package.sh --no-assets  # 精简包（约 2.7 MB，用户侧跑 setup.sh �
 | `cppsekai.exe` / `chartdl.exe` | 游戏本体 + 谱面下载器（图标和版本信息已嵌进 exe，由 `app.rc` 提供） |
 | `SDL2.dll` | 唯一的运行时依赖（**必须和 exe 同目录**） |
 | `icon.png` | 运行时窗口 / 任务栏图标（exe 里已有一份，这张是运行时读的） |
-| `assets/` | 贴图 / 字体 / UI 音效 / 开屏图。**默认打包**（游戏启动就从 `<exe>/assets` 读，不带跑不起来）；`--no-assets` 则不带 |
+| `assets/` | 贴图 / UI 音效 / 开屏图（**不含字体**，字体只用系统的）。**默认打包**（游戏启动就从 `<exe>/assets` 读，不带跑不起来）；`--no-assets` 则不带 |
 | `musics.json` `music-vocals.json` `music-levels.json` | 官方**事实数据**：曲名 / 读音 / 定数 / 演唱版本表。缺了也能开，但曲名会退化成文件名、分组排序失效 |
 | `setup.sh` | 精简包用：用户跑一次 `bash setup.sh --assets-only` 拉取贴图与音效 |
 | `README.md` `SETUP.md` `COPYRIGHT.md` `CREDITS.md` `LICENSE` | 说明与许可（AGPL-3.0-only，发二进制必须附带） |
@@ -470,7 +469,7 @@ CppSekai/
   - **逐个来源的完整台账见 [CREDITS.md](CREDITS.md)**（谁的东西、什么许可、放在哪）
 - **素材全部属于 SEGA / Colorful Palette**：`assets/` 与 `charts/` 是官方游戏素材与数据，仅限本地游玩。
   - ⚠️ **审计实情（2026-09-18 实测）**：`assets/**`（**669** 个 mmw 文件 + select 11 + se 20 + fx 4 + ost 2 + splashscreen）与 `Drafts/**`（64 个）因历史提交**实际被 git 跟踪**——README 早期「素材不入库」的说法对这些目录不成立。
-  - ⚠️ 另有一条**独立**的风险：`assets/mmw/font/` 里的两个 **FOT-Rodin** 是 Fontworks 商业字体（运行时默认用系统字体绕开了它，但文件在仓库里 = 仍在分发）。
+  - 字体：**只用系统字体**（2026-09-19 起 `assets/mmw/font/` 已删除），FOT-Rodin 那条商业字体的分发风险随之消失。
   - 风险等级与清理方案（`git filter-repo` 步骤、备选方案）见 **[COPYRIGHT.md](COPYRIGHT.md)**。
 - 发布纪律：任何 Release **只传源码或裸 exe**（资源按 exe 旁目录解析，裸 exe 里不含素材），永远不要打包 `assets/` 或 `charts/`。
 - 本项目与官方无关；如有侵权请联系移除。

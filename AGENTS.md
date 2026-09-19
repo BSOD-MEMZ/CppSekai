@@ -69,8 +69,10 @@ game/Result.*     # 结算画面（PRESENT/RESULT）：参考原版截图 1:1 �
                   # 是留给 live2d 的，16:9 里没有角色，所以面板直接铺到右边。
                   # 数字全部用游戏自带精灵（score/digit/*、combo/p*），不是字体。
                   # 详细测量笔记见下面「结算画面」一节。
-game/Intro.*      # ImGui 卡片/UI；字体跟随系统（注册表找字体文件 + CJK 字形探测，Yu Gothic UI
-                  # 是 CFF 轮廓 stb_truetype 渲染不了，会自动落到 Microsoft YaHei UI；--pjsk-font 回退）
+game/Intro.*      # ImGui 卡片/UI；字体**只走系统**（注册表找字体文件 + CJK 字形探测，
+                  # Yu Gothic UI 是 CFF 轮廓 stb_truetype 渲染不了，会自动落到 Microsoft
+                  # YaHei UI）。2026-09-19 删掉 assets/mmw/font 后 --pjsk-font 也没了，
+                  # 见下面「UI 字体」一节）
 game/SongSelect.* # 选曲界面 + userdata.json 读写（settings / scores / account 三段）+ 等级曲线。
                   # 账户 / 等级 / 资料卡见下面「账户 / 等级」一节。
 platform/Party.*  # 多人游玩（同机多窗口联机）的共享内存总线：命名文件映射 + 每实例一个座位，
@@ -181,9 +183,24 @@ main.cpp          # SDL2 窗口、事件循环、输入映射、ImGui HUD、截�
   `place x y` / `rect`；见「平台 / 输入相关的坑」）。
 - `.workbuddy/tools/asset_audit.py` → **素材清点**：把各 loader 里点名的路径当成清单，
   列出 assets/ 里游戏永远不会读的文件（`--list` 打全表，`--paths` 只打路径给脚本用）。
+  文件顶部的 `KEEP` 是"手放进来、暂时没接线但有意留着"的白名单（整个 `assets/se/`
+  都在里面），加进去的东西永远不会出现在"可以删"清单里。
   配套 `.workbuddy/tools/asset_prune_verify.sh`：在 build/_prune/ 造一份副本、按清单删干净，
   再跑选曲/演奏/结算/暂停四个模式检查日志有没有加载失败（**不碰仓库里的 assets/**）。
-  2026-09-19 的结论：461 个 / 19.8 MB 是死重量，删完四个模式零加载失败、演奏画面逐像素 0 差异。
+  **2026-09-19 已经真删过了**：461 个 / 43.3 MB（19.8 MB 未使用 + 23.6 MB 字体目录），
+  assets/ 从 56.1 MB 降到 11 MB。删完四个模式零加载失败。
+- `.workbuddy/tools/shrink_assets.py` → **素材压缩**（`--apply` 才写，原图先备份到
+  `.workbuddy/backup/assets-<日期>/`）。两趟，区别就是全部意义：
+  `RESIZE` 只碰"绘制尺寸由 C++ 写死、且按整图/分数 UV 采样"的文件（现在只有
+  `overlay_opt/life/v3/digit/*.png`：333x444 的图、屏幕上按 34px 画，烘到 128）；
+  `LOSSLESS` 是对其余**所有** loader 会读的 PNG 做 `optimize=True` 重编码
+  （顺带丢掉全不透明的 alpha 通道），像素逐位相同所以渲染不可能变。
+  `NEVER` 里的精灵图集（`notes*` / `effect.png` / `longNoteLine*` / `touchLine*`）
+  两趟都不碰——它们的精灵矩形是**像素坐标**写死在
+  `core/native/generated/generated_resources.h`，缩放会让所有音符错位。
+  2026-09-19 实测：223 个文件 9.70 → 6.77 MB（-30%）。
+  验证方法是逐像素比对同一帧（**注意：一批里的第一次运行会明显不同**，那是
+  舞台背景/着色器冷启动，别误判成改动导致的差异；同一版本连跑两次应当 0 差异）。
 - `.workbuddy/tools/mp_verify.sh` → 多人游玩的端到端回归：开两个窗口（`--party-auto`），
   断言同一 `start counter`、BGM 只在主机、时钟偏差、实时分数过进程、房主暂停后成员画面钉住、
   **打到结算画面（两边同一 chart time）并回到选曲、房间重新武装**。
@@ -384,6 +401,13 @@ bash build.sh          # 仅需 Git Bash；产物 build/cppsekai.exe + SDL2.dll 
 - **弹窗不再有半透明黑遮罩**（2026-09-19）：`beginCard` 不画 backdrop 了（`kBackdrop` 删掉），
   `dimBackdrop` 现在只表示"窗口铺满全屏"= 模态：挡住底下一切点击。设置卡片是非模态，
   窗口只包住卡片本身，所以演奏时 HUD/轨道照样可点。
+- **字体只用系统字体**（2026-09-19）：`assets/mmw/font/` 整个删了（两个 Fontworks 商业
+  FOT-Rodin + 16.9 MB 的 Noto），`--pjsk-font` 选项一并去掉，`loadIntroFonts()` 不再收参数。
+  现在是「注册表读系统 UI 字体 → 探 CJK 字形 → 不行就按 `Microsoft YaHei UI / Yu Gothic UI /
+  Meiryo UI / MS UI Gothic / Noto Sans SC|JP` 依次试」，结果页那几块（得分/最高得分/继续）
+  另外从 `%WINDIR%\Fonts` 按文件名取 `msyhbd.ttc` / `ARIALNB.TTF`；全失败才落 ImGui 内置位图字
+  （只有 ASCII，但至少不是"一个字都没有"）。**COPYRIGHT.md 里那条"商业字体嵌入分发"的风险
+  至此关闭**——别再往仓库里放字体文件。
 - 系统页签两项：`autoPauseOnBlur`（失焦自动暂停，关掉 = 切出去歌继续跑）、`reportSmtc`
   （是否汇报 SMTC）。关 SMTC 走 `systemMedia.setReporting(false)`，把媒体会话整个摘掉
   （`put_PlaybackStatus(Stopped)` + `put_IsEnabled(0)`），**不是**只停推送——否则系统浮层
@@ -1082,6 +1106,12 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
   （`registerMiss` / BAD / 长条中断）都必须用它 clamp —— 用 `kMaxLife` 会把 5000 的池子
   在第一次扣血时直接压回 1000。日志里的 `[score] life=X/Y` 里 Y 也用 `initialLife()`，
   `[stats]` 的百分比走 `lifeRatio()`。
+- **面板上的数字是真实血量，胶囊是百分比**（2026-09-19 修）：`HudState` 有两个字段——
+  `lifeRatio`（0..1，喂血条）和 `lifeValue`（`JudgementStats::life` 原值，喂 `life/v3/digit/*`
+  那几位数）。**以前数字是 `1000 * ratio` 写死的**，所以初始血量设成 5000 时，
+  数字从一开始就写 1000、每次 MISS 掉 16（看起来"扣血变慢"），而血条其实一直是对的。
+  实测（0001_master，autoplay 8 miss、池子 5000）：数字 `4360`、血条 87.2%，
+  与 `[stats] life=4360 (87.2%)` 一致。
 - **Flick 调试日志**（`settings > 判定 > Flick 调试日志`，勾选即生效并写进档案；
   命令行等价物 `--flick-log`，不落盘设置、只给支持/回归用）。开启时先把
   `flick_debug.log`（exe 工作目录）清空再逐行 flush，内容：

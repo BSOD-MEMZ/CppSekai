@@ -128,23 +128,17 @@ CppSekai (AGPL-3.0-only)  ← 本仓库        加平台层、判定引擎、UI�
 
 ## 七、字体
 
-| 文件 | 许可 | 用途 | 被跟踪？ |
-|---|---|---|---|
-| `assets/mmw/font/FOT-RodinNTLG Pro EB.otf` | ⚠️ **Fontworks 商业字体** | `--pjsk-font` 模式下的标题 / 难度字体（`gTitleFont` / `gDiffFont`） | **是** |
-| `assets/mmw/font/FOT-RodinNTLGPro-DB.ttf` | ⚠️ **Fontworks 商业字体** | `--pjsk-font` 模式下的正文（`gBodyFont`） | **是** |
-| `assets/mmw/font/NotoSansCJKSC-Black.ttf` | SIL OFL 1.1 | 简体中文字形回退，与上面那个合并使用；无 FOT-Rodin 时充当替补 | **是** |
+**不从仓库分发任何字体文件**（2026-09-19 起）。运行时只加载系统里已有的字体：
+注册表读系统 UI 字体（`SystemParametersInfoW(SPI_GETNONCLIENTMETRICS)`），
+再按 `Microsoft YaHei UI → Yu Gothic UI → Meiryo UI → MS UI Gothic → Noto Sans SC/JP`
+的顺序找一个能渲染 CJK 的；结果字体（得分 / 最高得分 / 继续那几块）另从
+`%WINDIR%\Fonts` 按文件名取 `msyhbd.ttc` / `ARIALNB.TTF` 等。全部是**用户机器上
+本来就有的**，不涉及再分发。
 
-**运行时的默认行为是对的**：不加 `--pjsk-font` 时用系统字体（注册表找字体文件 +
-CJK 字形探测，见 `game/Intro.cpp`），FOT-Rodin 只是 opt-in。
-
-**但文件本身在仓库里** —— 这跟「运行时默认不用」是两件事，嵌入分发商业字体同样需要
-授权。这是 2026-09-12 那版审计漏掉的一条（它只说了运行时绕开，没查文件是否入库）。
-若要彻底干净：把两个 FOT-Rodin 文件从仓库移除，改成 `--pjsk-font` 时从本地游戏目录读，
-或干脆只留 Noto（OFL，可自由分发）。
-
-> Noto Sans CJK 的 OFL 要求：再分发时保留其许可文本。OFL 允许与其它字体「合并」，
-> 但合并产物不能只按 OFL 发布（这里的合并只是运行时 ImGui 加载，不产生衍生字体文件，
-> 所以不触发）。
+原先随仓库走的三个文件（`FOT-RodinNTLG Pro EB.otf`、`FOT-RodinNTLGPro-DB.ttf`
+两个 Fontworks 商业字体 + `NotoSansCJKSC-Black.ttf`，OFL）已从仓库删除，
+`--pjsk-font` 选项一并去掉。那条「商业字体嵌入分发」的独立风险**就此关闭**
+（2026-09-12 审计提出的那条）。
 
 ---
 
@@ -175,8 +169,7 @@ CJK 字形探测，见 `game/Intro.cpp`），FOT-Rodin 只是 opt-in。
 | SDL2 | SDL 社区 | zlib | ❌（发布包里有 DLL） |
 | zig | zig 社区 | MIT | ❌ |
 | 美术 / 音频 / 数据表 | SEGA / Colorful Palette | 保留所有权利 | ⚠️ 大部分在库里 |
-| FOT-Rodin | Fontworks | 商业授权 | ⚠️ 在库里 |
-| Noto Sans CJK | Google | SIL OFL 1.1 | ✅ |
+| 系统 UI 字体（YaHei / Yu Gothic / Meiryo…） | 微软 / 各厂商 | 随系统提供 | ✅ 不随仓库分发 |
 
 ---
 

@@ -29,7 +29,13 @@ struct HudState
     float scoreDeltaAtSec = -100.0f;
     game::Judge lastJudge = game::Judge::None;
     float lastJudgeAtSec = -100.0f;
+    // The bar is driven by lifeRatio (0..1, normalised against the pool the run
+    // started with), but the digit readout next to it shows the *real* life
+    // value - with 初始血量 = 5000 the panel used to print 1000 * ratio, i.e.
+    // always 1000 at the start and 200 per MISS instead of 80. Keep the two
+    // separate: ratio for the capsule, this for the digits.
     float lifeRatio = 1.0f;
+    float lifeValue = 1000.0f;
     // Autoplay preview: show the AUTO sprite (judge_6) instead of the judge
     // word, timing/animation identical to the regular judgement text. Also
     // enables the blinking AUTO badge bottom-right (overlay/autolive.png).

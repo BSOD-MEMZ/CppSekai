@@ -391,7 +391,7 @@ namespace
             "Usage: cppsekai [--sus <file.sus>] [--bgm <audio>] [--charts <dir>]\n"
             "                [--offset <sec>] [--filler <sec>] [--auto] [--speed <1-12>]\n"
             "                [--se-volume <0-1>] [--lead-in <sec>] [--cover <image>]\n"
-            "                [--screenshot <png>] [--screenshot-time <sec>] [--pjsk-font]\n"
+                "                [--screenshot <png>] [--screenshot-time <sec>]\n"
             "                [--title <text>] [--lyricist <text>] [--composer <text>]\n"
             "                [--arranger <text>] [--vocal <text>] [--difficulty <text>]\n"
             "                [--width <px>] [--height <px>] [--window <mode>] [--fps <n>]\n"
@@ -408,7 +408,6 @@ namespace
             "          omitted). --offset: manual fine tune in seconds.\n"
             "--auto: autoplay preview for this run only (the saved setting is not\n"
             "        changed). --screenshot: headless frame dump, then exit.\n"
-            "--pjsk-font: use the bundled pjsk fonts instead of the system UI font.\n"
             "--window: borderless (default) | windowed | fullscreen. --width/--height:\n"
             "          window size (default 1280x720).\n"
             "--render-size <w>x<h>: fixed render mode - draw at this size and scale it\n"
@@ -792,7 +791,6 @@ int main(int argc, char** argv)
     std::string chartsDir;
     std::string coverPath;
     bool offsetGiven = false;
-    bool useSystemFont = true;
     bool autoPlay = false;
     float noteSpeed = 8.0f;
     float seVolume = 0.8f;
@@ -946,8 +944,6 @@ int main(int argc, char** argv)
         } else if (arg == "--fps" && i + 1 < utf8Argc) {
             fpsLimit = std::atoi(utf8Argv[++i]);
             fpsGiven = true;
-        } else if (arg == "--pjsk-font") {
-            useSystemFont = false;
         } else if (arg == "--auto") {
             autoPlay = true;
             autoplayGiven = true;
@@ -1620,7 +1616,6 @@ int main(int argc, char** argv)
     // Resolve bundled assets relative to the executable, not the CWD.
     const std::string assetDir = baseDir + "assets\\mmw";
     const std::string overlayDir = baseDir + "assets\\mmw\\overlay";
-    const std::string fontDir = baseDir + "assets\\mmw\\font";
     const std::string seDir = baseDir + "assets\\se";
     // The result screen loops the game's own result track (see game/Result.cpp).
     const std::string resultBgmPath = baseDir + "assets\\ost\\BGM_LIVE_RESULT_2.mp3";
@@ -1900,7 +1895,7 @@ int main(int argc, char** argv)
     // ------------------------------------------------------------------
     // UI fonts
     // ------------------------------------------------------------------
-    game::loadIntroFonts(fontDir, useSystemFont);
+    game::loadIntroFonts();
     bootLog("fonts");
     // The splash frames rendered with the default font atlas, so the GL
     // backend still owns that old font texture. Drop it - the next NewFrame
@@ -5858,6 +5853,9 @@ int main(int argc, char** argv)
                 }
             }
             hudState.lifeRatio = judgement.lifeRatio();
+            // The digits show the raw pool (5000 stays 5000); the bar keeps the
+            // 0..1 ratio. See game/Hud.hpp.
+            hudState.lifeValue = stats.life;
             hudState.autoJudge = autoPlay;
 
             // 多人游玩: hand this window's live numbers to the room, so the other

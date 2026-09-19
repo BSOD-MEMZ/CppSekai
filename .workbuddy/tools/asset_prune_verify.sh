@@ -2,7 +2,7 @@
 # 验证「删掉 asset_audit.py 判定为未使用的素材之后游戏照跑」。
 #
 # 做法：在 build/_prune/ 造一份独立副本（exe + SDL2.dll + 数据表 + charts + assets），
-# 按审计清单删掉未使用文件，然后跑四种模式（选曲 / 演奏 / 结算 / 暂停弹窗 + pjsk 字体），
+# 按审计清单删掉未使用文件，然后跑四种模式（选曲 / 演奏 / 结算 / 暂停弹窗），
 # 最后把日志里所有"加载失败 / 缺文件"的行抓出来。**不碰仓库里的 assets/**。
 #
 # Usage:  bash .workbuddy/tools/asset_prune_verify.sh
@@ -58,7 +58,7 @@ run_case() { # <名字> <参数...>
 run_case "选曲界面" --screenshot "shot_select.png" --width 960 --height 540
 run_case "演奏 12s" --sus "charts/test.sus" --auto --screenshot "shot_play.png" --screenshot-time 12 --width 960 --height 540
 run_case "结算画面" --sus "charts/test.sus" --auto --result-at 12 --screenshot "shot_result.png" --screenshot-time 20 --width 960 --height 540
-run_case "暂停弹窗+字体" --sus "charts/test.sus" --auto --show-pause-dialog --pjsk-font --screenshot "shot_pause.png" --screenshot-time 1.2 --width 960 --height 540
+run_case "暂停弹窗+字体" --sus "charts/test.sus" --auto --show-pause-dialog --screenshot "shot_pause.png" --screenshot-time 1.2 --width 960 --height 540
 
 echo "-- 截图"
 ls -la "$PRUNE"/*.png 2>/dev/null | awk '{print "  " $5 "  " $9}'

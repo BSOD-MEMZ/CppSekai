@@ -19,6 +19,7 @@ main.cpp 的直连路径）。贴图/音效都是按 key 缓存加载的，没�
     运行时读的是 _opt；删了原图就再也生成不出来了。
   - CREDITS.md/COPYRIGHT.md 里登记的素材要按那两份文档的结论处理。
 """
+import fnmatch
 import os
 import sys
 
@@ -43,6 +44,15 @@ def expand(spec):
             lo, hi = body.split('-')
             for n in range(int(lo), int(hi) + 1):
                 out.extend(expand([head + str(n) + tail]))
+        elif '*' in item:
+            # 通配：只看本目录（素材目录都是一层文件，不做递归）
+            directory, pattern = os.path.split(item)
+            try:
+                names = sorted(os.listdir(directory or '.'))
+            except OSError:
+                names = []
+            out.extend([os.path.join(directory, n).replace(os.sep, '/')
+                        for n in names if fnmatch.fnmatch(n, pattern)])
         else:
             out.append(item)
     return out
@@ -60,11 +70,6 @@ DIRECT = expand([
     'assets/mmw/touchLine_eff_01.png',
     'assets/mmw/effect.png',
     'assets/mmw/ui/close.png', # loadHud: "../ui/close.png"
-    # game/Intro.cpp 的 pjsk 字体候选（--pjsk-font 时才读，但仍然要点名）
-    'assets/mmw/font/FOT-RodinNTLGPro-DB.ttf',
-    'assets/mmw/font/FOT-RodinNTLG Pro EB.otf',
-    'assets/mmw/font/FOT-RodinNTLGPro-EB.ttf',
-    'assets/mmw/font/NotoSansCJKSC-Black.ttf',
     # game/TapEffect.cpp（tap_tri_0.png 是**故意不加载**的，见那边的注释）
     'assets/fx/tap_ring.png',
     'assets/fx/tap_tri_1.png',
@@ -106,7 +111,15 @@ OVERLAY_REL = expand([
 HUD = [f'assets/mmw/overlay/{p}' for p in OVERLAY_REL] \
     + [f'assets/mmw/overlay_opt/{p}' for p in OVERLAY_REL]
 
-USED = set(DIRECT) | set(SELECT) | set(SE) | set(HUD)
+# --- 手放进来、暂时还没接线的素材 -----------------------------------------
+# assets/se/ 整个目录都算"留着"：里面是用户自己加的音效，其中几张（LIVE_CLEAR /
+# LIVE_FINISH / touch）现在没有代码点名，但它们是有意留着的储备，不是废弃素材。
+# 加到这里的东西永远不会出现在"可以删"清单里。
+KEEP = expand([
+    'assets/se/*.mp3',
+])
+
+USED = set(DIRECT) | set(SELECT) | set(SE) | set(HUD) | set(KEEP)
 
 # 运行时**只读 _opt**（存在就不读原图），所以 overlay/ 里的原图算"运行时不用、
 # 但仓库里要留"（_opt 是靠它们生成的）。这条只影响措辞，不影响"未使用"判定。

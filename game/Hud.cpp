@@ -307,7 +307,7 @@ void drawHud(platform::Renderer& renderer, const HudState& state, float songTime
     // Life value digits, right-aligned in the empty top-right of the pill
     // (upstream: slotX = 1442+319 - i*22, slotY = 11+10, shadow 37 / glyph 34).
     {
-        const int lifeValue = std::max(0, static_cast<int>(std::lround(1000.0f * ratio)));
+        const int lifeValue = std::max(0, static_cast<int>(std::lround(state.lifeValue)));
         const std::string lifeText = std::to_string(lifeValue);
         for (size_t i = 0; i < lifeText.size(); ++i) {
             const std::string key(1, lifeText[lifeText.size() - 1 - i]);

@@ -12,7 +12,7 @@
 # user to grab songs with chartdl.exe.
 #
 # assets/ IS bundled by default so the download is plug-and-play: the game
-# loads its sprites, fonts, UI sounds and splash art from <exe>/assets at
+# loads its sprites, UI sounds and splash art from <exe>/assets at
 # startup and will not boot without them. That is official game art/audio
 # (see COPYRIGHT.md) - drop it with `--no-assets` for the lean archive, which
 # needs the user to run `bash setup.sh --assets-only` once instead.
@@ -49,7 +49,7 @@ cp -f icon.png "$OUT/"
 # Documented data tables (see COPYRIGHT.md: factual data, rebuildable by setup.sh).
 cp -f musics.json music-vocals.json music-levels.json "$OUT/"
 
-# Sprites / UI sounds / fonts / splash art the game loads at startup. With
+# Sprites / UI sounds / splash art the game loads at startup. With
 # these in place the package runs as-is (assets are resolved relative to the
 # exe, so the folder has to keep its name).
 if [ "$WITH_ASSETS" = "1" ]; then

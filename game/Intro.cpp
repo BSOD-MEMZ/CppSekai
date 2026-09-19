@@ -323,47 +323,9 @@ namespace
     }
 #endif
 
-void loadIntroFonts(const std::string& fontDir, bool preferSystemFont)
+void loadIntroFonts()
 {
     ImGuiIO& io = ImGui::GetIO();
-
-    // Japanese ranges plus the simplified-Chinese characters the built-in UI
-    // (dialogs / settings panel) renders. The stock Japanese ranges miss
-    // glyphs like 设/闭/试, which would render as "?" boxes.
-    static const std::vector<ImWchar> kGlyphRanges = [] {
-        const ImWchar* jp = ImGui::GetIO().Fonts->GetGlyphRangesJapanese();
-        std::vector<ImWchar> ranges;
-        for (const ImWchar* p = jp; p[0] != 0; p += 2) {
-            ranges.push_back(p[0]);
-            ranges.push_back(p[1]);
-        }
-        // 设 置 关 闭 是 否 继 续 演 出 重 试 放 弃 暂 停 跳 过 确 认 取 消
-        // 显 示 播 进 度 条 分 辨 率 (progress bar / resolution settings)
-        for (ImWchar c : {0x8BBE, 0x7F6E, 0x5173, 0x95ED, 0x662F, 0x5426, 0x7EE7, 0x7EED, 0x6F14,
-                 0x51FA, 0x91CD, 0x8BD5, 0x653E, 0x5F03, 0x6682, 0x505C, 0x8DF3, 0x8FC7, 0x786E,
-                 0x8BA4, 0x53D6, 0x6D88, 0x663E, 0x793A, 0x64AD, 0x8FDB, 0x5EA6, 0x6761, 0x5206,
-                 0x8FA8, 0x7387}) {
-            ranges.push_back(c);
-            ranges.push_back(c);
-        }
-        ranges.push_back(0);
-        return ranges;
-    }();
-    // Only the extra simplified-Chinese codepoints, used to merge the Noto
-    // face into the Rodin body font (Rodin is Japanese-only; without the
-    // merge, 设置/关闭/重试 etc. render as "?").
-    static const std::vector<ImWchar> kSimplifiedRanges = [] {
-        std::vector<ImWchar> ranges;
-        for (ImWchar c : {0x8BBE, 0x7F6E, 0x5173, 0x95ED, 0x662F, 0x5426, 0x7EE7, 0x7EED, 0x6F14,
-                 0x51FA, 0x91CD, 0x8BD5, 0x653E, 0x5F03, 0x6682, 0x505C, 0x8DF3, 0x8FC7, 0x786E,
-                 0x8BA4, 0x53D6, 0x6D88, 0x663E, 0x793A, 0x64AD, 0x8FDB, 0x5EA6, 0x6761, 0x5206,
-                 0x8FA8, 0x7387}) {
-            ranges.push_back(c);
-            ranges.push_back(c);
-        }
-        ranges.push_back(0);
-        return ranges;
-    }();
 
     // Two extra faces the result screen wants, loaded straight from the
     // system font folder by file name (more robust than a registry lookup for
@@ -429,11 +391,14 @@ void loadIntroFonts(const std::string& fontDir, bool preferSystemFont)
     };
 
 #ifdef _WIN32
-    // Default: draw with the font the OS uses for its own UI, so the game
-    // follows the system. A candidate is only accepted once it proves it can
-    // actually render CJK - a latin-only face (Segoe UI on a Japanese or
-    // Chinese desktop, for instance) would turn every title into tofu.
-    if (preferSystemFont) {
+    // The system UI font, and nothing else. 2026-09-19: assets/mmw/font was
+    // removed - the FOT-Rodin pair is a Fontworks *commercial* face (the whole
+    // embedding question in CREDITS.md / COPYRIGHT.md is gone with it) and the
+    // Noto fallback was 16.9 MB for the few hundred glyphs this UI draws. A
+    // candidate is only accepted once it proves it can actually render CJK - a
+    // latin-only face (Segoe UI on a Japanese or Chinese desktop, for instance)
+    // would turn every title into tofu.
+    {
         auto hasCjkGlyphs = [](ImFont* font, float size) {
             ImFontBaked* baked = font->GetFontBaked(size);
             if (baked == nullptr) {
@@ -481,67 +446,14 @@ void loadIntroFonts(const std::string& fontDir, bool preferSystemFont)
                 candidate.path.c_str());
             return;
         }
-        std::printf("[intro] no usable system font, falling back to the bundled faces\n");
+        std::printf("[intro] no usable system font, falling back to ImGui's built-in face\n");
     }
 #endif
 
-    // Same candidate order as upstream loadIntroFonts(). The Rodin EB face is
-    // CFF-based and stb_truetype cannot rasterize it, so the loader silently
-    // falls through to the Noto TTF - exactly like the web build.
-    auto addFont = [&](const std::vector<std::string>& candidates, float size) -> ImFont* {
-        for (const std::string& name : candidates) {
-            const std::string path = fontDir + "/" + name;
-            std::FILE* probe = std::fopen(path.c_str(), "rb");
-            if (probe == nullptr) {
-                continue;
-            }
-            std::fclose(probe);
-            ImFontConfig config;
-            config.OversampleH = 2;
-            config.OversampleV = 2;
-            config.RasterizerMultiply = 1.0f;
-            std::snprintf(config.Name, sizeof(config.Name), "%s", name.c_str());
-            ImFont* font = io.Fonts->AddFontFromFileTTF(path.c_str(), size, &config,
-                kGlyphRanges.data());
-            if (font != nullptr) {
-                // ロ ミ 初 音 作 詞 - report which of these actually rasterized.
-                const ImWchar probes[] = {0x30ED, 0x30DF, 0x521D, 0x97F3, 0x4F5C, 0x8A5E};
-                std::string missing;
-                ImFontBaked* baked = font->GetFontBaked(size);
-                for (const ImWchar c : probes) {
-                    if (baked == nullptr || baked->FindGlyphNoFallback(c) == nullptr) {
-                        char buf[16];
-                        std::snprintf(buf, sizeof(buf), "%04X ", c);
-                        missing += buf;
-                    }
-                }
-                std::printf("[intro] font %s @%.0fpx loaded%s\n", name.c_str(), size,
-                    missing.empty() ? " (all probes ok)" : (" MISSING: " + missing).c_str());
-                return font;
-            }
-            std::printf("[intro] font %s rejected by stb_truetype\n", name.c_str());
-        }
-        return nullptr;
-    };
-
-    gBodyFont = addFont({"FOT-RodinNTLGPro-DB.ttf"}, 42.0f);
-    if (gBodyFont != nullptr) {
-        // Merge the Noto CJK face for the simplified-Chinese UI glyphs.
-        const std::string notoPath = fontDir + "/NotoSansCJKSC-Black.ttf";
-        std::FILE* probe = std::fopen(notoPath.c_str(), "rb");
-        if (probe != nullptr) {
-            std::fclose(probe);
-            ImFontConfig config;
-            config.MergeMode = true;
-            config.OversampleH = 2;
-            config.OversampleV = 2;
-            std::snprintf(config.Name, sizeof(config.Name), "NotoSansCJKSC-Black.ttf");
-            io.Fonts->AddFontFromFileTTF(notoPath.c_str(), 42.0f, &config, kSimplifiedRanges.data());
-        }
-    }
-    gTitleFont = addFont({"FOT-RodinNTLG Pro EB.otf", "FOT-RodinNTLGPro-EB.ttf", "NotoSansCJKSC-Black.ttf"}, 38.0f);
-    gDiffFont = addFont({"FOT-RodinNTLG Pro EB.otf", "FOT-RodinNTLGPro-EB.ttf", "NotoSansCJKSC-Black.ttf"}, 20.0f);
-
+    // Nothing bundled to fall back to any more: whatever the system handed us is
+    // what the UI uses, and ImGui's own bitmap face is the last resort (it draws
+    // latin only, but keeping the process alive with readable numbers beats
+    // starting with no font at all).
     if (gBodyFont == nullptr) {
         gBodyFont = io.Fonts->AddFontDefault();
     }

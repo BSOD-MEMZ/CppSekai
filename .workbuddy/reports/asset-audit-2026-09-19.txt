@@ -1,5 +1,8 @@
 CppSekai 素材清点 / 2026-09-19
 ==============================================================================
+【已被 asset-cleanup-2026-09-19.txt 取代】下面是删除**之前**的快照：第一节列的 461 个
+文件已在 2026-09-19 全部删掉（assets/ 56.1 MB -> 9.9 MB），"保留"里的
+assets/mmw/font/** 也已删除、--pjsk-font 从代码里去掉。留档只为查"当时删了哪些"。
 
 由 .workbuddy/tools/asset_audit.py 生成：清单是各 loader（Renderer::loadAssets/loadHud、
 AudioEngine::loadSe/loadUiSe、Intro 的字体表、selectTex、TapEffect、StageBackground、

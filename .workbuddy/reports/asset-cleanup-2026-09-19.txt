@@ -1,0 +1,54 @@
+CppSekai 素材清理 + 压缩结果 / 2026-09-19
+======================================================================
+
+一、删除
+
+按用户指示：未使用素材全删；字体改为只用系统自带（assets/mmw/font 整个删）；
+assets/mmw/sound 的上游拷贝删；**assets/se 里自己加的音效保留**（哪怕还没接线）。
+
+  删掉 461 个文件 / 43.3 MB：
+    * 未使用素材 458 个 / 19.8 MB（清单见 asset-audit-2026-09-19.txt）
+    * assets/mmw/font/** 3 个 / 23.6 MB（两个 Fontworks 商业 FOT-Rodin + 16.9MB Noto）
+
+  assets/ 56.1 MB -> 9.9 MB（248 个文件）
+
+  代码侧跟着改的：--pjsk-font 选项与 game/Intro.cpp 里加载自带字体的那段全删，
+  loadIntroFonts() 不再收参数；只剩"系统 UI 字体 + 注册表探测 CJK"这一条路。
+  顺带关闭了 COPYRIGHT.md 里"商业字体嵌入分发"那条独立风险。
+
+  白名单机制：asset_audit.py 顶部新增 KEEP，assets/se/*.mp3 整目录在里面，
+  以后跑清点不会再把它们列进"可删"。
+
+二、压缩（.workbuddy/tools/shrink_assets.py --apply）
+
+  223 个 loader 会读的 PNG：9.70 MB -> 6.77 MB（省 2.93 MB / 30%）
+
+  1) 降尺寸 20 个：assets/mmw/overlay_opt/life/v3/digit/*.png
+     333x444 / 366x488 -> 96x128（屏幕上按 34px 画，128 在 1080p 还有 3.8x 余量）
+     单个 46.5 KB -> 3.6 KB
+  2) 无损重压其余全部：像素逐位相同，渲染不可能变。省得最多的几个：
+     overlay/life/v3/digit/s*.png  -59%      overlay_opt/bggen/v3/base.png  -37%
+     overlay/bggen/v3/center_cover.png  -9%  overlay/bggen/v3/base.png  -4.5%
+
+  3) 明确没动的精灵图集（用户要求 + 技术上也不能动）：
+     notes_01.png / effect.png / longNoteLine_01.png / touchLine_eff_01.png
+     理由：精灵矩形是像素坐标写死在 core/native/generated/generated_resources.h，
+     渲染端按**加载后的尺寸**归一化 UV —— 缩文件会让所有音符错位。
+
+三、现在 assets/ 里剩下什么
+
+  总计 9.9 MB / 248 个文件：
+    assets/mmw/overlay_opt/**    0.73 MB / 103 个   <- 运行时真正读的 HUD/舞台素材
+    assets/mmw/overlay/**        5.16 MB / 103 个   <- 上游原图（shrink_hud 的源），运行时完全不读
+    其余（fx / se / select / ost / splashscreen / notes / effect / stage / bggen …）    4.02 MB / 42 个
+
+  两个最大的单文件：notes_01.png 1.18 MB（不动）、effect.png 0.60 MB（不动）。
+
+四、还剩什么可做（都要你拍板）
+
+  1. assets/mmw/overlay/**（5.2 MB，重压后）—— loader 只把 overlay_opt/ 当首选，overlay/ 是
+     shrink_hud 生成 _opt 的源。**发布包里完全可以不带**（package.sh 里排除即可）；
+     仓库里要不要留着，看你以后还想不想重新生成 _opt。删掉的话 _opt 就成了唯一副本。
+  2. stage.png 减半 + background_overlay.png 到 512：显存 13.8 -> 3.5 MB，
+     代价是同一帧 1.1% 的像素差异 >16/255（舞台那层轻微变软）。没有做，等你说。
+  3. ost/BGM_LIVE_RESULT_2.mp3 776 KB：降码率重编码（有损）。
