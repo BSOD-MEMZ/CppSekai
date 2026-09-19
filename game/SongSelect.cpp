@@ -2579,7 +2579,12 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
                 visible.push_back(gi);
                 continue;
             }
-            if (useKana && g.kana.find(kanaNeedle) != std::string::npos) {
+            // Original-text match on the reading too: the CN-only songs carry
+            // pinyin there (see .workbuddy/tools/update_cn_music.py) because the
+            // official table has no kana for them, and pinyin does not fold to
+            // kana - "yiyang" only finds 「一样」 through this line.
+            if (g.kana.find(needle) != std::string::npos
+                || (useKana && g.kana.find(kanaNeedle) != std::string::npos)) {
                 visible.push_back(gi);
             }
         }

@@ -208,6 +208,13 @@ main.cpp          # SDL2 窗口、事件循环、输入映射、ImGui HUD、截�
   所以消息钩子照样会被调用，能无头验证。
 - `.workbuddy/tools/gen_music_vocals.py` → `music-vocals.json`：从官方的 musicVocals +
   gameCharacters 表生成演唱版本表（`asset` 就是 unipjsk 的音频目录名）。
+- `.workbuddy/tools/update_cn_music.py` → **国服曲库同步**：从 Sekai-World 的
+  `sekai-master-db-cn-diff` 拉国服表，把 id ≥ 10000 的独占曲追加进 `musics.json` /
+  `music-vocals.json`（`--check` 只报告差集，不写文件）。**读音得手工补**：国服表对这批
+  曲子把 `pronunciation` 填成了作曲者名（"Mitchie M"、"敌门"），直接抄进来排序会乱、
+  罗马音搜索也失效。中文标题填**拼音**（`game/SongSelect.cpp` 有一条原文比对，
+  输入 "yiyang" 能直接命中「一样」），日文/英文标题填**假名**（走罗马音路径）。
+  两个表都是单行紧凑 JSON，脚本只动收尾的 `]` / `}`，不整体重排。
 - `.workbuddy/tools/winsend.c` → `build/winsend.exe`：按窗口标题找窗口再送假输入，
   无交互会话下驱动 UI（动作：`click x y` / `move x y` / `key <vk>` / `focus` /
   `place x y` / `rect`；见「平台 / 输入相关的坑」）。

@@ -65,6 +65,13 @@
 - 多用户：`<dataDir>\profiles\<id>.json`（`{settings, scores, account}`）+ `index.json`；
   首次运行把 `userdata.json` **复制**成 `default`。`<dataDir>`：有 `<exe>\..\charts` 就用那一层。
 - 优先级：命令行 > 档案 > 内置默认；`--screenshot` 不写成绩。
+- **曲库有两个源，按 id 分派（2026-09-19）**：日服曲（id ≤ 804）走 `assets.unipjsk.com`；
+  **国服独占曲 17 首（id 11001–11017，独立号段）走 `storage.sekai.best/sekai-cn-assets`**，
+  布局三处不同：谱面 **带 `.txt`**、音频前缀是 `vs_/se_/an_`、曲绘是 5 位 `jacket_s_11xxx`。
+  判据只有 `id >= 10000`（chartdl 的 `kCnIdMin`）——**别往 10000 以上放新 id**。
+  国服表用 `.workbuddy/tools/update_cn_music.py` 同步（`--check` 只报告、写入是**追加**
+  不是重写：那两个 json 是单行紧凑格式）。**国服表把独占曲的读音填成了作曲者名**，
+  脚本里手工补过 —— 中文标题填的是**拼音**，别拿它当假名用（主程序搜索为此外加了一条原文比对）。
 
 ## UI 通则（所有画面都是「1920x1080 虚拟画布 + 缩放」）
 - HUD / 结算 / 选曲都用 `px()/py()/ps()` 换算。**ImGui `AddText(font,size,...)` 的 size 是像素**，

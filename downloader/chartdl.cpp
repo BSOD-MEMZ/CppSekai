@@ -645,20 +645,46 @@ fs::path jacketPath(const fs::path& dir, const Song& song)
     return dir / (id4(song.id) + ".png");
 }
 
+// ---------------------------------------------------------------------------
+// Where the files come from
+//
+// Two sources, picked by id:
+//   * id <  10000 - the Japanese server table, mirrored by unipjsk. Everything
+//     the game has in common with the CN server lives here.
+//   * id >= 10000 - CN-only songs (11001+). unipjsk does not carry them (every
+//     path 404s), but Sekai Viewer mirrors the CN asset bundle on S3, and the
+//     layout there differs: scores keep their ".txt" extension, vocal assets
+//     are named vs_/se_/an_ instead of vocal_s_/sekai_/another_, jackets use
+//     the 5-digit "jacket_s_11017".
+// The id is a reliable discriminator - the JP table tops out at 804.
+// ---------------------------------------------------------------------------
+constexpr int kCnIdMin = 10000;
+constexpr const char* kCnAssetBase = "https://storage.sekai.best/sekai-cn-assets";
+
 std::string chartUrl(const Song& song, const char* diff)
 {
+    if (song.id >= kCnIdMin) {
+        return std::string(kCnAssetBase) + "/music/music_score/" + id4(song.id) + "_01/"
+            + diff + ".txt";
+    }
     return "https://assets.unipjsk.com/startapp/music/music_score/" + id4(song.id) + "_01/" + diff;
 }
 
 std::string audioUrl(const VocalVersion& version, int id)
 {
     const std::string asset = version.asset.empty() ? id4(id) + "_01" : version.asset;
+    if (id >= kCnIdMin) {
+        return std::string(kCnAssetBase) + "/music/long/" + asset + "/" + asset + ".mp3";
+    }
     return "https://assets.unipjsk.com/ondemand/music/long/" + asset + "/" + asset + ".mp3";
 }
 
 std::string jacketUrl(const Song& song)
 {
     const std::string stem = jacketStem(song.jacket, song.id);
+    if (song.id >= kCnIdMin) {
+        return std::string(kCnAssetBase) + "/music/jacket/" + stem + "/" + stem + ".png";
+    }
     return "https://assets.unipjsk.com/startapp/music/jacket/" + stem + "/" + stem + ".png";
 }
 
@@ -995,7 +1021,9 @@ void printUsage()
         "              [--open-settings]         also open the settings window\n"
         "                                          (headless layout check)\n"
         "\n"
-        "Source: assets.unipjsk.com (charts, BGM per vocal version, jackets).\n");
+        "Source: assets.unipjsk.com for the Japanese songs; the CN-only ones\n"
+        "        (id 11001+, e.g. Hype Dive) come from the sekai-cn-assets bucket\n"
+        "        at storage.sekai.best - see the URL helpers for the layout.\n");
 }
 
 int runJobQueue(std::string& error)
