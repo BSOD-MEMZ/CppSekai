@@ -1122,7 +1122,6 @@ namespace
     constexpr int kIdTrayIcon = 1016;
     constexpr int kIdAliasGroup = 1017;
     constexpr int kIdAliasList = 1018;
-    constexpr int kIdAliasDetail = 1019;
     constexpr int kIdDiffBase = 1100;  // 1100..1104 = EASY..MASTER
     constexpr int kIdVocalBase = 1120; // 1120.. = one per vocal version
 
@@ -1151,6 +1150,14 @@ namespace
     HWND gStatus = nullptr;
     HWND gLogList = nullptr;
     HWND gDetailTitle = nullptr;
+    // Alias panel: it mirrors the song selected in the main list on the left -
+    // one row per alias, empty when nothing is selected. Keyed by song id so
+    // switching songs is just a lookup; the index itself is "alias -> ids" and
+    // would have to be walked otherwise.
+    std::map<int, std::vector<std::string>> gAliasBySong;
+    // What the alias list is currently showing. Rebuilt on every selection
+    // change; the virtual list re-reads it through LVN_GETDISPINFO.
+    std::vector<std::string> gAliasRows;
     HWND gAliasList = nullptr;
     HWND gJacketCheck = nullptr;
     HWND gSidecarCheck = nullptr;
@@ -1176,20 +1183,6 @@ namespace
     int gDragSplitter = 0; // 0 = none, 1 = list/detail, 2 = top/bottom, 3 = detail/alias
     int gDragOrigin = 0;
     int gDragStart = 0;
-
-    // Rows of the alias panel: one per song that the community has an alias
-    // for, with the alias list kept alongside so selecting a row can show it
-    // without walking the index again. Built once after every loadData().
-    // The list is virtual (LVS_OWNERDATA) so the row count can grow without
-    // the window taking a visible pause to fill it.
-    struct AliasRow
-    {
-        int id = 0;
-        std::string title;   // "#123 曲名", the form shown in the list
-        std::string aliases; // "、" joined, shown in the box below the list
-    };
-    std::vector<AliasRow> gAliasRows;
-    HWND gAliasDetail = nullptr;
 
     DlSettings gDlSettings;
     HWND gSettingsWindow = nullptr;
@@ -1586,57 +1579,42 @@ namespace
     // are the parent window's own client area, so a drag on one arrives here
     // (a control would swallow it).
     // -----------------------------------------------------------------------
-    // One row per song the community has an alias for, in the song table's own
-    // order (id ascending) so the two lists can be read side by side. Called
-    // after every loadData().
+    // Flips the alias index into the "song id -> aliases" lookup the panel
+    // reads from. The index itself is "alias -> ids" because that is what the
+    // search wants; this is the one place it gets turned around. Called after
+    // every loadData().
     void rebuildAliasRows()
     {
-        gAliasRows.clear();
-        // The index is "alias -> ids"; this panel wants "id -> aliases".
-        std::map<int, std::vector<std::string>> bySong;
+        gAliasBySong.clear();
         for (const auto& entry : gAliasIndex) {
             for (const int id : entry.second) {
-                bySong[id].push_back(entry.first);
+                gAliasBySong[id].push_back(entry.first);
             }
         }
-        gAliasRows.reserve(bySong.size());
-        for (const Song& song : gSongs) {
-            const auto it = bySong.find(song.id);
-            if (it == bySong.end()) {
-                continue;
+    }
+
+    // Points the alias list at one song - the one selected in the main list.
+    // 0 or a song without aliases empties it, which is what an unselected main
+    // list shows.
+    void showAliasesFor(int songId)
+    {
+        gAliasRows.clear();
+        if (songId > 0) {
+            const auto it = gAliasBySong.find(songId);
+            if (it != gAliasBySong.end()) {
+                gAliasRows = it->second;
             }
-            // Wrap by hand: a multi-line EDIT does not soft-wrap here (the box
-            // grew a horizontal scrollbar instead), and one alias per line wastes
-            // the box on entries like "hs" / "kz". ~54 UTF-8 bytes is about a
-            // line of the panel at 96 DPI.
-            std::string joined;
-            std::size_t lineWidth = 0;
-            for (const std::string& alias : it->second) {
-                if (lineWidth > 0 && lineWidth + alias.size() + 2 > 54) {
-                    joined += "\r\n";
-                    lineWidth = 0;
-                } else if (lineWidth > 0) {
-                    joined += "、";
-                    lineWidth += 3;
-                }
-                joined += alias;
-                lineWidth += alias.size() + 1;
-            }
-            gAliasRows.push_back({song.id,
-                "#" + std::to_string(song.id) + "  " + song.title, std::move(joined)});
+        }
+        if (gAliasList != nullptr) {
+            ListView_SetItemCountEx(gAliasList, static_cast<int>(gAliasRows.size()),
+                LVSICF_NOSCROLL | LVSICF_NOINVALIDATEALL);
+            InvalidateRect(gAliasList, nullptr, TRUE);
         }
     }
 
     int splitterThickness()
     {
         return dp(8);
-    }
-
-    // Height of the read-only alias box under the list; the list takes the rest
-    // of the panel. A function, not a constant, because dp() is not constexpr.
-    int aliasDetailHeight()
-    {
-        return dp(64);
     }
 
     // Where the two bars sit for a given client size. Kept next to the pixel
@@ -1734,12 +1712,7 @@ namespace
         SetWindowPos(GetDlgItem(hwnd, kIdAliasGroup), nullptr, panelX, aliasY, panelW, aliasH,
             SWP_NOZORDER);
         SetWindowPos(gAliasList, nullptr, panelX + dp(10), aliasY + dp(22),
-            std::max(dp(40), panelW - dp(20)),
-            std::max(dp(30), aliasH - dp(32) - dp(6) - aliasDetailHeight()), SWP_NOZORDER);
-        SetWindowPos(gAliasDetail, nullptr, panelX + dp(10),
-            aliasY + dp(22) + std::max(dp(30), aliasH - dp(32) - dp(6) - aliasDetailHeight())
-                + dp(6),
-            std::max(dp(40), panelW - dp(20)), aliasDetailHeight(), SWP_NOZORDER);
+            std::max(dp(40), panelW - dp(20)), std::max(dp(20), aliasH - dp(32)), SWP_NOZORDER);
         // The single column has to be widened by hand: a ListView never grows
         // its own columns when the control is resized.
         ListView_SetColumnWidth(gAliasList, 0, std::max(dp(60), panelW - dp(36)));
@@ -2035,9 +2008,10 @@ namespace
                 SendMessageW(gJacketCheck, BM_SETCHECK, BST_CHECKED, 0);
                 SendMessageW(gSidecarCheck, BM_SETCHECK, BST_CHECKED, 0);
 
-                // Alias panel: pick a song on top, read its community aliases in
-                // the box below. Read-only reference - the group box is created
-                // first so it stays behind the two controls.
+                // Alias panel: mirrors whatever song is selected in the main
+                // list on the left - one row per alias, empty when nothing is
+                // picked there. Read-only; the group box is created first so it
+                // stays behind the list.
                 create(L"BUTTON", L"别名", BS_GROUPBOX, kIdAliasGroup);
                 gAliasList = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"",
                     WS_CHILD | WS_VISIBLE | LVS_REPORT | LVS_SINGLESEL | LVS_OWNERDATA
@@ -2051,18 +2025,11 @@ namespace
                 {
                     LVCOLUMNW column{};
                     column.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM;
-                    column.pszText = const_cast<wchar_t*>(L"曲目");
+                    column.pszText = const_cast<wchar_t*>(L"别名");
                     column.cx = dp(300);
                     column.iSubItem = 0;
                     ListView_InsertColumn(gAliasList, 0, &column);
                 }
-                ListView_SetItemCountEx(gAliasList, static_cast<int>(gAliasRows.size()),
-                    LVSICF_NOSCROLL);
-                // Read-only multi-line box: an alias list can run to ~20 entries
-                // (アイドル新鋭隊), which no single list row could show.
-                gAliasDetail = create(L"EDIT", L"",
-                    WS_BORDER | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | WS_VSCROLL,
-                    kIdAliasDetail);
 
                 gProgress = CreateWindowExW(0, PROGRESS_CLASSW, L"", WS_CHILD | WS_VISIBLE, 0, 0, 10, 10,
                     hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdProgress)), nullptr, nullptr);
@@ -2416,6 +2383,13 @@ namespace
                             : -1;
                         if (songIndex != gDetailSong) {
                             updateDetailPanel(songIndex);
+                            // The alias panel mirrors the main list's selection:
+                            // pick a song there, read its aliases here. Nothing
+                            // selected (or a song without aliases) empties it.
+                            showAliasesFor(songIndex >= 0
+                                    && songIndex < static_cast<int>(gSongs.size())
+                                ? gSongs[static_cast<std::size_t>(songIndex)].id
+                                : 0);
                         }
                     }
                 }
@@ -2425,24 +2399,12 @@ namespace
                         const int row = info->item.iItem;
                         if (row >= 0 && row < static_cast<int>(gAliasRows.size())
                             && (info->item.mask & LVIF_TEXT) != 0) {
-                            // Single column: "#123 曲名".
                             // The pointer has to stay valid until the control is
                             // done with it. This call is synchronous, so a
                             // function-local static is the usual trick.
                             static std::wstring text;
-                            text = widen(gAliasRows[static_cast<std::size_t>(row)].title);
+                            text = widen(gAliasRows[static_cast<std::size_t>(row)]);
                             info->item.pszText = const_cast<wchar_t*>(text.c_str());
-                        }
-                    } else if (header->code == LVN_ITEMCHANGED) {
-                        const auto* change = reinterpret_cast<NMLISTVIEW*>(lParam);
-                        if ((change->uChanged & LVIF_STATE) != 0
-                            && (change->uNewState & LVIS_SELECTED) != 0) {
-                            const int row = change->iItem;
-                            if (row >= 0 && row < static_cast<int>(gAliasRows.size())) {
-                                const std::wstring text =
-                                    widen(gAliasRows[static_cast<std::size_t>(row)].aliases);
-                                SetWindowTextW(gAliasDetail, text.c_str());
-                            }
                         }
                     }
                     return 0;
