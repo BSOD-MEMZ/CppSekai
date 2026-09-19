@@ -81,6 +81,14 @@
 - 临时条件探针**别设计数上限**（`if (n < 8)` 会掩盖"条件没满足"和"分支没走"的区别）。
 - 无交互会话下 `winsend.exe` 的 PostMessage 到不了某些 ImGui 界面 → 在代码里加自动按的
   调试开关（如 `--chartdl-test`），别在输入注入上死磕。
+- **Git Bash 不等 GUI 子系统 exe**：`for ...; do ./cppsekai.exe ...; done` 会让几个实例几乎同时
+  启动互抢 GPU，测出过 245fps 的假基线。串行要 `exe & sleep N`。**日志落在 cwd 的 `cppsekai.log`**
+  （从仓库根跑就去根目录捞），不是 build/ 那份。
+- **内存怎么查**：`.workbuddy/tools/mem_sample.py`（每 150ms 打 WorkingSetSize / **峰值** / 提交，
+  tasklist 4 秒粒度看不出启动期台阶）。2026-09-19 实测：GL 空窗口基线 **72MB**，游戏稳态
+  **245MB**（峰值 291MB）—— 大头是**常驻的 TTF 数据 ~37MB**（msyh 19.7 + msyhbd 16.9，新版
+  ImGui 要整份字体常驻，换来 atlas 只有 0.25MB），贴图 13.5MB、壁纸 2.2MB。启动后 10~12s
+  有一次 ~46MB 的**延迟归还**，别当成泄漏、也别当成"切设置释放了内存"（bgStyle 0/1 都有）。
 
 ## 最近工作（细节一律看 AGENTS.md 对应小节 + 当日日志）
 - **2026-09-19**：多人开局倒计时删了（改成「最慢窗口加载 + 0.8s」两段 charge）；失血阴影几何
@@ -88,6 +96,9 @@
   `GetSystemTimePreciseAsFileTime`（启动即失败，build.sh 打补丁）② 系统字体候选表扩到三层 +
   按文件名兜底（点阵字/中文问号）③ 新增 `bgStyle = 2`「透明（Aero 玻璃）」背景
   （不填背景、保留漂浮三角形，Renderer + SongSelect + 窗口 DWM 四处联动）；素材压到 10MB。
+  另：**渲染质量档评估过，用户拍板先不做** —— 实测瓶颈不在填充率（窗口 1920x1080 + autoplay，
+  渲染 1080p 与 540p 都是 ~1.0ms/帧、950+fps），只对弱 GPU/VM 有意义。已知待办：拖动窗口时
+  38~51fps（见「验证手法」）。
 - **2026-09-18**：空谱面「下载谱面」按钮、首启 ELUA 弹窗、**多人"连不上"真根因在选曲界面**
   （`selected` 被 `diffIndex` 反推成 -1）、暂停没冻住主机时钟、多人流程重做、多人不进结算。
 - **2026-09-17**：多人游玩（`platform/Party.*` + `game/PartyScreen.*`，同机多窗口共享内存总线）。
