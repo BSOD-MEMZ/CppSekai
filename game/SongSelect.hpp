@@ -176,6 +176,11 @@ struct UserSettings
     // seeds its stats from it on every reset.
     float initialLife = 1000.0f;
     bool strictFlick = true;
+    // "Flick 视作 Tap" (settings > 判定): flick notes take any press instead of
+    // a directional swipe, for touchscreens that can barely send an upward
+    // swipe. A hold's flick TAIL is not converted - it stops being a note (see
+    // game/Judgement.hpp).
+    bool flickAsTap = false;
     // Flick debug log (settings > 判定 > Flick 调试日志): while on, every raw
     // touch sample, the swipe measurement the classifier saw and the judgement
     // it produced go to flick_debug.log next to the exe, so a missed touch

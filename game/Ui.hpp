@@ -120,6 +120,13 @@ void expBar(ImDrawList* dl, ImVec2 pos, float width, float unit, float ratio);
 // open=false).
 bool beginCard(const char* id, ImVec2* center, ImVec2* size, bool showClose, bool dimBackdrop,
     bool* closeClicked, bool open = true);
+// Child windows (ImGui::BeginChild) get their own ImDrawList, so their vertices
+// are NOT part of the card's own list and endCard() would leave them unscaled
+// and unfaded - the "the card animates but its contents pop in" bug. If a card
+// body lives in a child, hand that child's list over with this right after
+// BeginChild() and endCard() moves and fades it with everything else.
+// Registration is per frame: beginCard() starts a fresh list.
+void cardSubList(ImDrawList* list);
 void endCard();
 
 // Rounded-top tab row. The active tab is card-colored and taller, inactive

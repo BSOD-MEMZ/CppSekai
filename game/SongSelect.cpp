@@ -744,6 +744,7 @@ void loadUserData(const std::string& path, UserSettings& settings,
             settings.holdStartGraceMs = s.value("holdStartGraceMs", settings.holdStartGraceMs);
             settings.initialLife = s.value("initialLife", settings.initialLife);
             settings.strictFlick = s.value("strictFlick", settings.strictFlick);
+            settings.flickAsTap = s.value("flickAsTap", settings.flickAsTap);
             settings.debugLog = s.value("debugLog", settings.debugLog);
             settings.autoplay = s.value("autoplay", settings.autoplay);
             settings.autoPauseOnBlur = s.value("autoPauseOnBlur", settings.autoPauseOnBlur);
@@ -848,6 +849,7 @@ void saveUserData(const std::string& path, const UserSettings& settings,
         {"holdStartGraceMs", settings.holdStartGraceMs},
         {"initialLife", settings.initialLife},
         {"strictFlick", settings.strictFlick},
+        {"flickAsTap", settings.flickAsTap},
         {"debugLog", settings.debugLog},
         {"autoplay", settings.autoplay},
         {"autoPauseOnBlur", settings.autoPauseOnBlur},

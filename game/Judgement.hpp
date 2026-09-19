@@ -240,6 +240,20 @@ class JudgementEngine
     void setStrictFlick(bool strict) { mStrictFlick = strict; }
     [[nodiscard]] bool strictFlick() const { return mStrictFlick; }
 
+    // "Flick 视作 Tap" (settings > 判定), off by default: every flick note
+    // becomes an ordinary tap - any press inside its window clears it, whatever
+    // gesture produced it (so the swipe direction stops mattering). For
+    // touchscreens where an upward swipe is hard to trigger.
+    //
+    // A hold whose TAIL is a flick is deliberately not turned into a tap: the
+    // player is still holding that lane, so a tail that demanded a press would
+    // be unfair and one that demanded a swipe is exactly what this setting is
+    // here to avoid. Such a tail stops being a note at all - it is completed
+    // when the hold reaches its end (no input, no penalty), the same way
+    // autoplay resolves it. See the hold tracking in update().
+    void setFlickAsTap(bool on) { mFlickAsTap = on; }
+    [[nodiscard]] bool flickAsTap() const { return mFlickAsTap; }
+
     // CppSekai: autoplay (chart preview) mode - every scoreable note is
     // resolved as a PERFECT exactly on its own time, holds never break and
     // tails hold through. Feeds the HUD a full-combo run without any input.
@@ -286,6 +300,7 @@ class JudgementEngine
     JudgementWindows mWindows;
     JudgementStats mStats;
     bool mStrictFlick = true;
+    bool mFlickAsTap = false;
     bool mAutoPlay = false;
 
     // Score model (see kTeamPower above).

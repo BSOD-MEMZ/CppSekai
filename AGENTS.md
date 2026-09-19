@@ -357,6 +357,15 @@ bash build.sh          # 仅需 Git Bash；产物 build/cppsekai.exe + SDL2.dll 
   SetCursorScreenPos；卡片/组件内部不要用 Dummy 预留后重置光标到 (0,0)；零 item 的
   BeginGroup/EndGroup 会触发 ImGui 断言；`Ui.cpp` 的 `withAlpha(col, a)` 是**缩放** col 自身的
   alpha（曾经是"替换"，把 kBackdrop 的 84 变成 255，暂停遮罩变成全黑——改语义时留意）。
+- **卡片入场动画只做两件事，而且都在 `endCard()` 一处完成**（2026-09-19 修）：把这一段
+  顶点**往卡片中心缩** `k`、**把 alpha 乘** `k`（`k = 0.34 + 0.66 * smoothstep(t)`，0.16s）。
+  两个坑：
+  - **任何画在卡片里的东西都不许自己乘 `k`**（原来卡体/遮罩/关闭 X 各自 `withAlpha(col, k)`，
+    而标题、按钮、复选框没有——于是框淡入时内容是"啪"一下满不透明度闪现的）。全都交给那一趟顶点。
+  - **子窗口有自己的 ImDrawList**，它的顶点不在卡片的 range 里 → 设置卡片的页签内容
+    （`BeginChild`）原来既不缩也不淡。`BeginChild` 之后必须 `ui::cardSubList(ImGui::GetWindowDrawList())`
+    把那个 list 交给卡片，`endCard()` 会用同一套参数处理它（注册是每帧一次，`beginCard` 会清）。
+  想看动画中间某一帧：`CPSEKAI_CARD_T=<0..1>` 冻结（0.16s 的动画截图时机根本追不上）。
 - 设置卡片 360x640、四个页签（演奏 / 画面 / 判定 / 系统）；`--settings` + `--settings-tab <0-3>`
   无头打开（按键没法送进无头运行），配合 `--screenshot` 截图。
   **页签内容放在一个裁剪用的 `BeginChild` 里**：「画面」页比卡片高，多出来的行会钻到「关闭」
@@ -1076,9 +1085,35 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
     `setEnabled()` 里会 truncate；**变量别叫 `near`**（windef.h 把它定义成空宏，
     声明会被吃掉，直接编译不过）。
 
+## 「Flick 视作 Tap」（2026-09-19，`settings > 判定`，紧跟在「严格 Flick 方向」后面）
+
+给"上滑很难触发"的触摸屏用：勾上之后**所有 flick 音符都变成 tap**——
+`findCandidate()` 里 `flickAsTap` 同时跳过"种类不符就拒绝"和"方向不符就拒绝"两层，
+所以任意一次按在窗口内的点按/滑动都能清掉它（方向不再有意义）。
+`--flick-as-tap` 是本次运行等价的调试开关（和 `--auto` 一样**不落盘**）。
+
+**hold 尾接 flick 例外，而且不能反过来变成 tap**：玩家那时手还按在轨道上，
+要求他再点一下或者滑一下都是这个设置本来要消灭的事。所以**那个尾巴不再是音符**：
+`update()` 的 hold 尾判分支在 `mFlickAsTap` 时直接 `judgeHoldTail(Perfect)`
+（原来只有 `mAutoPlay` 走这条），按住不放、提前松手都算过，不扣分不断连。
+- 注意**不能**让它走 tap 尾那条路（按松手时刻评 Perfect/Great/Good/Bad）——
+  那还是在惩罚一个"本该不存在"的音符。
+- 也不用担心它会漏判成 MISS：`findCandidate` 里 hold tail 只可能被 flick 手势碰到
+  （`note.holdTail && !(wantFlick && kind == 2)`），所以尾巴只能由 hold 追踪器收尾。
+
+实测（`0001_master`：17 个 flick，其中 9 个是 hold 尾；把 `--test-hits` 的 flick 分支
+临时改成 `tap()` 模拟"只会点不会滑"）：关 = perfect 597 / miss 25 / tails 41；
+开 = perfect 615 / miss 7 / tails 51。差额正好是那 17 个 flick（尾巴 +10 走的是新分支）。
+
 ## 多人游玩（`platform/Party.*` + `game/PartyScreen.*`）
 
 同一台机器开多个窗口一起打。房间**没有自己的页面**：它就在选曲界面上。
+
+**房里只有一个人时不显示任何多人 UI**（2026-09-19）：左下角的房间胶囊
+（`drawPartyBadge`）和手机面板状态行里那些"其他玩家…"的话都只在
+`party.playerCount() > 1` 时才出。房间本身照旧活着（下一个窗口开起来就加入），
+只是不拿一排并不存在的队友去烦人。**演算里的"加载中/即将开始"和错误行
+（谱面加载失败 / 本窗口没有这首曲子）照常显示**——那是本窗口自己的状态，不是多人话术。
 
 流程（2026-09-18 定稿，之前的"房间页 + 准备 + 10s 倒计时"已删）：
 **第一个窗口是房主**，选曲列表归它（它的光标停在哪个曲目，就立刻广播哪个曲目）；

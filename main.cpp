@@ -443,6 +443,8 @@ namespace
             "Keyboard: Z S X D C V G B H N J M = 12 lanes\n"
             "          SPACE = pause, F = fullscreen, H = debug panel, ESC = back/quit\n"
             "--test-hits: fire the hit effects for upcoming notes without input (debug).\n"
+            "--flick-as-tap: judge flick notes as taps for this run only (debug; the\n"
+            "               saved 判定 > Flick 视作 Tap setting is not changed).\n"
             "--judge-frame <n>: freeze the judge text on animation frame n (debug).\n"
             "--result-preview: jump straight to the result screen at boot (debug; uses\n"
             "                  the reference screenshot's numbers for pixel checks).\n"
@@ -855,6 +857,9 @@ int main(int argc, char** argv)
     bool windowGiven = false;
     bool fpsGiven = false;
     bool autoplayGiven = false;
+    // --flick-as-tap: per-run override of the 判定 > "Flick 视作 Tap" setting
+    // (same rule as --auto - a headless check must not flip the saved value).
+    bool flickAsTapGiven = false;
     bool widthGiven = false;
     bool heightGiven = false;
     game::UserSettings userSettings;
@@ -946,6 +951,8 @@ int main(int argc, char** argv)
         } else if (arg == "--auto") {
             autoPlay = true;
             autoplayGiven = true;
+        } else if (arg == "--flick-as-tap") {
+            flickAsTapGiven = true;
         } else if (arg == "--speed" && i + 1 < utf8Argc) {
             noteSpeed = static_cast<float>(std::atof(utf8Argv[++i]));
             speedGiven = true;
@@ -1767,6 +1774,7 @@ int main(int argc, char** argv)
         windows.holdStartGraceMs = userSettings.holdStartGraceMs;
         judgement.setWindows(windows);
         judgement.setStrictFlick(userSettings.strictFlick);
+        judgement.setFlickAsTap(flickAsTapGiven || userSettings.flickAsTap);
         // One line that says exactly what is in force, so a "the judgement feels
         // wrong" report can be checked against the numbers without opening the
         // dialog. missAfter is what an untouched note waits for.
@@ -2486,6 +2494,7 @@ int main(int argc, char** argv)
         userSettings.holdTailGraceMs = w.holdTailGraceMs;
         userSettings.holdStartGraceMs = w.holdStartGraceMs;
         userSettings.strictFlick = judgement.strictFlick();
+        userSettings.flickAsTap = judgement.flickAsTap();
         game::saveUserData(userDataFile, userSettings, scores, account);
     };
 
@@ -2637,6 +2646,7 @@ int main(int argc, char** argv)
         applyTouchFeedback(window, hideTouchFeedback);
 #endif
         judgement.setStrictFlick(userSettings.strictFlick);
+        judgement.setFlickAsTap(flickAsTapGiven || userSettings.flickAsTap);
         judgement.setInitialLife(userSettings.initialLife);
         {
             game::JudgementWindows windows;
@@ -2781,6 +2791,11 @@ int main(int argc, char** argv)
             ImGui::BeginChild("##tabcontent",
                 ImVec2(cardSize.x, std::max(40.0f * s, contentBottom - contentTop)),
                 ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground);
+            // The child draws into its own list, so the card has to be told
+            // about it or the whole tab body (sliders, checkboxes, native Text)
+            // would sit at full size and opacity while the card animates - see
+            // ui::cardSubList.
+            ui::cardSubList(ImGui::GetWindowDrawList());
             ImGui::PopStyleVar();
             // Window-local coordinates: an absolute screen y here would pin the
             // first row in place while the rest of the tab scrolls under it.
@@ -3112,6 +3127,10 @@ int main(int argc, char** argv)
                 static bool strictFlick = judgement.strictFlick();
                 ui::checkBox("严格 Flick 方向", &strictFlick, interior);
                 judgement.setStrictFlick(strictFlick);
+                static bool flickAsTap = judgement.flickAsTap();
+                contentLeft();
+                ui::checkBox("Flick 视作 Tap", &flickAsTap, interior);
+                judgement.setFlickAsTap(flickAsTap);
                 // Starting life. The engine seeds every session's stats from its own
                 // copy on reset(), so pushing it here (and once at boot) is enough.
                 float life = judgement.initialLife();
@@ -4921,15 +4940,22 @@ int main(int argc, char** argv)
             // The room line under the phone panel's 确定 button: what this
             // window is waiting for right now.
             if (party.active()) {
+                // Alone in the room (one window on this machine): 多人游玩 has
+                // nothing to coordinate, so its whole vocabulary - the badge, the
+                // "other players pick their difficulty on their phone" line -
+                // would be noise describing people who are not there. The room
+                // itself stays live (the next window that opens joins it); only
+                // the UI goes quiet.
+                const bool partySolo = party.playerCount() <= 1;
                 if (party.isHost()) {
                     if (selected < 0 || selected >= static_cast<int>(entries.size())) {
-                        mpStatus = "选一首曲子";
+                        mpStatus = partySolo ? std::string() : "选一首曲子";
                     } else if (!mpConfirmed) {
-                        mpStatus = "点确定开始（其他玩家在手机上选难度）";
+                        mpStatus = partySolo ? std::string() : "点确定开始（其他玩家在手机上选难度）";
                     } else if (party.allReady()) {
-                        mpStatus = "全员确定 · 即将开始";
+                        mpStatus = partySolo ? std::string() : "全员确定 · 即将开始";
                     } else {
-                        mpStatus = "已确定 · 等待其他玩家（再按一次强制开始）";
+                        mpStatus = partySolo ? std::string() : "已确定 · 等待其他玩家（再按一次强制开始）";
                     }
                 } else if (mpSpectating) {
                     mpStatus = "旁观中 · 点确定加入本曲";
@@ -4960,6 +4986,10 @@ int main(int argc, char** argv)
             game::SelectPartyInfo selParty;
             if (party.active()) {
                 selParty.active = true;
+                // ... and the status stays as-is even when alone: the charge
+                // lines ("谱面加载中…" / "即将开始") and the error lines
+                // ("本窗口没有…" / "谱面加载失败") are about *this* window, not
+                // about other players, so they keep showing.
                 selParty.host = party.isHost();
                 selParty.songLocked = mpSnap.phase == platform::PartySongLocked
                     || mpSnap.phase == platform::PartyCharging
@@ -5396,8 +5426,11 @@ int main(int argc, char** argv)
             // 多开的实验性功能确认框（设置卡片里点出来的）。
             drawMultiInstanceAskDialog();
             // Who else is in the room (hidden while the settings card is up:
-            // it draws on the foreground list, above the card).
-            if (party.active() && !showDebug) {
+            // it draws on the foreground list, above the card). A room with a
+            // single seat is just this window, so the badge and its hint - the
+            // one thing that would say "waiting for other players" - stay away
+            // until somebody actually joins.
+            if (party.active() && party.playerCount() > 1 && !showDebug) {
                 std::string hint;
                 if (party.isHost()) {
                     hint = mpConfirmed ? "已确定 · 再按一次可强制开始" : "选好歌按确定开始";

@@ -364,7 +364,12 @@ HitNote* JudgementEngine::findCandidate(float lanePos, float songTimeSec, float 
             continue;
         }
         const bool noteIsFlick = note.kind == 2.0f;
-        if (wantFlick != noteIsFlick) {
+        // "Flick 视作 Tap": a flick note takes any press inside its window, so
+        // neither the kind mismatch nor the direction check below may reject it.
+        // Hold tails never reach this point as flick-as-tap (they are completed
+        // by the hold tracker instead, see update()).
+        const bool flickAsTap = noteIsFlick && mFlickAsTap;
+        if (wantFlick != noteIsFlick && !flickAsTap) {
             if (mStrictFlick) {
                 // Strict: a plain tap never clears a flick note (and a swipe
                 // never clears a tap).
@@ -372,7 +377,7 @@ HitNote* JudgementEngine::findCandidate(float lanePos, float songTimeSec, float 
             }
             // Lenient skeleton mode: either gesture clears either kind.
         }
-        if (wantFlick && mStrictFlick) {
+        if (wantFlick && mStrictFlick && !flickAsTap) {
             const FlickDir noteDir = static_cast<FlickDir>(noteFlickDir(note));
             // Up/default flicks (and legacy FlickNone) accept any upward
             // swipe; left/right flicks require the matching horizontal swipe.
@@ -736,6 +741,16 @@ void JudgementEngine::update(float songTimeSec)
                     // Nothing swipes in a preview run, so the flick tail would
                     // sit pending and auto-miss - autoplay has to stay flawless
                     // (its [stats] line is the headless baseline).
+                    judgeHoldTail(hold, Judge::Perfect, songTimeSec);
+                } else if (mFlickAsTap) {
+                    // "Flick 视作 Tap": the player is still holding this lane,
+                    // so the tail must not ask for anything. It stops being a
+                    // note: the hold simply ends and the tail is paid as a
+                    // PERFECT, whether the lane was released or held through.
+                    // (Turning it into a tap instead would demand a second
+                    // press on a lane that is already down, and grading it on
+                    // the release - the rule for tap tails - would punish a
+                    // gesture the setting exists to remove.)
                     judgeHoldTail(hold, Judge::Perfect, songTimeSec);
                 }
                 continue;

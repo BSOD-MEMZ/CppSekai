@@ -112,7 +112,10 @@ namespace
         int vtxBase = -1;
         ImDrawList* targetList = nullptr;
         ImVec2 pivot{0.0f, 0.0f};
-        float k = 1.0f;            // the eased scale applied by endCard()
+        float k = 1.0f;            // the eased scale/opacity applied by endCard()
+        // Draw lists the card opened *inside* itself (see cardSubList): a child
+        // window has its own vertex buffer, so it needs the same transform.
+        std::vector<ImDrawList*> subLists;
     };
 
     CardState& cardState(const char* id)
@@ -202,6 +205,13 @@ bool beginCard(const char* id, ImVec2* center, ImVec2* size, bool showClose, boo
         requestClose(st);
     }
     st.t = std::clamp(st.t + (open ? 1.0f : -1.0f) * ImGui::GetIO().DeltaTime / kAnimSec, 0.0f, 1.0f);
+    // Debug (CPSEKAI_CARD_T=0.4): freeze every card's animation at this point.
+    // The entrance lasts kAnimSec (0.16s), which is far shorter than any
+    // --screenshot timing can aim at, so this is the only way to look at a
+    // single frame of it.
+    if (const char* frozen = std::getenv("CPSEKAI_CARD_T")) {
+        st.t = std::clamp(static_cast<float>(std::atof(frozen)), 0.0f, 1.0f);
+    }
     // Scale from a small dot in the middle (official dialogs start at roughly
     // a third of their size, not 92%). At t == 1 this is exactly 1.0, so a
     // settled card has no transform at all and its hit boxes are its own.
@@ -252,6 +262,7 @@ bool beginCard(const char* id, ImVec2* center, ImVec2* size, bool showClose, boo
     st.targetList = dl;
     st.pivot = animCenter;
     st.vtxBase = dl->VtxBuffer.Size;
+    st.subLists.clear(); // re-registered below (per frame) by cardSubList()
     gOpenCard = &st;
 
     if (st.t <= 0.0f && !open) {
@@ -271,13 +282,19 @@ bool beginCard(const char* id, ImVec2* center, ImVec2* size, bool showClose, boo
     const ImVec2 lo = ImVec2(animCenter.x - animSize.x * 0.5f, animCenter.y - animSize.y * 0.5f);
     const ImVec2 hi = ImVec2(animCenter.x + animSize.x * 0.5f, animCenter.y + animSize.y * 0.5f);
 
+    // NOTE: nothing in here pre-multiplies its colour by `k` any more. endCard()
+    // fades *every* vertex it produced by that same value, so doing it twice
+    // would give the body k^2 - and, more to the point, anything that forgot to
+    // do it (the title, the buttons, the checkbox, ...) used to sit at full
+    // opacity on a half-transparent card, which is exactly the "the card fades
+    // in but its contents pop" bug.
     if (dimBackdrop) {
-        dl->AddRectFilled(ImVec2(0.0f, 0.0f), ImGui::GetIO().DisplaySize, withAlpha(kBackdrop, k));
+        dl->AddRectFilled(ImVec2(0.0f, 0.0f), ImGui::GetIO().DisplaySize, kBackdrop);
     }
     // Card + a faint drop shadow like the real dialog.
     dl->AddRectFilled(ImVec2(lo.x + 6.0f * s, lo.y + 10.0f * s), ImVec2(hi.x + 6.0f * s, hi.y + 10.0f * s),
-        withAlpha(IM_COL32(40, 40, 60, 40), k), kCardRadius * s);
-    dl->AddRectFilled(lo, hi, withAlpha(kCardBg, k), kCardRadius * s);
+        IM_COL32(40, 40, 60, 40), kCardRadius * s);
+    dl->AddRectFilled(lo, hi, kCardBg, kCardRadius * s);
 
     // Close X: submitted BEFORE the header drag strip, and the strip below
     // excludes the close corner - zero overlapping items, so the click always
@@ -300,7 +317,7 @@ bool beginCard(const char* id, ImVec2* center, ImVec2* size, bool showClose, boo
         const float inset = (hit - draw) * 0.5f;
         dl->AddImage(closeTexture(), ImVec2(closeLo.x + inset, closeLo.y + inset),
             ImVec2(closeHi.x - inset, closeHi.y - inset), ImVec2(0, 0), ImVec2(1, 1),
-            withAlpha(IM_COL32(255, 255, 255, 255), (hovered ? 0.55f : 1.0f) * k));
+            withAlpha(IM_COL32(255, 255, 255, 255), hovered ? 0.55f : 1.0f));
         headerRight = closeLo.x - 2.0f * s;
         if (clicked) {
             // Dismissing via the X closes the card right away, so the close
@@ -332,14 +349,28 @@ bool beginCard(const char* id, ImVec2* center, ImVec2* size, bool showClose, boo
     return true;
 }
 
+void cardSubList(ImDrawList* list)
+{
+    if (gOpenCard != nullptr && list != nullptr) {
+        gOpenCard->subLists.push_back(list);
+    }
+}
+
 void endCard()
 {
-    // Apply the whole-card scale (see beginCard). The vertices were emitted at
-    // their final positions, so the only thing left is to pull every one of
-    // them towards the card centre by `k`. Running it over the raw vertex
-    // buffer rather than over each Add* call is what keeps text, sprites and
-    // rounded corners all scaling by the same amount - and costs one pass over
-    // a few hundred vertices once per card per frame.
+    // Apply the whole-card transform (see beginCard). The vertices were emitted
+    // at their final positions and their final colours, so the only thing left
+    // is to pull every one of them towards the card centre by `k` *and* to fade
+    // it by the same value. Running it over the raw vertex buffer rather than
+    // over each Add* call is what keeps text, sprites and rounded corners all
+    // moving and fading together - and costs one pass over a few hundred
+    // vertices once per card per frame.
+    //
+    // The alpha half matters as much as the scale: the card body used to fade
+    // in on its own while the title / buttons / checkbox were drawn at full
+    // opacity from frame one, so the contents "flashed in" on a half-transparent
+    // card. Since the scale and the fade are the same number, one pass does both
+    // and no widget has to remember either.
     //
     // ImGui::End() may have appended its own vertices (the window's scrollbar
     // / decoration are off, so in practice nothing), and the ranges are per
@@ -350,11 +381,26 @@ void endCard()
         if (st.targetList != nullptr && st.vtxBase >= 0) {
             ImDrawList* dl = st.targetList;
             if (st.k < 0.9999f) {
-                const ImVec2 pivot = st.pivot;
-                for (int i = st.vtxBase; i < dl->VtxBuffer.Size; ++i) {
-                    ImDrawVert& v = dl->VtxBuffer[i];
-                    v.pos.x = pivot.x + (v.pos.x - pivot.x) * st.k;
-                    v.pos.y = pivot.y + (v.pos.y - pivot.y) * st.k;
+                const auto transform = [&](ImDrawList& list, int from) {
+                    const ImVec2 pivot = st.pivot;
+                    const int alphaMul = static_cast<int>(std::clamp(st.k, 0.0f, 1.0f) * 255.0f + 0.5f);
+                    for (int i = from; i < list.VtxBuffer.Size; ++i) {
+                        ImDrawVert& v = list.VtxBuffer[i];
+                        v.pos.x = pivot.x + (v.pos.x - pivot.x) * st.k;
+                        v.pos.y = pivot.y + (v.pos.y - pivot.y) * st.k;
+                        const int srcA = static_cast<int>((v.col & IM_COL32_A_MASK) >> IM_COL32_A_SHIFT);
+                        const int dstA = srcA * alphaMul / 255;
+                        v.col = (v.col & ~IM_COL32_A_MASK)
+                            | (static_cast<ImU32>(dstA) << IM_COL32_A_SHIFT);
+                    }
+                };
+                transform(*dl, st.vtxBase);
+                // A child window's list holds nothing but this card's content,
+                // so it is transformed from its start.
+                for (ImDrawList* sub : st.subLists) {
+                    if (sub != nullptr && sub != dl) {
+                        transform(*sub, 0);
+                    }
                 }
             }
         }
