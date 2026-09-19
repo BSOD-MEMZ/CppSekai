@@ -2,7 +2,8 @@
 
 > **把 Project SEKAI 的 SUS 谱面，做成一个双击就能玩的 Windows 原生 exe。**
 
-没有 Electron，没有浏览器，没有 Unity，没有引擎，没有一个需要用户安装的运行库。
+没有 Electron，没有浏览器，没有 Unity，没有引擎，没有一个需要用户安装的运行库
+（Windows 7 SP1 例外：那边要系统自带之外的 UCRT，见 [AGENTS.md](AGENTS.md) 的「Windows 7 兼容」）。
 zig 把 C++20 静态链成一个 ~4.8 MB 的 `cppsekai.exe`，SDL2 给窗口和输入，OpenGL 3.3 core 直接上屏。
 
 ```
@@ -61,7 +62,8 @@ cd build && ./cppsekai.exe
 bash setup.sh --charts     # 额外下载 0075 / 0127 两张谱 + BGM 到 charts/
 ```
 
-**不需要** Visual Studio、cmake、vcpkg、Python 环境。Windows 7 SP1 起，2008 年之后的核显就能跑。
+**不需要** Visual Studio、cmake、vcpkg、Python 环境。Windows 7 SP1 起，2008 年之后的核显就能跑
+（Win7 上还得装一次 UCRT / VC++ 2015-2022 运行库；Win10+ 开箱即用）。
 
 > 想下别的歌？仓库不自带谱面（官方素材不入库）→ 看 **[CHARTS.md](CHARTS.md)**：
 > 命名规则、unipjsk 下载地址、元数据 sidecar、常见问题都在里面。
