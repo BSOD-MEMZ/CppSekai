@@ -1050,39 +1050,65 @@ python -c "..."                      # 改 profiles/default.json 的 bgStyle=2
 
 ## 窗口外观：整块玻璃 / 原生材质 / Vista 成本（2026-09-19 调查）
 
-### 「整块玻璃」= 无边框 + 自己做 hit-test
+### 「整块玻璃」= MS 官方就有配方，别自己发明
 
-用户看到的是：客户区已经是玻璃了，但窗口**自带 caption 和边框**，于是玻璃被框在一个"窗框"里
-（caption 的玻璃有自己的高光/底边，外面还有 DWM 的一圈 outline）—— 他要的是 Explorer / 桌面
-小组件那种"整个窗口就是一块玻璃"。**这不是 `DwmExtendFrameIntoClientArea` 能解决的**（它只能
-让客户区变玻璃，caption 还在）。
+现象：客户区已经是玻璃了，但窗口**自带 caption 和边框**（caption 有自己的高光/底边，外面还有
+DWM 那圈 outline），玻璃像被装进了窗框。**`DwmExtendFrameIntoClientArea` 解决不了** —— 文档原话
+是负 margin 产生 "sheet of glass" effect "where **the client area** is rendered as a solid surface
+with no window border"，它管的是**客户区**，非客户区照旧由 DWM 画。
 
-要那种感觉只能**去掉窗口的非客户区**，而"无边框"不等于"不能拖"：经典的组合是
-**borderless (`WS_POPUP`) + `WM_NCHITTEST` 返回 `HTCAPTION`（顶部一条）+ `HTBOTTOMRIGHT` 等
-（四边/角给缩放）** —— 系统照样给原生的拖动、Aero Snap（拖到顶最大化、拖到边半屏）和缩放，
-但窗口不画任何 frame，于是 `-1` margin 的玻璃铺满整块 = 整块玻璃 ✓。我们的消息泵不会被挂住
-（系统那种模态循环仍然会发生，但已经有子类化喂帧兜着，画面照动）。
+**正解在 `Custom Window Frame Using DWM` 这篇官方文档里**（learn.microsoft.com/windows/win32/dwm/customframe），
+步骤和我们想做的完全一致 —— 就是说**这不是 hack，是微软自己教的做法**：
 
-**代价**：① 得自己维护 hit-test 区域（顶部多少 px 算 caption、边缘多少 px 算缩放），DPI 缩放时
-要乘 `scale`；② 最大化后没有原生标题栏就不能双击还原？——hmm，双击 caption 是系统行为，
-`HTCAPTION` 依然给 ✓；③ 多人模式多窗口时，每块玻璃都透桌面，视觉上更乱。
+1. **去掉标准 frame**：处理 `WM_NCCALCSIZE`，当 `wParam == TRUE` 时**返回 0**。文档原话
+   "your application uses the entire window region as the client area, removing the standard frame"。
+   **不用改窗口风格、不需要 `WS_POPUP`** —— `WS_THICKFRAME` 之类留着（DWM 投影、最小/最大化动画
+   都还在），只是 DWM 不再画 frame。注意创建时不会立刻生效，得补一次
+   `SetWindowPos(..., SWP_FRAMECHANGED)` 逼它重算一次 `WM_NCCALCSIZE`。
+2. **重新实现拖动/缩放**：文档明说"a side effect of removing the standard frame is the loss of the
+   default resizing and moving behavior"，而"frame hit test messages are sent to you through the
+   `WM_NCHITTEST` message, **even if** your application creates a custom frame without the standard
+   frame"。**附录 C 直接给了 `HitTestNCA()` 的源码**（返回 `HTCAPTION` / `HTTOPLEFT`…），照抄即可；
+   记得按 DPI 算边缘宽度（`SM_CXSIZEFRAME + SM_CXPADDEDBORDER` 的 per-DPI 版本）。
+3. **caption 按钮**：`WM_NCHITTEST` 先交给 `DwmDefWindowProc`（`WM_NCHITTEST` 页面的 Vista 那段就是
+   说这个），它负责 caption 按钮的 hit-test。我们要自绘全部 UI，也可以选
+   `DWMWA_NCRENDERING_POLICY = DWMNCRP_DISABLED` 让 DWM 整个非客户区都不画 —— **这是最便宜的
+   试探实验，先试它**（不确定是否连投影一起没掉，Win7 上实测一下就知道）。
+4. 在 1~3 的基础上，`-1` margin 的玻璃就铺满整块 = 整块玻璃 ✓。系统的模态拖动循环仍然会发生，
+   已经有子类化喂帧兜着（见上一节），画面照动。
 
-### 原生材质（Win10 亚克力 / Win11 Mica）：可以做，分系统一条
+**没有官方承诺的部分（别当成保证）**：
+- **Aero Snap / 摇一摇 / Win11 悬停最大化键出 Snap Layouts** 这些是 shell 行为；`HTCAPTION` 在文档
+  里只写了 "In a title bar"，没有任何一页承诺自定义 hit-test 区域也有这些。实测给，**但分系统验**。
+  Win11 的 Snap Layouts 依赖系统画的最大化按钮，frame 去掉后得自己画 + 自己处理。
+- 多人模式多窗口各透各的桌面，视觉上更乱。
 
-我们现在做的"透明 + DWM 玻璃"只在 Win7 Aero 上有模糊；Win8+ 是纯透（没有模糊）。各系统的
-官方/事实标准做法：
+**2026-09-19 更正**：本段原先写的是 "borderless (`WS_POPUP`) + `WM_NCHITTEST`" —— 那是社区常见做法，
+能用但会丢掉 DWM 投影和窗口风格带来的行为。MS 官方配方走 `WM_NCCALCSIZE` 清零非客户区。
 
-| 系统 | 做法 | 备注 |
+### 原生材质（Win10 亚克力 / Win11 Mica）：一条官方、一条野生
+
+我们现在做的"透明 + DWM 玻璃"只在 Win7 Aero 上有模糊；Win8+ 是纯透（没有模糊）。
+
+| 系统 | 做法 | 官方性 |
 |---|---|---|
-| Win7 / Vista | `DwmExtendFrameIntoClientArea(-1)` | Aero 模糊就是它，已实现 ✓ |
-| Win8 / 8.1 | 同上，但只得到透明（无模糊） | Aero 玻璃在 Win8 被砍了 |
-| Win10 1803+ | `SetWindowCompositionAttribute` + `ACCENT_ENABLE_BLURBEHIND`（轻）或 `ACCENT_ENABLE_ACRYLICBLURBEHIND`（亚克力，重、有历史 bug） | **未文档化**，user32 导出，得 GetProcAddress |
-| Win11 22000+ | `DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE=38, DWMSBT_MAINWINDOW=2 /*mica*/、DWMSBT_TRANSIENTWINDOW=3 /*acrylic*/)`；配 `DWMWA_WINDOW_CORNER_PREFERENCE=33` 圆角、`DWMWA_BORDER_COLOR=34` 去掉那条边框线 | 官方 API（21H2 上是 `DWMWA_MICA_EFFECT=1029`） |
+| Win7 / Vista | `DwmExtendFrameIntoClientArea(-1)` | **文档明确**：负 margin = "sheet of glass"（已实现 ✓） |
+| Win8 / 8.1 | 同上，只有透明没模糊 | Aero 在 Win8 被砍 |
+| Win10 1803+ | `SetWindowCompositionAttribute` + `ACCENT_ENABLE_BLURBEHIND`（轻）/ `ACCENT_ENABLE_ACRYLICBLURBEHIND`（真亚克力，吃 GPU、有历史 bug） | **未文档化**：user32 内部导出，learn 上没有页面，能用但无支持承诺。Win10 上**没有**文档化的替代品 |
+| Win11 **22621+** | `DwmSetWindowAttribute(DWMWA_SYSTEMBACKDROP_TYPE=38, DWMSBT_MAINWINDOW=2 /*mica*/ / DWMSBT_TRANSIENTWINDOW=3 /*acrylic*/)`，配 `DWMWA_WINDOW_CORNER_PREFERENCE=33`、`DWMWA_BORDER_COLOR=34`（`DWMWA_COLOR_NONE=0xFFFFFFFE` 可去掉那条边框线） | **官方**。枚举文档写的是 **build 22621** 起；21H2/22000 上只有未文档化的 `DWMWA_MICA_EFFECT=1029`。圆角/边框色/暗色模式是 22000 起 |
 
-全部都是 `GetProcAddress` 动态取（我们的工具链没有对应导入库），加一块 `platform/WindowMaterial.cpp`
-按系统分派即可，约 100~150 行。**Win11 的 Mica 我这边就能实测**（`--screenshot` 抓不到合成
-结果，得人眼看），Win10 亚克力需要用户那台 22H2 验证。
-注意：材质只在"背景不填充"（`bgStyle == 2`）时才看得见 —— 铺满的窗口没有材质可言。
+官方设计文档（`/windows/apps/design/style/mica`）还写了几条**会打脸的前提**：想看见材质就得
+"set the background to **transparent** for all layers where you want to see Mica"；而在系统关掉透明
+效果 / 节电模式 / 低端硬件 / **窗口失去激活** / **系统版本低于 22000** 这几种情况下，Mica 会
+**退化成实心底色**。另外 MS 给 Win32 的 Mica 教程走的是 **Windows App SDK 的 `MicaController`**
+（要 App SDK 运行时依赖，对静态链接的 exe 太重）—— 我们直接用上面那条文档化的 attribute 即可。
+顺带一提：官方那个 Win32 Mica 样例窗口本身还留着 `WS_OVERLAPPEDWINDOW`（frame 还在），
+所以"整块玻璃"和"材质"这两条得我们自己拼。
+
+全部 `GetProcAddress` 动态取（工具链没有对应导入库），一块 `platform/WindowMaterial.cpp` 按系统
+分派，约 100~150 行。**Mica 我在 Win11 上能实测**（合成结果 `--screenshot` 抓不到，得人眼看），
+Win10 亚克力只能他那台 22H2 验。材质只在"背景不填充"（`bgStyle == 2`）时才看得见 ——
+铺满的窗口没有材质可言。
 
 ### 兼容 Vista 的成本（2026-09-19 实测）
 
