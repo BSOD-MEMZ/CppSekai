@@ -267,9 +267,17 @@ namespace
             if (file.empty()) {
                 continue;
             }
+            // The Fonts key stores either a bare file name ("msyh.ttc") or a full
+            // path ("C:\\Windows\\Fonts\\msyh.ttc", what Win7 tends to write for
+            // fonts that arrived with an update / a language pack). Gluing "\Fonts\"
+            // in front of the latter produced a path that cannot exist - the font
+            // was then silently skipped, which is how a machine with perfectly good
+            // CJK fonts ends up on ImGui's bitmap face.
             wchar_t windowsDir[MAX_PATH]{};
             GetWindowsDirectoryW(windowsDir, MAX_PATH);
-            result = wideToUtf8(windowsDir) + "\\Fonts\\" + wideToUtf8(file);
+            result = (file.size() > 1 && file[1] == L':')
+                ? wideToUtf8(file)
+                : wideToUtf8(windowsDir) + "\\Fonts\\" + wideToUtf8(file);
         }
         RegCloseKey(key);
         return result;
@@ -300,6 +308,18 @@ namespace
     std::vector<SystemFontCandidate> systemFontCandidates()
     {
         std::vector<SystemFontCandidate> candidates;
+        auto push = [&](const std::string& path, const std::string& label) {
+            if (path.empty()) {
+                return;
+            }
+            for (const auto& existing : candidates) {
+                if (existing.path == path) {
+                    return; // same file reached by two names (msyh.ttc and all)
+                }
+            }
+            candidates.push_back({path, label});
+        };
+
         NONCLIENTMETRICSW metrics{};
         metrics.cbSize = sizeof(metrics);
         std::wstring faceName;
@@ -307,16 +327,52 @@ namespace
             faceName = metrics.lfMessageFont.lfFaceName;
         }
         if (!faceName.empty()) {
-            const std::string path = resolveFontFile(faceName);
-            if (!path.empty()) {
-                candidates.push_back({path, wideToUtf8(faceName)});
-            }
+            push(resolveFontFile(faceName), wideToUtf8(faceName));
         }
-        for (const wchar_t* fallback : {L"Microsoft YaHei UI", L"Yu Gothic UI", L"Meiryo UI",
-                                          L"MS UI Gothic", L"Noto Sans SC", L"Noto Sans JP"}) {
-            const std::string path = resolveFontFile(fallback);
-            if (!path.empty()) {
-                candidates.push_back({path, wideToUtf8(fallback)});
+        // Japanese first (kana + kanji + latin in one file, the only CJK faces
+        // on a plain JP install), then Chinese, then Korean.
+        // Both the English and the localized registry names are listed because
+        // the Fonts key is localized: zh-CN would work with either
+        // "Microsoft YaHei" or "微软雅黑", but 宋体's English half is "SimSun"
+        // and 黑体's entry may carry no English name at all.
+        for (const wchar_t* fallback : {
+                 L"Microsoft YaHei UI", L"Microsoft YaHei", L"微软雅黑",
+                 L"Yu Gothic UI", L"Yu Gothic", L"Meiryo UI", L"Meiryo", L"MS Gothic",
+                 L"MS UI Gothic", L"SimSun", L"宋体", L"SimHei", L"黑体",
+                 L"Microsoft JhengHei", L"微軟正黑體", L"Malgun Gothic",
+                 L"Noto Sans SC", L"Noto Sans JP" }) {
+            push(resolveFontFile(fallback), wideToUtf8(fallback));
+        }
+
+        // Registry-free net, and the reason this works on a Win7 box at all.
+        // The *value names* in HKLM\...\Fonts are what a lookup depends on, and
+        // they differ per locale and per Windows version: Win7 has no
+        // "Microsoft YaHei UI" entry (that face is Win8+), and on an English
+        // install the message font is Segoe UI - latin only, rejected below.
+        // The *file names*, on the other hand, have not changed since Vista, so
+        // try those directly before giving up.
+        {
+            wchar_t windowsDir[MAX_PATH]{};
+            GetWindowsDirectoryW(windowsDir, MAX_PATH);
+            const std::wstring root = std::wstring(windowsDir) + L"\\Fonts\\";
+            for (const wchar_t* file : {
+                     L"msyh.ttc",     // Microsoft YaHei (Win7+)
+                     L"msyh.ttf",     // Vista, or XP with the ClearType pack
+                     L"meiryo.ttc",   // Meiryo (Vista+, JP)
+                     L"msgothic.ttc", // MS Gothic (every JP install)
+                     L"YuGothM.ttc",  // Yu Gothic (Win8.1+)
+                     L"msjh.ttc",     // Microsoft JhengHei (zh-TW)
+                     L"malgun.ttf",   // Malgun Gothic (ko-KR)
+                     L"simhei.ttf",   // SimHei
+                     L"simsun.ttc",   // SimSun (always installed, serif)
+                     L"mingliu.ttc",  // MingLiU (zh-TW)
+                     L"arialuni.ttf", // Arial Unicode MS (Office)
+                 }) {
+                const std::wstring widePath = root + file;
+                if (GetFileAttributesW(widePath.c_str()) == INVALID_FILE_ATTRIBUTES) {
+                    continue;
+                }
+                push(wideToUtf8(widePath), wideToUtf8(file));
             }
         }
         return candidates;
@@ -399,21 +455,55 @@ void loadIntroFonts()
     // latin-only face (Segoe UI on a Japanese or Chinese desktop, for instance)
     // would turn every title into tofu.
     {
-        auto hasCjkGlyphs = [](ImFont* font, float size) {
+        // Returns the first probe glyph the face cannot draw, or 0 when the face
+        // passes. The set deliberately mixes Japanese and Simplified Chinese:
+        // 初 ミ 詞 are ja (kana + shinjitai) and 设 is the SC-only form of 設 -
+        // so a Japanese-only face (Meiryo, MS Gothic) fails on 设 and a
+        // Chinese-only face (most 方正/汉仪 faces) fails on ミ. One file has to
+        // cover both: the song titles are Japanese and this UI's own strings
+        // (谱面加载中… / 得分 / 继续) are Simplified Chinese.
+        auto missingCjkGlyph = [](ImFont* font, float size) -> ImWchar {
             ImFontBaked* baked = font->GetFontBaked(size);
             if (baked == nullptr) {
-                return false;
+                return ImWchar(0xFFFF); // atlas never built - not a coverage problem
             }
-            // 初 ミ 詞 设
             for (const ImWchar c : {ImWchar(0x521D), ImWchar(0x30DF), ImWchar(0x8A5E), ImWchar(0x8BBE)}) {
                 if (baked->FindGlyphNoFallback(c) == nullptr) {
-                    return false;
+                    return c;
                 }
             }
-            return true;
+            return 0;
         };
 
+        // Logger for the "which font did it pick" question: on a box where every
+        // candidate fails the UI silently ends up on ImGui's built-in bitmap face
+        // (dot matrix, every CJK glyph a "?"), and the only way to see why is the
+        // candidate list plus the reason each one was dropped.
+        std::vector<SystemFontCandidate> candidates;
+        // CPSEKAI_FONT_FILE=<path>: use exactly this face. Diagnostics, and a
+        // way out on a machine whose fonts we fail to recognise automatically.
+        if (const char* forced = std::getenv("CPSEKAI_FONT_FILE"); forced != nullptr && *forced != '\0') {
+            candidates.push_back({forced, forced});
+        }
         for (const auto& candidate : systemFontCandidates()) {
+            candidates.push_back(candidate);
+        }
+        std::printf("[intro] %d system font candidate(s)\n", static_cast<int>(candidates.size()));
+        for (const auto& candidate : candidates) {
+            std::printf("[intro]   candidate %s -> %s\n", candidate.face.c_str(), candidate.path.c_str());
+        }
+
+        for (const auto& candidate : candidates) {
+            // AddFontFromFileTTF only says "nullptr" for both "cannot open" and
+            // "cannot parse", and on Win7 those two have completely different
+            // causes. Tell them apart in the log.
+            if (std::FILE* probe = std::fopen(candidate.path.c_str(), "rb"); probe == nullptr) {
+                std::printf("[intro] system font %s not readable (%s)\n", candidate.face.c_str(),
+                    candidate.path.c_str());
+                continue;
+            } else {
+                std::fclose(probe);
+            }
             ImFontConfig config;
             config.OversampleH = 2;
             config.OversampleV = 2;
@@ -425,9 +515,10 @@ void loadIntroFonts()
                 std::printf("[intro] system font %s rejected by the rasterizer\n", candidate.path.c_str());
                 continue;
             }
-            if (!hasCjkGlyphs(font, 42.0f)) {
-                std::printf("[intro] system font %s has no CJK glyphs, trying the next one\n",
-                    candidate.face.c_str());
+            const ImWchar missing = missingCjkGlyph(font, 42.0f);
+            if (missing != 0) {
+                std::printf("[intro] system font %s lacks U+%04X, trying the next one\n",
+                    candidate.face.c_str(), static_cast<unsigned>(missing));
                 continue;
             }
             // Merge the simplified-Chinese set the built-in UI draws.

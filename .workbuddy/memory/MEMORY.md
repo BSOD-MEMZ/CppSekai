@@ -44,6 +44,11 @@
 
 ## 素材现状（2026-09-19 大清理后 10MB / 248 文件，清理前 56.1MB）
 - **字体只用系统字体**（`assets/mmw/font/` 已删，`--pjsk-font` 已去掉），别再往仓库放字体。
+  候选表三层：SPI 讯息字体 → 固定 face 名（中英两套）→ **按文件名兜底**（msyh/meiryo/msgothic/
+  simsun/simhei…，Win7 全靠这层，注册表值名随语言变）。**注册表值可能是完整路径**，别无脑拼
+  `\Fonts\`。字形探测是日文+简中混合（初/ミ/詞/设），日文字体会因缺 `设` 被拒 —— 故意的。
+  「字体变点阵 + 中文变问号」= 所有候选都没过 → 看 `cppsekai.log` 的 `[intro]` 几行
+  （候选表 + 拒绝原因），`CPSEKAI_FONT_FILE=<路径>` 可强制指定。
 - `assets/se/**` 是白名单，用户自己加的，哪怕没接线也不许删。
 - **精灵图集不许缩**：`notes*` / `effect.png` / `longNoteLine*` / `touchLine*`
   —— 精灵矩形是像素坐标写死在 `core/native/generated/generated_resources.h`，缩文件 = 音符错位。

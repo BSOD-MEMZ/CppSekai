@@ -69,10 +69,10 @@ game/Result.*     # 结算画面（PRESENT/RESULT）：参考原版截图 1:1 �
                   # 是留给 live2d 的，16:9 里没有角色，所以面板直接铺到右边。
                   # 数字全部用游戏自带精灵（score/digit/*、combo/p*），不是字体。
                   # 详细测量笔记见下面「结算画面」一节。
-game/Intro.*      # ImGui 卡片/UI；字体**只走系统**（注册表找字体文件 + CJK 字形探测，
-                  # Yu Gothic UI 是 CFF 轮廓 stb_truetype 渲染不了，会自动落到 Microsoft
-                  # YaHei UI）。2026-09-19 删掉 assets/mmw/font 后 --pjsk-font 也没了，
-                  # 见下面「UI 字体」一节）
+game/Intro.*      # ImGui 卡片/UI；字体**只走系统**（注册表找字体文件 + 按文件名兜底 +
+                  # 日文/简中字形探测。Yu Gothic UI 是 CFF 轮廓，stb_truetype 渲染不了，
+                  # 会自动落到 Microsoft YaHei）。2026-09-19 删掉 assets/mmw/font 后
+                  # --pjsk-font 也没了，候选表与排错见「约定与坑」里那两条字体说明）
 game/SongSelect.* # 选曲界面 + userdata.json 读写（settings / scores / account 三段）+ 等级曲线。
                   # 账户 / 等级 / 资料卡见下面「账户 / 等级」一节。
 platform/Party.*  # 多人游玩（同机多窗口联机）的共享内存总线：命名文件映射 + 每实例一个座位，
@@ -403,11 +403,34 @@ bash build.sh          # 仅需 Git Bash；产物 build/cppsekai.exe + SDL2.dll 
   窗口只包住卡片本身，所以演奏时 HUD/轨道照样可点。
 - **字体只用系统字体**（2026-09-19）：`assets/mmw/font/` 整个删了（两个 Fontworks 商业
   FOT-Rodin + 16.9 MB 的 Noto），`--pjsk-font` 选项一并去掉，`loadIntroFonts()` 不再收参数。
-  现在是「注册表读系统 UI 字体 → 探 CJK 字形 → 不行就按 `Microsoft YaHei UI / Yu Gothic UI /
-  Meiryo UI / MS UI Gothic / Noto Sans SC|JP` 依次试」，结果页那几块（得分/最高得分/继续）
-  另外从 `%WINDIR%\Fonts` 按文件名取 `msyhbd.ttc` / `ARIALNB.TTF`；全失败才落 ImGui 内置位图字
-  （只有 ASCII，但至少不是"一个字都没有"）。**COPYRIGHT.md 里那条"商业字体嵌入分发"的风险
-  至此关闭**——别再往仓库里放字体文件。
+  现在是「注册表读系统 UI 字体 → 探 CJK 字形 → 不行就按下面的候选表依次试」，结果页那几块
+  （得分/最高得分/继续）另外从 `%WINDIR%\Fonts` 按文件名取 `msyhbd.ttc` / `ARIALNB.TTF`；
+  全失败才落 ImGui 内置位图字（只有 ASCII，但至少不是"一个字都没有"）。
+  **COPYRIGHT.md 里那条"商业字体嵌入分发"的风险至此关闭**——别再往仓库里放字体文件。
+- **字体候选表（2026-09-19 晚修 Win7 时扩的）**：`systemFontCandidates()` 现在三层，
+  按顺序去重后逐个试：
+  1. `SPI_GETNONCLIENTMETRICS` 的 `lfMessageFont`（跟随系统，首选）；
+  2. 固定 face 名，**中英两套都列**：`Microsoft YaHei UI` / `Microsoft YaHei` / `微软雅黑`、
+     `Yu Gothic UI` / `Yu Gothic` / `Meiryo UI` / `Meiryo` / `MS Gothic` / `MS UI Gothic`、
+     `SimSun` / `宋体` / `SimHei` / `黑体` / `Microsoft JhengHei` / `Malgun Gothic` / Noto ×2；
+  3. **按文件名兜底**（绕开注册表）：`msyh.ttc` `msyh.ttf` `meiryo.ttc` `msgothic.ttc`
+     `YuGothM.ttc` `msjh.ttc` `malgun.ttf` `simhei.ttf` `simsun.ttc` `mingliu.ttc`
+     `arialuni.ttf`（存在才进列表）。**这一层才是 Win7 能起来的保证**：Fonts 键的
+     *值名* 随语言和系统版本变（Win7 根本没有 `Microsoft YaHei UI` 这条，英文版讯息字体是
+     latin-only 的 Segoe UI），而 *文件名* 从 Vista 起没变过。
+  还有两个 2026-09-19 晚修的坑，改这几行时别退回去：
+  - `findFontFile()` 拿到的值可能是**完整路径**（`C:\Windows\Fonts\msyh.ttc`，Win7 上很常见）
+    而不是裸文件名 —— 以前无脑拼 `\Fonts\` 前缀会拼出不存在的路径，然后被静默跳过。
+  - 探测字形用的是**日文 + 简中混合集**（初 `U+521D` / ミ `U+30DF` / 詞 `U+8A5E` /
+    设 `U+8BBE`）：日文字体（Meiryo / MS Gothic）**会**因为缺 `设` 被拒，中文装饰字体
+    （方正/汉仪）会因缺 `ミ` 被拒 —— 这是故意的，歌名是日文、游戏自带 UI 文案是简中，
+    一个文件得同时盖住两边。日志会写清缺哪个码位。
+- **出 \"字体变点阵 + 中文变问号\" 先看 `cppsekai.log`**：那意味着 `loadIntroFonts()` 里
+  一个候选都没过，UI 落到 ImGui 内置位图字（ProggyClean，CJK 全变 `?`）。启动时会打
+  `[intro] N system font candidate(s)` + 每条的 `face -> path`，然后是每个候选的拒绝原因
+  （`not readable` / `rejected by the rasterizer` / `lacks U+XXXX`），最后
+  `system font <face> @42px loaded` 或 `no usable system font`。**这几行就是全部答案**。
+  `CPSEKAI_FONT_FILE=<路径>` 可以强制指定一个字体文件（诊断，也是自动识别失败时的逃生口）。
 - 系统页签两项：`autoPauseOnBlur`（失焦自动暂停，关掉 = 切出去歌继续跑）、`reportSmtc`
   （是否汇报 SMTC）。关 SMTC 走 `systemMedia.setReporting(false)`，把媒体会话整个摘掉
   （`put_PlaybackStatus(Stopped)` + `put_IsEnabled(0)`），**不是**只停推送——否则系统浮层
