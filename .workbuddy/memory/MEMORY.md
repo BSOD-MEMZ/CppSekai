@@ -88,6 +88,13 @@
 - **Git Bash 不等 GUI 子系统 exe**：`for ...; do ./cppsekai.exe ...; done` 会让几个实例几乎同时
   启动互抢 GPU，测出过 245fps 的假基线。串行要 `exe & sleep N`。**日志落在 cwd 的 `cppsekai.log`**
   （从仓库根跑就去根目录捞），不是 build/ 那份。
+- **chartdl 的窗口/下载坑**（2026-09-19 修）：设置窗口是 `WS_OVERLAPPED` **顶层**窗口 + owner，
+  `GetParent()` 对它返回 **0** → 关闭设置后主窗口永久禁用（点什么都只有系统提示音），
+  必须用 `GetWindow(hwnd, GW_OWNER)`。验证：`--open-settings` 起 GUI，Python ctypes 按类名
+  （`CppSekaiChartDl` / `CppSekaiChartDlSettings`）发 `WM_CLOSE`，前后读 `IsWindowEnabled`。
+  下载侧：4 线程 + `thread_local` 缓存 WinHTTP session/connection（原来每个文件都重新握手），
+  31 文件 / 63.9 MB 实测 **19.0s → 9.8s**。**测下载别拿单曲做样本**（10 文件时只有 8% 差异，
+  噪声级）。国服曲库不在这个源里（`musics.json` 是日服表 + `assets.unipjsk.com`）。
 - **内存怎么查**：`.workbuddy/tools/mem_sample.py`（每 150ms 打 WorkingSetSize / **峰值** / 提交，
   tasklist 4 秒粒度看不出启动期台阶）。2026-09-19 实测：GL 空窗口基线 **72MB**，游戏稳态
   **245MB**（峰值 291MB）—— 大头是**常驻的 TTF 数据 ~37MB**（msyh 19.7 + msyhbd 16.9，新版

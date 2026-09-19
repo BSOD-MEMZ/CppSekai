@@ -133,6 +133,19 @@ main.cpp          # SDL2 窗口、事件循环、输入映射、ImGui HUD、截�
   HTTP 走 `winhttp.dll` **运行时 LoadLibrary**（工具链只有 winhttp.def，
   没有导入库——和 SystemMedia 用 combase 的办法一样）。下载在 `std::thread` 里跑，进度用
   `gJobMutex` 保护；**别在 worker 里持有 `gJobs[i]` 的引用**（GUI 线程还会 push_back，会悬空）。
+  **2026-09-19 起是 4 个 worker**（`kDownloadThreads`）。worker 本来就是「取一个 Waiting job
+  就下」的模式，但两处必须配套：① `gRunning` 只能在**最后一个** worker 退出时置 false
+  （`gActiveWorkers.fetch_sub(1) <= 1`），否则先下完的线程会提前报"全部完成"；
+  ② `http::get()` 把 **WinHTTP session + connection 缓存在 `thread_local`** 里复用，
+  不再每个文件 `WinHttpOpen` + 重新握手（连接被服务器半关时 worker 重试一次：丢缓存连接 +
+  截断 `.part` 重下；`HTTP xxx` 是最终答案，不重试）。实测 31 文件 / 63.9 MB：**19.0s → 9.8s**。
+  **进度条按「文件数」算，不是字节**：入队时每个 job 的 Content-Length 还是 0（要等响应头），
+  按字节算会让进度条在还没开始下载时跑到 100%。剩余时间用同一个比例推，两者同源不会打架。
+  点「开始下载」会**清空 gJobs**（原来只追加，旧条目 Done 了还在参与 `xx/xx` 的统计）。
+  **窗口坑（真 bug，已修）**：设置窗口是 `WS_OVERLAPPED` **顶层**窗口 + owner，而
+  `GetParent()` 对 owner 返回 **0** → `WM_DESTROY` 里的 `EnableWindow(主窗口, TRUE)`
+  从来没执行过，关掉设置后整个下载器点不动（只有系统提示音）。改用
+  `GetWindow(hwnd, GW_OWNER)`。ListView 那几处 `GetParent(gList)` 是对的，别跟着改。
   踩坑：文件里 `namespace http { std::wstring widen(...) }`，UI 段要用 `using http::widen;`；
   全局 `gLog` 是日志字符串数组，控件句柄得另起名（`gLogList`）。
   `--list` / `--download` 是给脚本和回归用的无界面模式。日志同时进 stdout 和 `chartdl.log`

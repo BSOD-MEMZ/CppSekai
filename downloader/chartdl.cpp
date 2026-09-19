@@ -140,6 +140,41 @@ bool splitUrl(const std::string& url, std::wstring& host, std::wstring& object, 
 
 // Streaming GET. `onChunk(data, len, received, total)` returning false aborts.
 // Writes nothing itself - the caller owns the file.
+// One WinHTTP session per *worker thread*, plus its connection to the asset
+// host, kept alive between files so the TCP + TLS handshake is paid once
+// instead of once per file. That handshake was where the wall clock actually
+// went on a chart pack (dozens of small .sus files, a jacket and an mp3 per
+// song). Thread-local because a WinHTTP session must not be shared between
+// threads. The handles are deliberately never closed: the pool lives exactly
+// as long as the process does.
+struct HttpSession
+{
+    void* session = nullptr;
+    void* connection = nullptr;
+    std::wstring host;
+    unsigned short port = 0;
+};
+
+HttpSession& httpSession()
+{
+    static thread_local HttpSession instance;
+    return instance;
+}
+
+// Throws the cached connection away so the next request dials again. Used when
+// a pooled keep-alive socket turns out to have been closed by the server
+// between two files.
+void dropConnection()
+{
+    HttpSession& cached = httpSession();
+    if (cached.connection != nullptr) {
+        api().closeHandle(cached.connection);
+        cached.connection = nullptr;
+    }
+    cached.host.clear();
+    cached.port = 0;
+}
+
 bool get(const std::string& url, const std::function<bool(const char*, size_t, long long, long long)>& onChunk,
     std::string& error)
 {
@@ -155,16 +190,31 @@ bool get(const std::string& url, const std::function<bool(const char*, size_t, l
         error = "bad url";
         return false;
     }
-    void* session = a.open(L"CppSekaiDownloader/1.0", 0, nullptr, nullptr, 0);
-    if (session == nullptr) {
-        error = "WinHttpOpen failed";
-        return false;
-    }
-    if (a.setTimeouts != nullptr) {
-        a.setTimeouts(session, 15000, 15000, 30000, 30000);
-    }
     const unsigned short port = secure ? 443 : 80;
-    void* connection = a.connect(session, host.c_str(), port, 0);
+    HttpSession& cached = httpSession();
+    if (cached.session == nullptr) {
+        cached.session = a.open(L"CppSekaiDownloader/1.0", 0, nullptr, nullptr, 0);
+        if (cached.session == nullptr) {
+            error = "WinHttpOpen failed";
+            return false;
+        }
+        if (a.setTimeouts != nullptr) {
+            a.setTimeouts(cached.session, 15000, 15000, 30000, 30000);
+        }
+    }
+    // Re-dial only when the host/port changes: every asset this program pulls
+    // comes from the same one, so in practice the connection is dialled once
+    // per thread and then reused for the whole queue.
+    if (cached.connection == nullptr || cached.host != host || cached.port != port) {
+        if (cached.connection != nullptr) {
+            a.closeHandle(cached.connection);
+            cached.connection = nullptr;
+        }
+        cached.connection = a.connect(cached.session, host.c_str(), port, 0);
+        cached.host = host;
+        cached.port = port;
+    }
+    void* connection = cached.connection;
     void* request = nullptr;
     if (connection != nullptr) {
         request = a.openRequest(connection, L"GET", object.c_str(), nullptr, nullptr, nullptr,
@@ -222,10 +272,8 @@ bool get(const std::string& url, const std::function<bool(const char*, size_t, l
     if (request != nullptr) {
         a.closeHandle(request);
     }
-    if (connection != nullptr) {
-        a.closeHandle(connection);
-    }
-    a.closeHandle(session);
+    // session / connection stay in httpSession() - they are reused by the next
+    // file on this thread, which is the whole point.
     return ok;
 }
 } // namespace http
@@ -558,6 +606,15 @@ std::mutex gJobMutex;
 std::vector<Job> gJobs;
 std::atomic<bool> gCancel{false};
 std::atomic<bool> gRunning{false};
+// How many workers are still alive. gRunning may only drop to false when the
+// last one leaves: with a pool of threads the first one to run out of work
+// would otherwise report the queue as finished while its siblings are still
+// downloading (and the UI would stop updating the progress).
+std::atomic<int> gActiveWorkers{0};
+// Wall clock (GetTickCount64 seconds) when the current queue started, and the
+// smoothed remaining-time estimate built from it. gEtaSec is UI-thread only.
+std::atomic<double> gQueueStartSec{-1.0};
+double gEtaSec = -1.0;
 std::vector<std::string> gLog;
 std::mutex gLogMutex;
 
@@ -793,15 +850,42 @@ void worker()
             continue;
         }
         std::string error;
-        const bool ok = http::get(url,
-            [&](const char* data, size_t len, long long received, long long total) {
-                out.write(data, static_cast<std::streamsize>(len));
-                std::lock_guard<std::mutex> lock(gJobMutex);
-                gJobs[index].bytes = received;
-                gJobs[index].total = total;
-                return !gCancel.load();
-            },
-            error);
+        bool ok = false;
+        // Two attempts, because a pooled keep-alive connection can have been
+        // closed by the server between two files - we hand WinHTTP a socket that
+        // is already gone and get a request/read failure back. The retry drops
+        // the cached connection and starts the file over; the .part is truncated
+        // first so no half-written bytes survive into the fresh attempt.
+        for (int attempt = 0; attempt < 2 && !ok; ++attempt) {
+            if (attempt > 0) {
+                http::dropConnection();
+                out.close();
+                out.open(partPath, std::ios::binary | std::ios::trunc);
+                if (!out) {
+                    break;
+                }
+                {
+                    std::lock_guard<std::mutex> lock(gJobMutex);
+                    gJobs[index].bytes = 0;
+                    gJobs[index].total = 0;
+                }
+                error.clear();
+            }
+            ok = http::get(url,
+                [&](const char* data, size_t len, long long received, long long total) {
+                    out.write(data, static_cast<std::streamsize>(len));
+                    std::lock_guard<std::mutex> lock(gJobMutex);
+                    gJobs[index].bytes = received;
+                    gJobs[index].total = total;
+                    return !gCancel.load();
+                },
+                error);
+            // An HTTP status is a final answer (404 = this song has no such
+            // file), not a dead socket - do not retry it.
+            if (!ok && error.rfind("HTTP ", 0) == 0) {
+                break;
+            }
+        }
         out.close();
         {
             std::lock_guard<std::mutex> lock(gJobMutex);
@@ -823,9 +907,22 @@ void worker()
             logLine("[fail] " + pathText(path.filename()) + "  " + error);
         }
     }
-    gRunning.store(false);
-    logLine("[done] queue finished");
+    // Only the last worker to leave may declare the queue finished: with a pool
+    // of threads the first one to run out of work would otherwise flip gRunning
+    // while its siblings are still downloading, and the UI would stop updating
+    // the bar and call it "全部完成" early.
+    if (gActiveWorkers.fetch_sub(1) <= 1) {
+        gRunning.store(false);
+        logLine("[done] queue finished");
+    }
 }
+
+// How many files are fetched at once. A chart pack is dozens of small .sus
+// files plus a few MB of audio, so the per-file cost is dominated by the
+// TCP + TLS handshake rather than by bandwidth - parallel connections are what
+// moves the wall clock, and http::get() keeping its WinHTTP session per thread
+// is what removes most of those handshakes.
+constexpr int kDownloadThreads = 4;
 
 void startWorker()
 {
@@ -833,7 +930,10 @@ void startWorker()
         return;
     }
     gCancel.store(false);
-    std::thread(worker).detach();
+    gActiveWorkers.store(kDownloadThreads);
+    for (int i = 0; i < kDownloadThreads; ++i) {
+        std::thread(worker).detach();
+    }
 }
 
 std::string humanBytes(long long bytes)
@@ -848,6 +948,28 @@ std::string humanBytes(long long bytes)
     }
     char buf[32];
     std::snprintf(buf, sizeof(buf), "%.1f MB", static_cast<double>(bytes) / (1024.0 * 1024.0));
+    return buf;
+}
+
+double nowSeconds()
+{
+    return static_cast<double>(GetTickCount64()) / 1000.0;
+}
+
+// "1 分 23 秒" / "45 秒". The ETA is a rough number by nature, so it is spelled
+// out rather than formatted as a clock.
+std::string formatEta(double seconds)
+{
+    if (seconds < 1.0) {
+        return "不到 1 秒";
+    }
+    const int total = static_cast<int>(seconds + 0.5);
+    char buf[32];
+    if (total >= 60) {
+        std::snprintf(buf, sizeof(buf), "%d 分 %d 秒", total / 60, total % 60);
+    } else {
+        std::snprintf(buf, sizeof(buf), "%d 秒", total);
+    }
     return buf;
 }
 
@@ -882,7 +1004,18 @@ int runJobQueue(std::string& error)
         return 1;
     }
     gRunning.store(true);
-    std::thread(worker).join();
+    gQueueStartSec.store(nowSeconds());
+    gActiveWorkers.store(kDownloadThreads);
+    {
+        std::vector<std::thread> pool;
+        pool.reserve(kDownloadThreads);
+        for (int i = 0; i < kDownloadThreads; ++i) {
+            pool.emplace_back(worker);
+        }
+        for (std::thread& thread : pool) {
+            thread.join();
+        }
+    }
     size_t done = 0;
     size_t failed = 0;
     size_t skipped = 0;
@@ -1075,7 +1208,7 @@ namespace
     // Widths in 96-DPI units; dp() scales them on the way into the header. They
     // add up to a bit under the default table width on purpose - the five
     // difficulty columns plus 已下载 otherwise push the last one out of sight.
-    const int kColumnWidths[kColumnCount] = {48, 190, 120, 50, 58, 50, 60, 60, 66, 58};
+    const int kColumnWidths[kColumnCount] = {64, 190, 120, 50, 58, 50, 60, 60, 66, 58};
 
     // Click a header to sort by that column; click it again to flip. Starts on
     // the id, which is the order of the upstream table.
@@ -1611,9 +1744,19 @@ namespace
                 DestroyWindow(hwnd);
                 return 0;
             case WM_DESTROY:
-                if (HWND parent = GetParent(hwnd)) {
-                    EnableWindow(parent, TRUE);
-                    SetForegroundWindow(parent);
+                // The settings window is a *top-level* window that merely has an
+                // owner (the main window, passed to CreateWindowExW), and
+                // GetParent() returns NULL for those - it only reports a parent
+                // for child windows, and for WS_POPUP owners. That is why
+                // closing this dialog used to leave the main window disabled for
+                // good: the re-enable below never ran, and every later click on
+                // the app only produced the system beep. GetWindow(GW_OWNER) is
+                // the call that finds it.
+                // (Measured 2026-09-19 with exactly this style + owner:
+                //  GetParent -> 0x0, GetWindow(GW_OWNER) -> the main window.)
+                if (HWND owner = GetWindow(hwnd, GW_OWNER)) {
+                    EnableWindow(owner, TRUE);
+                    SetForegroundWindow(owner);
                 }
                 gSettingsWindow = nullptr;
                 gSetCloseExit = gSetCloseTray = gSetNotify = gSetMinTray = nullptr;
@@ -1917,6 +2060,20 @@ namespace
                         return 0;
                     }
 
+                    // Every run starts from a clean queue. The progress bar, the
+                    // "xx/xx 个文件" counter and the ETA are all derived from
+                    // gJobs, so keeping the previous run's entries made all three
+                    // start from the *old* totals - and since those entries were
+                    // already Done, the bar sat at 100% before the first new file
+                    // had even been requested.
+                    {
+                        std::lock_guard<std::mutex> lock(gJobMutex);
+                        gJobs.clear();
+                    }
+                    gQueueStartSec.store(-1.0);
+                    gEtaSec = -1.0;
+                    SendMessageW(gProgress, PBM_SETPOS, 0, 0);
+
                     const int rows = ListView_GetItemCount(gList);
                     int queued = 0;
                     int skippedDone = 0;
@@ -1948,8 +2105,9 @@ namespace
                         return 0;
                     }
                     gCancel.store(false);
-                    gRunning.store(true);
-                    std::thread(worker).detach();
+                    gQueueStartSec.store(nowSeconds());
+                    gEtaSec = -1.0;
+                    startWorker();
                     setStatus("开始下载…");
                     appendLog("=== " + std::to_string(queued) + " 首歌曲，共 "
                         + std::to_string(gJobs.size()) + " 个文件 ===");
@@ -2044,30 +2202,61 @@ namespace
                 return 0;
             }
             case WM_TIMER: {
-                // Progress + log refresh (the worker thread only touches its own
+                // Progress + log refresh (the worker threads only touch their own
                 // state under gJobMutex).
                 long long received = 0;
-                long long total = 0;
                 std::size_t finished = 0;
+                std::size_t totalFiles = 0;
+                double activeFraction = 0.0;
                 {
                     std::lock_guard<std::mutex> lock(gJobMutex);
+                    totalFiles = gJobs.size();
                     for (const Job& job : gJobs) {
                         if (job.state == JobState::Done || job.state == JobState::Failed
                             || job.state == JobState::Skipped) {
                             ++finished;
                             received += std::max(job.bytes, job.total);
-                            total += std::max(job.bytes, job.total);
                             continue;
                         }
                         received += job.bytes;
-                        total += job.total;
+                        // Sub-file progress of whatever is being fetched right
+                        // now, so the bar keeps moving through a long mp3
+                        // instead of standing still until the file lands.
+                        if (job.state == JobState::Active && job.total > 0) {
+                            activeFraction += static_cast<double>(job.bytes)
+                                / static_cast<double>(job.total);
+                        }
                     }
                 }
-                const int permille = total > 0 ? static_cast<int>(received * 1000 / total) : 0;
-                SendMessageW(gProgress, PBM_SETPOS, static_cast<WPARAM>(std::max(0, permille)), 0);
-                if (gRunning.load() || finished < gJobs.size()) {
-                    setStatus("下载中 " + std::to_string(finished) + "/" + std::to_string(gJobs.size())
-                        + " 个文件  " + humanBytes(received) + " / " + humanBytes(total));
+                // Counted in *files* on purpose. At queue time no job knows its
+                // Content-Length yet - it only arrives with the response - so a
+                // byte-based bar counted a total of almost nothing at the start
+                // and ran to 100% while most of the queue had not even been
+                // requested. Files are also what the counter beside it reports,
+                // so the two can no longer disagree.
+                const double fraction = totalFiles > 0
+                    ? (static_cast<double>(finished) + activeFraction) / static_cast<double>(totalFiles)
+                    : 0.0;
+                const int permille = static_cast<int>(fraction * 1000.0 + 0.5);
+                SendMessageW(gProgress, PBM_SETPOS,
+                    static_cast<WPARAM>(std::clamp(permille, 0, 1000)), 0);
+                if (gRunning.load() || finished < totalFiles) {
+                    // Remaining time is derived from the same fraction, so the bar
+                    // and the estimate cannot contradict each other. Smoothed,
+                    // because a single slow file would otherwise swing it by
+                    // minutes.
+                    std::string eta;
+                    const double startedAt = gQueueStartSec.load();
+                    if (startedAt > 0.0 && fraction > 0.01) {
+                        const double elapsed = nowSeconds() - startedAt;
+                        if (elapsed > 1.0) {
+                            const double raw = elapsed / fraction * (1.0 - fraction);
+                            gEtaSec = gEtaSec < 0.0 ? raw : gEtaSec + (raw - gEtaSec) * 0.25;
+                            eta = "  剩余 " + formatEta(gEtaSec);
+                        }
+                    }
+                    setStatus("下载中 " + std::to_string(finished) + "/" + std::to_string(totalFiles)
+                        + " 个文件  " + humanBytes(received) + eta);
                 } else if (!gJobs.empty()) {
                     std::size_t failed = 0;
                     for (const Job& job : gJobs) {
