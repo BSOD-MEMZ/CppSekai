@@ -103,12 +103,32 @@ int main(int argc, char** argv)
         std::fprintf(stderr, "window not found: %ls (pid %lu)\n", classBuffer, pid);
         return 1;
     }
-    // "click" takes coordinates, not a control id, so it must not be looked up.
-    const int ctrlId = count > 1 && std::strcmp(verb, "click") != 0 ? std::atoi(rest[1]) : 0;
+    // "click" takes coordinates and "raw" a message id, so neither is a control id.
+    const int ctrlId = count > 1 && std::strcmp(verb, "click") != 0 && std::strcmp(verb, "raw") != 0
+        ? std::atoi(rest[1])
+        : 0;
     HWND control = ctrlId != 0 ? GetDlgItem(hwnd, ctrlId) : hwnd;
 
     if (std::strcmp(verb, "alive") == 0) {
         std::printf("window %p alive, pid %lu\n", static_cast<void*>(hwnd), pid);
+        return 0;
+    }
+    if (std::strcmp(verb, "raw") == 0) {
+        // Send an arbitrary message to the window itself (PostMessage). Needed
+        // for state no control owns: WM_ENTERSIZEMOVE / WM_EXITSIZEMOVE is what
+        // main.cpp's message hook watches to pause while the window is being
+        // dragged, and there is no way to trigger that from the outside other
+        // than posting the message.
+        //   winmsg.exe SDL_app raw 0231 [wparam] [lparam] [--pid N]
+        const unsigned int id = count > 1 ? static_cast<unsigned int>(std::strtoul(rest[1], nullptr, 16)) : 0;
+        const WPARAM wp = count > 2 ? static_cast<WPARAM>(std::strtoull(rest[2], nullptr, 0)) : 0;
+        const LPARAM lp = count > 3 ? static_cast<LPARAM>(std::strtoll(rest[3], nullptr, 0)) : 0;
+        std::printf("post 0x%04X wparam=%llu lparam=%lld -> %p\n", id,
+            static_cast<unsigned long long>(wp), static_cast<long long>(lp), static_cast<void*>(hwnd));
+        std::fflush(stdout);
+        PostMessageW(hwnd, id, wp, lp);
+        Sleep(80);
+        std::printf("done, window alive=%d\n", IsWindow(hwnd));
         return 0;
     }
     if (std::strcmp(verb, "click") == 0) {

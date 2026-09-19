@@ -171,11 +171,15 @@ main.cpp          # SDL2 窗口、事件循环、输入映射、ImGui HUD、截�
   要修得先决定 `ChartEntry::susPath` 的编码约定（现在是"扫描时 ACP 窄串、用时再 ACP 转回去"）。
 - `.workbuddy/tools/winmsg.c` → `build/winmsg.exe`：按窗口类名（+ `--pid` 指定实例）给控件
   发消息的无头驱动小工具，也是上面那个崩溃的复现器。用法：
-  `winmsg.exe <class> list|alive|gettext <id>|settext <id> <utf8>|char <id> <hex>|click <x> <y> [--pid N]`。
+  `winmsg.exe <class> list|alive|gettext <id>|settext <id> <utf8>|char <id> <hex>|click <x> <y>|raw <hex 消息> [wparam] [lparam] [--pid N]`。
   编译（不进 build.sh）：
   `zig c++ -x c++ -std=c++20 -O2 -s .workbuddy/tools/winmsg.c -luser32 -limm32 -o build/winmsg.exe`。
   注意 `GetWindowText` **读不到别的进程的控件文本**（跨进程只拿得到窗口标题），别拿 `gettext`
   当功能验证；`char` 走的是 WM_CHAR，ImGui 那类读 SDL 事件的界面要用 `click`。
+  `raw` 是给「没有控件对应、只能靠窗口消息驱动」的状态用的，SDL 的窗口类名是 `SDL_app`：
+  `winmsg.exe SDL_app raw 0231 --pid <pid>` = 伪造 WM_ENTERSIZEMOVE，用来测拖动窗口那条暂停逻辑
+  （见「拖动窗口 / 改窗口大小」一节）。**PostMessage 的消息同样会经过 SDL 的窗口过程**，
+  所以消息钩子照样会被调用，能无头验证。
 - `.workbuddy/tools/gen_music_vocals.py` → `music-vocals.json`：从官方的 musicVocals +
   gameCharacters 表生成演唱版本表（`asset` 就是 unipjsk 的音频目录名）。
 - `.workbuddy/tools/winsend.c` → `build/winsend.exe`：按窗口标题找窗口再送假输入，
@@ -904,6 +908,47 @@ System32 里根本看不到这些文件，Win10 上一直无事），**Win7 上�
 
 `bgStyle` 的取值范围随之变成 0..2（`SongSelect.cpp` 的 clamp 要跟着改），
 `profiles/*.json` 里存的就是这个数。
+
+**顺带修的一个老 bug**：选曲态那句 `renderer.renderFrame(nullptr, 0, 0.85f)` 没给
+`playfieldVisibility`，用的是默认值 1 —— 于是**选曲界面底下一直在画整个舞台/判定区**。
+以前看不出来（选曲界面自己不透明的背景盖住了），玻璃模式一开就露馅，看着像"歌单后面摆了个
+舞台"。现在传 0（只留背景板），选曲界面玻璃模式下 alpha==0 的像素从 23.8% 涨到 43.1%。
+**注意 `--screenshot` 的噪声基线极小（同版本两次运行只差 6 个像素）**，所以"改前改后截图
+逐像素比"能当回归用：这次普通模式下有 4903 个像素变化（0.5%），就是那层舞台从半透明 UI
+底下消失造成的。
+
+## 拖动窗口 / 改窗口大小 → 画面卡住、歌却继续跑 2026-09-19
+
+Windows 在 `DefWindowProc` 里为标题栏拖动和边框缩放跑了一个**自己的模态消息循环**：从
+`WM_NCLBUTTONDOWN` 到松手之间，我们的消息泵（`SDL_PollEvent` → `DispatchMessage`）整段被
+挂起，主循环一帧都不跑 —— 画面冻住。音频在 miniaudio 自己的线程里照放，谱面时钟又骑在音频上，
+所以演奏中拖窗口比"卡一下"严重得多：**松手瞬间钟表往前跳，中间的音符全被判 MISS**。
+
+**已落地**（`main.cpp` 里 `SDL_SetWindowsMessageHook` + `WindowDragPause`）：钩子是那段时间里
+唯一还在跑的自家代码，把拖动变成一次**静默暂停** —— `WM_ENTERSIZEMOVE` 时 `paused = true` +
+`audio.pause()`，`WM_EXITSIZEMOVE` 时恢复。`paused` 单独用不会画任何东西（暂停面板是
+`pauseDialogOpen` 画的），所以屏幕上不会闪东西。排除条件和失焦自动暂停一致：**多人房间里不停**
+（多个窗口常年失焦）、倒计时中不动、不在演奏态不管。每次进出都打
+`[window] WM_ENTERSIZEMOVE state=.. paused=.. countdown=.. party=.. room=.. -> song paused/left running`，
+"歌为什么没停/为什么停了"先看这行。
+
+验证（可复用，`winmsg.exe` 新加的 `raw` verb）：
+
+```bash
+# 单机进演奏（--no-party 必须加：多人默认是开的，party.active() 为真就不暂停）
+build/cppsekai.exe --sus charts/test.sus --auto --no-party --lead-in 1 \
+    --screenshot build/shots/x.png --screenshot-time 6 &
+build/winmsg.exe SDL_app raw 0231 --pid <pid>   # 伪造 WM_ENTERSIZEMOVE
+sleep 5
+build/winmsg.exe SDL_app raw 0232 --pid <pid>   # 伪造 WM_EXITSIZEMOVE
+```
+实测：到达「谱面时间 6s」的墙钟耗时 **13.35s（不拖）→ 18.49s（拖 5 秒）**，差值 5.13s ≈ 拖动
+时长；那次截图里 `miss=0`。也就是说**钟真的冻住了**。
+
+**还没做、也不打算顺手做**：拖动期间画面仍然不动。要让画面继续渲染，得把 `main()` 里那个
+~2500 行的帧循环体抽成函数、再从消息钩子里重入调用（现在的体量是 `CODE-REVIEW.md` 里点名的
+问题），属于大改；或者接管标题栏拖动（自己 `SetCapture` + `SetWindowPos`，代价是丢 Aero Snap）。
+用户问过一次，停在"要不要上大的"这一步。
 
 验证（不用眼睛也能看）：`--screenshot` 写的是 RGBA PNG（`glReadPixels(..., GL_RGBA, ...)` +
 `stbi_write_png(..., 4, ...)`），所以**直接量 alpha** 就知道透明生效没有 ——

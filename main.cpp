@@ -2587,6 +2587,75 @@ int main(int argc, char** argv)
     double countdownStartClock = 0.0;
     int countdownNumberShown = -1;
 
+#ifdef _WIN32
+    // ------------------------------------------------------------------
+    // Dragging the window: Windows runs its own modal loop inside DefWindowProc
+    // for a title-bar drag or a border resize, so our message pump - and with it
+    // the whole frame loop - stays parked until the mouse button comes up and the
+    // picture freezes. The audio keeps playing in miniaudio's own thread and the
+    // chart clock rides on it, so a drag during a live was worse than a frozen
+    // picture: on release the chart had jumped ahead and every note in between
+    // had been judged unseen.
+    // SDL calls this hook from its window procedure, which makes it the only code
+    // of ours that still runs inside that modal loop, so the drag becomes a
+    // *silent* pause: audio + clock stop on WM_ENTERSIZEMOVE, resume on
+    // WM_EXITSIZEMOVE. `paused` alone draws nothing (the pause dialog is what
+    // draws the overlay), so nothing flashes on screen either way.
+    // Rendering cannot continue this way - that would need the frame body out of
+    // main() so it can be re-entered from here; see AGENTS.md.
+    // ------------------------------------------------------------------
+    bool dragPauseActive = false;
+    struct WindowDragPause
+    {
+        bool* paused;
+        bool* suspended;
+        AppState* state;
+        platform::AudioEngine* audio;
+        platform::PartyLink* party;
+        const bool* roomOpen;
+        const bool* countdownActive;
+    };
+    WindowDragPause dragPause{&paused, &dragPauseActive, &state, &audio, &party, &roomOpen,
+        &countdownActive};
+    SDL_SetWindowsMessageHook(
+        [](void* userdata, void*, unsigned int message, Uint64, Sint64) {
+            WindowDragPause* c = static_cast<WindowDragPause*>(userdata);
+            if (message == WM_ENTERSIZEMOVE) {
+                // Same exclusions as the focus-loss auto pause: several windows
+                // sit on one screen in 多人游玩, so a room must never stop just
+                // because one seat's window is being moved. During the resume
+                // countdown the clock is already frozen, so leave it alone.
+                const bool pausable = *c->state == AppState::Play && !*c->paused && !*c->countdownActive
+                    && !c->party->active() && !*c->roomOpen;
+                if (pausable) {
+                    *c->paused = true;
+                    c->audio->pause();
+                    *c->suspended = true;
+                }
+                // Always logged, including the refusals: this is the only trace
+                // of a drag, and "why did the song not stop" / "why did it stop"
+                // both need the numbers.
+                std::printf("[window] WM_ENTERSIZEMOVE state=%d paused=%d countdown=%d party=%d room=%d"
+                            " -> %s\n",
+                    static_cast<int>(*c->state), *c->paused ? 1 : 0, *c->countdownActive ? 1 : 0,
+                    c->party->active() ? 1 : 0, *c->roomOpen ? 1 : 0,
+                    pausable ? "song paused" : "left running");
+                std::fflush(stdout);
+            } else if (message == WM_EXITSIZEMOVE) {
+                if (*c->suspended) {
+                    *c->suspended = false;
+                    *c->paused = false;
+                    c->audio->resume();
+                    std::printf("[window] WM_EXITSIZEMOVE: song resumed\n");
+                } else {
+                    std::printf("[window] WM_EXITSIZEMOVE: nothing was suspended\n");
+                }
+                std::fflush(stdout);
+            }
+        },
+        &dragPause);
+#endif
+
     // Damage vignette: brief dark inner shadow around the screen edges on
     // life loss (BAD / MISS / broken hold), a constant dark state at 0 life -
     // same feedback the original game gives.
@@ -4884,7 +4953,12 @@ int main(int argc, char** argv)
                 error.clear();
             }
             renderer.setLaneGlows({});
-            renderer.renderFrame(nullptr, 0, 0.85f);
+            // playfieldVisibility 0: the song select is not a performance, so the
+            // stage/playfield plate must not be drawn - only the backdrop. It
+            // never showed before because the select screen's own background is
+            // opaque; with the "Aero glass" background (bgStyle 2) it does, and a
+            // playfield sitting behind the song list looks like a bug.
+            renderer.renderFrame(nullptr, 0, 0.85f, 0.0f);
 
             // Music preview: cut a clip from partway into the BGM and loop it,
             // the way the official select screen never previews from the top.

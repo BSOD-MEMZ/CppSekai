@@ -71,6 +71,12 @@
 - **截图是能直接看的**（Read 一张 PNG 即可），选曲/房间这类界面改动直接抓图确认最快。
   但 `--party-auto` 会在结算 2s 后自动按「继续」，要拍结算就别加它。
 - 无头自检：`--screenshot` + `--screenshot-time`，断言看日志 `[stats]`/`[score]`/`[result]` 行。
+  **截图逐像素比的噪声基线只有 6 个像素**（同版本跑两次），所以画面回归可以靠 diff；
+  `winmsg.exe <class> raw <hex> [wparam] [lparam]` 能伪造任意窗口消息（PostMessage 一样走 SDL
+  的窗口过程 → 消息钩子能被无头验证）。`--no-party` 别忘：多人默认开着。
+- **拖动窗口会让 Windows 跑模态循环把整个消息泵挂住**（画面冻结、音频照跑）。已用
+  `SDL_SetWindowsMessageHook` 把拖动变成静默暂停（`[window] WM_ENTERSIZEMOVE ...` 日志）；
+  要让画面继续渲染得把 main() 的帧体抽出来 —— 大改，用户还没拍板（见 AGENTS.md）。
 - 日志"跑着跑着不打了"是缓冲假死（已改无条件 `setvbuf(_IONBF)`，读旧日志仍要记住）。
 - 临时条件探针**别设计数上限**（`if (n < 8)` 会掩盖"条件没满足"和"分支没走"的区别）。
 - 无交互会话下 `winsend.exe` 的 PostMessage 到不了某些 ImGui 界面 → 在代码里加自动按的
