@@ -965,36 +965,66 @@ build/winmsg.exe SDL_app raw 0232 --pid <pid>   # 伪造 WM_EXITSIZEMOVE
 **还没做**：拖**边框缩放**走的同一条模态循环、同一个定时器，但缩放期间窗口尺寸在变，
 `SDL_PollEvent` 拿到的 `WM_SIZE` 会带着新尺寸重建 FBO —— 这条路径没人真的拖过边框验证。
 
-### 实测记录 2026-09-19（Win11，用户报"拖动窗口画面不会刷新"之后）
+### 实测记录与真正的修法 2026-09-19（Windows 10 22H2 + Windows 11）
 
-为了不再靠猜，写了 `.workbuddy/tools/dragwin.c`：用 **SendInput** 注入真实鼠标事件拖窗口
-（`PostMessage` 伪造按钮状态骗不过系统的拖动逻辑 —— 系统看的是物理按键状态）。配套
-`.workbuddy/tools/capwin.c` 想抓"屏幕上的客户区"。实测结果：
+用户报"拖动窗口画面不会刷新"。为了不再靠猜，加了两个工具和一个常驻探针，结论如下。
 
-1. **拖动真的发生了**（拖前后 `GetWindowRect` 位移 = 注入的位移，例：312,148 → 492,220）。
-2. **消息泵没被挂住**：拖动期间 `[frame]` 每秒帧数 60 → **33 帧 / 2.9 秒**（≈11fps）→ 60，
-   `CPSEKAI_MP_TRACE` 的 `[sync]` 一行不漏，谱面钟一路平滑（`t` 连续，没有跳）。
-   也就是说 Win11 上主循环照跑，只是**帧率掉到 1/3~1/6**（swap 大概在等合成器）。
-3. **钩子一条拖动消息都没收到**：`CPSEKAI_MSG_LOG=1` 全程只有 24 条消息，没有
-   `WM_ENTERSIZEMOVE`、没有 `WM_MOVING`、没有 `WM_SIZE/WM_MOVE`（只有 3 条**不是我们 id 的**
-   `WM_TIMER`、2 条 `WM_PAINT`、几次鼠标）。**说明 Win11 的标题栏拖动是 shell/DWM 侧完成的，
-   根本不经过我们的窗口过程** —— 所以"方案 a"那套喂帧在 Win11 上是死代码（不触发），
-   它只在"真的把消息泵挂住"的系统（大概是 Win7 那种经典实现，**未验证**）才有意义。
-4. **屏幕上到底刷不刷新：没有数据。** `capwin.c` 的 `GetDC(NULL)` + `BitBlt` 在这个环境里抓到
-   的是**纯白**（GPU 合成的窗口抓不到）—— 注意这时"拖动中两张截图 0 像素差异"是假象，
-   是**抓屏方法失效**，不是"屏幕冻住"。要真测得换 `PrintWindow(hwnd, dc, PW_RENDERFULLCONTENT)`。
-   教训：**先做对照组**（不拖动时两张截图也该不同）—— 这一条把一次错误结论当场拦下来了。
+**1. 拖动确实把消息泵挂住了 —— 我中途读错过一次数据。** 常驻探针（每秒一行，只在有
+变化/长帧时打印）拖动期间给出：
 
-新增两个诊断开关（都默认关，只在排查时开）：
+```
+[frame] geometry changed: 56 frame(s)/s, longest frame 2264 ms, window moved 392 px
+```
 
-- `CPSEKAI_FRAME_LOG=1`：每秒一行 `[frame] N frame(s) in the last second (state=.. uiClock=..)`。
-  **拖动时这些行有没有断档**，就是"消息泵有没有被挂住"的直接判据。
-- `CPSEKAI_MSG_LOG=1`：把钩子看到的每条窗口消息打出来（`[msg] 0xXXXX wparam=.. lparam=..`），
-  用来确认某个消息到底有没有送到我们窗口过程。
+`longest frame ≈ 拖动时长`（2.1s 拖动 → 2264ms）就是"整整一帧被卡在拖动里"的签名。
+**教训**：`[sync]` 那类"每秒一行"的日志**看 qpc 跳变，不要看行数** —— 我当时因为 t 值
+连续、行数没少，误判成"泵没被挂住、只是帧率掉"，白绕了一圈。
 
-**待办**：用户那边的 `[frame]` 日志（哪台机器/哪个系统上出现"不刷新"）还没拿到 —— 如果那台
-的 `[frame]` 在拖动期间断档，就是经典模态循环 + 方案 a 生效；如果不断档只是帧率掉，那就是
-合成/呈现的问题（跟 `SwapBuffers` 的 GDI 呈现路径有关，应用层能做的有限）。
+**2. `SDL_SetWindowsMessageHook` 在这件事上没用。** 查 SDL2 源码
+（`src/video/windows/SDL_windowsevents.c`）：那个钩子是在 **`WIN_PumpEvents`（SDL 自己的
+事件泵）** 里调的，**不在窗口过程里**。模态循环期间我们的泵不跑，钩子就永远不会被调用 ——
+实测全程 24 条消息，没有 `WM_ENTERSIZEMOVE`、没有 `WM_MOVING`。
+**这条推翻了我之前"钩子能在模态循环里喂帧"的设计**（那版代码只在伪造消息的合成测试里跑通，
+真实拖动一次都没触发）。
+**但伪造消息的测试仍然有用**：它能证明"子类化后的窗口过程确实进了消息链"（30 秒验证）。
+
+**3. 现在走窗口子类化**（`main.cpp`，`runFrame` 定义之后那一块）：
+
+- `SetWindowLongPtrW(hwnd, GWLP_WNDPROC, ...)` 换成我们的过程，**原过程（SDL 的）存在
+  `WNDPROC chain` 里，每条消息末尾 `CallWindowProcW` 转回去**，转发行为不变。
+  **状态放在窗口属性里**（`SetPropW(hwnd, L"CppSekaiSubclassState", ...)`，SDL 自己也是用
+  窗口属性存窗口数据的），所以没有新增模块级可变全局，也不会出现"钩子比窗口活得久"。
+- 触发：`WM_ENTERSIZEMOVE` 开一个 16ms 定时器；`WM_MOVING`/`WM_MOVE`、`WM_SIZING`/`WM_SIZE`、
+  我们的 `WM_TIMER` 各自喂一帧；`WM_EXITSIZEMOVE` 关表并把帧数打进日志。
+- 两个保护：`depth`（喂进去的那一帧自己会泵消息，下一个 `WM_TIMER` 会落在它中间 —— 只能有一层
+  嵌套），以及 8ms 的时间下限（否则每个鼠标消息都要一帧，窗口会以 16ms 为步长跟着光标走）。
+- `CPSEKAI_MSG_LOG=1` 打印子类化过程看到的每条消息。
+
+**实测（Win11，SendInput 拖 2.1 秒、280px）**：`WM_EXITSIZEMOVE: 127 frame(s) served during
+the drag (moving=126 sizing=0 timer=1)` —— 拖动期间约 60fps（受 vsync 限），同时
+`[frame] geometry changed: 59 frame(s)/s, longest frame 29 ms, window moved 50 px`，
+最长帧从 **2264ms 掉到 19~29ms** ✓。Win10 22H2 那边等用户复测（模态循环更经典，消息一定会
+送到窗口过程）。
+
+**4. 常驻探针**（`main.cpp` 帧体开头，默认安静，不需要环境变量）：那一秒里窗口几何动过就打印
+`[frame] geometry changed: N frame(s)/s, longest frame M ms, window moved P px`，
+否则只在出现 >60ms 长帧时打印。**判据**：`M` ≈ 拖动时长 ⇒ 泵被挂住且没人喂帧；`M` 只有
+几十毫秒 ⇒ 帧一直在出。这条日志是为了让"拖动时到底刷不刷新"以后能自证，不用再问用户开开关。
+
+**5. 工具与踩过的坑**：
+
+- `.workbuddy/tools/dragwin.c` → `build/dragwin.exe`：**SendInput 真输入**拖窗口
+  （`PostMessage` 伪造按钮状态骗不过系统，它看物理按键状态）。用法
+  `dragwin.exe [rect|resize] [steps] [stepPx] [sleepMs]`、`dragwin.exe rect` 只看窗口位置。
+  **两个坑**：① 后台进程的 `SetForegroundWindow` 会被系统拒 → 拖到的是压在上面的别的窗口，
+  所以现在先 `SetWindowPos(HWND_TOPMOST)` 置顶、再点客户区抢焦点、**打印
+  `foreground before drag: ours/NOT ours` 并回读 `GetWindowRect` 确认位移**，否则测试白做；
+  ② 编译 `zig cc -x c -std=c11 -O2 -s .workbuddy/tools/dragwin.c -luser32 -o build/dragwin.exe`。
+- `.workbuddy/tools/capwin.c` → `build/capwin.exe`：想抓"屏幕上的客户区"，**方法无效** ——
+  `GetDC(NULL)` + `BitBlt` 抓 GPU 合成的窗口会得到**纯白**（"拖动中 0 像素差异"是假象）。
+  要真抓得用 `PrintWindow(hwnd, dc, PW_RENDERFULLCONTENT)`。**先做对照组**（不拖动时两张
+  截图也该不同）—— 这一条当场拦住了一次错误结论，留着当反例。
+
 
 
 验证（不用眼睛也能看）：`--screenshot` 写的是 RGBA PNG（`glReadPixels(..., GL_RGBA, ...)` +

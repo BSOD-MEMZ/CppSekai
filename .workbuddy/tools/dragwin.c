@@ -58,23 +58,28 @@ int main(int argc, char** argv)
     GetWindowRect(hwnd, &r);
     printf("before: rect=%ld,%ld-%ld,%ld (%ldx%ld)\n", r.left, r.top, r.right, r.bottom,
         r.right - r.left, r.bottom - r.top);
+    // 关键：拖之前确认窗口真的在最前面。后台进程的 SetForegroundWindow 会被系统拒，
+    // 于是"拖动"拖的是压在上面的别的窗口 —— 测试就白做了（这个坑踩过两次）。
+    if (GetForegroundWindow() != hwnd) {
+        INPUT focus;
+        ZeroMemory(&focus, sizeof(focus));
+        focus.type = INPUT_MOUSE;
+        SetCursorPos(r.left + (r.right - r.left) / 2, r.bottom - 60);
+        Sleep(120);
+        focus.mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
+        SendInput(1, &focus, sizeof(focus));
+        focus.mi.dwFlags = MOUSEEVENTF_LEFTUP;
+        SendInput(1, &focus, sizeof(focus));
+        Sleep(300);
+    }
+    printf("foreground before drag: %s\n",
+        GetForegroundWindow() == hwnd ? "ours (good)" : "NOT ours -> the drag would hit another window");
     fflush(stdout);
 
     const LONG cx = resizeMode ? (r.right - 3) : (r.left + (r.right - r.left) / 2);
     const LONG cy = resizeMode ? (r.top + (r.bottom - r.top) / 2) : (r.top + 10);
 
-    // 先点一下客户区正中，把焦点给游戏（顺序无所谓，但这样前台窗口就是它了）
-    SetCursorPos(r.left + (r.right - r.left) / 2, r.bottom - 60);
-    Sleep(120);
     INPUT in;
-    ZeroMemory(&in, sizeof(in));
-    in.type = INPUT_MOUSE;
-    in.mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
-    SendInput(1, &in, sizeof(in));
-    in.mi.dwFlags = MOUSEEVENTF_LEFTUP;
-    SendInput(1, &in, sizeof(in));
-    Sleep(200);
-
     SetCursorPos(cx, cy);
     Sleep(150);
     ZeroMemory(&in, sizeof(in));
