@@ -879,6 +879,43 @@ System32 里根本看不到这些文件，Win10 上一直无事），**Win7 上�
 
 **待用户拍板**，暂时只在文档里写明前置条件。
 
+## 「透明（Aero 玻璃）」选曲背景 2026-09-19
+
+`设置 → 系统 → 选曲背景` 的第三项 `bgStyle = 2`：**完全不填充背景**，窗口自己的像素保持透明，
+于是透出桌面 —— Win7 Aero 下就是原生毛玻璃，其它系统是纯透明。选曲界面那层漂浮的三角形/圆形
+（`BgShape`）保留，这是这个选项的重点（"关掉填充但留住装饰"）。
+
+不填 = 四件事一起做，少一件都还是黑的：
+
+1. `Renderer::setTransparentBackground(true)`（`main.cpp` 启动时设一次，设置里切换时再设）：
+   `renderFrame()` 清屏 alpha 设 0、`drawStaticScene()` 跳过 `background_overlay.png` 那块
+   背景板（**舞台/判定区照旧**，不然音符会飘在桌面上）、`presentFrame()` 的黑边也变透明。
+2. **选曲界面自己的 ImGui 窗口**也要透明：`ImGuiCol_WindowBg` 默认是 0x06/0.94，铺满全屏，
+   是最后一块不透明的东西 —— `setSelectTransparentBackground(true)` 时 push 成全透明，
+   卡片/按钮/列表行各自保留底色。梯度与壁纸（`drawFill`）同理跳过。
+3. **窗口**：`SDL_GL_ALPHA_SIZE 8`（默认 framebuffer 得带 alpha）+ DWM
+   `DwmExtendFrameIntoClientArea(hwnd, {-1,-1,-1,-1})`。这两件本来只有图片启动画面
+   （`splashStyle == 0`）需要，现在 `splashStyle == 0 || glassBackground` 都要，
+   `main.cpp` 里抽成了 `applyWindowTransparency(window, bool)`（关掉时传 false = 零 margin，
+   把不透明的客户区还回来）。
+4. **别让窗口铺满显示器**：Windows 会把覆盖整个显示器的窗口提升成 "fullscreen optimized"
+   展示、绕过 DWM 合成，透明背景直接变不透明。所以 `windowMode == 2` 时窗口缩 16px
+   （原来只有图片启动画面这么做）。**全屏下玻璃失效是系统的锅**，设置里那句灰字就是解释这个。
+
+`bgStyle` 的取值范围随之变成 0..2（`SongSelect.cpp` 的 clamp 要跟着改），
+`profiles/*.json` 里存的就是这个数。
+
+验证（不用眼睛也能看）：`--screenshot` 写的是 RGBA PNG（`glReadPixels(..., GL_RGBA, ...)` +
+`stbi_write_png(..., 4, ...)`），所以**直接量 alpha** 就知道透明生效没有 ——
+选曲界面角落的 `ImGuiCol_WindowBg` 当初就是这么抓出来的（`alpha==0` 占比 0% → 24%）。
+
+```bash
+# 临时把档案切到玻璃模式再截图，量 alpha（Pillow 在隔离 venv 里）
+python -c "..."                      # 改 profiles/default.json 的 bgStyle=2
+./cppsekai.exe --screenshot shots/g.png --screenshot-time 4
+# 注意 --screenshot 的参数是**文件路径**（不是目录！给目录会静默写失败）
+```
+
 ## UI 音效（2026-09-15，`ui::se` / `ui::flushSe`）
 
 - 素材在 `assets/se/`：`click.mp3`（任意组件按下）、`select.mp3`（选曲列表每动一格）、

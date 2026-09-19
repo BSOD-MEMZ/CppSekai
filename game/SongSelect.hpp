@@ -348,6 +348,13 @@ void setSelectAssetDir(const std::string& dir);
 // texture and calls this again whenever the setting changes.
 void setSelectBackdrop(GLuint texture, int texW, int texH, float dim);
 
+// "Aero glass" mode: draw no background fill at all (neither the wallpaper nor
+// the built-in gradient), leaving the window transparent so the desktop shows
+// through. The floating triangle field and every panel/list on top stay - this
+// only removes the flat wash behind them. Needs the window's alpha channel and
+// DWM's extended frame, which the host sets up (see main.cpp).
+void setSelectTransparentBackground(bool enabled);
+
 // Official per-difficulty levels, keyed by song id. unipjsk exports have their
 // SUS header stripped (no #TITLE / #PLAYLEVEL, "#DIFFICULTY 0"), so the level
 // has to come from the game's own data. Two formats are accepted:

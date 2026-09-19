@@ -1388,6 +1388,11 @@ int main(int argc, char** argv)
     std::printf("[settings] flick debug log %s\n",
         gFlickLog.enabled ? "on (flick_debug.log)" : "off");
     const int splashStyle = userSettings.splashStyle; // 0=image 1=classic
+    // "Aero glass" background: no background fill at all, the window's own
+    // pixels stay transparent where nothing is drawn. Needs the same window
+    // setup as the image splash (alpha channel + DWM's extended frame), so the
+    // two share the checks below.
+    const bool glassBackground = userSettings.bgStyle == 2;
 
     int windowW = std::max(320, winWidth);
     int windowH = std::max(240, winHeight);
@@ -1398,7 +1403,7 @@ int main(int argc, char** argv)
     // fully transparent apart from the picture (which is drawn centred at its
     // native size), so shrinking it by a few pixels is invisible, and it goes
     // fullscreen at the end of the boot sequence anyway.
-    if (windowMode == 2 && splashStyle == 0) {
+    if (windowMode == 2 && (splashStyle == 0 || glassBackground)) {
         SDL_Rect usable{};
         if (SDL_GetDisplayUsableBounds(0, &usable) == 0 && usable.w > 0 && usable.h > 0) {
             windowW = std::min(windowW, std::max(320, usable.w - 16));
@@ -1412,15 +1417,47 @@ int main(int argc, char** argv)
     if (windowMode != 1 || splashStyle == 0) {
         windowFlags |= SDL_WINDOW_BORDERLESS;
     }
-    // Image splash is a free-floating PNG: enable DWM per-pixel transparency
-    // (DwmExtendFrameIntoClientArea with -1 margins) so the picture's alpha
-    // shows the desktop instead of a black backdrop. The GL frames decide
-    // opacity themselves: clearing alpha=0 shows the desktop, clearing alpha=1
-    // (the game's normal background) is opaque, so this can stay on all run.
+    // Image splash is a free-floating PNG, and the glass background is a
+    // see-through whole window: both need DWM per-pixel transparency
+    // (DwmExtendFrameIntoClientArea with -1 margins) so the pixels the GL frame
+    // leaves with alpha < 255 blend with the desktop instead of a black
+    // backdrop. The GL frames decide opacity themselves: clearing alpha=0 shows
+    // the desktop (blurred by Aero on Win7), clearing alpha=1 (the normal
+    // background) is opaque, so this can stay on all run.
     // SDL2 has no transparent-window flag (that is SDL3), so do it manually.
-    if (splashStyle == 0) {
+    if (splashStyle == 0 || glassBackground) {
         SDL_GL_SetAttribute(SDL_GL_ALPHA_SIZE, 8); // the framebuffer needs an alpha channel
     }
+#ifdef _WIN32
+    // Windows SDK import libs are not part of the toolchain, so this is a
+    // dynamic load. Also called again when the setting is toggled at runtime
+    // (glass off = zero margins, which puts the frame back and makes the client
+    // area opaque again).
+    auto applyWindowTransparency = [](SDL_Window* target, bool enable) {
+        SDL_SysWMinfo wmi;
+        SDL_VERSION(&wmi.version);
+        if (!SDL_GetWindowWMInfo(target, &wmi) || wmi.subsystem != SDL_SYSWM_WINDOWS) {
+            return;
+        }
+        struct Margins
+        {
+            int left;
+            int right;
+            int top;
+            int bottom;
+        };
+        using DwmExtendFn = long(__stdcall*)(HWND, const Margins*);
+        if (HMODULE dwm = LoadLibraryA("dwmapi.dll")) {
+            if (auto extend = reinterpret_cast<DwmExtendFn>(
+                    reinterpret_cast<void*>(GetProcAddress(dwm, "DwmExtendFrameIntoClientArea"))); extend) {
+                const Margins full{-1, -1, -1, -1};
+                const Margins none{0, 0, 0, 0};
+                extend(wmi.info.win.window, enable ? &full : &none);
+            }
+            FreeLibrary(dwm);
+        }
+    };
+#endif
     // 多人游玩: several windows with the same title are indistinguishable in
     // the taskbar (and impossible to address for a script), so the room puts
     // the player's name in it.
@@ -1492,9 +1529,8 @@ int main(int argc, char** argv)
     bootLog("gl context");
     // Paint the very first frame before any asset is loaded. Without it
     // Windows shows an unpainted window - and after a swap the compositor has
-    // something to display even if the load below takes a while. The image
-    // splash clears to fully transparent (see SDL_WINDOW_TRANSPARENT above).
-    if (splashStyle == 0) {
+    // something to display even if the load below takes a while.
+    if (splashStyle == 0 || glassBackground) {
         glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
     } else {
         glClearColor(0.03f, 0.03f, 0.05f, 1.0f);
@@ -1502,24 +1538,10 @@ int main(int argc, char** argv)
     glClear(GL_COLOR_BUFFER_BIT);
     SDL_GL_SwapWindow(window);
 #ifdef _WIN32
-    // DWM: negative margins extend the glass over the whole client area, which
-    // makes every pixel whose alpha < 255 blend with whatever is behind the
-    // window. Loaded dynamically - the toolchain has no Windows SDK libs.
-    if (splashStyle == 0) {
-        SDL_SysWMinfo wmi;
-        SDL_VERSION(&wmi.version);
-        if (SDL_GetWindowWMInfo(window, &wmi) && wmi.subsystem == SDL_SYSWM_WINDOWS) {
-            struct Margins { int left, right, top, bottom; };
-            using DwmExtendFn = long(__stdcall*)(HWND, const Margins*);
-            if (HMODULE dwm = LoadLibraryA("dwmapi.dll")) {
-                if (auto extend = reinterpret_cast<DwmExtendFn>(
-                        reinterpret_cast<void*>(GetProcAddress(dwm, "DwmExtendFrameIntoClientArea"))); extend) {
-                    const Margins full{-1, -1, -1, -1};
-                    extend(wmi.info.win.window, &full);
-                }
-                FreeLibrary(dwm);
-            }
-        }
+    // DWM: the first swap above is what the compositor keeps until the game
+    // draws over it, so this goes right after it.
+    if (splashStyle == 0 || glassBackground) {
+        applyWindowTransparency(window, true);
     }
 #endif
 
@@ -1659,6 +1681,10 @@ int main(int argc, char** argv)
     // timeline fire them; player mode turns that off and fires them from
     // game/Judgement, so a burst only shows for notes that were actually hit.
     renderer.setDrawCoreEffects(true);
+    // "Aero glass" background: no background plate, alpha-0 clear, so the
+    // window's empty pixels show the desktop instead. The window side of this
+    // (alpha channel + DWM extended frame) is set up above.
+    renderer.setTransparentBackground(glassBackground);
 
     if (!renderer.loadHud(overlayDir, error)) {
         std::fprintf(stderr, "warning: HUD load failed: %s\n", error.c_str());
@@ -1807,6 +1833,9 @@ int main(int argc, char** argv)
     std::string backdropKey;
     bool backdropReported = false;
     auto refreshSelectBackdrop = [&]() {
+        // Glass mode draws no wash at all in the song select (the wallpaper and
+        // the built-in gradient both go away); the floating shapes stay.
+        game::setSelectTransparentBackground(userSettings.bgStyle == 2);
         if (userSettings.bgStyle != 1) {
             game::setSelectBackdrop(0, 0, 0, 0.0f);
             return;
@@ -2977,16 +3006,32 @@ int main(int argc, char** argv)
                     persistUserData();
                 }
                 contentLeft();
-                // Song-select background: the built-in gradient or the user's
-                // desktop wallpaper (blurred + dimmed).
+                // Song-select background: the built-in gradient, the user's
+                // desktop wallpaper (blurred + dimmed), or nothing at all so the
+                // window itself is see-through (Aero glass on Win7).
                 ImGui::Text("选曲背景");
                 contentLeft();
                 static int bgMode = userSettings.bgStyle;
                 ImGui::SetNextItemWidth(interior);
-                if (ImGui::Combo("##bgstyle", &bgMode, "默认渐变\0桌面壁纸\0")) {
+                if (ImGui::Combo("##bgstyle", &bgMode, "默认渐变\0桌面壁纸\0透明（Aero 玻璃）\0")) {
                     userSettings.bgStyle = bgMode;
                     refreshSelectBackdrop();
+                    // The play screen shares the setting, and switching it has
+                    // to touch the window too: the frame is what makes the
+                    // client area see-through in the first place.
+                    renderer.setTransparentBackground(userSettings.bgStyle == 2);
+#ifdef _WIN32
+                    applyWindowTransparency(window,
+                        splashStyle == 0 || userSettings.bgStyle == 2);
+#endif
                     persistUserData();
+                }
+                if (userSettings.bgStyle == 2) {
+                    contentLeft();
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyle().Colors[ImGuiCol_TextDisabled]);
+                    ImGui::TextWrapped("背景不填充，窗口透到桌面（Win7 Aero 下是毛玻璃）。"
+                                       "全屏时会退化成普通深色背景——Windows 的全屏优化会绕过 DWM。");
+                    ImGui::PopStyleColor();
                 }
                 if (userSettings.bgStyle == 1) {
                     // Re-blurring the picture is a CPU pass over a decoded

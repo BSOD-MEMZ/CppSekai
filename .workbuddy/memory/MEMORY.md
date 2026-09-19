@@ -18,7 +18,9 @@
   zig 缓存必须在 C 盘（build.sh 已设 `ZIG_GLOBAL_CACHE_DIR`，D 盘文件系统不支持）。
 - `main.cpp` 必须在 `#include <SDL.h>` 前 `#define SDL_MAIN_HANDLED`，否则"秒退无输出"。
 - exe 是 Windows 子系统；日志去 `cppsekai.log`（`--screenshot` 一定写文件）；
-  `--screenshot` 的目录**必须已存在**，否则进程静默挂住。
+  `--screenshot` 的参数是**文件路径**（给目录会静默失败），父目录必须已存在。
+  screenshot 是 RGBA PNG → **量 alpha 就能验透明**（Pillow 在 venv
+  `~/.workbuddy/binaries/python/envs/default`）。
 - **Win7 兼容补丁在 build.sh 顶部**（2026-09-19）：zig 自带 libc++ 的 chrono.cpp 在
   `_WIN32_WINNT>=0x0602` 时静态导入 `GetSystemTimePreciseAsFileTime`（Win8+），Win7 加载即报
   "无法定位程序输入点"。build.sh 幂等 sed 强制走运行时探测分支（`grep -c CPPSEKAI-WIN7 = 2`
@@ -76,7 +78,10 @@
 
 ## 最近工作（细节一律看 AGENTS.md 对应小节 + 当日日志）
 - **2026-09-19**：多人开局倒计时删了（改成「最慢窗口加载 + 0.8s」两段 charge）；失血阴影几何
-  重做（探针 `CPSEKAI_VIGNETTE`）；**Win7 启动失败修复**；素材压到 10MB。
+  重做（探针 `CPSEKAI_VIGNETTE`）；**Win7 三连修**：① libc++ chrono 静态导入
+  `GetSystemTimePreciseAsFileTime`（启动即失败，build.sh 打补丁）② 系统字体候选表扩到三层 +
+  按文件名兜底（点阵字/中文问号）③ 新增 `bgStyle = 2`「透明（Aero 玻璃）」背景
+  （不填背景、保留漂浮三角形，Renderer + SongSelect + 窗口 DWM 四处联动）；素材压到 10MB。
 - **2026-09-18**：空谱面「下载谱面」按钮、首启 ELUA 弹窗、**多人"连不上"真根因在选曲界面**
   （`selected` 被 `diffIndex` 反推成 -1）、暂停没冻住主机时钟、多人流程重做、多人不进结算。
 - **2026-09-17**：多人游玩（`platform/Party.*` + `game/PartyScreen.*`，同机多窗口共享内存总线）。

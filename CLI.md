@@ -111,7 +111,7 @@ cppsekai [--sus <file.sus>] [--bgm <audio>] [--charts <dir>] [--cover <image>]
 
 | 参数 | 说明 |
 |---|---|
-| `--screenshot <png>` | 无头跑一帧存 PNG 然后退出。选曲界面默认在启动后 1.2s 抓，演奏中在 `--screenshot-time` 抓 |
+| `--screenshot <png>` | 无头跑一帧存 PNG 然后退出。选曲界面默认在启动后 1.2s 抓，演奏中在 `--screenshot-time` 抓。**参数是文件路径**（`shots/a.png`），给一个目录会静默写失败；父目录必须已存在 |
 | `--screenshot-time <sec>` | 演奏模式抓图的时间点（谱面时间，默认 4.0）。**选曲界面也给这个参数时**按它抓（最少 0.5s），用来等滚动/动画停稳 |
 | `--judge-sheet` | 把 6 张判定文字贴图并排画在屏幕下方（对判定文字动画/UV 用） |
 | `--judge-frame <n>` | 把判定文字**冻结**在第 n 帧（60fps 计），用来逐帧核对动画 |

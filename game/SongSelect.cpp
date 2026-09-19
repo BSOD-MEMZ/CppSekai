@@ -391,6 +391,7 @@ GLuint gSelectBackdropTex = 0;
 int gSelectBackdropW = 0;
 int gSelectBackdropH = 0;
 float gSelectBackdropDim = 0.0f;
+bool gSelectFillDisabled = false;
 
 void setSelectBackdrop(GLuint texture, int texW, int texH, float dim)
 {
@@ -398,6 +399,11 @@ void setSelectBackdrop(GLuint texture, int texW, int texH, float dim)
     gSelectBackdropW = texW;
     gSelectBackdropH = texH;
     gSelectBackdropDim = dim;
+}
+
+void setSelectTransparentBackground(bool enabled)
+{
+    gSelectFillDisabled = enabled;
 }
 
 ScoreRecord mergeScore(const ScoreRecord& old, bool cleared, bool fullCombo, double score)
@@ -797,7 +803,7 @@ void loadUserData(const std::string& path, UserSettings& settings,
     if (settings.multiplayer) {
         settings.instanceMode = 1;
     }
-    settings.bgStyle = std::clamp(settings.bgStyle, 0, 1);
+    settings.bgStyle = std::clamp(settings.bgStyle, 0, 2);
     settings.bgBlur = std::clamp(settings.bgBlur, 0.0f, 1.0f);
     settings.bgDim = std::clamp(settings.bgDim, 0.0f, 1.0f);
     // Small range on purpose: this zooms the select / result canvas, and past
@@ -2252,6 +2258,13 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     ImGui::SetNextWindowSize(viewport->WorkSize);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    // Glass mode: this window is the last opaque thing between the player and
+    // the desktop (ImGui's default WindowBg is 0x06/0.94), so it has to go
+    // transparent too. Cards, buttons and list rows inside keep their own
+    // backgrounds - only the full-screen wash is dropped.
+    if (gSelectFillDisabled) {
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, IM_COL32(0, 0, 0, 0));
+    }
     ImGui::Begin("CppSekaiSongSelect", nullptr,
         ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize
             | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus);
@@ -2261,7 +2274,11 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
 
     // Background: the blurred desktop wallpaper when the player picked it,
     // otherwise the built-in dark blue wash with a slow moving highlight.
-    if (gSelectBackdropTex != 0 && gSelectBackdropW > 0 && gSelectBackdropH > 0) {
+    // In glass mode (gSelectFillDisabled) neither is drawn - the window is left
+    // transparent there on purpose, and the floating shapes below are all that
+    // remains of the backdrop.
+    const bool drawFill = !gSelectFillDisabled;
+    if (drawFill && gSelectBackdropTex != 0 && gSelectBackdropW > 0 && gSelectBackdropH > 0) {
         // "Cover" the window: scale so both sides are filled, centre it and let
         // ImGui clip the overflow (the aspect of a wallpaper rarely matches).
         const float srcAspect = static_cast<float>(gSelectBackdropW) / static_cast<float>(gSelectBackdropH);
@@ -2280,7 +2297,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             const int alpha = static_cast<int>(std::clamp(gSelectBackdropDim, 0.0f, 1.0f) * 255.0f);
             dl->AddRectFilled(ImVec2(0, 0), ImVec2(w, h), IM_COL32(8, 10, 24, alpha));
         }
-    } else {
+    } else if (drawFill) {
         dl->AddRectFilledMultiColor(ImVec2(0, 0), ImVec2(w, h),
             IM_COL32(30, 26, 58, 255), IM_COL32(52, 40, 88, 255),
             IM_COL32(20, 18, 40, 255), IM_COL32(46, 36, 78, 255));
@@ -3759,6 +3776,9 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
 
     ImGui::End();
     ImGui::PopStyleVar(2);
+    if (gSelectFillDisabled) {
+        ImGui::PopStyleColor();
+    }
 
     // ------------------------------------------------------------------
     // Profile card. The account is deliberately invisible during normal play -

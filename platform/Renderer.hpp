@@ -99,6 +99,17 @@ class Renderer
     // effects, so core effect quads (textureId >= 3) are opt-in.
     void setDrawCoreEffects(bool enabled) { mDrawCoreEffects = enabled; }
 
+    // Transparent background ("Aero glass"): the frame is cleared to alpha 0
+    // and the background plate (background_overlay.png) is not drawn at all, so
+    // whatever is behind the window shows through - the blurred desktop on Win7
+    // Aero, plain per-pixel transparency on Win8+. The stage, the playfield and
+    // every effect keep drawing normally, only the flat fill goes away.
+    //
+    // The host has to set up the two things this depends on: SDL_GL_ALPHA_SIZE 8
+    // (the window's default framebuffer must carry alpha) and DWM's
+    // DwmExtendFrameIntoClientArea(-1) - see main.cpp's window setup.
+    void setTransparentBackground(bool enabled) { mTransparentBackground = enabled; }
+
     // Projects a playfield world position to window pixel coordinates
     // (y down). Used to place judgement effects on the judge line.
     void worldToScreen(float worldX, float worldY, float& outX, float& outY) const;
@@ -190,6 +201,7 @@ class Renderer
 
     std::map<std::string, HudSprite> mHudSprites;
     bool mDrawCoreEffects = false;
+    bool mTransparentBackground = false;
 };
 
 } // namespace platform

@@ -465,7 +465,9 @@ void Renderer::presentFrame()
     glViewport(0, 0, mWindowW, mWindowH);
     // Everything outside the picture is the letterbox: plain black, so a
     // narrow window reads as a bordered screen instead of a smear.
-    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    // Letterbox: plain black normally, transparent in glass mode (the bars
+    // around the picture are exactly where the desktop should show through).
+    glClearColor(0.0f, 0.0f, 0.0f, mTransparentBackground ? 0.0f : 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
 
     int x = 0;
@@ -1197,7 +1199,11 @@ void Renderer::drawStaticScene(float backgroundBrightness, float playfieldVisibi
         background[i + 1] *= backgroundBrightness;
         background[i + 2] *= backgroundBrightness;
     }
-    drawVertices(mBackground, background, false, BLEND_NORMAL);
+    if (!mTransparentBackground) {
+        // The flat backdrop plate. Skipped in glass mode: it is exactly the
+        // "background fill" the setting is about. The stage below stays.
+        drawVertices(mBackground, background, false, BLEND_NORMAL);
+    }
     if (visibility <= 0.001f) {
         return;
     }
@@ -1249,7 +1255,10 @@ void Renderer::renderFrame(const float* packedQuads, int quadCount, float backgr
     // after this call) goes into the offscreen buffer, and presentFrame()
     // scales it into the window afterwards.
     glBindFramebuffer(GL_FRAMEBUFFER, mOffscreen ? mFbo : 0);
-    glClearColor(0.03f, 0.03f, 0.05f, 1.0f);
+    // Transparent background: clear with alpha 0 so the pixels nothing is drawn
+    // on stay see-through (DWM blends them with the desktop). Everything the
+    // scene draws afterwards brings its own alpha back to 1.
+    glClearColor(0.03f, 0.03f, 0.05f, mTransparentBackground ? 0.0f : 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
     glViewport(0, 0, mWidth, mHeight);
 
