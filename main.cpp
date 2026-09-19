@@ -1425,9 +1425,13 @@ int main(int argc, char** argv)
     // the desktop (blurred by Aero on Win7), clearing alpha=1 (the normal
     // background) is opaque, so this can stay on all run.
     // SDL2 has no transparent-window flag (that is SDL3), so do it manually.
-    if (splashStyle == 0 || glassBackground) {
-        SDL_GL_SetAttribute(SDL_GL_ALPHA_SIZE, 8); // the framebuffer needs an alpha channel
-    }
+    // The window framebuffer always gets an alpha channel: DwmExtendFrameInto-
+    // ClientArea (below) makes the window blend per pixel, and both the image
+    // splash and the "Aero glass" background rely on that. It has to be
+    // requested before the context exists, so it cannot follow the setting -
+    // without it, turning glass on at runtime would silently do nothing.
+    // Non-glass runs ignore the extra channel entirely.
+    SDL_GL_SetAttribute(SDL_GL_ALPHA_SIZE, 8);
 #ifdef _WIN32
     // Windows SDK import libs are not part of the toolchain, so this is a
     // dynamic load. Also called again when the setting is toggled at runtime
