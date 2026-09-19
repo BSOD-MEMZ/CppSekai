@@ -36,3 +36,7 @@ imgui.ini
 .workbuddy/shots/
 # Local backups of pre-shrink assets (the originals also live in git history).
 .workbuddy/backup/
+
+# Python bytecode from the .workbuddy/tools helpers
+__pycache__/
+*.pyc

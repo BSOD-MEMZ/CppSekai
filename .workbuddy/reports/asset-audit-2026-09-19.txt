@@ -1,0 +1,523 @@
+CppSekai 素材清点 / 2026-09-19
+==============================================================================
+
+由 .workbuddy/tools/asset_audit.py 生成：清单是各 loader（Renderer::loadAssets/loadHud、
+AudioEngine::loadSe/loadUiSe、Intro 的字体表、selectTex、TapEffect、StageBackground、
+main.cpp 的直连路径）里点名的路径，不是靠 grep 文件名猜的。
+验证：.workbuddy/tools/asset_prune_verify.sh —— 删掉下面这些之后跑选曲/演奏/结算/暂停
+四个模式，日志无任何加载失败，演奏画面与完整素材逐像素 0 差异。
+
+============ 一、可以删的（loader 永远不读） ============
+
+合计 461 个 / 19.8 MB（占 assets/ 全部 56.1 MB 的 35%）：
+
+  v1 旧版 pjsk 素材（life/v1、judge/v1、*-v1_full、life-v1.png）                                         76 个   2840.1 KB
+  overlay 顶层上游大图（background/lane*_full、lane.png、mv_line、各难度 *_bg、overlay/combo.png、tournament…）  24 个   5106.8 KB
+  overlay_opt 里对应的副本（跟着上面一起删）                                                                   23 个    670.9 KB
+  combo 里的变体（n* / *_ 家族；只保留 pt/pe/p0-9/b0-9）                                                   124 个   1688.3 KB
+  mmw/effects 的 75 个 fx_*.json（已作为 C++ 字符串编译进 exe，运行时一个都不读）                                     75 个   2594.4 KB
+  mmw/sound 的 11 个 mp3（游戏读的是 assets/se，这是上游那份拷贝）                                                11 个    263.8 KB
+  notes / longNoteLine / touchLine 的旧版本（只加载 *_01.png）                                            6 个   2396.4 KB
+  ap-native / custom-score（上游 overlay 播放器用）                                                     13 个    628.7 KB
+  life/v3 的 mask.png 与 digit/{n,sn}.png（loadHud 只点名 0-9 和 s0-s9）                                 6 个    355.6 KB
+  score/digit 的 %、+、- 变体（只点名 0-9 / s0-9 / plus / splus / n / sn）                                 6 个      3.2 KB
+  assets/se 里没被点名的 3 张                                                                           3 个     92.7 KB
+  assets/select 的旧版两张                                                                            2 个      1.7 KB
+  assets/fx/tap_tri_0.png（TapEffect.cpp 注释写明故意不加载）                                               1 个      4.3 KB
+  assets/ost 里那首                                                                                 1 个   1546.3 KB
+  其它零散 90 个 1123.3 KB：assets/mmw/default.png, assets/mmw/overlay/score/a.png, assets/mmw/overlay/score/b.png, assets/mmw/overlay/score/b_%.png, assets/mmw/overlay/score/b_+.png, assets/mmw/overlay/score/b_-.png, assets/mmw/overlay/score/b_..png, assets/mmw/overlay/score/b_0.png
+
+============ 二、完整清单（461 个文件） ============
+
+      4.3 KB  assets/fx/tap_tri_0.png
+    963.3 KB  assets/mmw/default.png
+      3.0 KB  assets/mmw/effects/0/fx_lane_critical.json
+      7.5 KB  assets/mmw/effects/0/fx_lane_critical_flick.json
+      3.9 KB  assets/mmw/effects/0/fx_lane_default.json
+     33.0 KB  assets/mmw/effects/0/fx_note_critical_flick_aura.json
+     53.9 KB  assets/mmw/effects/0/fx_note_critical_flick_flash.json
+     47.6 KB  assets/mmw/effects/0/fx_note_critical_flick_gen.json
+     43.7 KB  assets/mmw/effects/0/fx_note_critical_long_aura.json
+     68.2 KB  assets/mmw/effects/0/fx_note_critical_long_gen.json
+     59.3 KB  assets/mmw/effects/0/fx_note_critical_long_hold_gen.json
+      9.3 KB  assets/mmw/effects/0/fx_note_critical_long_hold_gen_aura.json
+     17.3 KB  assets/mmw/effects/0/fx_note_critical_long_hold_via_aura.json
+     26.3 KB  assets/mmw/effects/0/fx_note_critical_normal_aura.json
+     62.9 KB  assets/mmw/effects/0/fx_note_critical_normal_gen.json
+     49.5 KB  assets/mmw/effects/0/fx_note_critical_trace_aura.json
+     25.9 KB  assets/mmw/effects/0/fx_note_flick_aura.json
+     42.6 KB  assets/mmw/effects/0/fx_note_flick_flash.json
+     40.8 KB  assets/mmw/effects/0/fx_note_flick_gen.json
+      8.9 KB  assets/mmw/effects/0/fx_note_hold_aura.json
+     24.2 KB  assets/mmw/effects/0/fx_note_long_aura.json
+     53.6 KB  assets/mmw/effects/0/fx_note_long_gen.json
+     59.2 KB  assets/mmw/effects/0/fx_note_long_hold_gen.json
+     17.2 KB  assets/mmw/effects/0/fx_note_long_hold_via_aura.json
+     16.1 KB  assets/mmw/effects/0/fx_note_normal_aura.json
+     49.7 KB  assets/mmw/effects/0/fx_note_normal_gen.json
+     41.5 KB  assets/mmw/effects/0/fx_note_trace_aura.json
+      3.0 KB  assets/mmw/effects/1/fx_lane_critical.json
+      7.5 KB  assets/mmw/effects/1/fx_lane_critical_flick.json
+      3.9 KB  assets/mmw/effects/1/fx_lane_default.json
+     33.0 KB  assets/mmw/effects/1/fx_note_critical_flick_aura.json
+     53.9 KB  assets/mmw/effects/1/fx_note_critical_flick_flash.json
+     47.6 KB  assets/mmw/effects/1/fx_note_critical_flick_gen.json
+     43.7 KB  assets/mmw/effects/1/fx_note_critical_long_aura.json
+     68.2 KB  assets/mmw/effects/1/fx_note_critical_long_gen.json
+     59.2 KB  assets/mmw/effects/1/fx_note_critical_long_hold_gen.json
+      9.2 KB  assets/mmw/effects/1/fx_note_critical_long_hold_gen_aura.json
+     17.2 KB  assets/mmw/effects/1/fx_note_critical_long_hold_via_aura.json
+     26.3 KB  assets/mmw/effects/1/fx_note_critical_normal_aura.json
+     62.9 KB  assets/mmw/effects/1/fx_note_critical_normal_gen.json
+     49.4 KB  assets/mmw/effects/1/fx_note_critical_trace_aura.json
+     25.9 KB  assets/mmw/effects/1/fx_note_flick_aura.json
+     42.6 KB  assets/mmw/effects/1/fx_note_flick_flash.json
+     40.8 KB  assets/mmw/effects/1/fx_note_flick_gen.json
+      8.9 KB  assets/mmw/effects/1/fx_note_hold_aura.json
+     24.2 KB  assets/mmw/effects/1/fx_note_long_aura.json
+     53.6 KB  assets/mmw/effects/1/fx_note_long_gen.json
+     59.2 KB  assets/mmw/effects/1/fx_note_long_hold_gen.json
+     17.2 KB  assets/mmw/effects/1/fx_note_long_hold_via_aura.json
+     16.1 KB  assets/mmw/effects/1/fx_note_normal_aura.json
+     49.7 KB  assets/mmw/effects/1/fx_note_normal_gen.json
+     41.5 KB  assets/mmw/effects/1/fx_note_trace_aura.json
+      3.0 KB  assets/mmw/effects/fx_lane_critical.json
+      7.5 KB  assets/mmw/effects/fx_lane_critical_flick.json
+      3.9 KB  assets/mmw/effects/fx_lane_default.json
+     33.0 KB  assets/mmw/effects/fx_note_critical_flick_aura.json
+     53.9 KB  assets/mmw/effects/fx_note_critical_flick_flash.json
+     47.6 KB  assets/mmw/effects/fx_note_critical_flick_gen.json
+     43.7 KB  assets/mmw/effects/fx_note_critical_long_aura.json
+     68.2 KB  assets/mmw/effects/fx_note_critical_long_gen.json
+     59.3 KB  assets/mmw/effects/fx_note_critical_long_hold_gen.json
+      9.3 KB  assets/mmw/effects/fx_note_critical_long_hold_gen_aura.json
+     17.3 KB  assets/mmw/effects/fx_note_critical_long_hold_via_aura.json
+     26.3 KB  assets/mmw/effects/fx_note_critical_normal_aura.json
+     62.9 KB  assets/mmw/effects/fx_note_critical_normal_gen.json
+     49.5 KB  assets/mmw/effects/fx_note_critical_trace_aura.json
+     25.9 KB  assets/mmw/effects/fx_note_flick_aura.json
+     42.6 KB  assets/mmw/effects/fx_note_flick_flash.json
+     40.8 KB  assets/mmw/effects/fx_note_flick_gen.json
+      8.9 KB  assets/mmw/effects/fx_note_hold_aura.json
+     24.2 KB  assets/mmw/effects/fx_note_long_aura.json
+     53.6 KB  assets/mmw/effects/fx_note_long_gen.json
+     59.2 KB  assets/mmw/effects/fx_note_long_hold_gen.json
+     17.2 KB  assets/mmw/effects/fx_note_long_hold_via_aura.json
+     16.1 KB  assets/mmw/effects/fx_note_normal_aura.json
+     49.7 KB  assets/mmw/effects/fx_note_normal_gen.json
+     41.5 KB  assets/mmw/effects/fx_note_trace_aura.json
+      0.5 KB  assets/mmw/longNoteLine.png
+      0.2 KB  assets/mmw/longNoteLine_02.png
+   1184.1 KB  assets/mmw/notes.png
+   1206.2 KB  assets/mmw/notes_02.png
+     26.5 KB  assets/mmw/overlay/ap-native/all-perfect-line.png
+    140.2 KB  assets/mmw/overlay/ap-native/all-perfect.m4a
+     36.4 KB  assets/mmw/overlay/ap-native/all-perfect.png
+    222.1 KB  assets/mmw/overlay/ap-native/flare.png
+    103.7 KB  assets/mmw/overlay/ap-native/flash.png
+      0.4 KB  assets/mmw/overlay/ap-native/sparkle.png
+   2687.5 KB  assets/mmw/overlay/ap.mp4
+    123.2 KB  assets/mmw/overlay/append_bg.png
+      8.0 KB  assets/mmw/overlay/autolive-en.png
+   1627.1 KB  assets/mmw/overlay/background-v1_full.png
+    978.9 KB  assets/mmw/overlay/background_full.png
+      1.9 KB  assets/mmw/overlay/black_bg.png
+      0.3 KB  assets/mmw/overlay/collab-tag.png
+     14.3 KB  assets/mmw/overlay/combo.png
+     15.0 KB  assets/mmw/overlay/combo/b%.png
+     11.5 KB  assets/mmw/overlay/combo/b-.png
+      2.9 KB  assets/mmw/overlay/combo/b..png
+     16.2 KB  assets/mmw/overlay/combo/b_%.png
+      3.8 KB  assets/mmw/overlay/combo/b_-.png
+      2.9 KB  assets/mmw/overlay/combo/b_..png
+      8.2 KB  assets/mmw/overlay/combo/b_0.png
+      5.1 KB  assets/mmw/overlay/combo/b_1.png
+     10.5 KB  assets/mmw/overlay/combo/b_2.png
+     10.9 KB  assets/mmw/overlay/combo/b_3.png
+      8.0 KB  assets/mmw/overlay/combo/b_4.png
+     10.0 KB  assets/mmw/overlay/combo/b_5.png
+      9.2 KB  assets/mmw/overlay/combo/b_6.png
+      8.4 KB  assets/mmw/overlay/combo/b_7.png
+      8.1 KB  assets/mmw/overlay/combo/b_8.png
+      9.0 KB  assets/mmw/overlay/combo/b_9.png
+      5.8 KB  assets/mmw/overlay/combo/b_c.png
+     14.8 KB  assets/mmw/overlay/combo/n%.png
+      4.9 KB  assets/mmw/overlay/combo/n-.png
+      1.1 KB  assets/mmw/overlay/combo/n..png
+     13.7 KB  assets/mmw/overlay/combo/n0.png
+      4.7 KB  assets/mmw/overlay/combo/n1.png
+     12.2 KB  assets/mmw/overlay/combo/n2.png
+     15.1 KB  assets/mmw/overlay/combo/n3.png
+      8.1 KB  assets/mmw/overlay/combo/n4.png
+     13.2 KB  assets/mmw/overlay/combo/n5.png
+     15.7 KB  assets/mmw/overlay/combo/n6.png
+      8.4 KB  assets/mmw/overlay/combo/n7.png
+     15.3 KB  assets/mmw/overlay/combo/n8.png
+     15.5 KB  assets/mmw/overlay/combo/n9.png
+     12.3 KB  assets/mmw/overlay/combo/n_%.png
+      1.7 KB  assets/mmw/overlay/combo/n_-.png
+      0.7 KB  assets/mmw/overlay/combo/n_..png
+     13.7 KB  assets/mmw/overlay/combo/n_0.png
+      4.5 KB  assets/mmw/overlay/combo/n_1.png
+     10.8 KB  assets/mmw/overlay/combo/n_2.png
+     13.7 KB  assets/mmw/overlay/combo/n_3.png
+      7.2 KB  assets/mmw/overlay/combo/n_4.png
+     10.4 KB  assets/mmw/overlay/combo/n_5.png
+     14.5 KB  assets/mmw/overlay/combo/n_6.png
+      8.8 KB  assets/mmw/overlay/combo/n_7.png
+     15.1 KB  assets/mmw/overlay/combo/n_8.png
+     14.5 KB  assets/mmw/overlay/combo/n_9.png
+     12.1 KB  assets/mmw/overlay/combo/n_c.png
+      8.5 KB  assets/mmw/overlay/combo/nt.png
+     14.3 KB  assets/mmw/overlay/combo/p%.png
+      3.5 KB  assets/mmw/overlay/combo/p-.png
+      1.3 KB  assets/mmw/overlay/combo/p..png
+     30.4 KB  assets/mmw/overlay/combo/p_%.png
+      4.6 KB  assets/mmw/overlay/combo/p_-.png
+      3.5 KB  assets/mmw/overlay/combo/p_..png
+     26.8 KB  assets/mmw/overlay/combo/p_0.png
+     13.4 KB  assets/mmw/overlay/combo/p_1.png
+     26.0 KB  assets/mmw/overlay/combo/p_2.png
+     28.6 KB  assets/mmw/overlay/combo/p_3.png
+     20.0 KB  assets/mmw/overlay/combo/p_4.png
+     24.6 KB  assets/mmw/overlay/combo/p_5.png
+     28.5 KB  assets/mmw/overlay/combo/p_6.png
+     22.2 KB  assets/mmw/overlay/combo/p_7.png
+     28.5 KB  assets/mmw/overlay/combo/p_8.png
+     27.1 KB  assets/mmw/overlay/combo/p_9.png
+     21.8 KB  assets/mmw/overlay/combo/p_c.png
+      1.4 KB  assets/mmw/overlay/custom-score/icon.png
+     20.1 KB  assets/mmw/overlay/easy_bg.png
+    109.7 KB  assets/mmw/overlay/eternal_bg.png
+     20.1 KB  assets/mmw/overlay/expert_bg.png
+      4.6 KB  assets/mmw/overlay/extra.png
+     20.1 KB  assets/mmw/overlay/hard_bg.png
+     37.4 KB  assets/mmw/overlay/judge/v1/1.png
+     42.8 KB  assets/mmw/overlay/judge/v1/2.png
+     47.0 KB  assets/mmw/overlay/judge/v1/3.png
+     32.2 KB  assets/mmw/overlay/judge/v1/4.png
+     27.7 KB  assets/mmw/overlay/judge/v1/5.png
+     39.1 KB  assets/mmw/overlay/judge/v1/6.png
+    307.5 KB  assets/mmw/overlay/lane-v1_full.png
+    304.4 KB  assets/mmw/overlay/lane.png
+    275.4 KB  assets/mmw/overlay/lane_full.png
+     11.0 KB  assets/mmw/overlay/life-v1.png
+    186.0 KB  assets/mmw/overlay/life.png
+      2.5 KB  assets/mmw/overlay/life/v1/bg.png
+      5.1 KB  assets/mmw/overlay/life/v1/border.png
+      4.9 KB  assets/mmw/overlay/life/v1/danger.png
+      2.5 KB  assets/mmw/overlay/life/v1/danger_bg.png
+      1.0 KB  assets/mmw/overlay/life/v1/digit/b_0.png
+      0.5 KB  assets/mmw/overlay/life/v1/digit/b_1.png
+      1.0 KB  assets/mmw/overlay/life/v1/digit/b_2.png
+      1.1 KB  assets/mmw/overlay/life/v1/digit/b_3.png
+      0.8 KB  assets/mmw/overlay/life/v1/digit/b_4.png
+      0.9 KB  assets/mmw/overlay/life/v1/digit/b_5.png
+      0.9 KB  assets/mmw/overlay/life/v1/digit/b_6.png
+      1.0 KB  assets/mmw/overlay/life/v1/digit/b_7.png
+      0.9 KB  assets/mmw/overlay/life/v1/digit/b_8.png
+      0.9 KB  assets/mmw/overlay/life/v1/digit/b_9.png
+      1.0 KB  assets/mmw/overlay/life/v1/digit/b_n.png
+      0.9 KB  assets/mmw/overlay/life/v1/digit/f_0.png
+      0.3 KB  assets/mmw/overlay/life/v1/digit/f_1.png
+      0.9 KB  assets/mmw/overlay/life/v1/digit/f_2.png
+      0.9 KB  assets/mmw/overlay/life/v1/digit/f_3.png
+      0.6 KB  assets/mmw/overlay/life/v1/digit/f_4.png
+      0.8 KB  assets/mmw/overlay/life/v1/digit/f_5.png
+      1.0 KB  assets/mmw/overlay/life/v1/digit/f_6.png
+      0.7 KB  assets/mmw/overlay/life/v1/digit/f_7.png
+      1.0 KB  assets/mmw/overlay/life/v1/digit/f_8.png
+      1.0 KB  assets/mmw/overlay/life/v1/digit/f_9.png
+      3.4 KB  assets/mmw/overlay/life/v1/digit/f_n.png
+      2.7 KB  assets/mmw/overlay/life/v1/normal.png
+      2.6 KB  assets/mmw/overlay/life/v1/overflow.png
+      7.7 KB  assets/mmw/overlay/life/v1/placeholder.png
+     53.3 KB  assets/mmw/overlay/life/v3/digit/n.png
+    212.9 KB  assets/mmw/overlay/life/v3/digit/sn.png
+     34.9 KB  assets/mmw/overlay/life/v3/mask.png
+     15.5 KB  assets/mmw/overlay/master.png
+     20.1 KB  assets/mmw/overlay/master_bg.png
+    119.2 KB  assets/mmw/overlay/mv_line.png
+     20.1 KB  assets/mmw/overlay/normal_bg.png
+    144.7 KB  assets/mmw/overlay/over.png
+      2.5 KB  assets/mmw/overlay/rainbow.png
+      5.1 KB  assets/mmw/overlay/score/a.png
+      4.9 KB  assets/mmw/overlay/score/b.png
+      2.5 KB  assets/mmw/overlay/score/b_%.png
+      0.4 KB  assets/mmw/overlay/score/b_+.png
+      0.4 KB  assets/mmw/overlay/score/b_-.png
+      0.6 KB  assets/mmw/overlay/score/b_..png
+      0.9 KB  assets/mmw/overlay/score/b_0.png
+      0.5 KB  assets/mmw/overlay/score/b_1.png
+      0.9 KB  assets/mmw/overlay/score/b_2.png
+      1.0 KB  assets/mmw/overlay/score/b_3.png
+      0.6 KB  assets/mmw/overlay/score/b_4.png
+      0.8 KB  assets/mmw/overlay/score/b_5.png
+      0.8 KB  assets/mmw/overlay/score/b_6.png
+      0.8 KB  assets/mmw/overlay/score/b_7.png
+      0.8 KB  assets/mmw/overlay/score/b_8.png
+      0.9 KB  assets/mmw/overlay/score/b_9.png
+      0.9 KB  assets/mmw/overlay/score/b_n.png
+      0.4 KB  assets/mmw/overlay/score/b_p.png
+      7.6 KB  assets/mmw/overlay/score/bars.png
+      5.4 KB  assets/mmw/overlay/score/c.png
+      1.4 KB  assets/mmw/overlay/score/digit/%.png
+      0.2 KB  assets/mmw/overlay/score/digit/+.png
+      0.2 KB  assets/mmw/overlay/score/digit/-.png
+      0.2 KB  assets/mmw/overlay/score/digit/..png
+      2.9 KB  assets/mmw/overlay/score/digit/s%.png
+      3.1 KB  assets/mmw/overlay/score/digit/s+.png
+      0.4 KB  assets/mmw/overlay/score/digit/s-.png
+      1.2 KB  assets/mmw/overlay/score/digit/s..png
+      1.6 KB  assets/mmw/overlay/score/f_%.png
+      0.3 KB  assets/mmw/overlay/score/f_+.png
+      0.3 KB  assets/mmw/overlay/score/f_-.png
+      0.3 KB  assets/mmw/overlay/score/f_..png
+      0.8 KB  assets/mmw/overlay/score/f_0.png
+      0.3 KB  assets/mmw/overlay/score/f_1.png
+      0.7 KB  assets/mmw/overlay/score/f_2.png
+      0.8 KB  assets/mmw/overlay/score/f_3.png
+      0.5 KB  assets/mmw/overlay/score/f_4.png
+      0.7 KB  assets/mmw/overlay/score/f_5.png
+      0.9 KB  assets/mmw/overlay/score/f_6.png
+      0.6 KB  assets/mmw/overlay/score/f_7.png
+      0.8 KB  assets/mmw/overlay/score/f_8.png
+      0.9 KB  assets/mmw/overlay/score/f_9.png
+      3.4 KB  assets/mmw/overlay/score/f_n.png
+      0.3 KB  assets/mmw/overlay/score/f_p.png
+      6.3 KB  assets/mmw/overlay/score/inner.png
+      4.5 KB  assets/mmw/overlay/score/s.png
+     19.9 KB  assets/mmw/overlay/score/score.png
+      2.8 KB  assets/mmw/overlay/start_bg.png
+     14.0 KB  assets/mmw/overlay/tournament-mode-en.png
+     13.7 KB  assets/mmw/overlay/tournament-mode.png
+      6.8 KB  assets/mmw/overlay_opt/ap-native/all-perfect-line.png
+      8.6 KB  assets/mmw/overlay_opt/ap-native/all-perfect.png
+     41.8 KB  assets/mmw/overlay_opt/ap-native/flare.png
+     38.5 KB  assets/mmw/overlay_opt/ap-native/flash.png
+      0.3 KB  assets/mmw/overlay_opt/ap-native/sparkle.png
+     70.7 KB  assets/mmw/overlay_opt/append_bg.png
+      9.8 KB  assets/mmw/overlay_opt/autolive-en.png
+    238.2 KB  assets/mmw/overlay_opt/background-v1_full.png
+    249.4 KB  assets/mmw/overlay_opt/background_full.png
+      3.2 KB  assets/mmw/overlay_opt/black_bg.png
+      0.6 KB  assets/mmw/overlay_opt/collab-tag.png
+      5.6 KB  assets/mmw/overlay_opt/combo.png
+     15.6 KB  assets/mmw/overlay_opt/combo/b%.png
+     13.7 KB  assets/mmw/overlay_opt/combo/b-.png
+      3.0 KB  assets/mmw/overlay_opt/combo/b..png
+     17.3 KB  assets/mmw/overlay_opt/combo/b_%.png
+      3.7 KB  assets/mmw/overlay_opt/combo/b_-.png
+      3.2 KB  assets/mmw/overlay_opt/combo/b_..png
+     12.0 KB  assets/mmw/overlay_opt/combo/b_0.png
+      7.2 KB  assets/mmw/overlay_opt/combo/b_1.png
+     15.6 KB  assets/mmw/overlay_opt/combo/b_2.png
+     15.9 KB  assets/mmw/overlay_opt/combo/b_3.png
+     11.7 KB  assets/mmw/overlay_opt/combo/b_4.png
+     14.8 KB  assets/mmw/overlay_opt/combo/b_5.png
+     13.6 KB  assets/mmw/overlay_opt/combo/b_6.png
+     12.5 KB  assets/mmw/overlay_opt/combo/b_7.png
+     11.8 KB  assets/mmw/overlay_opt/combo/b_8.png
+     13.2 KB  assets/mmw/overlay_opt/combo/b_9.png
+      8.5 KB  assets/mmw/overlay_opt/combo/b_c.png
+     15.2 KB  assets/mmw/overlay_opt/combo/n%.png
+      5.5 KB  assets/mmw/overlay_opt/combo/n-.png
+      1.1 KB  assets/mmw/overlay_opt/combo/n..png
+     16.2 KB  assets/mmw/overlay_opt/combo/n0.png
+      5.4 KB  assets/mmw/overlay_opt/combo/n1.png
+     14.3 KB  assets/mmw/overlay_opt/combo/n2.png
+     17.6 KB  assets/mmw/overlay_opt/combo/n3.png
+      9.5 KB  assets/mmw/overlay_opt/combo/n4.png
+     15.8 KB  assets/mmw/overlay_opt/combo/n5.png
+     18.6 KB  assets/mmw/overlay_opt/combo/n6.png
+      9.7 KB  assets/mmw/overlay_opt/combo/n7.png
+     18.2 KB  assets/mmw/overlay_opt/combo/n8.png
+     18.2 KB  assets/mmw/overlay_opt/combo/n9.png
+     11.5 KB  assets/mmw/overlay_opt/combo/n_%.png
+      1.6 KB  assets/mmw/overlay_opt/combo/n_-.png
+      0.6 KB  assets/mmw/overlay_opt/combo/n_..png
+     15.5 KB  assets/mmw/overlay_opt/combo/n_0.png
+      5.1 KB  assets/mmw/overlay_opt/combo/n_1.png
+     11.9 KB  assets/mmw/overlay_opt/combo/n_2.png
+     15.4 KB  assets/mmw/overlay_opt/combo/n_3.png
+      7.8 KB  assets/mmw/overlay_opt/combo/n_4.png
+     11.6 KB  assets/mmw/overlay_opt/combo/n_5.png
+     16.4 KB  assets/mmw/overlay_opt/combo/n_6.png
+      9.6 KB  assets/mmw/overlay_opt/combo/n_7.png
+     17.1 KB  assets/mmw/overlay_opt/combo/n_8.png
+     16.3 KB  assets/mmw/overlay_opt/combo/n_9.png
+     14.2 KB  assets/mmw/overlay_opt/combo/n_c.png
+      9.2 KB  assets/mmw/overlay_opt/combo/nt.png
+     14.3 KB  assets/mmw/overlay_opt/combo/p%.png
+      3.2 KB  assets/mmw/overlay_opt/combo/p-.png
+      1.3 KB  assets/mmw/overlay_opt/combo/p..png
+     30.7 KB  assets/mmw/overlay_opt/combo/p_%.png
+      4.4 KB  assets/mmw/overlay_opt/combo/p_-.png
+      3.7 KB  assets/mmw/overlay_opt/combo/p_..png
+     34.8 KB  assets/mmw/overlay_opt/combo/p_0.png
+     17.7 KB  assets/mmw/overlay_opt/combo/p_1.png
+     33.7 KB  assets/mmw/overlay_opt/combo/p_2.png
+     37.0 KB  assets/mmw/overlay_opt/combo/p_3.png
+     26.6 KB  assets/mmw/overlay_opt/combo/p_4.png
+     31.9 KB  assets/mmw/overlay_opt/combo/p_5.png
+     36.9 KB  assets/mmw/overlay_opt/combo/p_6.png
+     29.0 KB  assets/mmw/overlay_opt/combo/p_7.png
+     36.4 KB  assets/mmw/overlay_opt/combo/p_8.png
+     34.6 KB  assets/mmw/overlay_opt/combo/p_9.png
+     27.5 KB  assets/mmw/overlay_opt/combo/p_c.png
+      1.9 KB  assets/mmw/overlay_opt/custom-score/icon.png
+     10.5 KB  assets/mmw/overlay_opt/easy_bg.png
+    108.3 KB  assets/mmw/overlay_opt/eternal_bg.png
+     10.5 KB  assets/mmw/overlay_opt/expert_bg.png
+      8.4 KB  assets/mmw/overlay_opt/extra.png
+     10.5 KB  assets/mmw/overlay_opt/hard_bg.png
+     45.9 KB  assets/mmw/overlay_opt/judge/v1/1.png
+     51.1 KB  assets/mmw/overlay_opt/judge/v1/2.png
+     55.5 KB  assets/mmw/overlay_opt/judge/v1/3.png
+     37.5 KB  assets/mmw/overlay_opt/judge/v1/4.png
+     32.3 KB  assets/mmw/overlay_opt/judge/v1/5.png
+     45.2 KB  assets/mmw/overlay_opt/judge/v1/6.png
+     52.9 KB  assets/mmw/overlay_opt/lane-v1_full.png
+     37.8 KB  assets/mmw/overlay_opt/lane.png
+     47.9 KB  assets/mmw/overlay_opt/lane_full.png
+     14.0 KB  assets/mmw/overlay_opt/life-v1.png
+     18.6 KB  assets/mmw/overlay_opt/life.png
+      2.5 KB  assets/mmw/overlay_opt/life/v1/bg.png
+      5.3 KB  assets/mmw/overlay_opt/life/v1/border.png
+      4.7 KB  assets/mmw/overlay_opt/life/v1/danger.png
+      2.5 KB  assets/mmw/overlay_opt/life/v1/danger_bg.png
+      0.9 KB  assets/mmw/overlay_opt/life/v1/digit/b_0.png
+      0.5 KB  assets/mmw/overlay_opt/life/v1/digit/b_1.png
+      0.9 KB  assets/mmw/overlay_opt/life/v1/digit/b_2.png
+      1.0 KB  assets/mmw/overlay_opt/life/v1/digit/b_3.png
+      0.7 KB  assets/mmw/overlay_opt/life/v1/digit/b_4.png
+      0.8 KB  assets/mmw/overlay_opt/life/v1/digit/b_5.png
+      0.8 KB  assets/mmw/overlay_opt/life/v1/digit/b_6.png
+      0.8 KB  assets/mmw/overlay_opt/life/v1/digit/b_7.png
+      0.8 KB  assets/mmw/overlay_opt/life/v1/digit/b_8.png
+      0.9 KB  assets/mmw/overlay_opt/life/v1/digit/b_9.png
+      0.9 KB  assets/mmw/overlay_opt/life/v1/digit/b_n.png
+      0.9 KB  assets/mmw/overlay_opt/life/v1/digit/f_0.png
+      0.3 KB  assets/mmw/overlay_opt/life/v1/digit/f_1.png
+      0.9 KB  assets/mmw/overlay_opt/life/v1/digit/f_2.png
+      0.9 KB  assets/mmw/overlay_opt/life/v1/digit/f_3.png
+      0.6 KB  assets/mmw/overlay_opt/life/v1/digit/f_4.png
+      0.7 KB  assets/mmw/overlay_opt/life/v1/digit/f_5.png
+      1.1 KB  assets/mmw/overlay_opt/life/v1/digit/f_6.png
+      0.7 KB  assets/mmw/overlay_opt/life/v1/digit/f_7.png
+      1.0 KB  assets/mmw/overlay_opt/life/v1/digit/f_8.png
+      1.0 KB  assets/mmw/overlay_opt/life/v1/digit/f_9.png
+      0.9 KB  assets/mmw/overlay_opt/life/v1/digit/f_n.png
+      2.6 KB  assets/mmw/overlay_opt/life/v1/normal.png
+      2.6 KB  assets/mmw/overlay_opt/life/v1/overflow.png
+      7.7 KB  assets/mmw/overlay_opt/life/v1/placeholder.png
+     12.8 KB  assets/mmw/overlay_opt/life/v3/digit/n.png
+     38.8 KB  assets/mmw/overlay_opt/life/v3/digit/sn.png
+      2.9 KB  assets/mmw/overlay_opt/life/v3/mask.png
+      6.1 KB  assets/mmw/overlay_opt/master.png
+     10.5 KB  assets/mmw/overlay_opt/master_bg.png
+      5.3 KB  assets/mmw/overlay_opt/mv_line.png
+     10.5 KB  assets/mmw/overlay_opt/normal_bg.png
+      9.8 KB  assets/mmw/overlay_opt/over.png
+      3.6 KB  assets/mmw/overlay_opt/rainbow.png
+      6.5 KB  assets/mmw/overlay_opt/score/a.png
+      6.5 KB  assets/mmw/overlay_opt/score/b.png
+      2.3 KB  assets/mmw/overlay_opt/score/b_%.png
+      0.5 KB  assets/mmw/overlay_opt/score/b_+.png
+      0.3 KB  assets/mmw/overlay_opt/score/b_-.png
+      0.5 KB  assets/mmw/overlay_opt/score/b_..png
+      1.0 KB  assets/mmw/overlay_opt/score/b_0.png
+      0.6 KB  assets/mmw/overlay_opt/score/b_1.png
+      1.0 KB  assets/mmw/overlay_opt/score/b_2.png
+      1.1 KB  assets/mmw/overlay_opt/score/b_3.png
+      0.7 KB  assets/mmw/overlay_opt/score/b_4.png
+      0.9 KB  assets/mmw/overlay_opt/score/b_5.png
+      0.9 KB  assets/mmw/overlay_opt/score/b_6.png
+      0.9 KB  assets/mmw/overlay_opt/score/b_7.png
+      0.9 KB  assets/mmw/overlay_opt/score/b_8.png
+      0.9 KB  assets/mmw/overlay_opt/score/b_9.png
+      1.0 KB  assets/mmw/overlay_opt/score/b_n.png
+      0.5 KB  assets/mmw/overlay_opt/score/b_p.png
+      3.3 KB  assets/mmw/overlay_opt/score/bars.png
+      7.0 KB  assets/mmw/overlay_opt/score/c.png
+      1.2 KB  assets/mmw/overlay_opt/score/digit/%.png
+      0.1 KB  assets/mmw/overlay_opt/score/digit/+.png
+      0.1 KB  assets/mmw/overlay_opt/score/digit/-.png
+      0.2 KB  assets/mmw/overlay_opt/score/digit/..png
+      3.4 KB  assets/mmw/overlay_opt/score/digit/s%.png
+      1.0 KB  assets/mmw/overlay_opt/score/digit/s+.png
+      0.4 KB  assets/mmw/overlay_opt/score/digit/s-.png
+      1.3 KB  assets/mmw/overlay_opt/score/digit/s..png
+      1.4 KB  assets/mmw/overlay_opt/score/f_%.png
+      0.3 KB  assets/mmw/overlay_opt/score/f_+.png
+      0.2 KB  assets/mmw/overlay_opt/score/f_-.png
+      0.2 KB  assets/mmw/overlay_opt/score/f_..png
+      0.9 KB  assets/mmw/overlay_opt/score/f_0.png
+      0.3 KB  assets/mmw/overlay_opt/score/f_1.png
+      0.7 KB  assets/mmw/overlay_opt/score/f_2.png
+      0.8 KB  assets/mmw/overlay_opt/score/f_3.png
+      0.5 KB  assets/mmw/overlay_opt/score/f_4.png
+      0.7 KB  assets/mmw/overlay_opt/score/f_5.png
+      1.0 KB  assets/mmw/overlay_opt/score/f_6.png
+      0.5 KB  assets/mmw/overlay_opt/score/f_7.png
+      0.9 KB  assets/mmw/overlay_opt/score/f_8.png
+      0.9 KB  assets/mmw/overlay_opt/score/f_9.png
+      0.9 KB  assets/mmw/overlay_opt/score/f_n.png
+      0.3 KB  assets/mmw/overlay_opt/score/f_p.png
+      3.1 KB  assets/mmw/overlay_opt/score/inner.png
+      5.9 KB  assets/mmw/overlay_opt/score/s.png
+      8.2 KB  assets/mmw/overlay_opt/score/score.png
+      0.1 KB  assets/mmw/overlay_opt/start_bg.png
+     16.4 KB  assets/mmw/overlay_opt/tournament-mode-en.png
+     16.7 KB  assets/mmw/overlay_opt/tournament-mode.png
+      5.4 KB  assets/mmw/sound/se_live_connect.mp3
+      8.5 KB  assets/mmw/sound/se_live_connect_critical.mp3
+      8.5 KB  assets/mmw/sound/se_live_critical.mp3
+     17.0 KB  assets/mmw/sound/se_live_flick.mp3
+     12.8 KB  assets/mmw/sound/se_live_flick_critical.mp3
+     87.7 KB  assets/mmw/sound/se_live_long.mp3
+     94.5 KB  assets/mmw/sound/se_live_long_critical.mp3
+     12.9 KB  assets/mmw/sound/se_live_perfect.mp3
+      3.8 KB  assets/mmw/sound/se_live_tap.mp3
+      6.3 KB  assets/mmw/sound/se_live_trace.mp3
+      6.4 KB  assets/mmw/sound/se_live_trace_critical.mp3
+      2.7 KB  assets/mmw/touchLine_eff.png
+      2.7 KB  assets/mmw/touchLine_eff_02.png
+   1546.3 KB  assets/ost/キミだけの軌跡.mp3
+     43.2 KB  assets/se/LIVE_CLEAR.mp3
+     47.7 KB  assets/se/LIVE_FINISH.mp3
+      1.9 KB  assets/se/touch.mp3
+      1.1 KB  assets/select/indicate_back.png
+      0.6 KB  assets/select/skip.png
+      0.5 KB  assets/test.sus
+
+============ 三、保留（loader 会读） ============
+
+共 248 个 / 36.4 MB。其中两类运行时可能不读、但仓库要留：
+  * assets/mmw/overlay/**（103 个 / 7.06 MB）：运行时优先读 overlay_opt/**（瘦身版已在库里），
+    原图是 shrink_hud.cpp 生成 _opt 的源。仓库留着；发布包里可以不带。
+  * assets/mmw/font/**（3 个 / 23.0 MB）：只在 --pjsk-font 下读，默认走系统字体。
+
+============ 四、可压缩（全部实测） ============
+
+1) 零损失，直接换文件就行：
+   effect.png                595.3 KB -> 215.9 KB  烘到 512x512。运行时本来就按 maxDim=512
+                                                 上传，实测两条路径的画面逐像素 100% 相同。
+   overlay/life/v3/digit/s*.png（10 个）  ~2.2 MB -> ~0.9 MB   无损重压，-59%
+   notes_01.png              1184.1 KB -> 1040.5 KB  无损重压 -12%
+   已用 PNG 全量无损重压：11.5 MB -> 8.6 MB（省 3.0 MB / 26%）
+
+2) 打包层面（素材本身不用改）：
+   * 发布包不带 assets/mmw/overlay/**（省 7.06 MB）——运行时只用 overlay_opt/**。
+   * 默认包不带 assets/mmw/font/**（省 23.0 MB）。NotoSansCJKSC-Black.ttf 一个文件 16.9 MB，
+     而 UI 里用到的简体字只有几百个，fonttools 子集化大约能压到 0.2 MB（字表可从源码抽，可脚本化）。
+     FOT-Rodin 两个（6.1 MB）是商业字体，见 COPYRIGHT.md 的风险一节。
+
+3) 有画质代价，要你拍板（实测差异）：
+   stage.png 206.8 KB -> 108.8 KB（减半 1024x588）；background_overlay.png 447.8 KB -> 175.0 KB（512²）。
+   两个一起做：同一帧 56% 像素完全相同、1.1% 像素差异 >16/255（舞台那层轻微变软），显存 13.8 -> 3.5 MB。
+   assets/ost/BGM_LIVE_RESULT_2.mp3 775.8 KB：降码率重编码（有损，自己听）
+
+4) 不要动：notes_01.png 这类 atlas 不能在文件上缩放 —— 精灵矩形是**像素坐标**写死在
+   core/native/generated/generated_resources.h（渲染端拿加载尺寸归一化 UV），缩放会让音符全部错位。
+   要缩必须同时按比例改那张表（上游有生成脚本，本项目没移植）。

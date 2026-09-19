@@ -56,9 +56,10 @@ void se(SeKind kind);
 void flushSe();
 
 // pjsk palette.
-// Fullscreen dim behind dialogs. Kept light (~33%) on purpose: the stage and
-// the notes stay readable while paused.
-constexpr ImU32 kBackdrop = IM_COL32(8, 8, 16, 84);
+// (Dialogs used to draw a fullscreen dim of IM_COL32(8, 8, 16, 84) behind
+// themselves. Removed 2026-09-19 - the card is enough, and the frozen playfield
+// stays readable without a film over it. The modal window that blocked the
+// clicks behind it is still there, see beginCard's dimBackdrop.)
 constexpr ImU32 kCardBg = IM_COL32(242, 242, 247, 252);     // light gray card
 constexpr ImU32 kTitleText = IM_COL32(96, 96, 112, 255);    // gray title
 constexpr ImU32 kBodyText = IM_COL32(70, 70, 88, 255);      // dark body text

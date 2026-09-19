@@ -2314,21 +2314,30 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     ImGui::PushStyleColor(ImGuiCol_FrameBgActive, IM_COL32(255, 255, 255, 255));
     ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(70, 70, 90, 255));
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, searchH * 0.5f);
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(20.0f * k, searchH * 0.28f));
+    // Frame padding doubles as "leave room for the magnifier": the text starts
+    // this far in, and the icon (assets/select/search.png) is drawn at the
+    // box's left end, *inside* the pill.
+    const float searchIconBox = searchH * 0.86f;
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(searchIconBox, searchH * 0.28f));
     ImGui::PushFont(body, 19.0f * k);
-    ImGui::SetNextItemWidth(searchW - searchH);
+    // Full width: the icon lives inside the field, so the field has to be the
+    // whole pill. (It used to be shortened by searchH and the magnifier drawn
+    // past its right edge, which left it hanging outside the box.)
+    ImGui::SetNextItemWidth(searchW);
     ImGui::InputTextWithHint("##search", "根据歌曲名·作者名查找", searchBuf, sizeof(searchBuf));
     ImGui::PopFont();
     ImGui::PopStyleVar(2);
     ImGui::PopStyleColor(4);
-    // Magnifier icon at the right end of the box.
     {
-        const float mx = listX + searchW - searchH * 0.55f;
-        const float my = listTop + searchH * 0.5f;
-        const float mr = 8.0f * k;
-        dl->AddCircle(ImVec2(mx, my), mr, IM_COL32(120, 120, 140, 255), 24, 2.0f * k);
-        dl->AddLine(ImVec2(mx + mr * 0.75f, my + mr * 0.75f), ImVec2(mx + mr * 1.5f, my + mr * 1.5f),
-            IM_COL32(120, 120, 140, 255), 2.0f * k);
+        const GLuint searchIcon = selectTex(renderer, "search");
+        if (searchIcon != 0) {
+            const float iconSize = searchH * 0.44f;
+            const ImVec2 c(listX + searchIconBox * 0.5f + 2.0f * k, listTop + searchH * 0.5f);
+            dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(searchIcon)),
+                ImVec2(c.x - iconSize * 0.5f, c.y - iconSize * 0.5f),
+                ImVec2(c.x + iconSize * 0.5f, c.y + iconSize * 0.5f), ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f),
+                IM_COL32(255, 255, 255, searchBuf[0] == '\0' ? 150 : 210));
+        }
     }
 
     // Sort / grouping selectors, to the right of the search box (the official
@@ -2407,23 +2416,20 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         // already says 刷新 with F5 documented in the empty-state hint.
         (void)hovered;
 
-        // Circular arrow, drawn by hand so no icon asset is needed: an open
-        // ring plus a solid head at its end.
-        const ImVec2 c(btnX + 24.0f * k, headerRowY + rowH * 0.5f);
-        const float radius = 8.0f * k;
-        dl->PathArcTo(c, radius, 0.45f, 5.10f, 28);
-        dl->PathStroke(fg, 0, 2.0f * k);
-        const float headAngle = 5.10f;
-        const ImVec2 tip(c.x + std::cos(headAngle) * (radius + 3.5f * k),
-            c.y + std::sin(headAngle) * (radius + 3.5f * k));
-        const ImVec2 base(c.x + std::cos(headAngle) * (radius - 3.0f * k),
-            c.y + std::sin(headAngle) * (radius - 3.0f * k));
-        const ImVec2 wingA(base.x + std::cos(headAngle + 2.3f) * 5.0f * k,
-            base.y + std::sin(headAngle + 2.3f) * 5.0f * k);
-        const ImVec2 wingB(base.x + std::cos(headAngle - 2.3f) * 5.0f * k,
-            base.y + std::sin(headAngle - 2.3f) * 5.0f * k);
-        dl->AddTriangleFilled(tip, wingA, wingB, fg);
-        addTextLeft(dl, body, 17.0f * k, ImVec2(c.x + 16.0f * k, c.y), fg, "刷新");
+        // Official icon (assets/select/refresh.png - a white circular arrow, so
+        // it needs no tint). Falls back to nothing if the file is missing; the
+        // label still says what the button does.
+        const ImVec2 c(btnX + 26.0f * k, headerRowY + rowH * 0.5f);
+        const GLuint refreshIcon = selectTex(renderer, "refresh");
+        if (refreshIcon != 0) {
+            const float iconSize = 20.0f * k;
+            const int iconAlpha = hovered ? 255 : 232; // the icon is already white
+            dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(refreshIcon)),
+                ImVec2(c.x - iconSize * 0.5f, c.y - iconSize * 0.5f),
+                ImVec2(c.x + iconSize * 0.5f, c.y + iconSize * 0.5f), ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f),
+                IM_COL32(255, 255, 255, iconAlpha));
+        }
+        addTextLeft(dl, body, 17.0f * k, ImVec2(c.x + 18.0f * k, c.y), fg, "刷新");
     }
     ImGui::EndDisabled();
 

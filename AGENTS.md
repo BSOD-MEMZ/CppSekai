@@ -179,6 +179,11 @@ main.cpp          # SDL2 窗口、事件循环、输入映射、ImGui HUD、截�
 - `.workbuddy/tools/winsend.c` → `build/winsend.exe`：按窗口标题找窗口再送假输入，
   无交互会话下驱动 UI（动作：`click x y` / `move x y` / `key <vk>` / `focus` /
   `place x y` / `rect`；见「平台 / 输入相关的坑」）。
+- `.workbuddy/tools/asset_audit.py` → **素材清点**：把各 loader 里点名的路径当成清单，
+  列出 assets/ 里游戏永远不会读的文件（`--list` 打全表，`--paths` 只打路径给脚本用）。
+  配套 `.workbuddy/tools/asset_prune_verify.sh`：在 build/_prune/ 造一份副本、按清单删干净，
+  再跑选曲/演奏/结算/暂停四个模式检查日志有没有加载失败（**不碰仓库里的 assets/**）。
+  2026-09-19 的结论：461 个 / 19.8 MB 是死重量，删完四个模式零加载失败、演奏画面逐像素 0 差异。
 - `.workbuddy/tools/mp_verify.sh` → 多人游玩的端到端回归：开两个窗口（`--party-auto`），
   断言同一 `start counter`、BGM 只在主机、时钟偏差、实时分数过进程、房主暂停后成员画面钉住、
   **打到结算画面（两边同一 chart time）并回到选曲、房间重新武装**。
@@ -372,6 +377,13 @@ bash build.sh          # 仅需 Git Bash；产物 build/cppsekai.exe + SDL2.dll 
   按钮底下（按钮后提交，把点击全吃掉）。这个 child 的末尾**必须补一句 `ImGui::Dummy`**——
   `ui::checkBox()` 最后一条是裸的 `SetCursorScreenPos`，child 作为当帧最后一个窗口时
   `EndChild()` 会弹 "SetCursorPos ... to extend window/parent boundaries" 断言。
+- **选曲界面两个图标来自 `assets/select/`**（`selectTex()`：静态缓存 + 缺文件静默跳过）：
+  `search.png` 画在搜索框**里面**的左侧（深色十字圆环，按框高 0.44 缩放）——InputText 的
+  `FramePadding.x` 就是「给图标留出的位置」，输入框宽度是整条胶囊；旧写法把框缩短、
+  图标画在框外，看起来是"图标浮在框右边"。`refresh.png` 是白色圆形箭头，替掉了手绘的弧+三角。
+- **弹窗不再有半透明黑遮罩**（2026-09-19）：`beginCard` 不画 backdrop 了（`kBackdrop` 删掉），
+  `dimBackdrop` 现在只表示"窗口铺满全屏"= 模态：挡住底下一切点击。设置卡片是非模态，
+  窗口只包住卡片本身，所以演奏时 HUD/轨道照样可点。
 - 系统页签两项：`autoPauseOnBlur`（失焦自动暂停，关掉 = 切出去歌继续跑）、`reportSmtc`
   （是否汇报 SMTC）。关 SMTC 走 `systemMedia.setReporting(false)`，把媒体会话整个摘掉
   （`put_PlaybackStatus(Stopped)` + `put_IsEnabled(0)`），**不是**只停推送——否则系统浮层

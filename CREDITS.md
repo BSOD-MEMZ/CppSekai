@@ -86,7 +86,7 @@ CppSekai (AGPL-3.0-only)  ← 本仓库        加平台层、判定引擎、UI�
 | `assets/mmw/overlay/**` + `overlay_opt/**` | 566 | HUD 全套精灵：分数 `score/**`、连击 `combo/**`、血量条 `life/**`、背景层 `bggen/**`、判定音效提示等 | **是** |
 | `assets/mmw/effects/**` | 75 | 音符特效图集（`effect.png` 等，含判定光效） | **是** |
 | `assets/mmw/*.png`（顶层 13 个） | 13 | `notes*.png`（音符）、`longNoteLine*.png`（长条）、`touchLine*.png`（触摸线）、`stage.png`、`background_overlay.png`、`default.png` | **是** |
-| `assets/select/**` | 11 | 选曲界面：`indicate_back_new.png`、`img_smartphone.png`、`musicsetting.png`、`refresh.png`、`shufflebutton.png`、`skip.png`、clear/FC 指示灯等 | **是** |
+| `assets/select/**` | 12 | 选曲界面：`indicate_back_new.png`、`img_smartphone.png`、`musicsetting.png`、`refresh.png`、`search.png`（搜索框内的放大镜）、`shufflebutton.png`、`skip.png`、clear/FC 指示灯等 | **是** |
 | `assets/fx/**` | 4 | 打击特效：`tap_ring.png`、`tap_tri_0..2.png` | **是** |
 | `assets/mmw/ui/close.png` | 1 | 关闭按钮 | **是** |
 | `Drafts/**` | 64 | 素材暂存区：`icon/profile_icon_0001..0042.png`（官方头像）、`friend_invitation_campaign_*`（官方活动图）、clear/FC 指示灯草稿等 | **是** |

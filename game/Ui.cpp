@@ -266,10 +266,9 @@ bool beginCard(const char* id, ImVec2* center, ImVec2* size, bool showClose, boo
     gOpenCard = &st;
 
     if (st.t <= 0.0f && !open) {
-        // Fully closed: draw the (invisible) backdrop only and report done.
-        if (dimBackdrop && k > 0.0f) {
-            dl->AddRectFilled(ImVec2(0.0f, 0.0f), ImGui::GetIO().DisplaySize, withAlpha(kBackdrop, k));
-        }
+        // Fully closed: nothing left to draw (see the note above - a modal card
+        // has no film), so just report done. The window stays up for this one
+        // frame, which is harmless: the caller stops calling on the next one.
         ImGui::Dummy(ImVec2(1.0f, 1.0f)); // keep ImGui happy: submit an item
         st.vtxBase = -1;
         st.targetList = nullptr;
@@ -288,9 +287,15 @@ bool beginCard(const char* id, ImVec2* center, ImVec2* size, bool showClose, boo
     // do it (the title, the buttons, the checkbox, ...) used to sit at full
     // opacity on a half-transparent card, which is exactly the "the card fades
     // in but its contents pop" bug.
-    if (dimBackdrop) {
-        dl->AddRectFilled(ImVec2(0.0f, 0.0f), ImGui::GetIO().DisplaySize, kBackdrop);
-    }
+    //
+    // `dimBackdrop` no longer *dims* anything (2026-09-19): a modal dialog shows
+    // its card and nothing else - no dark film over the frozen playfield. What
+    // the flag still does is keep the fullscreen window, which is what makes the
+    // dialog modal: the window covers every item underneath, so a click on the
+    // lane / list behind it cannot land. (A non-modal card sizes its window to
+    // itself instead - see below - which is how the settings card leaves the
+    // playfield clickable.)
+    (void)dimBackdrop;
     // Card + a faint drop shadow like the real dialog.
     dl->AddRectFilled(ImVec2(lo.x + 6.0f * s, lo.y + 10.0f * s), ImVec2(hi.x + 6.0f * s, hi.y + 10.0f * s),
         IM_COL32(40, 40, 60, 40), kCardRadius * s);
