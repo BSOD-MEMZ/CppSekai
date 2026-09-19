@@ -1,0 +1,9 @@
+{
+  "active": "default",
+  "users": [
+    {
+      "id": "default",
+      "name": "默认用户"
+    }
+  ]
+}
