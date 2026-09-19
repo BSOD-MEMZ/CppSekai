@@ -57,6 +57,7 @@ void JudgementEngine::load(const float* packed, int count)
     mActiveHolds.clear();
     mMissedHoldKeys.clear();
     mHitEventIndices.clear();
+    mTailClaimed.assign(mNotes.size(), 0);
     mStats = JudgementStats{};
     // Loading a chart wipes the stats just like reset() does, so the configured
     // starting life has to be seeded here too - this is the one that runs last
@@ -237,6 +238,7 @@ void JudgementEngine::reset()
     mActiveHolds.clear();
     mMissedHoldKeys.clear();
     mHitEventIndices.clear();
+    mTailClaimed.assign(mNotes.size(), 0);
     mStats = JudgementStats{};
     // Settings > 判定 > 初始血量: a smaller pool makes the clear harder (the bar is
     // normalised against the pool, so the run always starts at a full bar).
@@ -568,13 +570,18 @@ void JudgementEngine::update(float songTimeSec)
         }
 
         if (note.holdTail) {
-            // A tail is resolved by its hold (release at the end). Only when
-            // it is still pending well after its time the hold never started
-            // at all - then it is a plain miss. This also guarantees the
-            // cursor keeps moving even if a hold is dropped.
+            // A tail is scored through its hold: releasing at the end is graded
+            // by how early the finger came off, holding through is a PERFECT,
+            // and the lane is never pressed *for the tail itself*. So if it is
+            // still pending long after its time, either the hold never started
+            // (and its start note's own MISS already paid for the whole thing)
+            // or no hold ever claimed this event. Judging it as a second MISS
+            // here is what an autoplay run scored ~20 misses on - sliding long
+            // notes whose tail event sits in a different lane than the hold
+            // started in, and a human player saw the same as pointless combo
+            // breaks. Consume it silently and let the cursor move past it.
             if (note.timeSec < songTimeSec - missSec) {
                 note.state = 2;
-                registerMiss(songTimeSec, kLifeMiss);
             }
             continue;
         }
@@ -827,6 +834,14 @@ void JudgementEngine::update(float songTimeSec)
                 continue;
             }
             if (candidate.holdTail) {
+                // A tail another hold has already taken is off the table. Two
+                // long notes can end on the very same tick, and their tails sit
+                // in the lanes the holds *end* in - a sliding long note does not
+                // end where it started - so "closest to the start lane" alone
+                // picks the same note twice and leaves the other one orphaned.
+                if (mTailClaimed[j] != 0) {
+                    continue;
+                }
                 const float distance = std::fabs(candidate.center - marker.center);
                 if (distance < tailDistance) {
                     tailDistance = distance;
@@ -843,6 +858,14 @@ void JudgementEngine::update(float songTimeSec)
         }
         hold.tailIndex = tail != mNotes.size() ? tail
             : (exactTail != mNotes.size() ? exactTail : overlappingTail);
+        if (hold.tailIndex < mNotes.size()) {
+            // Claim it, so the next hold looking at this tick cannot take the
+            // same note. Without this the leftover tail stayed pending until the
+            // auto-miss path below swallowed it: an autoplay run scored ~22
+            // misses on a chart full of sliding long notes, and a human player
+            // saw the same thing as random combo breaks.
+            mTailClaimed[hold.tailIndex] = 1;
+        }
 
         const bool startMissed = hold.startIndex < mNotes.size() && mNotes[hold.startIndex].state == 2;
         if (startMissed) {

@@ -289,6 +289,13 @@ class JudgementEngine
     };
 
     std::vector<HitNote> mNotes;
+    // One flag per note: 1 once a hold has taken this note as its tail.
+    // Needed because a *sliding* long note emits its tail event in the lane it
+    // ends in, not the one it starts in, so picking "the tail closest to the
+    // hold's start lane" made two holds that end on the same tick claim the
+    // same tail - and the other tail then sat pending until the auto-miss
+    // swallowed it. Each tail may only be claimed once.
+    std::vector<std::uint8_t> mTailClaimed;
     std::vector<ActiveHold> mActiveHolds;
     std::vector<float> mHoldLanes;
     std::vector<float> mMissedHoldKeys;

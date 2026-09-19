@@ -28,6 +28,7 @@
 #include <shlobj.h>
 
 #include "nlohmann/json.hpp"
+#include "romaji_search.hpp"
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
@@ -1271,10 +1272,15 @@ namespace
         if (std::to_string(song.id).find(filter) != std::string::npos) {
             return true;
         }
-        if (song.title.find(filter) != std::string::npos) {
+        if (song.title.find(filter) != std::string::npos
+            || song.kana.find(filter) != std::string::npos) {
             return true;
         }
-        return song.kana.find(filter) != std::string::npos;
+        // Romaji fallback, for a player with no Japanese IME: "gurume" finds
+        // 「いますぐ輪廻」. The official reading is all kana, so folding the
+        // query to kana is enough - see romaji_search.hpp.
+        const std::string kana = romaji::toKana(filter);
+        return !kana.empty() && kana != filter && song.kana.find(kana) != std::string::npos;
     }
 
     // Fills the list from gSongs, keeping the current search filter and the
@@ -1347,7 +1353,14 @@ namespace
             int cmp = 0;
             switch (gSortColumn) {
                 case kColTitle:
-                    cmp = lhs.title.compare(rhs.title);
+                    // Sort by the official reading, not by the title's UTF-8
+                    // bytes. A byte order puts kanji in Unicode codepoint order,
+                    // which is neither pinyin nor romaji and reads as random; the
+                    // reading is all kana, so this becomes a proper 五十音 sort
+                    // (hiragana is laid out in that order in Unicode). Titles
+                    // with no reading fall back to themselves.
+                    cmp = (lhs.kana.empty() ? lhs.title : lhs.kana)
+                              .compare(rhs.kana.empty() ? rhs.title : rhs.kana);
                     break;
                 case kColKana:
                     cmp = lhs.kana.compare(rhs.kana);
@@ -2697,9 +2710,10 @@ int main(int argc, char** argv)
             const std::string line = id4(song.id) + "  " + song.title + "  [" + song.kana + "]  "
                 + std::to_string(song.levels[3]) + "/" + std::to_string(song.levels[4]) + "  "
                 + std::to_string(song.vocals.size()) + " versions";
-            if (listFilter.empty()
-                || line.find(listFilter) != std::string::npos
-                || std::to_string(song.id) == listFilter) {
+            // matchesFilter() instead of a raw substring of the printed line:
+            // it also folds a romaji query to kana, so "imasugurinne" finds
+            // 「いますぐ輪廻」 from a shell with no Japanese IME.
+            if (listFilter.empty() || matchesFilter(song, listFilter)) {
                 std::printf("%s\n", line.c_str());
             }
         }

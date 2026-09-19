@@ -34,6 +34,14 @@ game/Judgement.*  # 判定引擎（本项目新增，判定逻辑都在这）
                   # 提前松手才算断连 —— 具体窗口可调（`holdTailGraceMs` / `holdStartGraceMs`，
                   # 设置 → 判定 → 长条容错；默认 180 / 140，就是原来的硬编码常量）。
                   # holdTail 事件不走 findCandidate / 自动 miss。
+                  # **2026-09-19 修（真 bug，`--auto` 会 miss）**：① 一个尾判只能被**一条** hold
+                  # 认领（新成员 `mTailClaimed`）—— 原来 spawn 挑 tail 用「距 hold 起点 lane
+                  # 最近」，而**滑动长条的尾判在终点 lane**，两条长条同一 tick 结束时会**抢同一个**
+                  # tail，另一个永远 pending；② 没人认领的尾判改成**静默消费**（`state = 2`，
+                  # 不再 `registerMiss`）—— 它本来就由 hold 结算，起点没抓住时起点的 MISS 已经算过
+                  # 整条，再判一次等于重复扣分。修前 `--auto` 跑「いますぐ輪廻」MASTER 是
+                  # miss=22 / maxCombo=140，修后 **miss=0 / maxCombo=890**。
+                  # 前提：**别假设 hold 的起点和尾判同 lane**。
                   # 判定窗口全部走 `JudgementWindows`：perfect/great/good 之外还有 badMs
                   # （迟按还能算 BAD 的边界）和 missAfterMs（没人碰的音符自动 MISS 的时刻），
                   # 设置 → 判定 里两个都能量；勾上「Bad 与 Miss 同步」时 missAfterMs = badMs

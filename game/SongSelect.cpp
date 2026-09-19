@@ -8,6 +8,7 @@
 // UTF-8 <-> fs::path: the narrow side of fs::path is the ANSI code page and
 // throws on a file name it cannot represent (that aborted the chart scan).
 #include "path_utf8.hpp"
+#include "romaji_search.hpp"
 
 #include "imgui.h"
 
@@ -2565,10 +2566,20 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         }
     } else {
         const std::string needle = toLower(searchBuf);
+        // A query typed without a Japanese IME ("gurume") is folded to kana and
+        // matched against the official reading, which is what the grouping and
+        // the name sort already use - see romaji_search.hpp. `useKana` keeps
+        // that from double-matching a query that is already kana or kanji.
+        const std::string kanaNeedle = romaji::toKana(needle);
+        const bool useKana = !kanaNeedle.empty() && kanaNeedle != needle;
         for (int gi = 0; gi < static_cast<int>(groups.size()); ++gi) {
             const SongGroup& g = groups[static_cast<size_t>(gi)];
             if (toLower(g.title).find(needle) != std::string::npos
                 || toLower(g.artist).find(needle) != std::string::npos) {
+                visible.push_back(gi);
+                continue;
+            }
+            if (useKana && g.kana.find(kanaNeedle) != std::string::npos) {
                 visible.push_back(gi);
             }
         }
