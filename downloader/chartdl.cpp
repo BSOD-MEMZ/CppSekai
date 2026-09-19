@@ -1054,6 +1054,8 @@ void printUsage()
         "                                          the system DPI)\n"
         "              [--open-settings]         also open the settings window\n"
         "                                          (headless layout check)\n"
+        "              [--select <row>]          select a song row first (headless\n"
+        "                                          check for the right-hand panel)\n"
         "\n"
         "Source: assets.unipjsk.com for the Japanese songs; the CN-only ones\n"
         "        (id 11001+, e.g. Hype Dive) come from the sekai-cn-assets bucket\n"
@@ -1122,6 +1124,9 @@ namespace
     constexpr int kIdTrayIcon = 1016;
     constexpr int kIdAliasGroup = 1017;
     constexpr int kIdAliasList = 1018;
+    // The scroll container inside the 下载内容 group box (see
+    // layoutDetailRows). 1019 leaves a gap for future controls.
+    constexpr int kIdDetailBody = 1019;
     constexpr int kIdDiffBase = 1100;  // 1100..1104 = EASY..MASTER
     constexpr int kIdVocalBase = 1120; // 1120.. = one per vocal version
 
@@ -1183,6 +1188,32 @@ namespace
     int gDragSplitter = 0; // 0 = none, 1 = list/detail, 2 = top/bottom, 3 = detail/alias
     int gDragOrigin = 0;
     int gDragStart = 0;
+
+    // Tallest 下载内容 content the window can give the panel, and what the
+    // current song actually needs. Both in real pixels; -1 = not measured yet.
+    //
+    // The panel is a group box that stacks a variable number of checkboxes (5
+    // difficulties + however many vocal versions the song has + 2 extras), and
+    // a song with six vocal versions needs ~375px. Those rows used to be
+    // children of the main window and simply ran off the bottom of the panel
+    // and painted on top of the alias panel underneath it.
+    //
+    // gDetailMaxHeight is the cap layoutChildren() computes from the current
+    // split; gDetailWantedHeight is what the rows measured. When the latter is
+    // larger the panel has grown as far as it may and the body scrolls instead.
+    int gDetailMaxHeight = -1;
+    int gDetailWantedHeight = -1;
+    int gDetailScroll = 0;
+    // The "（没有演唱版本数据）" placeholder, destroyed with the rest on the next
+    // selection - it is rebuilt by layoutDetailRows, not cached up front.
+    HWND gDetailEmptyNote = nullptr;
+    // The 下载内容 group box, kept so its wheel messages can be forwarded to the
+    // main window (see detailGroupProc). gDetailBody is the scroll container
+    // inside it that actually clips the scrolling rows.
+    HWND gDetailGroup = nullptr;
+    HWND gDetailBody = nullptr;
+    WNDPROC gDetailGroupOldProc = nullptr;
+    WNDPROC gDetailBodyOldProc = nullptr;
 
     DlSettings gDlSettings;
     HWND gSettingsWindow = nullptr;
@@ -1536,6 +1567,12 @@ namespace
     }
 
     void updateDetailPanel(int songIndex);
+    void layoutDetailRows(int songIndex, int scrollPx);
+    bool detailScrollable();
+    int detailBodySpace();
+    int detailFooterHeight();
+    int detailMaxScroll();
+    bool scrollDetail(int delta);
 
     // -----------------------------------------------------------------------
     // Local (already downloaded) state
@@ -1697,13 +1734,41 @@ namespace
         // The right panel is split in two: 下载内容 on top, 别名 below, with the
         // same draggable bar the other two seams use. -1 on the first layout
         // means "give the detail panel 55%"; after that the user's drag wins.
+        //
+        // 别名 is the flexible side: it is a flat list of aliases that scrolls
+        // on its own, so shrinking it costs nothing. 下载内容 is not - its rows
+        // are real controls stacked top-down, and a song with six vocal
+        // versions needs ~375px while the tallest (13 versions) needs ~545px.
+        // The panel therefore grows to fit its content down to aliasFloor,
+        // which is the *single* floor the cap and the clamp below both use.
+        // (Two different floors meant the tighter clamp won and cut the cap
+        // short, so the panel could never reach it.)
+        //
+        // The floor is deliberately small: the download content is the point of
+        // this window, so the alias list yields to it. 72px still fits the
+        // group box's title, its list border and two rows, and the list scrolls
+        // for the rest - which is enough for it to stay usable while the panel
+        // above fits a six-version song (the common worst case) without
+        // scrolling. A taller floor would push that case into the scroll path.
+        const int aliasFloor = dp(72);
         const int detailMin = dp(120);
-        const int aliasMin = dp(110);
+        const int detailCap = std::max(detailMin, topHeight - band - aliasFloor);
+        // What the current song needs, measured by updateDetailPanel(); -1
+        // before the first selection, which is the same as "no opinion".
+        const int detailNeed = gDetailWantedHeight;
         if (gDetailHeight < 0) {
             gDetailHeight = std::max(detailMin, topHeight * 55 / 100);
         }
-        gDetailHeight = std::clamp(gDetailHeight, detailMin,
-            std::max(detailMin, topHeight - band - aliasMin));
+        if (detailNeed > 0) {
+            // Never grow past what leaves 别名 its floor.
+            gDetailHeight = std::max(gDetailHeight, std::min(detailNeed, detailCap));
+        }
+        gDetailHeight = std::clamp(gDetailHeight, detailMin, detailCap);
+        // Publish the cap so updateDetailPanel() knows whether the rows fit or
+        // have to scroll, and can skip re-laying out entirely when they do.
+        // gDetailHeight is the *group box* height; its usable client area is a
+        // border thinner, and the rows are measured in that space.
+        gDetailMaxHeight = detailCap;
         const int aliasY = topY + gDetailHeight + band;
         const int aliasH = std::max(dp(40), topHeight - gDetailHeight - band);
 
@@ -1741,10 +1806,13 @@ namespace
         SetWindowPos(gLogList, nullptr, margin, progressY + dp(46), width - margin * 2,
             std::max(dp(24), height - progressY - dp(56)), SWP_NOZORDER);
 
-        SetWindowPos(gDetailTitle, nullptr, panelX + dp(14), topY + dp(24), panelW - dp(28), dp(18),
-            SWP_NOZORDER);
-        if (gDetailSong >= 0) {
-            updateDetailPanel(gDetailSong);
+        // The rows live inside the group box, so they are positioned in its
+        // client space - by layoutDetailRows, not here. Re-running it is what
+        // makes a splitter drag re-fit them (and re-clamp the scroll offset,
+        // since a taller panel may no longer need to scroll at all).
+        if (gDetailSong >= 0 || gDetailWantedHeight > 0) {
+            gDetailScroll = std::min(gDetailScroll, detailMaxScroll());
+            layoutDetailRows(gDetailSong, gDetailScroll);
         }
     }
 
@@ -1952,6 +2020,35 @@ namespace
     }
 
     void updateDetailPanel(int songIndex);
+    void layoutDetailRows(int songIndex, int scrollPx);
+    bool detailScrollable();
+    int detailBodySpace();
+    int detailFooterHeight();
+    int detailMaxScroll();
+    bool scrollDetail(int delta);
+
+    // A group box is a plain static control: it does not handle WM_MOUSEWHEEL,
+    // and the rows inside the panel are its children (of this box, or of the
+    // body container inside it), so a wheel over the 下载内容 panel lands here
+    // rather than on the main window. Forwarding it into the scroll helper is
+    // what makes the panel scrollable with the wheel. Installed on both the box
+    // and the body because the pointer is usually over a row, whose parent is
+    // the body.
+    LRESULT CALLBACK detailGroupProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
+    {
+        if (message == WM_MOUSEWHEEL && detailScrollable()) {
+            const int delta = GET_WHEEL_DELTA_WPARAM(wParam);
+            if (scrollDetail(delta > 0 ? -dp(48) : dp(48))) {
+                // Windows the rows were laid out in - the box owns the pinned
+                // footer, the body the scrolling rows.
+                InvalidateRect(gDetailGroup, nullptr, FALSE);
+                InvalidateRect(gDetailBody, nullptr, FALSE);
+            }
+            return 0;
+        }
+        WNDPROC old = hwnd == gDetailBody ? gDetailBodyOldProc : gDetailGroupOldProc;
+        return CallWindowProcW(old, hwnd, message, wParam, lParam);
+    }
 
     LRESULT CALLBACK windowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
     {
@@ -1996,15 +2093,52 @@ namespace
                 }
                 updateHeaderSortMarks();
 
-                create(L"BUTTON", L"下载内容", BS_GROUPBOX, kIdDetailGroup);
-                gDetailTitle = create(L"STATIC", L"（在左边选一首歌）", SS_LEFT, kIdDetailTitle);
+                // 下载内容 layout: the group box holds the title and the two
+                // pinned footer boxes, while all the scrolling rows go into
+                // gDetailBody - a plain child window that clips them on every
+                // side. A group box alone does not (see layoutDetailRows).
+                gDetailGroup = create(L"BUTTON", L"下载内容", BS_GROUPBOX, kIdDetailGroup);
+                // Wheel over the panel's rows must reach the scroll helper, and
+                // a static does not forward it (see detailGroupProc).
+                gDetailGroupOldProc = reinterpret_cast<WNDPROC>(
+                    SetWindowLongPtrW(gDetailGroup, GWLP_WNDPROC,
+                        reinterpret_cast<LONG_PTR>(detailGroupProc)));
+                gDetailBody = CreateWindowExW(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE,
+                    0, 0, 10, 10, gDetailGroup,
+                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdDetailBody)), nullptr, nullptr);
+                SendMessageW(gDetailBody, WM_SETFONT, reinterpret_cast<WPARAM>(gFont), TRUE);
+                gDetailBodyOldProc = reinterpret_cast<WNDPROC>(
+                    SetWindowLongPtrW(gDetailBody, GWLP_WNDPROC,
+                        reinterpret_cast<LONG_PTR>(detailGroupProc)));
+                const HWND detailBody = gDetailBody;
+                const auto createInGroup = [&](const wchar_t* cls, const wchar_t* text, DWORD style,
+                                               int id) {
+                    HWND control = CreateWindowExW(0, cls, text,
+                        WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | style, 0, 0, 10, 10, detailBody,
+                        reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), nullptr, nullptr);
+                    SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(gFont), TRUE);
+                    return control;
+                };
+                gDetailTitle = createInGroup(L"STATIC", L"（在左边选一首歌）", SS_LEFT, kIdDetailTitle);
                 for (int d = 0; d < 5; ++d) {
-                    gDiffChecks[d] =
-                        create(L"BUTTON", widen(kDiffNames[d]).c_str(), BS_AUTOCHECKBOX, kIdDiffBase + d);
+                    gDiffChecks[d] = createInGroup(L"BUTTON", widen(kDiffNames[d]).c_str(),
+                        BS_AUTOCHECKBOX, kIdDiffBase + d);
                     SendMessageW(gDiffChecks[d], BM_SETCHECK, BST_CHECKED, 0);
                 }
-                gJacketCheck = create(L"BUTTON", L"曲绘", BS_AUTOCHECKBOX, kIdJacket);
-                gSidecarCheck = create(L"BUTTON", L"元数据 (sidecar json)", BS_AUTOCHECKBOX, kIdSidecar);
+                // 曲绘 / 元数据 are pinned to the panel's bottom edge, so they
+                // are children of the group box rather than of the scroll
+                // container - a fixed row cannot be scrolled out of view.
+                const auto createInBox = [&](const wchar_t* cls, const wchar_t* text, DWORD style,
+                                             int id) {
+                    HWND control = CreateWindowExW(0, cls, text,
+                        WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | style, 0, 0, 10, 10, gDetailGroup,
+                        reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), nullptr, nullptr);
+                    SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(gFont), TRUE);
+                    return control;
+                };
+                gJacketCheck = createInBox(L"BUTTON", L"曲绘", BS_AUTOCHECKBOX, kIdJacket);
+                gSidecarCheck = createInBox(L"BUTTON", L"元数据 (sidecar json)", BS_AUTOCHECKBOX,
+                    kIdSidecar);
                 SendMessageW(gJacketCheck, BM_SETCHECK, BST_CHECKED, 0);
                 SendMessageW(gSidecarCheck, BM_SETCHECK, BST_CHECKED, 0);
 
@@ -2533,8 +2667,69 @@ namespace
         return DefWindowProcW(hwnd, message, wParam, lParam);
     }
 
+    // Height the row stack needs for the current song, and the height the panel
+    // actually has, both in real pixels with the scroll taken out. The gap
+    // between them is the scroll range - but only the *body* scrolls (the pinned
+    // footer never moves), so the range is measured against the body region.
+    bool detailScrollable()
+    {
+        return gDetailWantedHeight > 0 && gDetailHeight > 1
+            && gDetailWantedHeight > gDetailHeight;
+    }
+
+    // Vertical space the scrolling body has: the panel minus the pinned footer
+    // (two rows + clearance) and the offset the container starts at. Mirrors
+    // layoutDetailRows().
+    int detailBodySpace()
+    {
+        return std::max(dp(24), gDetailHeight - detailFooterHeight() - dp(42));
+    }
+
+    // Two pinned rows plus the clearance kept from the group box's bottom
+    // border. Must match layoutDetailRows().
+    int detailFooterHeight()
+    {
+        return dp(24) * 2 + dp(10);
+    }
+
+    int detailMaxScroll()
+    {
+        if (!detailScrollable()) {
+            return 0;
+        }
+        // The body block's unscrolled height is `wanted - footer - bodyTop`, so
+        // the excess over the container is exactly that minus the space it has.
+        const int bodyNeed = std::max(0, gDetailWantedHeight - detailFooterHeight() - dp(42));
+        return std::max(0, bodyNeed - detailBodySpace());
+    }
+
+    // Moves the panel by `delta` px and re-lays the rows out. Returns true when
+    // the offset actually changed (so the caller knows whether to repaint).
+    bool scrollDetail(int delta)
+    {
+        if (delta == 0) {
+            return false;
+        }
+        const int clamped = std::clamp(gDetailScroll + delta, 0, detailMaxScroll());
+        if (clamped == gDetailScroll) {
+            return false;
+        }
+        gDetailScroll = clamped;
+        layoutDetailRows(gDetailSong, gDetailScroll);
+        return true;
+    }
+
     // Right-hand panel: which difficulty / vocal version / extras to fetch for
     // the song currently selected in the list.
+    //
+    // The rows are real controls stacked top-down, so the panel's own height is
+    // a hard limit: a song with six vocal versions needs ~390px, and anything
+    // past the group box used to paint over the alias panel below. Two things
+    // keep that from happening now:
+    //   1. the content's height is measured first and (re)layouted with it, so
+    //      layoutChildren() can hand the panel the room it needs;
+    //   2. if even the cap is not enough, the rows scroll (WM_MOUSEWHEEL over
+    //      the panel) and the group box clips whatever falls outside it.
     void updateDetailPanel(int songIndex)
     {
         gDetailSong = songIndex;
@@ -2542,28 +2737,122 @@ namespace
             DestroyWindow(check);
         }
         gVocalChecks.clear();
+        if (gDetailEmptyNote != nullptr) {
+            DestroyWindow(gDetailEmptyNote);
+            gDetailEmptyNote = nullptr;
+        }
+        // A new song starts at the top, and forgets how tall the last one was:
+        // laying out for the old song's needs would have grown the panel for a
+        // song that no longer exists.
+        gDetailScroll = 0;
+        gDetailWantedHeight = -1;
         if (songIndex < 0 || songIndex >= static_cast<int>(gSongs.size())) {
             SetWindowTextW(gDetailTitle, L"（在左边选一首歌）");
+            layoutDetailRows(-1, 0);
             return;
         }
         const Song& song = gSongs[static_cast<std::size_t>(songIndex)];
         const std::wstring title = L"#" + std::to_wstring(song.id) + L"  " + widen(song.title);
         SetWindowTextW(gDetailTitle, title.c_str());
+        layoutDetailRows(songIndex, 0);
+        // The measured content may be taller than the panel currently is (it
+        // starts at 55% of the column). Redoing the split hands the panel the
+        // room, and layoutChildren() re-enters here - so the second pass sees
+        // the taller panel and finds nothing left to grow into.
+        //
+        // Compared against gDetailHeight, not against the cap: a need that fits
+        // under the cap but not under the current height still has to be
+        // applied, and guarding on the cap alone left the panel at 55% with the
+        // rows clipped inside it.
+        if (gDetailWantedHeight > gDetailHeight) {
+            RECT client{};
+            GetClientRect(GetParent(gList), &client);
+            layoutChildren(GetParent(gList), client.right, client.bottom);
+        }
+    }
 
+    // Lays the detail rows out for one song at a given scroll offset. Split out
+    // of updateDetailPanel() because the panel is re-scrolled (wheel) and
+    // re-laid-out (splitter drag, window resize) without the song changing.
+    //
+    // Layout is "pinned footer, scrolling body": 曲绘 and 元数据 are anchored to
+    // the bottom edge and never move, while the difficulty + vocal block above
+    // them scrolls inside a dedicated container window. Those two are the ones
+    // that decide what a download actually contains, so they must not be the
+    // rows that fall off the panel - and they are also always exactly two rows,
+    // which makes them a reliable anchor.
+    //
+    // The scrolling rows live in gDetailBody, a plain child of the group box,
+    // rather than directly in the group box. Neither a group box nor a static
+    // clips its children on all four sides, so a scrolled row would otherwise
+    // print itself over the toolbar above the panel; a window with no special
+    // handling beyond plain painting does clip, which is what makes a scroll
+    // container work.
+    void layoutDetailRows(int songIndex, int scrollPx)
+    {
+        const HWND parent = GetParent(gList);
+        const HWND group = gDetailGroup != nullptr ? gDetailGroup
+                                                   : GetDlgItem(parent, kIdDetailGroup);
+        if (group == nullptr) {
+            return;
+        }
         RECT panel{};
-        GetWindowRect(GetDlgItem(GetParent(gList), kIdDetailGroup), &panel);
-        MapWindowPoints(HWND_DESKTOP, GetParent(gList), reinterpret_cast<POINT*>(&panel), 2);
-        // `panel` is real pixels, the offsets are 96-DPI units.
-        const int contentWidth = panel.right - panel.left - dp(28);
-        const int baseX = panel.left + dp(14);
-        int y = panel.top + dp(40);
+        GetClientRect(group, &panel);
+        const int panelW = static_cast<int>(panel.right);
+        const int panelH = static_cast<int>(panel.bottom);
+        const int contentWidth = std::max(dp(40), panelW - dp(28));
+        const int baseX = dp(14);
         const int rowHeight = dp(24);
+        const int gap = dp(8);
+        // The pinned pair occupies the bottom two rows plus a little clearance
+        // from the group box border.
+        const int footerH = detailFooterHeight();
+        // The scroll container covers the body region only, so a row can never
+        // be visible outside it. It starts below the title row (which the group
+        // box owns, so it never scrolls) and ends above the pinned footer.
+        const int bodyTop = dp(42);
+        const int bodyH = std::max(dp(24), panelH - footerH - bodyTop);
+        const HWND body = gDetailBody;
+        if (body != nullptr) {
+            SetWindowPos(body, nullptr, 0, bodyTop, panelW, bodyH,
+                SWP_NOZORDER | SWP_NOACTIVATE);
+        }
+        // The scroll offset applies inside the container only, so y is relative
+        // to the container's own top - a small pad keeps the first row off the
+        // container edge, then the scroll is subtracted.
+        const int bodyPad = dp(4);
+        int y = bodyPad - scrollPx;
 
-        SetWindowPos(gDetailTitle, nullptr, baseX, panel.top + dp(18), contentWidth, dp(18), SWP_NOZORDER);
+        SetWindowPos(gDetailTitle, group, baseX, dp(18), contentWidth, dp(18), SWP_NOZORDER);
 
-        const SongFiles& files = static_cast<std::size_t>(songIndex) < gFiles.size()
+        const auto placeRow = [&](HWND control, int rowY) {
+            SetWindowPos(control, nullptr, baseX, rowY, contentWidth, rowHeight,
+                SWP_NOZORDER | SWP_NOACTIVATE);
+        };
+
+        // Pinned footer, positioned from the panel's bottom edge so it stays put
+        // no matter how tall the panel is or how far the body has scrolled.
+        const int sidecarY = panelH - dp(12) - rowHeight;
+        const int jacketY = sidecarY - rowHeight;
+
+        const SongFiles files = (songIndex >= 0 && static_cast<std::size_t>(songIndex) < gFiles.size())
             ? gFiles[static_cast<std::size_t>(songIndex)]
             : SongFiles{};
+        const bool validSong =
+            songIndex >= 0 && songIndex < static_cast<int>(gSongs.size());
+
+        if (!validSong) {
+            // Nothing selected: no rows at all, just the prompt in the title.
+            gDetailWantedHeight = bodyTop + rowHeight + footerH;
+            SetWindowTextW(gJacketCheck, L"曲绘");
+            EnableWindow(gJacketCheck, FALSE);
+            placeRow(gJacketCheck, jacketY);
+            SetWindowTextW(gSidecarCheck, L"元数据 (sidecar json)");
+            EnableWindow(gSidecarCheck, FALSE);
+            placeRow(gSidecarCheck, sidecarY);
+            return;
+        }
+        const Song& song = gSongs[static_cast<std::size_t>(songIndex)];
 
         for (int d = 0; d < 5; ++d) {
             const int level = song.levels[d];
@@ -2584,10 +2873,10 @@ namespace
             EnableWindow(gDiffChecks[d], (available && !onDisk) ? TRUE : FALSE);
             SendMessageW(gDiffChecks[d], BM_SETCHECK,
                 (available && !onDisk) ? BST_CHECKED : BST_UNCHECKED, 0);
-            SetWindowPos(gDiffChecks[d], nullptr, baseX, y, contentWidth, rowHeight, SWP_NOZORDER);
+            placeRow(gDiffChecks[d], y);
             y += rowHeight;
         }
-        y += dp(8);
+        y += gap;
         for (std::size_t v = 0; v < song.vocals.size(); ++v) {
             const VocalVersion& version = song.vocals[v];
             const bool onDisk = v < files.vocal.size() && files.vocal[v];
@@ -2599,8 +2888,9 @@ namespace
                 label += L"  ✓已下载";
             }
             HWND check = CreateWindowExW(0, L"BUTTON", label.c_str(),
-                WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, baseX, y, contentWidth, rowHeight,
-                GetParent(gList), reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdVocalBase + v)), nullptr, nullptr);
+                WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | WS_CLIPSIBLINGS, baseX, y, contentWidth,
+                rowHeight, body, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdVocalBase + v)),
+                nullptr, nullptr);
             SendMessageW(check, WM_SETFONT, reinterpret_cast<WPARAM>(gFont), TRUE);
             SendMessageW(check, BM_SETCHECK, onDisk ? BST_UNCHECKED : BST_CHECKED, 0);
             EnableWindow(check, onDisk ? FALSE : TRUE);
@@ -2608,22 +2898,36 @@ namespace
             y += rowHeight;
         }
         if (song.vocals.empty()) {
-            HWND none = CreateWindowExW(0, L"STATIC", L"（没有演唱版本数据）", WS_CHILD | WS_VISIBLE,
-                baseX, y, contentWidth, rowHeight, GetParent(gList), nullptr, nullptr, nullptr);
+            HWND none = CreateWindowExW(0, L"STATIC", L"（没有演唱版本数据）",
+                WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS, baseX, y, contentWidth, rowHeight, body,
+                nullptr, nullptr, nullptr);
             SendMessageW(none, WM_SETFONT, reinterpret_cast<WPARAM>(gFont), TRUE);
+            gDetailEmptyNote = none;
             y += rowHeight;
         }
-        y += dp(8);
+        // The body block's own bottom, before the scroll offset is taken back
+        // out. What the panel must reserve for everything to fit unscrolled is
+        // this plus the pinned footer; it is reported unscrolled on purpose,
+        // because layoutChildren() sizes the panel from it and it must not
+        // depend on the current scroll offset (or scrolling would resize the
+        // panel under the user).
+        gDetailWantedHeight = (y + scrollPx) + footerH;
+        // Rows start right under the title, which lives in the group box, so the
+        // measured body is offset by however far down the container starts.
+        gDetailWantedHeight += bodyTop;
+
         SetWindowTextW(gJacketCheck, files.jacket ? L"曲绘  ✓已下载" : L"曲绘");
         EnableWindow(gJacketCheck, files.jacket ? FALSE : TRUE);
         SendMessageW(gJacketCheck, BM_SETCHECK, files.jacket ? BST_UNCHECKED : BST_CHECKED, 0);
-        SetWindowPos(gJacketCheck, nullptr, baseX, y, contentWidth, rowHeight, SWP_NOZORDER);
-        y += rowHeight;
+        placeRow(gJacketCheck, jacketY);
+
         SetWindowTextW(gSidecarCheck,
             files.sidecar ? L"元数据 (sidecar json)  ✓已下载" : L"元数据 (sidecar json)");
         EnableWindow(gSidecarCheck, files.sidecar ? FALSE : TRUE);
         SendMessageW(gSidecarCheck, BM_SETCHECK, files.sidecar ? BST_UNCHECKED : BST_CHECKED, 0);
-        SetWindowPos(gSidecarCheck, nullptr, baseX, y, contentWidth, rowHeight, SWP_NOZORDER);
+        placeRow(gSidecarCheck, sidecarY);
+        // (The wanted height was already published above the footer, where the
+        // unscrolled body bottom is still known.)
     }
 
     // --screenshot: grab the window with GDI (no screen capture, no input) so
@@ -2678,7 +2982,7 @@ namespace
     }
 
     int runGui(fs::path outDir, const std::string& screenshotPath, double screenshotTime,
-        bool openSettingsAtStart = false)
+        bool openSettingsAtStart = false, int selectRow = -1, int scrollNotches = 0)
     {
         gOutDir = outDir.native();
         loadDlSettings(gDlSettings);
@@ -2765,6 +3069,28 @@ namespace
         refreshDownloadedState();
         rebuildList("");
         note("[out] " + pathText(fs::path(gOutDir)));
+        // Headless check hook: select a row in the song table so the right-hand
+        // panel renders a real song (the empty state fits in any panel height,
+        // so it can never show an overflow).
+        if (selectRow >= 0 && selectRow < ListView_GetItemCount(gList)) {
+            ListView_SetItemState(gList, selectRow, LVIS_SELECTED | LVIS_FOCUSED,
+                LVIS_SELECTED | LVIS_FOCUSED);
+            ListView_EnsureVisible(gList, selectRow, FALSE);
+        }
+        // Headless check hook: drive the detail panel's scroll, which is
+        // otherwise only reachable by putting the wheel over the 下载内容 group
+        // box. Positive = down. Reported in the log so a check can assert the
+        // panel actually moved rather than trusting the PNG.
+        if (scrollNotches != 0 && detailScrollable()) {
+            const int before = gDetailScroll;
+            for (int i = 0; i < std::abs(scrollNotches); ++i) {
+                scrollDetail(scrollNotches > 0 ? dp(48) : -dp(48));
+            }
+            note("[detail] scroll " + std::to_string(before) + " -> "
+                + std::to_string(gDetailScroll) + " / max " + std::to_string(detailMaxScroll())
+                + " (wanted " + std::to_string(gDetailWantedHeight) + ", panel "
+                + std::to_string(gDetailHeight) + ")");
+        }
         if (openSettingsAtStart) {
             openSettingsWindow(hwnd);
         }
@@ -2824,6 +3150,8 @@ int main(int argc, char** argv)
     std::string screenshotPath;
     double screenshotTime = 1.0;
     bool openSettingsAtStart = false;
+    int selectRow = -1;
+    int scrollNotches = 0;
     bool force = false;
     bool wantJacket = true;
     bool wantSidecar = true;
@@ -2861,6 +3189,16 @@ int main(int argc, char** argv)
             std::string value;
             next(value);
             gDpiOverride = std::atoi(value.c_str());
+        } else if (arg == "--select") {
+            // Headless layout check: pick a row so the right panel has content.
+            std::string value;
+            next(value);
+            selectRow = std::atoi(value.c_str());
+        } else if (arg == "--scroll-detail") {
+            // Headless check: wheel notches to apply to the 下载内容 panel.
+            std::string value;
+            next(value);
+            scrollNotches = std::atoi(value.c_str());
         } else if (arg == "--screenshot-time") {
             std::string value;
             next(value);
@@ -2961,5 +3299,5 @@ int main(int argc, char** argv)
         return runJobQueue(error);
     }
 
-    return runGui(outDir, screenshotPath, screenshotTime, openSettingsAtStart);
+    return runGui(outDir, screenshotPath, screenshotTime, openSettingsAtStart, selectRow, scrollNotches);
 }
