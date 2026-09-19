@@ -206,15 +206,21 @@ main.cpp          # SDL2 窗口、事件循环、输入映射、ImGui HUD、截�
   `winmsg.exe SDL_app raw 0231 --pid <pid>` = 伪造 WM_ENTERSIZEMOVE，用来测拖动窗口那条暂停逻辑
   （见「拖动窗口 / 改窗口大小」一节）。**PostMessage 的消息同样会经过 SDL 的窗口过程**，
   所以消息钩子照样会被调用，能无头验证。
-- `.workbuddy/tools/gen_music_vocals.py` → `music-vocals.json`：从官方的 musicVocals +
-  gameCharacters 表生成演唱版本表（`asset` 就是 unipjsk 的音频目录名）。
-- `.workbuddy/tools/update_cn_music.py` → **国服曲库同步**：从 Sekai-World 的
-  `sekai-master-db-cn-diff` 拉国服表，把 id ≥ 10000 的独占曲追加进 `musics.json` /
-  `music-vocals.json`（`--check` 只报告差集，不写文件）。**读音得手工补**：国服表对这批
-  曲子把 `pronunciation` 填成了作曲者名（"Mitchie M"、"敌门"），直接抄进来排序会乱、
-  罗马音搜索也失效。中文标题填**拼音**（`game/SongSelect.cpp` 有一条原文比对，
-  输入 "yiyang" 能直接命中「一样」），日文/英文标题填**假名**（走罗马音路径）。
-  两个表都是单行紧凑 JSON，脚本只动收尾的 `]` / `}`，不整体重排。
+- `.workbuddy/tools/update_music_db.py` → **曲库总同步**（`musics.json` + `music-vocals.json`，
+  日服全量 + 国服独占曲）。曲库是**本地表**，不跑它就会永远停在抓表那天 —— 表一旧，新歌
+  既搜不到也下不了（GUI 列表和 `--download` 都要先从表里查到 `assetbundleName` 才能拼 URL）。
+  2026-09-19 实测：本地停在日服 id 804，当日日服已经到 811，缺 敗走 / ヘレディティ 两首，
+  而它们的资源在 unipjsk 上本来就是 200 —— 纯属表没跟上。**拉新歌就重跑它**，`--check` 只报告。
+  - 源：日服 `Sekai-World/sekai-master-db-diff`（719 首，最全；备选 Team-Haruki 的
+    `haruki-sekai-master`）；国服 `Team-Haruki/haruki-sekai-sc-master`（实时收集；
+    备选 Sekai-World 的 `sekai-master-db-cn-diff`）。每侧都配了备用源，抽风会自动往下试。
+  - 国服独占曲按 `id >= 10000` 挑（日服表最大 811）。
+  - **读音得手工补**：国服表把独占曲的 `pronunciation` 填成了作曲者名（"Mitchie M"、"敌门"）。
+    照抄会毁掉排序（两个界面都按读音排）和罗马音搜索 —— 脚本里 KANA_OVERRIDE 手工补：
+    中文标题填**拼音**（`game/SongSelect.cpp` 有一条原文比对，输入 "yiyang" 能命中「一样」），
+    日文/英文标题填**假名**（走罗马音路径）。
+  - 两个表都是**单行紧凑 JSON**，脚本按 `separators=(",",":")` 整体写回，diff 才只有一行。
+  - 它同时吸收了原来的 `gen_music_vocals.py`（从 musicVocals + gameCharacters 生成演唱版本表）。
 - `.workbuddy/tools/winsend.c` → `build/winsend.exe`：按窗口标题找窗口再送假输入，
   无交互会话下驱动 UI（动作：`click x y` / `move x y` / `key <vk>` / `focus` /
   `place x y` / `rect`；见「平台 / 输入相关的坑」）。

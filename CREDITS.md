@@ -74,7 +74,8 @@ CppSekai (AGPL-3.0-only)  ← 本仓库        加平台层、判定引擎、UI�
 | `sekai-mmw-preview-web` | 判定与渲染的行为基准（上游，见第一节） |
 | `MikuMikuWorld` | 同上（上游，见第一节） |
 | [MajdataPlay](https://github.com/LingFeng-bbben/MajdataPlay) | **发布姿态**的社区先例：仓库零官方素材、皮肤音效让用户自己丢、README 导流官方。见 `COPYRIGHT.md` 第五节 |
-| [Sekai-World/sekai-master-db-cn-diff](https://github.com/Sekai-World/sekai-master-db-cn-diff) | **国服曲库表**：`musics.json` / `music-vocals.json` 里那 17 首国服独占曲（id 11001+，Hype Dive / 一样 / 低彩度记事…）由它同步，见 `.workbuddy/tools/update_cn_music.py`。只是数据，没有代码 |
+| [Sekai-World](https://github.com/Sekai-World)（`sekai-master-db-diff`、`sekai-master-db-cn-diff`…） | **曲库表**：`musics.json` / `music-vocals.json` 的数据来源（官方 master DB 的镜像，日服与各服各一套）。只是数据，没有代码。由 `.workbuddy/tools/update_music_db.py` 同步 |
+| [Team-Haruki](https://github.com/Team-Haruki)（`haruki-sekai-master`、`haruki-sekai-sc-master`） | 同上的**实时收集**版本，作为备用源（国服那份带独占曲 11001+）。见 `update_music_db.py` 的源列表 |
 | `storage.sekai.best/sekai-cn-assets` | **国服资源镜像**（Sekai Viewer 的 S3 桶）：`chartdl` 从这取国服独占曲的 SUS / BGM / 曲绘。日服曲仍走 `assets.unipjsk.com` |
 
 ---
