@@ -45,6 +45,11 @@ enum PartySeat
     PartySeatReady,
     PartySeatPlaying,
     PartySeatResult,
+    // Chart decoded, waiting for the shared start instant. Deliberately its own
+    // value and not just "Ready": it is what the host waits for before it arms
+    // the start (allLoaded), so the round begins the moment the slowest window
+    // is ready instead of after a fixed countdown.
+    PartySeatLoaded,
 };
 
 struct PartyPlayer
@@ -133,8 +138,16 @@ class PartyLink
     // Publish the locked song and open the difficulty picker.
     void lockSong(int musicId, const std::string& songKey, const std::string& title, int difficulty,
         int leadInMs);
-    // All ready: publish the absolute start instant (and the run's epoch).
-    void beginCharging(std::uint64_t startCounter);
+    // All ready: enter the loading phase (new epoch) *without* a start instant.
+    // Every window now decodes its chart and reports back with
+    // setSeat(PartySeatLoaded); the host then calls armStart() once the last one
+    // is in. See allLoaded(). Between the two, the block reads as
+    // phase PartyCharging + startCounter 0 = "loading", and any other combination
+    // as "the instant is set".
+    void beginLoading();
+    // Fix the shared start instant while the phase stays PartyCharging. This is
+    // the "go" the whole room aims at; chart time -leadIn lands on it.
+    void armStart(std::uint64_t startCounter);
     void setPhase(int phase);
     void setHostPaused(bool paused);
     // Host only: how long this live lasts (its own track's length), published
@@ -155,6 +168,10 @@ class PartyLink
     // never blocks the room - and a host that is alone counts as soon as it has
     // confirmed itself.
     bool allReady() const;
+    // True when every player still in this round has its chart decoded (seat
+    // PartySeatLoaded). A seat that sat the round out (PartySeatLobby) is
+    // skipped, exactly like allReady().
+    bool allLoaded() const;
 
     static std::uint64_t nowCounter();
     static double counterFrequency();

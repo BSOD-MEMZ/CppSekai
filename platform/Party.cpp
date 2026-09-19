@@ -489,20 +489,42 @@ void PartyLink::lockSong(int musicId, const std::string& songKey, const std::str
     std::fflush(stdout);
 }
 
-void PartyLink::beginCharging(std::uint64_t startCounter)
+void PartyLink::beginLoading()
 {
     if (!mActive || gBlock == nullptr || !isHost()) {
         return;
     }
     InterlockedIncrement(&gBlock->seq);
     gBlock->paused = 0;
-    gBlock->startLo = static_cast<LONG>(static_cast<std::uint32_t>(startCounter & 0xffffffffull));
-    gBlock->startHi = static_cast<LONG>(static_cast<std::uint32_t>(startCounter >> 32));
+    // No instant yet: startLo/Hi stay 0, which is what tells every window (and
+    // armStart below) that the charge is still loading. armStart() is what
+    // fills them in - a reader that sees Charging + 0 knows to wait.
+    gBlock->startLo = 0;
+    gBlock->startHi = 0;
     gBlock->hostClockValid = 0;
     gBlock->epoch = gBlock->epoch + 1;
     gBlock->phase = PartyCharging;
     InterlockedIncrement(&gBlock->seq);
-    std::printf("[party] charging: start counter %llu (epoch %ld)\n",
+    std::printf("[party] loading: everybody ready, charts loading (epoch %ld)\n",
+        static_cast<long>(gBlock->epoch));
+    std::fflush(stdout);
+}
+
+void PartyLink::armStart(std::uint64_t startCounter)
+{
+    if (!mActive || gBlock == nullptr || !isHost() || startCounter == 0) {
+        return;
+    }
+    if (gBlock->phase != PartyCharging) {
+        return; // the room moved on (released, or locked another song) meanwhile
+    }
+    InterlockedIncrement(&gBlock->seq);
+    gBlock->paused = 0;
+    gBlock->startLo = static_cast<LONG>(static_cast<std::uint32_t>(startCounter & 0xffffffffull));
+    gBlock->startHi = static_cast<LONG>(static_cast<std::uint32_t>(startCounter >> 32));
+    gBlock->hostClockValid = 0;
+    InterlockedIncrement(&gBlock->seq);
+    std::printf("[party] start armed: counter %llu (epoch %ld)\n",
         static_cast<unsigned long long>(startCounter), static_cast<long>(gBlock->epoch));
     std::fflush(stdout);
 }
@@ -647,6 +669,24 @@ bool PartyLink::allReady() const
     // One player is enough: the host alone in the room starts the moment it
     // confirms, exactly like the single-window case, and a second window that
     // joins later catches the charge instead of blocking it.
+    return inRoom >= 1;
+}
+
+bool PartyLink::allLoaded() const
+{
+    const std::vector<PartyPlayer> list = players();
+    int inRoom = 0;
+    for (const PartyPlayer& player : list) {
+        if (player.seat == PartySeatLobby) {
+            continue; // sitting this round out: not waited for
+        }
+        ++inRoom;
+        // Playing counts too: the host may re-read the block in the same frame
+        // the instant lands and a fast window has already crossed over.
+        if (player.seat != PartySeatLoaded && player.seat != PartySeatPlaying) {
+            return false;
+        }
+    }
     return inRoom >= 1;
 }
 

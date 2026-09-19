@@ -2131,6 +2131,13 @@ int main(int argc, char** argv)
     int mpConfirmedEpoch = -1;  // host: the lock epoch its 确定 belongs to
     bool mpStartPending = false;
     Uint64 mpStartCounter = 0;
+    // Host: the charge epoch whose start instant this window has already armed,
+    // and when the loading phase opened. The epoch guards the arming block
+    // against re-arming every frame (which would push the instant forward for
+    // ever); the timestamp is the stall watchdog, so one window that never
+    // finishes loading cannot hold the room on the song list for good.
+    int mpArmedEpoch = -1;
+    Uint64 mpChargeStartCounter = 0;
     bool mpFollowing = false;   // member without BGM: follow the host's clock
     bool mpClockSynced = false;
     double mpClockOffset = 0.0;
@@ -2399,14 +2406,19 @@ int main(int argc, char** argv)
             || snap.phase == platform::PartyCharging || snap.phase == platform::PartyRunning;
         return locked ? findPartyEntry(snap.musicId, snap.songKey, -1) : -1;
     };
-    // How long the shared charge lasts before chart time 0. It is the song's own
-    // lead-in (the opening card + the stage fade-in) and nothing else: the load
-    // itself takes a fraction of it, and the previous extra four seconds of
-    // "load grace" were felt as a countdown nobody asked for.
+    // Chart time 0 sits this far past the shared start instant. It is the song's
+    // own lead-in (the opening card + the stage fade-in) and nothing else: the
+    // previous extra four seconds of "load grace" were felt as a countdown
+    // nobody asked for.
     auto partyLeadInSec = [&](const platform::PartyState& snap) {
         return std::max(static_cast<double>(game::kMinLeadInSec),
             static_cast<double>(snap.leadInMs) / 1000.0);
     };
+    // Safety net for the loading phase (see the host's arming block): a window
+    // that never reports its chart decoded - a failed load, a hung decode -
+    // must not hold the whole room on the song list for ever. Generous on
+    // purpose; a healthy load is well under a second.
+    constexpr double kPartyLoadTimeoutSec = 6.0;
     // The one way into the pause dialog. In 多人游玩 only the host may pause: it
     // owns the clock everybody else follows, so a member pausing itself would
     // do nothing but desync its own window.
@@ -4936,15 +4948,12 @@ int main(int argc, char** argv)
                 } else {
                     mpStatus = "已确定 · 等待其他玩家";
                 }
-                // The charge is on (the chart is loaded, the shared instant is
-                // set): count it down on the panel, so the last seconds before
-                // the switch read as a start rather than as a dead screen.
-                if (mpConfirmed && mpSnap.phase == platform::PartyCharging && mpSnap.startCounter != 0) {
-                    const double left = platform::PartyLink::counterToSeconds(mpSnap.startCounter)
-                        - platform::PartyLink::counterToSeconds(platform::PartyLink::nowCounter());
-                    char text[48];
-                    std::snprintf(text, sizeof(text), "即将开始 %.1fs", std::max(0.0, left));
-                    mpStatus = text;
+                // The charge is on: say which half it is in. No numbers - the
+                // loading phase is as long as the slowest window's load (under a
+                // second), and the armed phase is one fuse long (0.8s), so a
+                // counter would be a flicker rather than information.
+                if (mpConfirmed && mpSnap.phase == platform::PartyCharging) {
+                    mpStatus = mpSnap.startCounter != 0 ? "即将开始" : "谱面加载中…";
                 }
             }
 
@@ -5125,10 +5134,16 @@ int main(int argc, char** argv)
                                 forcing ? " [force start]" : "", mpConfirmedEpoch);
                             std::fflush(stdout);
                             if (forcing) {
-                                const double lead = partyLeadInSec(party.read());
-                                party.beginCharging(platform::PartyLink::nowCounter()
-                                    + static_cast<Uint64>(
-                                        lead * platform::PartyLink::counterFrequency()));
+                                // Forcing means "start now, do not wait for the
+                                // stragglers" - so it opens the *loading* phase
+                                // like a normal start and lets the arming block
+                                // decide when the instant is (a window that never
+                                // confirmed sits this one out at once, so it
+                                // cannot hold the start).
+                                party.beginLoading();
+                                mpChargeStartCounter = platform::PartyLink::nowCounter();
+                                std::printf("[party] forced start -> loading\n");
+                                std::fflush(stdout);
                             }
                         }
                     } else if (mpSpectating) {
@@ -5199,13 +5214,19 @@ int main(int argc, char** argv)
                 mpSnap = party.read();
                 const bool host = party.isHost();
 
-                // Host: everybody in the round is ready -> publish the instant.
+                // Host: everybody in the round is ready -> open the loading
+                // phase. No start instant yet: the host arms it once every
+                // window reports its chart decoded (see the arming block below),
+                // so the wait is exactly as long as the slowest load instead of
+                // a fixed countdown.
                 if (host && mpConfirmed && mpConfirmedEpoch == mpSnap.epoch
                     && mpSnap.phase == platform::PartySongLocked && party.allReady()) {
-                    const double lead = partyLeadInSec(mpSnap);
-                    party.beginCharging(platform::PartyLink::nowCounter()
-                        + static_cast<Uint64>(lead * platform::PartyLink::counterFrequency()));
-                    std::printf("[party] all ready -> charging (start in %.1fs)%s\n", lead,
+                    party.beginLoading();
+                    // QPC, not the frame clock: the load itself happens inside a
+                    // frame, so frame time would hide the very thing this is
+                    // here to measure.
+                    mpChargeStartCounter = platform::PartyLink::nowCounter();
+                    std::printf("[party] all ready -> loading%s\n",
                         party.playerCount() < 2 ? " [solo in the room]" : "");
                     std::fflush(stdout);
                 }
@@ -5213,7 +5234,12 @@ int main(int argc, char** argv)
                 // Everybody: the charge is on -> load this window's chart.
                 if (mpSnap.phase == platform::PartyCharging && mpSnap.epoch != mpSeenChargeEpoch) {
                     mpSeenChargeEpoch = mpSnap.epoch;
-                    const bool late = platform::PartyLink::nowCounter() >= mpSnap.startCounter;
+                    // startCounter == 0 is the loading phase (the instant is not
+                    // armed yet) - not a start this window missed. QPC is a big
+                    // positive number, so a bare `now >= 0` would bench every
+                    // window the moment the room opened the charge.
+                    const bool late = mpSnap.startCounter != 0
+                        && platform::PartyLink::nowCounter() >= mpSnap.startCounter;
                     if (!host && (!mpConfirmed || late)) {
                         // The room started without this window - it never
                         // confirmed, or it joined after the instant. Sit the
@@ -5257,6 +5283,14 @@ int main(int argc, char** argv)
                                 error.clear();
                                 mpConfirmed = false;
                                 party.setReady(false);
+                                // The host's own load failed, so there is no
+                                // chart to start: hand the room back to the
+                                // lobby instead of leaving it charging for an
+                                // instant that would never be armed. The others
+                                // read that as 房主放弃本曲 and return to the list.
+                                if (host) {
+                                    party.releaseSong();
+                                }
                             } else {
                                 // The run length has to travel with the round:
                                 // a member has no track of its own, and without
@@ -5291,11 +5325,52 @@ int main(int argc, char** argv)
                                 // so the room does not claim this seat is
                                 // already playing during the lead-in.
                                 party.clearPlayingScore();
+                                // Report in: this is the flag the host waits for
+                                // before it arms the shared instant (allLoaded).
+                                // A window that never gets here simply is not
+                                // waited for past the watchdog below.
+                                party.setSeat(platform::PartySeatLoaded);
                                 std::printf("[party] chart loaded (%s, %s), waiting for the shared start\n",
                                     mpEntry.susPath.c_str(), mpEntry.difficulty.c_str());
                                 std::fflush(stdout);
                             }
                         }
+                    }
+                }
+
+                // Host: everybody's chart is in -> fix the instant. This is the
+                // whole point of the loading phase: the round starts the moment
+                // the slowest window is ready, so there is nothing to count
+                // down. `mpArmedEpoch` keeps it to one arming per charge (a
+                // second write would push the instant forward for ever), and
+                // `mpStartPending` means this window's own chart is decoded.
+                //
+                // The fuse only has to cover one frame on the other windows
+                // (16-33ms at their fps), so 0.8s is generous and still reads as
+                // "instant". The watchdog is the safety net for a window that
+                // never reports in (a failed load, a hung decode): past
+                // kPartyLoadTimeoutSec the room goes without it rather than
+                // sitting on the song list for ever.
+                if (host && mpStartPending && mpSnap.phase == platform::PartyCharging
+                    && mpSnap.startCounter == 0 && mpArmedEpoch != mpSnap.epoch) {
+                    const bool allIn = party.allLoaded();
+                    const double waited = platform::PartyLink::counterToSeconds(
+                                              platform::PartyLink::nowCounter())
+                        - platform::PartyLink::counterToSeconds(mpChargeStartCounter);
+                    const bool stalled = waited > kPartyLoadTimeoutSec;
+                    if (allIn || stalled) {
+                        mpArmedEpoch = mpSnap.epoch;
+                        constexpr double kPartyStartFuseSec = 0.8;
+                        party.armStart(platform::PartyLink::nowCounter()
+                            + static_cast<Uint64>(
+                                kPartyStartFuseSec * platform::PartyLink::counterFrequency()));
+                        // The waited-for figure is the number that matters when
+                        // the start feels slow: it is the slowest window's load.
+                        // It used to be a flat 5.8s whatever the load took.
+                        std::printf("[party] start in %.2fs (%s; the room waited %.2fs for the loads)\n",
+                            kPartyStartFuseSec,
+                            allIn ? "every chart loaded" : "watchdog: somebody never loaded", waited);
+                        std::fflush(stdout);
                     }
                 }
 
@@ -5834,12 +5909,26 @@ int main(int argc, char** argv)
             //     the corners darken. Afterwards (or on the foreground list) it
             //     covered them.
             //
-            // Geometry: one square per corner, sized off min(w,h), with a
-            // bilinear ramp that is dark at the corner and 0 at the inner
-            // vertex. Two of the four colours are always 0, so the four squares
-            // do not stack into a visible seam where they meet.
+            // Geometry: one *full-length strip per screen edge*, each fading
+            // perpendicular to its own edge. Two strips overlap in every corner,
+            // and alpha-blending them there multiplies into the darkest patch -
+            // that is what makes it read as a vignette.
+            //
+            // The old version drew one square per corner instead, which broke on
+            // any window wider than it is tall: the squares only reached
+            // min(w,h)*0.55 in from each side, so on a 1920x1080 window the top
+            // and bottom edges had an ~880px hole right in the middle, with a
+            // hard step from 50% black to nothing where each square ended
+            // (measured: alpha 127 at x=594, 0 at x=614, along y=8).
             // ----------------------------------------------------------
             const float damageVig = [&]() {
+                // Debug (CPSEKAI_VIGNETTE=0.85): freeze the vignette at a fixed
+                // level so it can be checked from a headless screenshot - a real
+                // life drop needs a player who misses, which --screenshot has no
+                // way to produce.
+                if (const char* forced = std::getenv("CPSEKAI_VIGNETTE")) {
+                    return std::clamp(static_cast<float>(std::atof(forced)), 0.0f, 1.0f);
+                }
                 const float deadVignette = judgement.lifeRatio() <= 0.0f ? 1.0f : 0.0f;
                 return std::max(damageVignette * 0.85f, deadVignette);
             }();
@@ -5847,20 +5936,27 @@ int main(int argc, char** argv)
                 ImDrawList* bg = ImGui::GetBackgroundDrawList();
                 const float w = static_cast<float>(windowW);
                 const float h = static_cast<float>(windowH);
-                const int a = static_cast<int>(150.0f * std::clamp(damageVig, 0.0f, 1.0f));
+                // Peak alpha of *one* strip. Corners blend two of them, so the
+                // corner ends up at 1-(1-a)^2 - about 1.6x the edge value.
+                const int a = static_cast<int>(120.0f * std::clamp(damageVig, 0.0f, 1.0f));
                 const ImU32 dark = IM_COL32(0, 0, 0, a);
                 const ImU32 none = IM_COL32(0, 0, 0, 0);
-                // Square-ish corner patch: long enough to read as a vignette,
-                // short enough that the middle of a 16:9 screen stays clear.
-                const float rc = std::min(w, h) * 0.55f;
-                // Top-left: dark at (0,0), 0 at (rc,rc).
-                bg->AddRectFilledMultiColor(ImVec2(0.0f, 0.0f), ImVec2(rc, rc), dark, dark, none, dark);
-                // Top-right: dark at (w,0), 0 at (w-rc,rc).
-                bg->AddRectFilledMultiColor(ImVec2(w - rc, 0.0f), ImVec2(w, rc), dark, dark, dark, none);
-                // Bottom-left: dark at (0,h), 0 at (rc,h-rc).
-                bg->AddRectFilledMultiColor(ImVec2(0.0f, h - rc), ImVec2(rc, h), dark, none, dark, dark);
-                // Bottom-right: dark at (w,h), 0 at (w-rc,h-rc).
-                bg->AddRectFilledMultiColor(ImVec2(w - rc, h - rc), ImVec2(w, h), none, dark, dark, dark);
+                // Reach of the fade, off the short side so a wide window and a
+                // tall one darken by the same amount.
+                const float rc = std::min(w, h) * 0.42f;
+                // WARNING: the corner order of AddRectFilledMultiColor is
+                // (upper-left, upper-right, **lower-right**, lower-left) - the
+                // two bottom corners are NOT in reading order. Each strip below
+                // only ever varies across its own axis, so the order only has to
+                // be right at the two ends of that axis.
+                // Top: dark at y=0, gone at y=rc.
+                bg->AddRectFilledMultiColor(ImVec2(0.0f, 0.0f), ImVec2(w, rc), dark, dark, none, none);
+                // Bottom: gone at y=h-rc, dark at y=h.
+                bg->AddRectFilledMultiColor(ImVec2(0.0f, h - rc), ImVec2(w, h), none, none, dark, dark);
+                // Left: dark at x=0, gone at x=rc.
+                bg->AddRectFilledMultiColor(ImVec2(0.0f, 0.0f), ImVec2(rc, h), dark, none, none, dark);
+                // Right: gone at x=w-rc, dark at x=w.
+                bg->AddRectFilledMultiColor(ImVec2(w - rc, 0.0f), ImVec2(w, h), none, dark, dark, none);
             }
 
             if (visibility > 0.0f) {
@@ -6225,33 +6321,11 @@ int main(int argc, char** argv)
                 fg->AddRectFilled(ImVec2(0.0f, 0.0f), ImVec2(w, h),
                     IM_COL32(0, 0, 0, static_cast<int>(std::clamp(songEndBlackout, 0.0f, 1.0f) * 255.0f)));
             }
-            // 多人游玩 charge: the chart loads and then everybody waits for the
-            // shared instant *while still on the song select*. Without this the
-            // screen just sits on the list, which reads as "按了确定怎么又回到
-            // 选歌" - so cover it with the countdown, the way the room used to.
-            if (state == AppState::Select && party.active() && (mpConfirmed || party.isHost())) {
-                const platform::PartyState snap = party.read();
-                if (snap.phase == platform::PartyCharging && snap.startCounter != 0) {
-                    const double left = platform::PartyLink::counterToSeconds(snap.startCounter)
-                        - platform::PartyLink::counterToSeconds(platform::PartyLink::nowCounter());
-                    if (left > 0.0) {
-                        fg->AddRectFilled(ImVec2(0.0f, 0.0f), ImVec2(w, h), IM_COL32(6, 8, 18, 165));
-                        ImFont* big = game::titleFont() != nullptr ? game::titleFont() : ImGui::GetFont();
-                        ImFont* small = game::bodyFont() != nullptr ? game::bodyFont() : ImGui::GetFont();
-                        char text[24];
-                        std::snprintf(text, sizeof(text), "%.1f", left);
-                        const float bigPx = std::min(w, h) * 0.16f;
-                        const ImVec2 ts = big->CalcTextSizeA(bigPx, FLT_MAX, 0.0f, text);
-                        fg->AddText(big, bigPx, ImVec2((w - ts.x) * 0.5f, h * 0.34f),
-                            IM_COL32(255, 255, 255, 240), text);
-                        const float smallPx = std::min(w, h) * 0.030f;
-                        const char* label = "即将开始";
-                        const ImVec2 ls = small->CalcTextSizeA(smallPx, FLT_MAX, 0.0f, label);
-                        fg->AddText(small, smallPx, ImVec2((w - ls.x) * 0.5f, h * 0.34f + bigPx * 1.05f),
-                            IM_COL32(176, 232, 220, 235), label);
-                    }
-                }
-            }
+            // 多人游玩 charge: no countdown here any more. The room starts as
+            // soon as every window's chart is decoded (see the host's arming
+            // block), so what is left of the wait is the load itself - about a
+            // second, covered by the confirm burst. The 5.8s "即将开始 5.8" that
+            // used to sit here was a fixed wait dressed up as a countdown.
             if (confirmFlashActive) {
                 const float t = confirmFlashTime;
                 // Envelope: soft onset -> plateau (the session loads inside it) ->

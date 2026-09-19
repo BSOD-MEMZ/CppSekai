@@ -87,6 +87,13 @@
   要验证的按钮就在代码里加个自动按的调试开关（如 `--chartdl-test`），别在输入注入上死磕。
 
 ## 最近工作
+- **2026-09-19 两件**：(a) **多人开局倒计时删了**——charge 分「加载段 / 武装段」两段
+  （`beginLoading()` → 各窗口 `setSeat(PartySeatLoaded)` → 房主 `allLoaded()` 后
+  `armStart(now+0.8s)`），等待从固定 5.8s 变成「最慢那个窗口的加载（实测 0.24s）+ 0.8s」，
+  选曲界面的遮罩与大数字全删，面板只写 `谱面加载中…` → `即将开始`；`mp_verify.sh` 三轮全绿。
+  (b) **失血阴影几何重做**：原来四角方块在 16:9 上上下边缘正中留 880px 亮带 + 硬断崖，
+  改成四条整边条各自垂直渐隐（角落叠两条自然最暗）；新增探针 `CPSEKAI_VIGNETTE=<0..1>`。
+  两件事的坑都写进 AGENTS.md「多人游玩」与 main.cpp 注释。
 - **2026-09-18 三件用户需求 + 挖出两个真 bug**（commit `3f1c2ba`）：
   (a) 空谱面时选曲界面出「下载谱面（chartdl）」按钮（`SelectDownload`，退出后自动重扫；
   `--chartdl-test` 可自动按）；(c) 首启 ELUA 弹窗（`ui::eulaDialog` + `UserSettings::eulaAccepted`）；

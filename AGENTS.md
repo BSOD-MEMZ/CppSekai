@@ -1091,7 +1091,25 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
 - **加载宽限没了**：老代码是 `4s 宽限 + lead-in`（默认 10s），现在只有 lead-in（默认 6s）。
   各窗口在 `PartyCharging` 那一帧加载自己的谱面（**白色确定闪光就是盖这次加载的**，
   在 charge 里手动点亮 `confirmFlashActive`，不要设 `confirmStartPending`——这里没有异步加载），
-  然后等共享 QPC 时刻。起奏时刻在面板状态行上倒计时（"即将开始 3.2s"）。
+  然后等共享 QPC 时刻。
+- **开局没有倒计时（2026-09-19 改）**：charge 分两段，靠 `startCounter == 0` 区分：
+  1) **加载段**：房主 `beginLoading()`（epoch++，phase=Charging，**不写 startCounter**），
+     每个窗口加载完自己的谱面就 `setSeat(PartySeatLoaded)`（**新加的座位状态**，不是 Ready）；
+  2) **武装段**：房主看到 `allLoaded()`（非 Lobby 座位全是 Loaded）就把起奏时刻写下去
+     （`armStart(now + 0.8s)`，**不动 epoch**，否则成员会以为换了一轮）。
+  于是等待 = 最慢那个窗口的加载（实测 0.2~0.3s）+ 0.8s 引信，**不再是固定的 5.8s**。
+  实测日志：`[party] start armed: ... (every chart loaded; the room waited 0.24s for the loads)`。
+  坑：
+  - `armStart` 只在 `phase == PartyCharging` 时才写，否则会把已经释放的房间"复活"；
+    房主侧用 `mpArmedEpoch` 保证一轮只武装一次（重复武装会把时刻一直往后推）。
+  - 房主的**强制开始**（第二次按确定）也走 `beginLoading()`：没按确定的窗口会立刻
+    `setSeat(PartySeatLobby)` 让开，所以不会卡住武装。
+  - 成员第一次看到 charge 时的 **`late` 判定必须带 `startCounter != 0`**：QPC 是个大正数，
+    裸写 `now >= startCounter` 会在加载段就把所有窗口判成"错过开局"。
+  - **看门狗** `kPartyLoadTimeoutSec = 6.0`：某个窗口加载失败/卡住时房主照常武装
+    （日志写 `watchdog: somebody never loaded`），否则整房永远停在加载段。
+    迟到的窗口仍然会**正确入局**——时钟锚在共享 QPC 上，它只是少看一段开幕卡。
+  - 房主自己的加载失败时 `releaseSong()` 回大厅，成员按"房主已放弃本曲"回列表。
 - **结算画面进不去了（2026-09-18 修）**：多人路径从来没调 `announceTrack()`，
   `trackDurationSec` 一直是 0，于是 `resultDue` 恒假 —— 歌放完就停在演奏画面。
   现在 charge 加载成功后两边都调 `announceTrack()`，并且**房主把 `trackDurationSec`
@@ -1109,7 +1127,7 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
   被误判死掉的窗口会自己把座位抢回来（`update()` 开头）。
 - **起奏同步**：`startCounter` 是一个 **QPC 值**（不是相对时间）。QPC 全机唯一，所以
   "T 时刻开始"对所有窗口意义相同。各窗口到点各自 `beginSessionClockAt(startCounter)`
-  （`perfStart = startCounter`），加载宽限 4s + 房主 lead-in（默认 6s）。
+  （`perfStart = startCounter`），之后再走房主的 lead-in（默认 6s，就是开幕卡 + 淡入）。
 - **时钟跟随**（`resolveSongClock` / `songClock`）：房主每帧把自己的 `songTime` **连同采样时的
   QPC** 发到共享页（`publishHostClock`）；成员的本底时钟是 QPC（它没有 BGM，走 `wallSongTime`），
   用包里的 QPC 差把房主时钟外推到"现在"，再把差值当作**偏移量**缓变跟上：
@@ -1140,10 +1158,12 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
   等整个 lead-in，而这一帧的 BGM 已经加载好了——试听每帧还会重启，于是"选歌的曲子"和
   "正在打的曲子"叠在一起（而且看起来是概率触发，取决于 charge 落在哪一帧）。
   修法：`playPreviewHere` 里加上 `!mpStartPending`（charge 一武装就停试听）。
-- **charge 阶段要有遮罩**（2026-09-18）：加载 + 等共享时刻都发生在**选曲界面**上，
-  只留一行状态小字会让人以为"按了确定怎么又回到选歌"（用户实测就是这个感觉）。
-  现在 charge 期间在选曲界面上盖一层 + 中央大数字倒计时（"即将开始 x.xs"），
-  和旧房间页那个数字同一套观感。
+- **charge 阶段的数字倒计时已删**（2026-09-19）：原来在选曲界面上盖一层 + 中央大数字
+  （"即将开始 5.8"），因为那时 charge 是**固定的 5.8s**，不盖点什么就像"按了确定又回到选歌"。
+  改成"加载完就开"之后整段只剩约 1 秒，数字只会闪一下，于是：
+  遮罩和大数字全删（`state == AppState::Select && phase == PartyCharging` 那个块没了），
+  只在手机面板状态行写 `谱面加载中…` → `即将开始`（**不带数字**，
+  `startCounter != 0` 区分两段）。这段等待由房主那边点亮的白色确定闪光自解释。
 - **"失焦"在多人里一律忽略**（2026-09-18）：不只 `party.active()`，只要**本机有房间**
   （`roomOpen`，启动时 `roomExists()` 的结果）就跳过所有失焦处理——包括演奏态失焦直接
   回选曲那条老路径（lead-in 期间失焦会 `state = Select`，在两个窗口互相点击时特别容易触发）。

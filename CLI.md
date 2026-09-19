@@ -183,6 +183,8 @@ cppsekai [--sus <file.sus>] [--bgm <audio>] [--charts <dir>] [--cover <image>]
   无头模式可以直接拿来当断言（自动演示应当全 PERFECT、0 miss）。
 - `--screenshot` **完全不写 `userdata.json`**，随便跑，不会污染存档。
 - 贴图加载耗时想细看：设环境变量 `CPSEKAI_ASSET_TIMING=1`，日志里会多出每张贴图的耗时。
+- **失血阴影**（掉血时四边变暗）：`CPSEKAI_VIGNETTE=0.85` 把阴影冻结在这个强度上，用来截无头对比图——
+  掉血需要真人漏接，`--screenshot` 造不出来。`0` = 关（当对照图用）。
 
 ---
 
