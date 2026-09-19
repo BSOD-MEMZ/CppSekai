@@ -3184,7 +3184,7 @@ int main(int argc, char** argv)
                     int renderModeSel = userSettings.renderScale;
                     ImGui::SetNextItemWidth(interior);
                     if (ImGui::Combo("##renderscale", &renderModeSel,
-                            "窗口多大就渲染多大\0固定分辨率（等比缩放 + 黑边）\0")) {
+                            "跟随窗口分辨率\0固定分辨率\0")) {
                         userSettings.renderScale = std::clamp(renderModeSel, 0, 1);
                         applyRenderMode();
                         persistUserData();
@@ -3209,7 +3209,7 @@ int main(int argc, char** argv)
                     }
                 }
                 contentLeft();
-                ImGui::Text("帧率上限 (0 = 仅垂直同步)");
+                ImGui::Text("帧率上限");
                 static float fpsLimitF = static_cast<float>(fpsLimit);
                 contentLeft();
                 if (ui::slider("fps", &fpsLimitF, 0.0f, 240.0f, 5.0f, "%.0f fps", interior)) {
@@ -3492,13 +3492,13 @@ int main(int argc, char** argv)
                     persistUserData();
                 }
                 contentLeft();
-                ImGui::Text("多开 / 单实例");
+                ImGui::Text("多开");
                 contentLeft();
                 {
                     int mode = userSettings.instanceMode;
                     ImGui::SetNextItemWidth(interior);
                     if (ImGui::Combo("##instancemode", &mode,
-                            "只允许一个实例（再启动就切回已有窗口）\0"
+                            "只允许一个实例\0"
                             "允许多开，新实例登录另一个用户\0")) {
                         const int picked = std::clamp(mode, 0, 1);
                         // 多开是实验性功能：第一次开启要先确认（已经确认过就直接写）。
@@ -3526,7 +3526,7 @@ int main(int argc, char** argv)
                     // policy forbids a second window.
                     const bool multiOpen = userSettings.instanceMode == 1;
                     bool partyBox = multiOpen ? userSettings.multiplayer : false;
-                    ui::checkBox("多人游玩（同机多窗口一起打）", &partyBox, interior, multiOpen);
+                    ui::checkBox("多人演出", &partyBox, interior, multiOpen);
                     // Only a click can change it: with the policy on single
                     // instance the greyed box shows "off" and storing that would
                     // silently wipe the setting just for opening this page.
@@ -3551,13 +3551,11 @@ int main(int argc, char** argv)
                 }
                 contentLeft();
                 if (userSettings.instanceMode == 0) {
-                    ImGui::TextWrapped("多人游玩需要「允许多开」（多个窗口各登录一个用户）。");
+                    ImGui::TextWrapped("多人游玩需要允许多开）。");
                 } else if (userSettings.multiplayer) {
-                    ImGui::TextWrapped("多人游玩已开启：重开所有窗口生效。先开的窗口是房主"
-                                       "（选曲 + 播放 BGM），其它窗口选完难度准备后一起开始。");
+                    ImGui::TextWrapped("多人游玩已开启，重开所有窗口生效。");
                 } else {
-                    ImGui::TextWrapped("多人游玩：先开的窗口是房主（负责选曲与播放 BGM），"
-                                       "其它窗口选完难度准备后一起开始。");
+                    ImGui::TextWrapped("多人游玩：先开的窗口是房主。");
                 }
             } else {
                 // 账户: the local profile. Nothing here leaves the machine, and

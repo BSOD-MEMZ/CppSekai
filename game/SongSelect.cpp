@@ -2558,7 +2558,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
                 ImVec2(c.x + iconSize * 0.5f, c.y + iconSize * 0.5f), ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f),
                 IM_COL32(255, 255, 255, iconAlpha));
         }
-        addTextLeft(dl, body, 17.0f * k, ImVec2(c.x + 18.0f * k, c.y), fg, "下载谱面");
+        addTextLeft(dl, body, 17.0f * k, ImVec2(c.x + 18.0f * k, c.y), fg, "音乐商店");
     }
     ImGui::EndDisabled();
 
