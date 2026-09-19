@@ -37,6 +37,7 @@ CXXFLAGS=(
     -I"$SDL/include/SDL2"
 )
 
+
 SOURCES=(
     main.cpp
     platform/CoreApi.cpp

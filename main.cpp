@@ -728,9 +728,88 @@ namespace
     }
 } // namespace
 
+#ifdef _WIN32
+// ---------------------------------------------------------------------------
+// Crash diagnostics. This is a Windows-subsystem binary, so a fault leaves
+// nothing behind: no console output, only the numbers in the Windows dialog
+// ("异常偏移: 00000000001d7812"). This writes that same offset, the state that was
+// live, and a backtrace to cppsekai-crash.log next to the exe.
+//
+// Those offsets are RVAs (address minus module base) and resolve to a function
+// with .workbuddy/tools/pe_symbols.py - against a build that still has a symbol
+// table, i.e. one made with CPSEKAI_DEBUG_SYMBOLS=1. The symbol table does not
+// move code, so the offsets match the release exe.
+//
+// This runs on a broken stack, so it stays tiny: no C++ strings, no allocation,
+// plain stdio. The globals below are the only module-level mutable state in the
+// program, written once a frame so the log says what was going on.
+// ---------------------------------------------------------------------------
+volatile long gCrashState = -1;
+volatile long gCrashGlassMode = -1;
+volatile long gCrashFrameless = -1;
+volatile unsigned long long gCrashFrameCount = 0;
+
+void logCrashAddress(FILE* out, const char* tag, const void* address)
+{
+    HMODULE module = nullptr;
+    unsigned long long rva = 0;
+    char modulePath[MAX_PATH] = "?";
+    const char* base = modulePath;
+    if (address != nullptr && GetModuleHandleExA(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            static_cast<LPCSTR>(address), &module)) {
+        if (GetModuleFileNameA(module, modulePath, MAX_PATH) != 0) {
+            for (const char* p = modulePath; *p != '\0'; ++p) {
+                if (*p == '\\' || *p == '/') {
+                    base = p + 1;
+                }
+            }
+        }
+        rva = reinterpret_cast<unsigned long long>(address)
+            - reinterpret_cast<unsigned long long>(module);
+    }
+    std::fprintf(out, "  %-8s %s+0x%llX  (rva 0x%llX)\n", tag, base, rva, rva);
+}
+
+LONG WINAPI cppsekaiCrashFilter(EXCEPTION_POINTERS* info)
+{
+    const unsigned long code = (info != nullptr && info->ExceptionRecord != nullptr)
+        ? info->ExceptionRecord->ExceptionCode : 0;
+    const void* where = (info != nullptr && info->ExceptionRecord != nullptr)
+        ? info->ExceptionRecord->ExceptionAddress : nullptr;
+    if (FILE* out = std::fopen("cppsekai-crash.log", "a")) {
+        std::fprintf(out, "--- crash: exception 0x%08lX\n", code);
+        std::fprintf(out, "  state=%ld glassMode=%ld frameless=%ld frames=%llu\n",
+            gCrashState, gCrashGlassMode, gCrashFrameless, gCrashFrameCount);
+        logCrashAddress(out, "fault", where);
+        void* frames[32] = {};
+        unsigned short count = 0;
+        using CaptureFn =
+            unsigned short(__stdcall*)(unsigned long, void**, unsigned long, unsigned long*);
+        if (HMODULE kernel = GetModuleHandleA("kernel32.dll")) {
+            if (auto capture = reinterpret_cast<CaptureFn>(
+                    reinterpret_cast<void*>(GetProcAddress(kernel, "RtlCaptureStackBackTrace")));
+                capture != nullptr) {
+                count = capture(0, frames, 32, nullptr);
+            }
+        }
+        for (unsigned short i = 0; i < count; ++i) {
+            logCrashAddress(out, "bt", frames[i]);
+        }
+        std::fprintf(out, "--- end\n");
+        std::fclose(out);
+    }
+    // Terminate right away: the Windows dialog would only repeat what is now in
+    // the file.
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+#endif
+
 int main(int argc, char** argv)
 {
 #ifdef _WIN32
+    // See above: log a crash to cppsekai-crash.log instead of dying silently.
+    SetUnhandledExceptionFilter(cppsekaiCrashFilter);
     // The binary is linked as a Windows-subsystem app, so double-clicking it
     // does not spawn a console window. A terminal that launched us (cmd /
     // PowerShell) may have handed down its standard handles; when it did not,
@@ -1450,11 +1529,20 @@ int main(int argc, char** argv)
     // taskbar.
     int noFrameMode = 0;
 #ifdef _WIN32
+    // CPSEKAI_GLASS_TOGGLE=<sec>: flip 玻璃实现 once, that many seconds in, through
+    // exactly the call the settings card makes. Diagnosis only (see AGENTS.md) - it
+    // exists because "切到自绘无框就崩" has to be reproducible without clicking
+    // anything.
+    const double glassToggleSec = std::getenv("CPSEKAI_GLASS_TOGGLE") != nullptr
+        ? std::atof(std::getenv("CPSEKAI_GLASS_TOGGLE")) : -1.0;
+    bool glassToggleDone = false;
+#endif
+#ifdef _WIN32
     // Windows SDK import libs are not part of the toolchain, so this is a
     // dynamic load. Also called again when the setting is toggled at runtime
     // (glass off = zero margins, which puts the frame back and makes the client
     // area opaque again).
-    auto applyWindowTransparency = [](SDL_Window* target, bool enable, int mode) {
+    auto applyWindowTransparency = [](SDL_Window* target, bool enable) {
         SDL_SysWMinfo wmi;
         SDL_VERSION(&wmi.version);
         if (!SDL_GetWindowWMInfo(target, &wmi) || wmi.subsystem != SDL_SYSWM_WINDOWS) {
@@ -1468,9 +1556,6 @@ int main(int argc, char** argv)
             int bottom;
         };
         using DwmExtendFn = long(__stdcall*)(HWND, const Margins*);
-        // DwmSetWindowAttribute(hwnd, DWMWA_NCRENDERING_POLICY = 2, &policy, size);
-        // DWMNCRENDERINGPOLICY: 0 = DWMNCRP_USEWINDOWSTYLE, 1 = ..._DISABLED.
-        using DwmSetAttrFn = long(__stdcall*)(HWND, unsigned, const void*, unsigned);
         if (HMODULE dwm = LoadLibraryA("dwmapi.dll")) {
             if (auto extend = reinterpret_cast<DwmExtendFn>(
                     reinterpret_cast<void*>(GetProcAddress(dwm, "DwmExtendFrameIntoClientArea"))); extend) {
@@ -1480,24 +1565,13 @@ int main(int argc, char** argv)
                 std::printf("[window] DwmExtendFrameIntoClientArea(%s) -> 0x%lX\n",
                     enable ? "-1 margins" : "no margins", static_cast<unsigned long>(hr));
             }
-            if (auto setAttr = reinterpret_cast<DwmSetAttrFn>(
-                    reinterpret_cast<void*>(GetProcAddress(dwm, "DwmSetWindowAttribute"))); setAttr) {
-                // glassMode 1 is the experiment: let DWM skip the non-client area
-                // entirely, so the caption and the outline it draws around the
-                // client area are gone. The glass we see comes *from* the frame, so
-                // this may cost the blur as well - the log line plus a screenshot
-                // are what tell us which. Mode 2 wants the opposite: DWM keeps its
-                // frame logic (extended over the whole window) and *we* take the
-                // non-client area away.
-                const unsigned policy =
-                    (enable && mode == 1) ? 1u /* DWMNCRP_DISABLED */ : 0u /* USEWINDOWSTYLE */;
-                const long hr = setAttr(wmi.info.win.window, 2, &policy, sizeof(policy));
-                std::printf("[window] DwmSetWindowAttribute(NCRENDERING_POLICY=%u) -> 0x%lX\n",
-                    policy, static_cast<unsigned long>(hr));
-            }
             FreeLibrary(dwm);
         }
         std::fflush(stdout);
+        // Tried and rejected (2026-09-19): DWMWA_NCRENDERING_POLICY =
+        // DWMNCRP_DISABLED as a cheap way to drop the frame. On Windows 7 it makes
+        // DWM fall back to the Basic frame (no Aero at all), which is uglier than
+        // the frame it was supposed to remove - removed, see AGENTS.md.
     };
 #endif
     // 多人游玩: several windows with the same title are indistinguishable in
@@ -1584,9 +1658,21 @@ int main(int argc, char** argv)
     // (transparency + NCR policy) and the frame removal are two halves of the same
     // setting and always move together. Called once here and again whenever 背景
     // 或 玻璃实现 changes in the settings.
+    // Asked for from the settings card, done at the top of the next frame: removing
+    // or restoring the non-client area fires a cascade of *synchronous* messages
+    // (WM_NCCALCSIZE, WM_WINDOWPOSCHANGED, and on Windows 7 a WM_SIZE) and the
+    // settings card is drawn from the middle of an ImGui frame - the worst place to
+    // restructure the window. Park the request and service it before ImGui starts
+    // the next frame.
+    bool glassReapplyWanted = false;
+    bool glassReapplyEnable = false;
+    auto requestGlassWindowMode = [&](bool enable) {
+        glassReapplyWanted = true;
+        glassReapplyEnable = enable;
+    };
     auto applyGlassWindowMode = [&](bool enable) {
         noFrameMode = (enable && glassMode == 2 && windowMode != 2) ? 1 : 0;
-        applyWindowTransparency(window, enable, glassMode);
+        applyWindowTransparency(window, enable);
         // WM_NCCALCSIZE only runs when the window box changes, so a runtime switch
         // has to ask for one - SWP_FRAMECHANGED is exactly that request.
         SDL_SysWMinfo wmi;
@@ -1595,6 +1681,7 @@ int main(int argc, char** argv)
             SetWindowPos(wmi.info.win.window, nullptr, 0, 0, 0, 0,
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
         }
+        gCrashGlassMode = glassMode;
         std::printf("[window] glass mode %d (%s), frameless %d\n", glassMode,
             glassMode == 0 ? "extend frame only" :
             glassMode == 1 ? "DWM NCR off" : "own custom frame", noFrameMode);
@@ -3083,7 +3170,7 @@ int main(int argc, char** argv)
                     // client area see-through in the first place.
                     renderer.setTransparentBackground(userSettings.bgStyle == 2);
 #ifdef _WIN32
-                    applyGlassWindowMode(splashStyle == 0 || userSettings.bgStyle == 2);
+                    requestGlassWindowMode(splashStyle == 0 || userSettings.bgStyle == 2);
 #endif
                     persistUserData();
                 }
@@ -3092,14 +3179,18 @@ int main(int argc, char** argv)
                     contentLeft();
                     ImGui::Text("玻璃实现");
                     contentLeft();
-                    static int glassModeUi = userSettings.glassMode;
+                    // 0 and 2 only: the middle idea (ask DWM to skip the non-client
+                    // area) falls back to the Basic frame on Windows 7, which is
+                    // worse than what it removes. See AGENTS.md.
+                    static int glassModeUi = userSettings.glassMode == 2 ? 1 : 0;
                     ImGui::SetNextItemWidth(interior);
                     if (ImGui::Combo("##glassmode", &glassModeUi,
-                            "extend frame（默认）\0不画窗框（DWM NCR off）\0自绘无框（实验）\0")) {
-                        userSettings.glassMode = glassModeUi;
-                        glassMode = glassModeUi; // the helper reads this one
+                            "extend frame（默认）\0自绘无框（窗口无边框）\0")) {
+                        const int chosen = glassModeUi == 1 ? 2 : 0;
+                        userSettings.glassMode = chosen;
+                        glassMode = chosen; // the helper reads this one
 #ifdef _WIN32
-                        applyGlassWindowMode(true);
+                        requestGlassWindowMode(true); // applied between frames, not here
 #endif
                         persistUserData();
                     }
@@ -3107,8 +3198,8 @@ int main(int argc, char** argv)
                     ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyle().Colors[ImGuiCol_TextDisabled]);
                     ImGui::TextWrapped("背景不填充，窗口透到桌面（Win7 Aero 下是毛玻璃）。"
                                        "全屏时会退化成普通深色背景——Windows 的全屏优化会绕过 DWM。"
-                                       "「不画窗框」请 DWM 别画非客户区；「自绘无框」把非客户区算成零、"
-                                       "移动与缩放由我们自己接管（窗口顶部 23px 是拖动区）。");
+                                       "「自绘无框」把非客户区算成零，移动与缩放由我们自己接管"
+                                       "（窗口顶部 23px 是拖动区）。");
                     ImGui::PopStyleColor();
                 }
                 if (userSettings.bgStyle == 1) {
@@ -4162,6 +4253,23 @@ int main(int argc, char** argv)
         lastFrameCounter = nowCounter;
         const float frameDelta = static_cast<float>(lastFrameDeltaSec);
         uiClock += lastFrameDeltaSec;
+#ifdef _WIN32
+        if (glassReapplyWanted) {
+            glassReapplyWanted = false;
+            applyGlassWindowMode(glassReapplyEnable);
+        }
+        // Feeds the crash log (cppsekaiCrashFilter); a handful of stores a frame.
+        gCrashState = static_cast<long>(state);
+        gCrashFrameless = noFrameMode;
+        ++gCrashFrameCount;
+        if (glassToggleSec >= 0.0 && !glassToggleDone && uiClock >= glassToggleSec) {
+            glassToggleDone = true;
+            glassMode = (glassMode == 2) ? 0 : 2;
+            std::printf("[glass] probe: switching to mode %d now\n", glassMode);
+            std::fflush(stdout);
+            requestGlassWindowMode(true); // same path the settings card uses
+        }
+#endif
         // ------------------------------------------------------------------
         // Frame-rate sampler. Quiet while nothing interesting happens, and it
         // needs no environment variable - a "the window's picture does not
@@ -6791,6 +6899,15 @@ int main(int argc, char** argv)
         bool logMessages = false;
         bool* dragPacing = nullptr; // vsync off while a drag is in progress
         int* noFrame = nullptr;     // glassMode 2: remove the non-client area
+        // Frames are only ever served **during a real modal move/size loop**, which
+        // is what WM_ENTERSIZEMOVE marks and WM_EXITSIZEMOVE ends. Without this gate
+        // any WM_MOVE/WM_SIZE reaching the window would run the whole frame body
+        // *from inside itself* - and one of the ways to get a WM_SIZE without a drag
+        // is our own SetWindowPos from the settings card, so switching 玻璃实现
+        // re-entered the frame in the middle of an ImGui frame. ImGui is not
+        // reentrant; that is the crash this counter used to catch (see servedOutside).
+        bool dragging = false;
+        int servedOutside = 0;
     };
     SubclassState subclass;
     subclass.frame = &runFrame;
@@ -6882,6 +6999,7 @@ int main(int argc, char** argv)
                         }
                     }
                     if (message == WM_ENTERSIZEMOVE) {
+                        st->dragging = true;
                         *st->dragPacing = true;
                         st->fromTimer = 0;
                         st->fromMoving = 0;
@@ -6893,6 +7011,7 @@ int main(int argc, char** argv)
                             kDragFrameMs);
                         std::fflush(stdout);
                     } else if (message == WM_EXITSIZEMOVE) {
+                        st->dragging = false;
                         *st->dragPacing = false;
                         KillTimer(hwnd, kDragTimerId);
                         std::printf("[window] WM_EXITSIZEMOVE: %d frame(s) served during the drag "
@@ -6901,11 +7020,30 @@ int main(int argc, char** argv)
                             st->fromSizing, st->fromTimer);
                         std::fflush(stdout);
                     } else if (st->depth == 0) {
+                        // WM_MOVING/WM_SIZING are only ever *sent* by the system's
+                        // modal move/size loop; WM_MOVE/WM_SIZE are not (SetWindowPos
+                        // and SDL_SetWindowSize produce those), so they must never
+                        // ask for a frame - doing that used to nest a whole frame
+                        // inside a frame. They are counted instead, as evidence that
+                        // the machine does deliver them here (Windows 7 does, Windows
+                        // 11 apparently does not).
                         int* counter = nullptr;
-                        if (message == WM_MOVING || message == WM_MOVE) {
+                        if (message == WM_MOVING) {
                             counter = &st->fromMoving;
-                        } else if (message == WM_SIZING || message == WM_SIZE) {
+                        } else if (message == WM_SIZING) {
                             counter = &st->fromSizing;
+                        } else if (message == WM_MOVE || message == WM_SIZE || message == WM_NCCALCSIZE
+                            || message == WM_WINDOWPOSCHANGED) {
+                            if (!st->dragging && st->servedOutside < 8) {
+                                ++st->servedOutside;
+                                std::printf("[window] %s outside a drag (frameless=%d) - not served\n",
+                                    message == WM_MOVE ? "WM_MOVE" :
+                                    message == WM_SIZE ? "WM_SIZE" :
+                                    message == WM_NCCALCSIZE ? "WM_NCCALCSIZE" : "WM_WINDOWPOSCHANGED",
+                                    *st->noFrame);
+                                std::fflush(stdout);
+                            }
+                            return CallWindowProcW(st->chain, hwnd, message, wParam, lParam);
                         } else if (message == WM_TIMER && wParam == kDragTimerId) {
                             // The modal loop can be entered and left without our
                             // seeing WM_EXITSIZEMOVE (the release lands in the
@@ -6915,6 +7053,7 @@ int main(int argc, char** argv)
                             // check it here and clean up if the drag is over.
                             if ((GetAsyncKeyState(VK_LBUTTON) & 0x8000) == 0) {
                                 KillTimer(hwnd, kDragTimerId);
+                                st->dragging = false;
                                 *st->dragPacing = false;
                                 std::printf("[window] drag over (button released): %d frame(s) served "
                                             "(moving=%d sizing=%d timer=%d)\n",
@@ -6924,6 +7063,9 @@ int main(int argc, char** argv)
                                 return CallWindowProcW(st->chain, hwnd, message, wParam, lParam);
                             }
                             counter = &st->fromTimer;
+                        }
+                        if (counter != nullptr && !st->dragging) {
+                            return CallWindowProcW(st->chain, hwnd, message, wParam, lParam);
                         }
                         if (counter != nullptr) {
                             // The frame served here pumps messages itself (the next WM_TIMER can

@@ -1088,39 +1088,102 @@ with no window border"，它管的是**客户区**，非客户区照旧由 DWM �
 **2026-09-19 更正**：本段原先写的是 "borderless (`WS_POPUP`) + `WM_NCHITTEST`" —— 那是社区常见做法，
 能用但会丢掉 DWM 投影和窗口风格带来的行为。MS 官方配方走 `WM_NCCALCSIZE` 清零非客户区。
 
-### 玻璃实现（`glassMode`，2026-09-19 已落地，等 Win7 上验）
+### 玻璃实现（`glassMode`，2026-09-19）
 
-设置 → 系统 → 选曲背景选「透明（Aero 玻璃）」之后会多一个「玻璃实现」下拉，三档：
+设置 → 系统 → 选曲背景选「透明（Aero 玻璃）」之后多一个「玻璃实现」下拉，**只有两档**：
 
-| `glassMode` | 做什么 | 本机实测（Win11，窗口 1280x720 带框） |
+| `glassMode` | 做什么 | 实测 |
 |---|---|---|
-| 0 `extend frame（默认）` | 只有 `DwmExtendFrameIntoClientArea(-1)`（＝以前的行为） | 客户区 1280x720，透明像素 43.1% |
-| 1 `不画窗框（DWM NCR off）` | 再加 `DWMWA_NCRENDERING_POLICY = DWMNCRP_DISABLED`（叫 DWM 别画非客户区） | 客户区还是 1280x720 —— 框架那 16x40 **还在**，只是 DWM 不再画它，**可能变成一圈黑边**（所以才有第 2 档） |
-| 2 `自绘无框（实验）` | MS 官方 custom frame：`WM_NCCALCSIZE` 返回 0 + 自己 hit-test | 客户区 **1280x720 → 1296x760**，正好是窗框那 16x40 ⇒ 非客户区真的没了；透明像素 42.0%（玻璃还在） |
+| 0 `extend frame（默认）` | 只有 `DwmExtendFrameIntoClientArea(-1)` | 客户区 1280x720，透明像素 43.1% |
+| 2 `自绘无框` | MS 官方 custom frame：`WM_NCCALCSIZE` 返回 0 + 自己 hit-test | 客户区 **1280x720 → 1296x760**（正好是窗框那 16x40）；透明 42.0%；Win7 上内边框消失、Aero 玻璃正常 ✓ |
 
-实现要点（都在 `main.cpp`）：
+**中间那档（`DWMWA_NCRENDERING_POLICY = DWMNCRP_DISABLED`）试过，已删**：想法是"请 DWM 别画非
+客户区"，在 Win7 上它会让 DWM **回退到 Basic 窗框**（整窗连 Aero 都没了），比它本来要去掉的那个
+框还丑。`SongSelect.cpp` 里加载时把旧值 1 归零，代码里留了一行注释说明，别再捡回来。
 
-- 三档共用一个 `applyGlassWindowMode(enable)`：算 `noFrameMode` → `applyWindowTransparency(window,
-  enable, glassMode)` → `SetWindowPos(..., SWP_FRAMECHANGED)`。DWM 那两个调用都打了返回值和
-  policy 值（`[window] DwmSetWindowAttribute(NCRENDERING_POLICY=%u) -> 0x%lX`），`0x0` 就是 S_OK。
-- **`SWP_FRAMECHANGED` 不能省**：子类化是在窗口创建很久之后才装上的，创建时那次 `WM_NCCALCSIZE`
-  早跑完了、之后没人重算 —— 不逼一次的话设置看起来"什么都没发生"（第一版就是这样，客户区尺寸
-  一点没变，靠新加的 `[window] frameless: client 1280x720 -> ...` 那行才发现）。
+实现要点（都在 `main.cpp`，验过再改）：
+
+- 公共入口 `applyGlassWindowMode(enable)`：算 `noFrameMode` → `applyWindowTransparency` →
+  `SetWindowPos(SWP_FRAMECHANGED)`。`SWP_FRAMECHANGED` **不能省**：子类化是在窗口创建很久之后才
+  装上的，创建时那次 `WM_NCCALCSIZE` 早跑完了、之后没人重算（少了它设置看着"完全没反应"）。
+- **窗口结构变更必须投递到帧边界执行，不能在设置卡片里直接做**：卡片是在 ImGui 帧的中途画的，
+  而 `SetWindowPos(SWP_FRAMECHANGED)` 会**同步**打来一串消息（实测 Win11 上是
+  `WM_WINDOWPOSCHANGED` + `WM_MOVE` + `WM_SIZE`；Win7 同样会发）。所以卡片只置
+  `requestGlassWindowMode()` 的请求，帧体开头（`ImGui::NewFrame` 之前）才真正应用。
 - 模式 2 的 hit-test 在子类里（`WM_NCHITTEST`）：边缘宽度用 `SM_CXSIZEFRAME + SM_CXPADDEDBORDER`
   （Windows 自己用的数，手感才一致），顶部 `max(22, SM_CYCAPTION)` px 返回 `HTCAPTION`，其余
-  `HTCLIENT`。`lParam` 的两个坐标**必须按 16 位有符号解**（多显示器会是负坐标，文档明确说别用
-  裸 `LOWORD/HIWORD`），而 `windowsx.h` 不在工具链里，所以是手写的 `(short)LOWORD/HIWORD`。
-- **最大化 / 全屏不参与**：`IsZoomed || IsIconic` 时把 `WM_NCCALCSIZE` 转回 SDL 的过程（= 正常
-  框架），否则客户端铺满屏幕会把任务栏也盖住；`windowMode == 2`（全屏）在 `noFrameMode` 里直接排除。
-- 官方**没承诺过**的东西依然没有承诺：Aero Snap / 摇一摇是 shell 行为，`HTCAPTION` 文档只有
-  "In a title bar"。本机用 `dragwin`（SendInput 真拖动）实测：模式 2 下窗口精确位移 240px、
-  拖边框 +160px、拖动期间 53 帧由模态循环喂进去（`moving=30 sizing=0 timer=23`）——
-  **移动和缩放是好的**，Snap 得在他那台手动试。
-- 代价：顶部那 23px 变成拖动区，那里点不了 UI（本来也是标题栏的位置）。
+  `HTCLIENT`。`lParam` 两个坐标**必须按 16 位有符号解**（多显示器是负坐标），工具链没有
+  `windowsx.h`，所以手写 `(short)LOWORD/HIWORD`。
+- **最大化 / 全屏不参与**：`IsZoomed || IsIconic` 时把 `WM_NCCALCSIZE` 转回 SDL 的过程，否则客户端
+  铺满屏幕会盖住任务栏；`windowMode == 2` 在 `noFrameMode` 里直接排除。
 
-**待用户在 Win7 上验**：`glassMode` 依次试 1、2，看① 那圈内边框有没有消失 ② Aero 毛玻璃还在不在
-（模式 1 有黑边的风险，模式 2 才是文档保证的路径）。日志里 `[window] glass mode N (...)` 那行就是
-当时生效的是哪档。
+#### 喂帧的教训：`WM_MOVE` / `WM_SIZE` 绝不能触发一帧（2026-09-19 的崩溃根因）
+
+症状：Win7 上在设置里切到「自绘无框」，效果出现约一秒后进程 AV 崩掉（`c0000005`）；**重启后带着
+这个设置进来却一切正常** —— 只有"运行时切换"崩，说明 bug 在切换路径上。
+
+根因：拖动喂帧那套（见上一节）最初把 `WM_MOVE` / `WM_SIZE` 也当成"拖动消息"来喂帧：
+
+```cpp
+} else if (message == WM_MOVING || message == WM_MOVE)  { counter = &st->fromMoving; }
+  else if (message == WM_SIZING || message == WM_SIZE)  { counter = &st->fromSizing; }  // ← 祸根
+```
+
+而 `depth` 只挡得住"我们喂出来的帧"里再嵌套，**普通主循环里 `depth` 就是 0** —— 于是那条路变成：
+设置卡片改设置 → `SetWindowPos(SWP_FRAMECHANGED)` → 客户区尺寸变了 → `WM_SIZE` 同步到达子类 →
+**从帧体内部又跑了一整遍帧体**（含 `ImGui::NewFrame()`）。ImGui 不可重入，Win11 上侥幸活下来
+（实测嵌套了 2~3 帧没死），Win7 上直接 AV。这也解释了为什么只有「自绘无框」会崩：只有它**改变
+客户区尺寸**，切 0↔1 尺寸不变、根本不发 `WM_SIZE`。
+
+修法（两道，都在子类里）：
+
+1. **门闩 `dragging`**：只在 `WM_ENTERSIZEMOVE` ~ `WM_EXITSIZEMOVE`（或按键松开的看门狗）之间才算
+   "正在拖动"，其余时间任何消息都不喂帧。同时把 **`WM_MOVE` / `WM_SIZE` 从喂帧名单里删掉** ——
+   它们不是模态循环发的（`SetWindowPos`、`SDL_SetWindowSize` 都会产生），只留
+   `WM_MOVING` / `WM_SIZING` / 自家 `WM_TIMER`。
+2. 结构变更投递到帧边界（上一段）。
+
+回归实测（Win11，`dragwin` 真输入）：改完后真拖动 54 帧被喂进模态循环（`moving=35 timer=19`）、
+窗口精确位移 240px；真缩放 34 帧（`sizing=12`）、宽度精确 +160px —— **喂帧功能没被门闩挡掉**。
+切换探针（下面那个）连跑多个来回不再崩、也没有再出现嵌套帧。
+
+日志里现在会打这两行（**下次 Win7 再崩，先看它们**）：
+
+```
+[window] WM_SIZE outside a drag (frameless=1) - not served
+[window] WM_WINDOWPOSCHANGED outside a drag (frameless=1) - not served
+```
+
+它们说明"机器确实会发这些消息"（Win7 会、Win11 也会），而 `- not served` 说明它们**没有**再变成
+嵌套帧。
+
+#### 崩溃现场怎么拿到：`cppsekai-crash.log`
+
+exe 是 Windows 子系统程序，崩了什么都不留（只有 Windows 错误对话框里那个「异常偏移」）。现在
+`main()` 开头装了 `SetUnhandledExceptionFilter`（`cppsekaiCrashFilter`），崩了会往 exe 旁边写
+`cppsekai-crash.log`：异常码、**出错地址按 RVA 记**（和错误对话框里那个数一致）、当时的
+`state/glassMode/frameless/frames`，以及 `RtlCaptureStackBackTrace` 抓的 32 层返回地址（同样记 RVA）。
+写好就 `EXCEPTION_EXECUTE_HANDLER` 直接结束，不再弹系统对话框。
+
+**这个项目没法把 RVA 反查成函数名**：zig 的 lld 生成的 exe 里**没有 COFF 符号表**
+（`ptrsym=0 nsyms=0`，`-g`、`--export-all-symbols` 都没用，`-Wl,-Map`/`/MAP` 一律被 zig 拒绝），
+所以"拿偏移查函数"这条路走不通，别浪费时间再试（`.workbuddy/tools/pe_symbols.py` 已删）。
+定位靠**崩溃日志里的状态 + 上面的步进日志 + 探针复现**。
+
+#### 复现用的探针
+
+`CPSEKAI_GLASS_TOGGLE=<秒>`：到点自动把 `glassMode` 在 0/2 之间翻一次，走的就是设置卡片那条投递
+路径 —— 这样"切一下就崩"不用手点也能复现：
+
+```bash
+cd build && CPSEKAI_GLASS_TOGGLE=5 ./cppsekai.exe --no-party --screenshot shots/x.png --screenshot-time 12
+```
+
+（`--screenshot` 会强制把日志写进 `cppsekai.log`；从 Git Bash 直接跑的话 stdout 被父进程接走、
+**不生成日志文件**，这一点坑过一次。）
+
+**待用户在 Win7 上复测**：切「自绘无框」→ 应该不再崩；万一还崩，把 `cppsekai-crash.log` 和
+`cppsekai.log` 末尾发我。
 
 ### 原生材质（Win10 亚克力 / Win11 Mica）：一条官方、一条野生
 

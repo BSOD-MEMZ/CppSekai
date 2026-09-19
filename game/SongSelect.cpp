@@ -806,6 +806,11 @@ void loadUserData(const std::string& path, UserSettings& settings,
     }
     settings.bgStyle = std::clamp(settings.bgStyle, 0, 2);
     settings.glassMode = std::clamp(settings.glassMode, 0, 2);
+    if (settings.glassMode == 1) {
+        // 1 was "let DWM stop drawing the non-client area"; dropped in 2026-09-19
+        // because on Windows 7 it drops Aero and falls back to the Basic frame.
+        settings.glassMode = 0;
+    }
     settings.bgBlur = std::clamp(settings.bgBlur, 0.0f, 1.0f);
     settings.bgDim = std::clamp(settings.bgDim, 0.0f, 1.0f);
     // Small range on purpose: this zooms the select / result canvas, and past
