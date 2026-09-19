@@ -355,6 +355,28 @@ namespace
     }
 
     // -----------------------------------------------------------------
+    // Community song aliases (music-aliases.json, exported from the public
+    // HarukiBot API - see .workbuddy/tools/fetch_music_aliases.py). The
+    // official table only knows one reading per song; this one carries what
+    // people actually type: "tyw" / "梦开始的地方" for Tell Your World,
+    // "mmj团歌" for アイドル新鋭隊, "即刻轮回" for いますぐ輪廻. Small-cased
+    // alias -> song ids. Lookups are EXACT on purpose: the table is full of
+    // two-letter entries ("hs", "kz", "emu") that as substrings would light up
+    // half the list at once.
+    // -----------------------------------------------------------------
+    std::map<std::string, std::vector<int>> gAliasIndex;
+
+    bool aliasMatches(int musicId, const std::string& needleLower)
+    {
+        const auto it = gAliasIndex.find(needleLower);
+        if (it == gAliasIndex.end()) {
+            return false;
+        }
+        const std::vector<int>& ids = it->second;
+        return std::find(ids.begin(), ids.end(), musicId) != ids.end();
+    }
+
+    // -----------------------------------------------------------------
     // Vocal versions (music-vocals.json, generated from the official
     // musicVocals + gameCharacters tables). Only the *table* lives here; which
     // versions have their mp3 next to the chart is decided per entry by
@@ -2067,6 +2089,51 @@ void applyDefaultVocal(ChartEntry& entry)
     applyVocalVersion(entry, versions, defaultVocalIndex(entry.musicId, versions));
 }
 
+void loadMusicAliases(const std::string& path)
+{
+    gAliasIndex.clear();
+    std::error_code ec;
+    if (path.empty() || !fs::exists(toFsPath(path), ec)) {
+        return;
+    }
+    std::ifstream file(toFsPath(path), std::ios::binary);
+    if (!file) {
+        return;
+    }
+    nlohmann::json doc;
+    try {
+        doc = nlohmann::json::parse(file);
+    } catch (...) {
+        return;
+    }
+    if (!doc.is_object()) {
+        return;
+    }
+    for (auto it = doc.begin(); it != doc.end(); ++it) {
+        const int musicId = std::atoi(it.key().c_str());
+        if (musicId <= 0 || !it.value().is_array()) {
+            continue;
+        }
+        for (const auto& row : it.value()) {
+            if (!row.is_string()) {
+                continue;
+            }
+            const std::string alias = toLower(row.get<std::string>());
+            if (alias.empty()) {
+                continue;
+            }
+            std::vector<int>& ids = gAliasIndex[alias];
+            if (std::find(ids.begin(), ids.end(), musicId) == ids.end()) {
+                ids.push_back(musicId);
+            }
+        }
+    }
+    // Logged because a missing music-aliases.json is otherwise invisible: the
+    // search just quietly loses its alias branch.
+    std::printf("[aliases] %zu aliases\n", gAliasIndex.size());
+    std::fflush(stdout);
+}
+
 void loadMusicVocals(const std::string& path)
 {
     std::error_code ec;
@@ -2579,8 +2646,17 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
                 visible.push_back(gi);
                 continue;
             }
+            // Community alias ("tyw" / "梦开始的地方" / "mmj团歌" / "即刻轮回"):
+            // exact match, see aliasMatches(). Kept as its own branch rather
+            // than folded into the substring tests - a two-letter alias is not
+            // a fragment of the title, and treating it as one would match
+            // everything.
+            if (aliasMatches(g.musicId, needle)) {
+                visible.push_back(gi);
+                continue;
+            }
             // Original-text match on the reading too: the CN-only songs carry
-            // pinyin there (see .workbuddy/tools/update_cn_music.py) because the
+            // pinyin there (see .workbuddy/tools/update_music_db.py) because the
             // official table has no kana for them, and pinyin does not fold to
             // kana - "yiyang" only finds 「一样」 through this line.
             if (g.kana.find(needle) != std::string::npos

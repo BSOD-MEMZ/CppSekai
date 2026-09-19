@@ -47,7 +47,7 @@ cp -f build/SDL2.dll "$OUT/"
 cp -f icon.png "$OUT/"
 
 # Documented data tables (see COPYRIGHT.md: factual data, rebuildable by setup.sh).
-cp -f musics.json music-vocals.json music-levels.json "$OUT/"
+cp -f musics.json music-vocals.json music-levels.json music-aliases.json "$OUT/"
 
 # Sprites / UI sounds / splash art the game loads at startup. With
 # these in place the package runs as-is (assets are resolved relative to the

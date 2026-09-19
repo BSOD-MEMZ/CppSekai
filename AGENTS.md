@@ -221,6 +221,12 @@ main.cpp          # SDL2 窗口、事件循环、输入映射、ImGui HUD、截�
     日文/英文标题填**假名**（走罗马音路径）。
   - 两个表都是**单行紧凑 JSON**，脚本按 `separators=(",",":")` 整体写回，diff 才只有一行。
   - 它同时吸收了原来的 `gen_music_vocals.py`（从 musicVocals + gameCharacters 生成演唱版本表）。
+- `.workbuddy/tools/fetch_music_aliases.py` → **社区曲目别名表** `music-aliases.json`
+  （`{musicId: [别名…]}`，703 首 / 12,896 条 / 185 KB）。数据来自 HarukiBot 的公开 API
+  （`neo-api.haruki.seiunx.com/api/bot/v2/pjsk/alias/music/<id>`，社区提交 + 审核，
+  后端是 Team-Haruki 的 Haruki-Cloud）。**抓一次存成本地表**：单机游玩器不该把搜索挂到
+  网络上 —— 断网就废、还多一个隐私面。玩法是一首一首查、并发 8，700 多首约一分钟；
+  别名是社区持续补充的，隔一阵重跑一次就好。纯数字别名会被丢掉（输入 id 本来就能搜到）。
 - `.workbuddy/tools/winsend.c` → `build/winsend.exe`：按窗口标题找窗口再送假输入，
   无交互会话下驱动 UI（动作：`click x y` / `move x y` / `key <vk>` / `focus` /
   `place x y` / `rect`；见「平台 / 输入相关的坑」）。
@@ -725,14 +731,21 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
   图标是 `dl` 手画的弧 + 三角箭头，不需要素材），点了返回 `SelectRescan`，和 F5 走同一条路。
   悬停有 tooltip 写着 F5。注意**重扫之后 main.cpp 会把选中项重置成第一首**（F5 一直是这行为），
   要改成保留当前曲目得动 `main.cpp` 那处 `selected = entries.empty() ? -1 : 0`。
+- **搜索框匹配顺序**：标题子串 → 作者子串 → **社区别名（精确匹配）** → 读音子串（原文）
+  → 读音（把输入当罗马音折成假名）。别名表是 `music-aliases.json`（HarukiBot 的公开 API
+  导出，700 首 / 1.3 万条，见工具一节），所以 `tyw`、`hs`、`mmj`、`梦开始的地方`、`mmj团歌`、
+  `即刻轮回` 都能直接搜到。**别名必须精确匹配**：表里全是两字母词（`hs` / `kz` / `emu`），
+  当子串用会一次点亮半张列表。chartdl 的曲库列表走同一张表、同一套顺序。
 - **排序 / 分组**（搜索框右边的两个 combobox）：排序有「按名称」「按难度」，分组有「关闭」
   「按难度段（1-5 / 6-10 / … / 36+）」「按读音（あ/か/さ…/A-Z 逐字母/#）」「按首字
   （A-Z / 0-9 / あ い う…，用 initialLabel()）」。
   名称排序和读音分组用的是**官方读音**（`musics.json` 的 `pronunciation`，main.cpp 里
   `loadMusicMaster()` 载入，`foldForSort()` 把片假名折成平假名、ASCII 转小写），
-  所以「ウミユリ海底譚」落在 あ 行、片假名标题也能正确排序；官方 715 首的读音**全是假名**
+  所以「ウミユリ海底譚」落在 あ 行、片假名标题也能正确排序；**日服曲的读音全是假名**
   （`Tell Your World` = てるゆあわーるど → た 行），所以逐字母段只对**没有读音的自制谱**
-  生效（那时退回用标题当 key）。汉字开头且没有读音的会落进「その他」（按字节序排在最后）。
+  生效（那时退回用标题当 key）。**例外是国服独占曲的中文标题，那里填的是拼音**
+  （见工具一节）—— 它们会落进逐字母段，而且只有靠原文比对才搜得到。
+  汉字开头且没有读音的会落进「その他」（按字节序排在最后）。
   `kanaRowLabel()` 是「行」级的标签（あ か さ た な は ま や ら わ + 逐字母 + `#`），
   `initialLabel()` 是「首字」级的（逐假名 + 逐字母）。
   注意 `#TITLE` 里写的是难度名（有些 unipjsk 导出写 `#TITLE "master"`）时要当空处理，

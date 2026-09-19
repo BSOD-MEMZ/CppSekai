@@ -341,6 +341,12 @@ void applyDefaultVocal(ChartEntry& entry);
 // simply offers no version switcher.
 void loadMusicVocals(const std::string& path);
 
+// Community song aliases (music-aliases.json, exported from the public
+// HarukiBot API by .workbuddy/tools/fetch_music_aliases.py). Optional like the
+// other tables: without it the search just loses the alias branch ("tyw",
+// "梦开始的地方", "mmj团歌" ...). Matching is exact, not substring.
+void loadMusicAliases(const std::string& path);
+
 // Key used in scores.json: the chart's file name (e.g. "0075_master.sus").
 std::string scoreKey(const ChartEntry& entry);
 

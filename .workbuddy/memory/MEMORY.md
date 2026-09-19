@@ -60,6 +60,15 @@
   —— 精灵矩形是像素坐标写死在 `core/native/generated/generated_resources.h`，缩文件 = 音符错位。
 
 ## 谱面目录 / 数据文件
+- 仓库根有**四个**数据表，都在 `main.cpp` 里按 `baseDir` → `..` → cwd 三级候选找，
+  打包时由 `package.sh` 一起拷进包内：`musics.json`（曲名/读音/组）、`music-vocals.json`
+  （演唱版本）、`music-levels.json`（定数）、**`music-aliases.json`（社区别名）**。
+  四个都是**可选**的，缺一个只会少一块功能、不会崩 —— 别名表丢了是**静默降级**，
+  所以启动打了一行 `[aliases] N aliases`。
+- 别名表来自 HarukiBot 的公开 API（社区提交 + 审核），703 首 / 1.3 万条，搜 `tyw`、
+  `梦开始的地方`、`mmj团歌` 都能命中。**匹配是精确的**（表里全是两字母词），
+  两个界面的搜索顺序都是：标题 → 作者 → 别名 → 读音原文 → 读音（罗马音折假名）。
+  重抓跑 `.workbuddy/tools/fetch_music_aliases.py`。
 - 谱面只认 **exe 同级的 `charts\`**（下载器默认输出）；游戏扫 `chartCandidates` 全部候选**合并**、
   按 .sus 文件名去重。下载器设置存 `<exe>\chartdl.json`。
 - 多用户：`<dataDir>\profiles\<id>.json`（`{settings, scores, account}`）+ `index.json`；

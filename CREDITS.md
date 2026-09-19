@@ -77,6 +77,7 @@ CppSekai (AGPL-3.0-only)  ← 本仓库        加平台层、判定引擎、UI�
 | [Sekai-World](https://github.com/Sekai-World)（`sekai-master-db-diff`、`sekai-master-db-cn-diff`…） | **曲库表**：`musics.json` / `music-vocals.json` 的数据来源（官方 master DB 的镜像，日服与各服各一套）。只是数据，没有代码。由 `.workbuddy/tools/update_music_db.py` 同步 |
 | [Team-Haruki](https://github.com/Team-Haruki)（`haruki-sekai-master`、`haruki-sekai-sc-master`） | 同上的**实时收集**版本，作为备用源（国服那份带独占曲 11001+）。见 `update_music_db.py` 的源列表 |
 | `storage.sekai.best/sekai-cn-assets` | **国服资源镜像**（Sekai Viewer 的 S3 桶）：`chartdl` 从这取国服独占曲的 SUS / BGM / 曲绘。日服曲仍走 `assets.unipjsk.com` |
+| [Team-Haruki](https://github.com/Team-Haruki) 的公开别名 API（Haruki-Cloud 后端） | **社区曲目别名**：`music-aliases.json` 由 `.workbuddy/tools/fetch_music_aliases.py` 从 `neo-api.haruki.seiunx.com` 的只读接口导出（别名是社区提交 + 审核的，不是我们的数据；后端仓库是 MIT，**没有取任何代码**） |
 
 ---
 

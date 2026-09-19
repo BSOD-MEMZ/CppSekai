@@ -2128,6 +2128,21 @@ int main(int argc, char** argv)
         }
     }
 
+    // Community song aliases (music-aliases.json, next to the two tables
+    // above). Sourced from the public HarukiBot API - see
+    // .workbuddy/tools/fetch_music_aliases.py. Also optional: it only widens
+    // what the search box accepts.
+    for (const std::string& candidate :
+        {baseDir + "music-aliases.json", baseDir + "..\\music-aliases.json",
+            std::string("music-aliases.json")}) {
+        std::ifstream probe(candidate, std::ios::binary);
+        if (probe.good()) {
+            probe.close();
+            game::loadMusicAliases(candidate);
+            break;
+        }
+    }
+
     // ------------------------------------------------------------------
     // UI fonts
     // ------------------------------------------------------------------

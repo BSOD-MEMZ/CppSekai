@@ -342,6 +342,11 @@ struct Song
 const char* kDiffNames[5] = {"easy", "normal", "hard", "expert", "master"};
 
 std::vector<Song> gSongs;
+// Community song aliases (music-aliases.json), small-cased alias -> song ids.
+// The same table the game's song select reads; the list here searches by title
+// only, so "tyw" / "梦开始的地方" need it to find Tell Your World.
+// Exact match on purpose - the table is full of two-letter entries.
+std::map<std::string, std::vector<int>> gAliasIndex;
 std::string gDataError;
 // How many rows in musics.json were dropped because their id was already taken.
 // Reported on the log so a broken table is visible instead of silently "just
@@ -538,6 +543,35 @@ void loadData()
                 }
                 if (!version.asset.empty()) {
                     gSongs[found->second].vocals.push_back(std::move(version));
+                }
+            }
+        }
+    }
+
+    // Community song aliases (music-aliases.json, next to the tables above).
+    // Same export the game reads - .workbuddy/tools/fetch_music_aliases.py.
+    gAliasIndex.clear();
+    nlohmann::json aliases;
+    if (readJson("music-aliases.json", aliases) && aliases.is_object()) {
+        for (auto it = aliases.begin(); it != aliases.end(); ++it) {
+            const int musicId = std::atoi(it.key().c_str());
+            if (musicId <= 0 || !it.value().is_array()) {
+                continue;
+            }
+            for (const auto& row : it.value()) {
+                if (!row.is_string()) {
+                    continue;
+                }
+                std::string alias = row.get<std::string>();
+                for (char& ch : alias) {
+                    ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+                }
+                if (alias.empty()) {
+                    continue;
+                }
+                std::vector<int>& ids = gAliasIndex[alias];
+                if (std::find(ids.begin(), ids.end(), musicId) == ids.end()) {
+                    ids.push_back(musicId);
                 }
             }
         }
@@ -1303,6 +1337,20 @@ namespace
         if (song.title.find(filter) != std::string::npos
             || song.kana.find(filter) != std::string::npos) {
             return true;
+        }
+        // Community alias - exact match, because the table is full of very
+        // short entries ("hs", "kz", "emu") that as substrings would match
+        // half the list. See gAliasIndex.
+        {
+            std::string needle = filter;
+            for (char& ch : needle) {
+                ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+            }
+            const auto hit = gAliasIndex.find(needle);
+            if (hit != gAliasIndex.end()
+                && std::find(hit->second.begin(), hit->second.end(), song.id) != hit->second.end()) {
+                return true;
+            }
         }
         // Romaji fallback, for a player with no Japanese IME: "gurume" finds
         // 「いますぐ輪廻」. The official reading is all kana, so folding the
