@@ -377,12 +377,21 @@ bash build.sh          # 仅需 Git Bash；产物 build/cppsekai.exe + SDL2.dll 
   血量 1000 起，MISS -80、长条中途断 -40，HUD 血量 = `judgement.lifeRatio()`。
   分数前言零用 `score/digit/n.png`（它本身就是个浅色 0，8 位补足是上游行为）。
 - UI 缩放：`ui::scale()` 以 860p 为基准（720p 窗口下 ≈0.84）；titlebar 高 `kHeaderH=44` 设计像素。
+  2026-09-19 细节调整：页签高 50→**42**、页签圆角 14→**10**；`ui::stepper` 胶囊高 62→**50**
+  （判定页「长条容错」那一排原来像三块厚板子）。都在 `game/Ui.cpp` 顶部/各自函数里，改数值即可。
   设置卡片 400x500、暂停弹窗 600x250（设计像素）；滑块行高 80。改卡片尺寸时先量内容高度
   （临时 printf `GetCursorScreenPos().y` 对比 cardBottom），别让底部按钮压住内容。
 - UI 组件坑：ImGui::Text 新行会把光标 x 归零（窗口 padding=0），绝对定位内容每行前要
   SetCursorScreenPos；卡片/组件内部不要用 Dummy 预留后重置光标到 (0,0)；零 item 的
   BeginGroup/EndGroup 会触发 ImGui 断言；`Ui.cpp` 的 `withAlpha(col, a)` 是**缩放** col 自身的
   alpha（曾经是"替换"，把 kBackdrop 的 84 变成 255，暂停遮罩变成全黑——改语义时留意）。
+- **`AddRectFilled` 的圆角会被钳到"短边的一半"**（2026-09-19 修)：`playerLevelChip` / `expBar`
+  的经验条 fill 是"窄矩形 + 圆角 = h/2"，而 ImGui 只给 `ImDrawFlags_RoundCornersAll` 的情况留
+  `min(w,h)*0.5` 的钳制额度 —— 于是 fill 宽度小于胶囊半径时，它的左端比胶囊本身"方"，绿色从胶囊
+  左帽的**两个角戳了出去**。修法：**fill 按完整胶囊画，再用 `PushClipRect` 裁到 ratio 宽度**
+  （裁剪出来必定贴合胶囊；也不用再写"窄了会变气泡、宽了补方块"那两套分支）。
+  同理，想让某个角保持大圆角而另一头是直角，用 `ImDrawFlags_RoundCornersLeft/Right`（那种 flag
+  的钳制额度是 `min(w,h)*1.0`，不会被砍）。
 - **卡片入场动画只做两件事，而且都在 `endCard()` 一处完成**（2026-09-19 修）：把这一段
   顶点**往卡片中心缩** `k`、**把 alpha 乘** `k`（`k = 0.34 + 0.66 * smoothstep(t)`，0.16s）。
   两个坑：
@@ -392,12 +401,40 @@ bash build.sh          # 仅需 Git Bash；产物 build/cppsekai.exe + SDL2.dll 
     （`BeginChild`）原来既不缩也不淡。`BeginChild` 之后必须 `ui::cardSubList(ImGui::GetWindowDrawList())`
     把那个 list 交给卡片，`endCard()` 会用同一套参数处理它（注册是每帧一次，`beginCard` 会清）。
   想看动画中间某一帧：`CPSEKAI_CARD_T=<0..1>` 冻结（0.16s 的动画截图时机根本追不上）。
+- **对话框的开关动画归调用方管，而且必须"画到 -2 为止"**（2026-09-19 修）：`messageDialog` /
+  `eulaDialog` 返回 `-3`（正在关）/ `>= 0`（按了某个按钮，内部已 `requestClose`）/ `-2`（关闭动画
+  结束）。**点完按钮当帧就把标志置 false 是错的**：关闭动画一帧都播不出来，而且卡片的动画状态被
+  留在半路（`open=false` 但 `t≈1`），下次弹出就"全尺寸闪现 → 缩小 → 再放大"弹一下（多开确认框
+  就是这么坏的）。正确写法（暂停框那份是模板）：
+
+  ```cpp
+  static bool alive = false;
+  if (wantOpen) { alive = true; }
+  if (alive) {
+      const int action = ui::messageDialog(...);
+      if (action == -2) { alive = false; }          // 动画结束才撤卡
+      else if (action >= 0) { /* 记录选择，不撤卡 */ }
+  }
+  ```
+  勾选框同理：「以后不再显示」在按下时就写档案，但卡片留到 `-2` 再撤。
+- **组件侧对"调用方中途撤卡"免疫**：`messageDialog` / `eulaDialog` 开头的状态判断走
+  `cardRaisedFresh(st)`（`CardState.lastFrame != GetFrameCount()-1` ⇒ 上一帧没画过 ⇒ 这次是重新
+  弹出），命中就 `t=0 / open=true / soundOpen=false` 重新入场。没有它，任何"中途撤走再弹出"都会弹
+  一下。**暂停框（`##pauseDialog`）还是老写法**（每个分支立刻 `pauseDialogAlive=false`）：它的绘制
+  点在状态分支里，要改成画到 -2 得先把绘制点从状态分支里提出来，还没做。
+- 无头看对话框：【`--settings --settings-tab <0-4>`】打开设置卡（页签 0 演奏 / 1 画面 / 2 判定 /
+  3 系统 / 4 账户）；`CPSEKAI_MULTIASK=1` 启动即弹「开启多开？」确认框（点 combo 是唯一其它入口，
+  而 PostMessage 假点击进不了 ImGui 按钮）。配合 `CPSEKAI_CARD_T` 抓入场中间帧。
 - 设置卡片 360x640、四个页签（演奏 / 画面 / 判定 / 系统）；`--settings` + `--settings-tab <0-3>`
   无头打开（按键没法送进无头运行），配合 `--screenshot` 截图。
   **页签内容放在一个裁剪用的 `BeginChild` 里**：「画面」页比卡片高，多出来的行会钻到「关闭」
   按钮底下（按钮后提交，把点击全吃掉）。这个 child 的末尾**必须补一句 `ImGui::Dummy`**——
   `ui::checkBox()` 最后一条是裸的 `SetCursorScreenPos`，child 作为当帧最后一个窗口时
   `EndChild()` 会弹 "SetCursorPos ... to extend window/parent boundaries" 断言。
+- **选曲头部行现在有两个按钮**（2026-09-19）：「刷新」（`refresh.png`，F5 同义）和它右边的
+  「下载谱面」（`store.png`，返回既有的 `game::SelectDownload`，主循环已有处理；空列表那个按钮
+  用的是同一个 action）。几何在 `game/SongSelect.cpp` 头部一起算（`rescanX/W`、`storeX/W`），
+  **多人 banner 的右边界要用 `storeX + storeW`**，不然会长得盖不住新按钮。
 - **选曲界面两个图标来自 `assets/select/`**（`selectTex()`：静态缓存 + 缺文件静默跳过）：
   `search.png` 画在搜索框**里面**的左侧（深色十字圆环，按框高 0.44 缩放）——InputText 的
   `FramePadding.x` 就是「给图标留出的位置」，输入框宽度是整条胶囊；旧写法把框缩短、
@@ -1096,6 +1133,13 @@ with no window border"，它管的是**客户区**，非客户区照旧由 DWM �
 |---|---|---|
 | 0 `extend frame（默认）` | 只有 `DwmExtendFrameIntoClientArea(-1)` | 客户区 1280x720，透明像素 43.1% |
 | 2 `自绘无框` | MS 官方 custom frame：`WM_NCCALCSIZE` 返回 0 + 自己 hit-test | 客户区 **1280x720 → 1296x760**（正好是窗框那 16x40）；透明 42.0%；Win7 上内边框消失、Aero 玻璃正常 ✓ |
+
+**这一档只在 Vista / 7 上出现**（2026-09-19）：非 Aero 系统（Win8+）直接不画「透明（Aero 玻璃）」
+和「玻璃实现」——`aeroGlassAvailable()`（`main.cpp`）用 **`RtlGetVersion`**，**不能用 `GetVersionEx`**
+（没有 manifest 时 Win8.1+ 一律谎报 6.2，Win10 会被判成 Win8）。档案里带 `bgStyle=2` 时启动静默
+回退成壁纸（**不回写档案**，同一份档案拿到 Win7 上设置还在）；并且 `glassMode` 只在 `bgStyle==2`
+时生效，其它情况清成 0 —— 否则"档案里存着 2、背景却不是玻璃"会让窗口白变无框（启动那张图片画面
+本来就要求透明窗口，`applyGlassWindowMode` 的 `enable` 恒为真，这个漏洞真会发生）。
 
 **中间那档（`DWMWA_NCRENDERING_POLICY = DWMNCRP_DISABLED`）试过，已删**：想法是"请 DWM 别画非
 客户区"，在 Win7 上它会让 DWM **回退到 Basic 窗框**（整窗连 Aero 都没了），比它本来要去掉的那个

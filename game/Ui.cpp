@@ -113,6 +113,9 @@ namespace
         ImDrawList* targetList = nullptr;
         ImVec2 pivot{0.0f, 0.0f};
         float k = 1.0f;            // the eased scale/opacity applied by endCard()
+        // Frame this card was last submitted on (see cardRaisedFresh): a card whose
+        // caller skips a frame has been dropped, and the next call is a new raise.
+        int lastFrame = -1;
         // Draw lists the card opened *inside* itself (see cardSubList): a child
         // window has its own vertex buffer, so it needs the same transform.
         std::vector<ImDrawList*> subLists;
@@ -170,6 +173,19 @@ namespace
         const ImVec4 cb = ImGui::ColorConvertU32ToFloat4(b);
         return ImGui::ColorConvertFloat4ToU32(ImVec4(ca.x + (cb.x - ca.x) * k, ca.y + (cb.y - ca.y) * k,
             ca.z + (cb.z - ca.z) * k, ca.w + (cb.w - ca.w) * k));
+    }
+    // True when this card was *not* submitted on the previous frame, i.e. its caller
+    // dropped it (hid the dialog, changed screen) and is raising it again now. The
+    // animation state left behind then describes a close that never finished - the
+    // caller hid the card on the click while `open` was already false and `t` was
+    // still up - so continuing from it made the dialog flash at full size, shrink
+    // away and pop back in. A raise after a gap is a fresh raise, always.
+    bool cardRaisedFresh(CardState& st)
+    {
+        const int frame = ImGui::GetFrameCount();
+        const bool fresh = st.lastFrame != frame - 1;
+        st.lastFrame = frame;
+        return fresh;
     }
 } // namespace
 
@@ -424,8 +440,10 @@ int tabBar(const char* id, const std::vector<std::string>& tabs, int* active, fl
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImFont* font = game::bodyFont();
     const float fontSize = 24.0f * s;
-    const float tabH = 50.0f * s;
-    const float radius = 14.0f * s;
+    // 42 / 10 (was 50 / 14): the header sat as tall as a button row and the corners
+    // read as a pill rather than as a tab.
+    const float tabH = 42.0f * s;
+    const float radius = 10.0f * s;
     const ImVec2 pos = ImGui::GetCursorScreenPos();
     const float rowW = rowWidth > 0.0f ? rowWidth : ImGui::GetContentRegionAvail().x;
     const float tabW = rowW / static_cast<float>(tabs.size());
@@ -872,14 +890,16 @@ bool stepper(const char* id, float* value, const std::vector<float>& deltas, con
     const ImVec2 pos = ImGui::GetCursorScreenPos();
     const float rowW = rowWidth > 0.0f ? rowWidth : ImGui::GetContentRegionAvail().x;
     const float y = pos.y;
-    ImGui::Dummy(ImVec2(rowW, 62.0f * s + 8.0f * s)); // reserve the row
+    // 50 (was 62): in pick-one mode the capsules *are* the choice, and at 62 they
+    // read as three fat slabs next to the sliders above them.
+    const float btnH = 50.0f * s;
+    ImGui::Dummy(ImVec2(rowW, btnH + 8.0f * s)); // reserve the row
     ImGui::PushID(id);
 
     // Capsule widths. Numeric mode is fixed (a "+1" label is narrow). Pick-one
     // measures the widest preset name and splits whatever is left over, so
     // three Chinese labels plus the value pill always fit inside `rowW`
     // instead of running off the card at small UI scales.
-    const float btnH = 62.0f * s;
     float btnW = 104.0f * s;
     float pillW = 132.0f * s;
     float gap = 14.0f * s;
@@ -1038,12 +1058,14 @@ int messageDialog(platform::Renderer& renderer, const char* id, const char* titl
     ImVec2 size = ImVec2(cardW, cardH);
 
     CardState& st = cardState(id);
-    if (st.ended) {
-        // Previous run finished closing: start a fresh entrance.
+    if (cardRaisedFresh(st) || st.ended) {
+        // Either the close animation finished, or the caller stopped drawing us
+        // mid-close and is raising the dialog again: both mean a fresh entrance.
         st.ended = false;
         st.t = 0.0f;
         st.drag = ImVec2(0.0f, 0.0f);
         st.open = true;
+        st.soundOpen = false; // the raise gets its own window_open
     } else if (!st.open && st.t <= 0.0f) {
         st.open = true; // fresh dialog
     }
@@ -1155,11 +1177,14 @@ int eulaDialog(platform::Renderer& renderer, const char* id, const char* title,
     ImVec2 size = ImVec2(cardW, cardH);
 
     CardState& st = cardState(id);
-    if (st.ended) {
+    if (cardRaisedFresh(st) || st.ended) {
+        // See messageDialog: a card dropped mid-close and raised again is a new
+        // entrance, not a continuation of the close that never finished.
         st.ended = false;
         st.t = 0.0f;
         st.drag = ImVec2(0.0f, 0.0f);
         st.open = true;
+        st.soundOpen = false;
     } else if (!st.open && st.t <= 0.0f) {
         st.open = true; // fresh dialog
     }
@@ -1298,14 +1323,17 @@ ImVec4 playerLevelChip(ImDrawList* dl, ImFont* font, ImVec2 anchor, int rank, fl
     // The green left end is the exp bar towards the next rank: it starts at the
     // pill's left cap and its width is the ratio, so a fresh account shows
     // (almost) none of it while a nearly leveled-up one is filled to the brim.
+    //
+    // Drawn as the *whole* capsule and then clipped to the ratio width. Drawing it
+    // as a narrow rounded rect instead made its left cap flatter than the pill's
+    // (ImGui clamps a rect's rounding to half its smaller side, so a fill narrower
+    // than the cap radius rounds less than the pill does) and the green poked out
+    // of the capsule's left corners. Clipping a correctly shaped capsule never can.
     const float fill = std::clamp(expRatio, 0.0f, 1.0f) * w;
-    if (fill > 1.0f) {
-        dl->AddRectFilled(ImVec2(x0, y0), ImVec2(x0 + fill, y0 + h), kLevelExp, round);
-        if (fill > h) {
-            // Square off the right end: a rounded end would read as a bubble
-            // rather than as a bar that is still filling up.
-            dl->AddRectFilled(ImVec2(x0 + fill - round, y0), ImVec2(x0 + fill, y0 + h), kLevelExp);
-        }
+    if (fill > 0.5f) {
+        dl->PushClipRect(ImVec2(x0, y0), ImVec2(x0 + fill, y0 + h), true);
+        dl->AddRectFilled(ImVec2(x0, y0), ImVec2(x0 + w, y0 + h), kLevelExp, round);
+        dl->PopClipRect();
     }
 
     // Note glyph, drawn straight on top: the sprite is a gold note on a
@@ -1346,15 +1374,13 @@ void expBar(ImDrawList* dl, ImVec2 pos, float width, float unit, float ratio)
     const float h = 10.0f * u;
     const float r = h * 0.5f;
     dl->AddRectFilled(pos, ImVec2(pos.x + width, pos.y + h), IM_COL32(30, 30, 44, 200), r);
+    // Same clip as playerLevelChip: the fill is the full capsule, cropped to the
+    // ratio, so its left end is the pill's own cap and its right end is square.
     const float fill = std::clamp(ratio, 0.0f, 1.0f) * width;
-    if (fill > h) {
-        // Full-round left end, square right end: a rounded rect narrower than
-        // its own height turns into a blob, so the fill is drawn as a rounded
-        // rect plus a small square capping the right edge.
-        dl->AddRectFilled(pos, ImVec2(pos.x + fill, pos.y + h), kLevelExp, r);
-        dl->AddRectFilled(ImVec2(pos.x + fill - r, pos.y), ImVec2(pos.x + fill, pos.y + h), kLevelExp);
-    } else if (fill > 0.0f) {
-        dl->AddRectFilled(pos, ImVec2(pos.x + fill, pos.y + h), kLevelExp, r);
+    if (fill > 0.5f) {
+        dl->PushClipRect(pos, ImVec2(pos.x + fill, pos.y + h), true);
+        dl->AddRectFilled(pos, ImVec2(pos.x + width, pos.y + h), kLevelExp, r);
+        dl->PopClipRect();
     }
 }
 

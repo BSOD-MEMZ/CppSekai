@@ -805,6 +805,45 @@ LONG WINAPI cppsekaiCrashFilter(EXCEPTION_POINTERS* info)
 }
 #endif
 
+// Is this a system where "Aero glass" means anything? Only Windows Vista and 7
+// ever blurred the desktop behind a window; Windows 8 dropped Aero, and 10/11
+// replaced the effect with Mica / Acrylic - a different API, not implemented
+// here. The background entry is hidden elsewhere instead of being offered and
+// then doing nothing (see the settings card).
+//
+// RtlGetVersion rather than GetVersionEx: without a manifest, Windows 8.1+
+// report 6.2 to the documented call, so on 10/11 it would answer "Windows 8" and
+// the check would come out wrong.
+bool aeroGlassAvailable()
+{
+#ifdef _WIN32
+    struct OsVersionInfo
+    {
+        unsigned long size;
+        unsigned long major;
+        unsigned long minor;
+        unsigned long build;
+        unsigned long platform;
+        wchar_t csd[128];
+    };
+    using RtlGetVersionFn = long(__stdcall*)(OsVersionInfo*);
+    OsVersionInfo info{};
+    info.size = sizeof(info);
+    HMODULE ntdll = GetModuleHandleA("ntdll.dll");
+    if (ntdll == nullptr) {
+        return false;
+    }
+    auto get = reinterpret_cast<RtlGetVersionFn>(
+        reinterpret_cast<void*>(GetProcAddress(ntdll, "RtlGetVersion")));
+    if (get == nullptr || get(&info) != 0) {
+        return false;
+    }
+    return info.major == 6 && info.minor <= 1; // 6.0 = Vista, 6.1 = 7
+#else
+    return false;
+#endif
+}
+
 int main(int argc, char** argv)
 {
 #ifdef _WIN32
@@ -1471,6 +1510,17 @@ int main(int argc, char** argv)
     // pixels stay transparent where nothing is drawn. Needs the same window
     // setup as the image splash (alpha channel + DWM's extended frame), so the
     // two share the checks below.
+    // A profile can carry bgStyle 2 from a Windows 7 machine (or from before the
+    // entry became Aero-only). On a system without Aero the entry is not in the UI
+    // at all, so fall back here rather than leaving the player stuck with a
+    // background they cannot change. The profile keeps its value, so the setting
+    // comes back if the same profile is used on Windows 7.
+    const bool aeroGlass = aeroGlassAvailable();
+    if (!aeroGlass && userSettings.bgStyle == 2) {
+        std::printf("[bg] Aero glass is not available on this system, using the wallpaper\n");
+        std::fflush(stdout);
+        userSettings.bgStyle = 1;
+    }
     const bool glassBackground = userSettings.bgStyle == 2;
 
     // Set by the window subclass (WM_ENTERSIZEMOVE / WM_EXITSIZEMOVE) and read by
@@ -1522,6 +1572,14 @@ int main(int argc, char** argv)
     // Which of the "整块玻璃" variants is in force (设置 -> 玻璃实现, see AGENTS.md
     // 「窗口外观」). Non-const: the settings card changes it at runtime.
     int glassMode = std::clamp(userSettings.glassMode, 0, 2);
+    // The frameless window only belongs to the Aero background: with anything else
+    // the window has an opaque picture to show, and going frameless for it is a
+    // window with no border for no reason (the startup call below passes enable=true
+    // for the image splash whatever the background is). userSettings keeps the choice,
+    // so switching the background back to glass restores it.
+    if (userSettings.bgStyle != 2) {
+        glassMode = 0;
+    }
     // What the subclassed window procedure needs to know: 1 = "treat this window
     // as frameless right now" (WM_NCCALCSIZE -> 0, WM_NCHITTEST does the rest).
     // Kept separate from glassMode because fullscreen must stay out of it: with the
@@ -2876,6 +2934,14 @@ int main(int argc, char** argv)
     // 说明这是实验性功能，确认后才真的写进设置。
     bool multiInstanceAsk = false;
     bool multiInstanceAskFromParty = false; // true = 用户点的是多人游玩
+#ifdef _WIN32
+    // Headless check (CPSEKAI_MULTIASK=1): raise the card at startup. Clicking the
+    // combo is the only other way to get here, and a posted click does not reach an
+    // ImGui button, so this is how the entrance animation gets looked at.
+    if (std::getenv("CPSEKAI_MULTIASK") != nullptr) {
+        multiInstanceAsk = true;
+    }
+#endif
     auto drawSettingsCard = [&]() {
         static bool settingsAlive = false;
         if (showDebug) {
@@ -3162,8 +3228,14 @@ int main(int argc, char** argv)
                 contentLeft();
                 static int bgMode = userSettings.bgStyle;
                 ImGui::SetNextItemWidth(interior);
-                if (ImGui::Combo("##bgstyle", &bgMode, "默认渐变\0桌面壁纸\0透明（Aero 玻璃）\0")) {
+                // The Aero entry only exists where Aero does - see aeroGlassAvailable.
+                const char* bgItems = aeroGlass ? "默认渐变\0桌面壁纸\0透明（Aero 玻璃）\0"
+                                                : "默认渐变\0桌面壁纸\0";
+                if (ImGui::Combo("##bgstyle", &bgMode, bgItems)) {
                     userSettings.bgStyle = bgMode;
+                    // The frameless choice lives in the profile but is only in force
+                    // while the background is the Aero one (see the declaration).
+                    glassMode = userSettings.bgStyle == 2 ? std::clamp(userSettings.glassMode, 0, 2) : 0;
                     refreshSelectBackdrop();
                     // The play screen shares the setting, and switching it has
                     // to touch the window too: the frame is what makes the
@@ -3174,7 +3246,7 @@ int main(int argc, char** argv)
 #endif
                     persistUserData();
                 }
-                if (userSettings.bgStyle == 2) {
+                if (aeroGlass && userSettings.bgStyle == 2) {
                     // How far to go with the window chrome; see AGENTS.md「窗口外观」.
                     contentLeft();
                     ImGui::Text("玻璃实现");
@@ -3194,13 +3266,6 @@ int main(int argc, char** argv)
 #endif
                         persistUserData();
                     }
-                    contentLeft();
-                    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyle().Colors[ImGuiCol_TextDisabled]);
-                    ImGui::TextWrapped("背景不填充，窗口透到桌面（Win7 Aero 下是毛玻璃）。"
-                                       "全屏时会退化成普通深色背景——Windows 的全屏优化会绕过 DWM。"
-                                       "「自绘无框」把非客户区算成零，移动与缩放由我们自己接管"
-                                       "（窗口顶部 23px 是拖动区）。");
-                    ImGui::PopStyleColor();
                 }
                 if (userSettings.bgStyle == 1) {
                     // Re-blurring the picture is a CPU pass over a decoded
@@ -3701,8 +3766,16 @@ int main(int argc, char** argv)
     // 「取消」什么也不改 —— 用户点错的 combo 会自己跳回去，因为 combo 的值
     // 每帧都从 userSettings.instanceMode 重新读。
     // ------------------------------------------------------------------
+    // The card is drawn until its close animation reports -2. Hiding it on the
+    // click itself was what took the closing animation away *and* left the card's
+    // animation state mid-flight, which made the next raise flash at full size,
+    // shrink and pop back (see ui::cardRaisedFresh).
+    bool multiInstanceAskAlive = false;
     auto drawMultiInstanceAskDialog = [&]() {
-        if (!multiInstanceAsk) {
+        if (multiInstanceAsk) {
+            multiInstanceAskAlive = true;
+        }
+        if (!multiInstanceAskAlive) {
             return;
         }
         // eulaDialog is the only card that takes body paragraphs (messageDialog
@@ -3715,6 +3788,10 @@ int main(int argc, char** argv)
                 "每个窗口各登录一个用户，各自记成绩。确定开启吗？",
             },
             nullptr, nullptr, {std::string("取消"), std::string("确定开启")}, {false, true});
+        if (action == -2) {
+            multiInstanceAskAlive = false; // close animation over, drop the card
+            return;
+        }
         if (action == 0) {
             // 取消：什么也不存。combo / 复选框下一帧自己从 userSettings 归位。
             std::printf("[instance] multi-open declined\n");
@@ -4261,7 +4338,7 @@ int main(int argc, char** argv)
         // Feeds the crash log (cppsekaiCrashFilter); a handful of stores a frame.
         gCrashState = static_cast<long>(state);
         gCrashFrameless = noFrameMode;
-        ++gCrashFrameCount;
+        gCrashFrameCount = gCrashFrameCount + 1; // not ++: C++20 deprecates that on volatile
         if (glassToggleSec >= 0.0 && !glassToggleDone && uiClock >= glassToggleSec) {
             glassToggleDone = true;
             glassMode = (glassMode == 2) ? 0 : 2;
@@ -6601,10 +6678,12 @@ int main(int argc, char** argv)
                             "不会上传到任何服务器。",
                     },
                     "以后不再显示", &eulaNoShow, {std::string("知道了")}, {true}, -1);
-                // Only act once the close animation is over (-2) or a button was
-                // pressed (>= 0). Acting on -3 (still closing) would relatch the
-                // flag mid-animation and the card would pop back up.
-                if (eulaAction >= 0 || eulaAction == -2) {
+                // A button press (>= 0) records the choice and lets the card animate
+                // out; only -2 (close finished) takes it down. Dropping the card on
+                // the press is what made the EULA have no closing animation - and it
+                // left the animation state mid-close, so the next raise bounced.
+                // Acting on -3 (still closing) would relatch the flag mid-animation.
+                if (eulaAction >= 0) {
                     // 复选框是"下次还看不看"的记录；不管勾没勾，这一次都关掉。
                     if (userSettings.eulaAccepted != eulaNoShow) {
                         userSettings.eulaAccepted = eulaNoShow;
@@ -6612,8 +6691,9 @@ int main(int argc, char** argv)
                     }
                     std::printf("[eula] dismissed (noShow=%d)\n", eulaNoShow ? 1 : 0);
                     std::fflush(stdout);
-                    eulaAlive = false;
                     eulaDismissedThisRun = true;
+                } else if (eulaAction == -2) {
+                    eulaAlive = false;
                     eulaSeeded = false; // next raise re-reads the profile
                 }
             }

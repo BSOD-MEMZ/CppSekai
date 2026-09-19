@@ -2419,6 +2419,10 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     const float headerRowH = 36.0f * k;
     const float rescanW = 104.0f * k;
     const float rescanX = comboX0 + (comboW + comboGap) * 2.0f + 4.0f * k;
+    // 下载谱面 sits right of 刷新: the downloader was reachable from the empty-list
+    // state and from the settings, but on a full list there was nothing.
+    const float storeW = 144.0f * k;
+    const float storeX = rescanX + rescanW + 10.0f * k;
     {
         const float rowH = headerRowH;
         const float btnW = rescanW;
@@ -2456,6 +2460,38 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         }
         addTextLeft(dl, body, 17.0f * k, ImVec2(c.x + 18.0f * k, c.y), fg, "刷新");
     }
+    {
+        // Same chrome as 刷新, with the store icon (assets/select/store.png) and
+        // SelectDownload - the action the empty list already used (main.cpp).
+        const float rowH = headerRowH;
+        const float btnW = storeW;
+        const float btnX = storeX;
+        const ImU32 fg = IM_COL32(238, 238, 248, 255);
+        ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(58, 52, 92, 235));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(76, 68, 118, 245));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(90, 80, 138, 255));
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, rowH * 0.5f);
+        ImGui::SetCursorScreenPos(ImVec2(btnX, headerRowY));
+        if (ImGui::Button("##store", ImVec2(btnW, rowH))) {
+            ui::se(ui::SeClick);
+            action = SelectDownload;
+        }
+        const bool hovered = ImGui::IsItemHovered();
+        ImGui::PopStyleVar();
+        ImGui::PopStyleColor(3);
+
+        const ImVec2 c(btnX + 26.0f * k, headerRowY + rowH * 0.5f);
+        const GLuint storeIcon = selectTex(renderer, "store");
+        if (storeIcon != 0) {
+            const float iconSize = 20.0f * k;
+            const int iconAlpha = hovered ? 255 : 232;
+            dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(storeIcon)),
+                ImVec2(c.x - iconSize * 0.5f, c.y - iconSize * 0.5f),
+                ImVec2(c.x + iconSize * 0.5f, c.y + iconSize * 0.5f), ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f),
+                IM_COL32(255, 255, 255, iconAlpha));
+        }
+        addTextLeft(dl, body, 17.0f * k, ImVec2(c.x + 18.0f * k, c.y), fg, "下载谱面");
+    }
     ImGui::EndDisabled();
 
     // ------------------------------------------------------------------
@@ -2466,7 +2502,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     if (partyReadOnly) {
         const float bannerH = headerRowH + 12.0f * k;
         const ImVec2 b0(listX, headerRowY - 6.0f * k);
-        const ImVec2 b1(rescanX + rescanW, b0.y + bannerH);
+        const ImVec2 b1(storeX + storeW, b0.y + bannerH);
         const float cy = (b0.y + b1.y) * 0.5f;
         dl->AddRectFilled(b0, b1, IM_COL32(18, 20, 38, 246), 12.0f * k);
         dl->AddRect(b0, b1, IM_COL32(255, 255, 255, 46), 12.0f * k, 0, 1.5f * k);
