@@ -206,20 +206,28 @@ main.cpp          # SDL2 窗口、事件循环、输入映射、ImGui HUD、截�
   `winmsg.exe SDL_app raw 0231 --pid <pid>` = 伪造 WM_ENTERSIZEMOVE，用来测拖动窗口那条暂停逻辑
   （见「拖动窗口 / 改窗口大小」一节）。**PostMessage 的消息同样会经过 SDL 的窗口过程**，
   所以消息钩子照样会被调用，能无头验证。
-- `.workbuddy/tools/update_music_db.py` → **曲库总同步**（`musics.json` + `music-vocals.json`，
-  日服全量 + 国服独占曲）。曲库是**本地表**，不跑它就会永远停在抓表那天 —— 表一旧，新歌
-  既搜不到也下不了（GUI 列表和 `--download` 都要先从表里查到 `assetbundleName` 才能拼 URL）。
-  2026-09-19 实测：本地停在日服 id 804，当日日服已经到 811，缺 敗走 / ヘレディティ 两首，
-  而它们的资源在 unipjsk 上本来就是 200 —— 纯属表没跟上。**拉新歌就重跑它**，`--check` 只报告。
+- `.workbuddy/tools/update_music_db.py` → **曲库总同步**（`musics.json` + `music-vocals.json`
+  + `music-levels.json`，日服全量 + 国服独占曲）。曲库是**本地表**，不跑它就会永远停在抓表那天 ——
+  表一旧，新歌既搜不到也下不了（GUI 列表和 `--download` 都要先从表里查到 `assetbundleName`
+  才能拼 URL）。2026-09-19 实测：本地停在日服 id 804，当日日服已经到 811，缺 敗走 / ヘレディティ
+  两首，而它们的资源在 unipjsk 上本来就是 200 —— 纯属表没跟上。
+  **定数表同理，而且缺它更阴**：2026-09-20 本地 `music-levels.json` 停在 id 804 且**完全没有国服
+  17 首**，后果是 chartdl 里那些歌 5 个难度框全灰（见「下载器」一节）。
+  **拉新歌 / 换版本就重跑它**，`--check` 只报告。
   - 源：日服 `Sekai-World/sekai-master-db-diff`（719 首，最全；备选 Team-Haruki 的
     `haruki-sekai-master`）；国服 `Team-Haruki/haruki-sekai-sc-master`（实时收集；
     备选 Sekai-World 的 `sekai-master-db-cn-diff`）。每侧都配了备用源，抽风会自动往下试。
+  - **每个仓库都配了 raw.githubusercontent + jsDelivr 两条地址**：国内直连 raw 会整段不通
+    （2026-09-20 实测 curl 直接 000 超时），只留 raw 的话"表旧了重新同步一次"根本跑不起来。
   - 国服独占曲按 `id >= 10000` 挑（日服表最大 811）。
   - **读音得手工补**：国服表把独占曲的 `pronunciation` 填成了作曲者名（"Mitchie M"、"敌门"）。
     照抄会毁掉排序（两个界面都按读音排）和罗马音搜索 —— 脚本里 KANA_OVERRIDE 手工补：
     中文标题填**拼音**（`game/SongSelect.cpp` 有一条原文比对，输入 "yiyang" 能命中「一样」），
     日文/英文标题填**假名**（走罗马音路径）。
-  - 两个表都是**单行紧凑 JSON**，脚本按 `separators=(",",":")` 整体写回，diff 才只有一行。
+  - 定数表由两边的 `musicDifficulties.json` 合并：**日服那份管 id < 10000，国服那份管独占号段**，
+    只保留 `musics.json` 里真有的 id（表跑到歌单前面去没意义）。
+  - musics / music-vocals 是**单行紧凑 JSON**（`separators=(",",":")` 整体写回，diff 才只有一行）；
+    **music-levels.json 反过来是一行一首、按 id 升序**，它有自己的 `write_levels()`，别顺手改格式。
   - 它同时吸收了原来的 `gen_music_vocals.py`（从 musicVocals + gameCharacters 生成演唱版本表）。
 - `.workbuddy/tools/fetch_music_aliases.py` → **社区曲目别名表** `music-aliases.json`
   （`{musicId: [别名…]}`，703 首 / 12,896 条 / 185 KB）。数据来自 HarukiBot 的公开 API
@@ -402,10 +410,12 @@ bash build.sh          # 仅需 Git Bash；产物 build/cppsekai.exe + SDL2.dll 
   前 2 帧不可见、第 2~5 帧四次方缓出到 scale 1、0.24s 窗口）。
 - 难度定数：unipjsk 导出的 SUS 把 `#TITLE`/`#PLAYLEVEL` 清空了（`#DIFFICULTY 0`），所以定数
   来自仓库根的 `music-levels.json`（`{"<musicId>":[easy,normal,hard,expert,master]}`，
-  `setup.sh` 可从官方 `musicDifficulties` 表重建）。曲目 id 从文件名取（`0075_master.sus` → 75），
+  `setup.sh` 可从官方 `musicDifficulties` 表重建，**平时重跑 `.workbuddy/tools/update_music_db.py`
+  就一起刷**——国服独占曲的定数只有国服的 master DB 有）。曲目 id 从文件名取（`0075_master.sus` → 75），
   `game/SongSelect.cpp` 按 id 分组，所以同一首歌的不同难度会并成一条、缺 sidecar 也不会散开。
   谱面同级可放 `<musicId>.json`（如 `charts/0075.json`）作为全难度共用的元数据；`<难度>.json`
-  优先于它。
+  优先于它。**表里没有这首歌只是"定数显示 `-`"，不是"没有这个难度"** —— 表旧了别慌，
+  游戏这边只会少显示数字。
 - 选曲界面（`game/SongSelect.cpp`）：列表行没有底色，只用一条半透明白线分隔；选中项是
   半透明白圆角矩形。行首定数指示（圆/「歌曲等级」标签 + 数字）的颜色跟当前选中的难度走
   （`kDiffColors[diffIndex]`），不是固定粉色。五个难度格子是 `assets/select/indicate_back_new.png`
@@ -1548,6 +1558,31 @@ ImGui 后端降级 + 去掉 `glBindSampler`），那是一块真活儿，而目�
 - 关窗行为选「隐藏到托盘」时，**先 `addTrayIcon` 并确认成功再隐藏**，否则会留下一个再也叫不回来的进程。
 - `loadData()` 现在**幂等**（开头 clear）：main 和 GUI 各调一次，不定稿的话歌表翻倍（715 → 1430），
   所有按索引进 `gSongs` 的东西（含已下载扫描）都会做两遍。
+- **搜索是大小写不敏感的**（2026-09-20 修）：`matchesFilter` 以前是裸字节比较，`hype` 搜不到
+  「Hype Dive」，只有照抄表里的大小写才行。现在查询和标题一起过 `foldCase()`（只折 ASCII；
+  假名/汉字无大小写，原样比较），别名表加载也走同一个函数。
+- **命令行参数按 UTF-8 重新读一遍**（2026-09-20）：GUI 子系统的 `argv` 是 **ANSI 代码页**解出来的，
+  `chartdl.exe --list 镜中少女` 到手就是乱码、永远匹配不上。`main()` 开头用
+  `utf8Args()`（`CommandLineToArgvW` + `toUtf8`）重取，解析循环读的是 `args` 不是 `argv`。
+- **难度框的可用性不能只看定数表**（2026-09-20 修的 bug，症状很有欺骗性）：
+  `updateDetailPanel` 原来用 `available = level > 0` 判断"这首有没有这一档"，
+  而定数表 `music-levels.json` 一旦没有这首歌的行，五档全是 0 → **5 个难度框全部灰掉、取消勾选**，
+  点「下载勾选的歌曲」只能下到曲绘 + BGM，谱面一个都不下（2026-09-20 用户报的正是这个：
+  国服 17 首独占曲在表里一行都没有）。现在 `Song::levelsKnown` 记录"表里到底有没有这首歌"：
+  没有 → 一律当成"有"，定数显示仍走 0（界面显示 `-`）；有 → 才用 `level > 0` 判断。
+  启动日志会打 `[data] N song(s) have no levels in music-levels.json ...`，**别把它当成正常输出**，
+  那是表旧了（跑 `.workbuddy/tools/update_music_db.py`）。
+- **`--list` 之外没有别的搜索入口**，所以改 `matchesFilter` 要顺手跑一遍：
+  `--list hype` / `--list 镜中少女` / `--list はいぷ` / `--list imasugurinne`（罗马音）/
+  `--list tyw`（别名）—— 五条覆盖五个匹配分支。
+- **一个文件只排一个任务**：`queueSong` 的 `add()` 会先在 `gJobs` 里查同路径，重复的直接丢。
+  起因是「下载内容」面板曾经给同一个演唱版本建出**两个勾选框**（同一个 `kIdVocalBase + v` 的
+  id 在同一个父窗口下出现两次，`GetDlgItem` 只能拿到一个，而排队读的是 `gVocalChecks` 全部），
+  同一个 BGM 被下两遍。面板那边加了 `GetDlgItem` 守卫挡住重复行，队列这边兜底。
+  （2026-09-20 的 09-20 打包版里两个「バーチャル・シンガーver.」行就是这个，
+  **重复行为什么会产生没查出根因**：探针显示一次 `updateDetailPanel` 里难度循环跑了两遍、
+  演唱版本循环也跑了两遍，但函数入口探针只打了一次 —— 行为像"从中间又跑了一遍"。
+  现在两处都不再依赖这个成因成立与否。）
 
 ## 手柄 / 单实例 / 触摸 flick（2026-09-16 晚）
 

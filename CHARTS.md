@@ -226,10 +226,19 @@ unipjsk 导出的 SUS 把 `#TITLE` 和 `#PLAYLEVEL` 清空了（`#DIFFICULTY 0`�
 顺序是 `[easy, normal, hard, expert, master]`。想手动重建：
 
 ```bash
+python .workbuddy/tools/update_music_db.py     # 连带 musics / music-vocals 一起刷
+# 或者（只重建定数表）
 rm music-levels.json && bash setup.sh
 ```
 
-或者干脆在单难度 sidecar 里写 `"level": "32"` 覆盖它。
+两个源，按号段分：日服曲（id < 10000）来自 `Sekai-World/sekai-master-db-diff`，
+**国服独占曲（id ≥ 10000）只有 `Sekai-World/sekai-master-db-cn-diff` 有** ——
+后者长期缺失的后果不只是界面上显示 `-`：下载器会把"定数表里没有这一行"当成
+"这首没有这个难度"，5 个难度框全灰掉，点下载只能拿到曲绘和 BGM。
+现在下载器那边已经改成"表里没这行 = 未知 = 照常可勾"（见 `AGENTS.md`），但表本身还是
+要跟着刷。
+
+也可以干脆在单难度 sidecar 里写 `"level": "32"` 覆盖它。
 
 ---
 
@@ -252,7 +261,8 @@ rm music-levels.json && bash setup.sh
 |---|---|
 | 列表里没有这首歌 | 文件名必须是 `<4位id>_<难度>.sus`；确认放在 `charts/` 且重启了游戏 |
 | 歌名显示成 `0075 master` | 缺 sidecar 的 `title` |
-| 定数显示 `-` | `music-levels.json` 缺失或该 id 不在表里；也可以 sidecar 写 `"level"` |
+| 定数显示 `-` | `music-levels.json` 缺失或该 id 不在表里（跑 `update_music_db.py` 刷）；也可以 sidecar 写 `"level"` |
+| 下载器里难度框全灰、"（无）" | 定数表没有这首歌 → 跑 `update_music_db.py`。**2026-09-20 起**灰色不再挡住下载（表里没这行 = 未知 = 照常可勾） |
 | 同一首歌散成 5 条 | 文件名里解析不出曲目 id，命名改成 `0075_expert.sus` 这种 |
 | 只有 5 个难度格 | 正常，只支持 easy～master |
 | 完全没有声音 | 少了 `charts/<id4>.mp3`；或两个 BGM 地址都 404，需自备音频 |

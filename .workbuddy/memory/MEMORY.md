@@ -41,7 +41,9 @@
   `.workbuddy/` 不入 ignore（记忆 + 工具，工具是入库的）。
 - **不要删 `.workbuddy/`**。工具：`winmd_*.py`（查 WinRT 槽位）、`pngcrop.py`、
   `shot_probe.py`（像素探针，带 Pillow 回退）、`asset_audit.py`、`shrink_assets.py`、
-  `mp_verify.sh`（多人回归）、`pe_imports.py`（PE 导入表 → Win7 兼容检查）。
+  `mp_verify.sh`（多人回归）、`pe_imports.py`（PE 导入表 → Win7 兼容检查）、
+  `update_music_db.py`（曲库 + 定数表同步）、`chartdl_detail_check.py`
+  （跨进程读回 chartdl 右侧面板的勾选框状态，验证"哪些框能勾"比截图直给）。
 - `build/winsend.exe` / `winmsg.exe` 不在库里，要自己编（见 AGENTS.md 工具一节）。
 
 ## 素材现状（2026-09-19 大清理后 10MB / 248 文件，清理前 56.1MB）
@@ -80,12 +82,19 @@
   **国服独占曲 17 首（id 11001–11017，独立号段）走 `storage.sekai.best/sekai-cn-assets`**，
   布局三处不同：谱面 **带 `.txt`**、音频前缀是 `vs_/se_/an_`、曲绘是 5 位 `jacket_s_11xxx`。
   判据只有 `id >= 10000`（chartdl 的 `kCnIdMin`）——**别往 10000 以上放新 id**。
-  曲库总同步用 `.workbuddy/tools/update_music_db.py`（日服全量 + 国服独占，`--check` 只报告；
-  那两个 json 是单行紧凑格式，脚本按无缩进整体写回，diff 才只有一行）。
+  曲库总同步用 `.workbuddy/tools/update_music_db.py`（日服全量 + 国服独占 **+ 定数表
+  `music-levels.json`**，`--check` 只报告；musics / music-vocals 是单行紧凑格式，脚本按无缩进
+  整体写回，diff 才只有一行，**定数表反过来是一行一首**、有专门的 writer）。
+  每个仓库都配了 raw.github + **jsDelivr 镜像**两条地址（国内直连 raw 会整段不通）。
   **表是本地快照、会过时**：2026-09-19 实测它停在日服 id 804 而当天已经 811，缺 敗走 /
   ヘレディティ 两首，而它们的资源在 unipjsk 上本来就是 200 —— **日服出新曲就跑这个脚本**。
   **国服表把独占曲的读音填成了作曲者名**，脚本里手工补过 —— 中文标题填的是**拼音**，
   别拿它当假名用（主程序搜索为此外加了一条原文比对）。
+- **定数表（`music-levels.json`）2026-09-20 才纳入同步**：此前它停在 712 首 / 无国服曲，
+  后果是 chartdl 里「定数表没有这一行」被当成「这首没有这个难度」→ 国服曲 5 个难度框全灰、
+  只能下到曲绘和 BGM。现在 chartdl 用 `Song::levelsKnown` 区分「未知」和「确实没有」，
+  所以表旧了不再挡住下载，但**新曲还是要跑脚本刷表**（启动日志会打
+  `[data] N song(s) have no levels ...`）。表里没有只在界面上表现为定数 `-`。
 
 ## UI 通则（所有画面都是「1920x1080 虚拟画布 + 缩放」）
 - HUD / 结算 / 选曲都用 `px()/py()/ps()` 换算。**ImGui `AddText(font,size,...)` 的 size 是像素**，
@@ -123,6 +132,13 @@
   有一次 ~46MB 的**延迟归还**，别当成泄漏、也别当成"切设置释放了内存"（bgStyle 0/1 都有）。
 
 ## 最近工作（细节一律看 AGENTS.md 对应小节 + 当日日志）
+- **2026-09-20**：chartdl 数据源体检 —— ① 搜索改成大小写不敏感（`hype` 找不到 `Hype Dive`），
+  ② `main()` 用 `utf8Args()` 重读命令行（GUI 子系统的 argv 是 ANSI 码页，中文过滤从来无效），
+  ③ `Song::levelsKnown`：定数表没有这首歌 = 未知，不再把 5 个难度框全灰掉（国服曲因此下不到谱面），
+  ④ `update_music_db.py` 纳入 `music-levels.json` + jsDelivr 镜像，表刷到 733 首
+  （+敗走/ヘレディティ/17 首国服曲）。新工具 `.workbuddy/tools/chartdl_detail_check.py`
+  （跨进程读回面板勾选框状态，比截图直给）。遗留：面板会重复建同一个演唱版本勾选框，
+  成因未定，已从面板守卫 + 队列去重两头堵死。
 - **2026-09-19**：多人开局倒计时删了（改成「最慢窗口加载 + 0.8s」两段 charge）；失血阴影几何
   重做（探针 `CPSEKAI_VIGNETTE`）；**Win7 三连修**：① libc++ chrono 静态导入
   `GetSystemTimePreciseAsFileTime`（启动即失败，build.sh 打补丁）② 系统字体候选表扩到三层 +

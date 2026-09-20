@@ -336,6 +336,13 @@ struct Song
     std::string jacket; // assetbundleName, e.g. jacket_s_374
     double fillerSec = 0.0;
     std::array<int, 5> levels{0, 0, 0, 0, 0};
+    // Whether `levels` came from the official table at all. A song the table
+    // does not know about (a CN-only one before the table was refreshed, or a
+    // brand new JP song) has all five entries at 0 - which reads as "this song
+    // has no difficulty whatsoever" unless something records that the table
+    // simply has no row for it. The detail panel uses this to keep the
+    // difficulty boxes usable instead of greying all five out.
+    bool levelsKnown = false;
     std::vector<VocalVersion> vocals;
 };
 
@@ -358,6 +365,21 @@ std::string id4(int id)
     char buf[8];
     std::snprintf(buf, sizeof(buf), "%04d", id);
     return buf;
+}
+
+// ASCII case fold, for the search box and the alias table.
+//
+// The search used to be a raw byte compare, so "hype" did not find
+// "Hype Dive" - a Latin title was only findable with the exact capitalisation
+// the master table happens to use. Folding both sides fixes it. Only ASCII is
+// folded: kana and kanji have no case, and a full Unicode fold would need ICU.
+std::string foldCase(const std::string& text)
+{
+    std::string out = text;
+    for (char& ch : out) {
+        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    }
+    return out;
 }
 
 std::string jacketStem(const std::string& assetbundleName, int id)
@@ -562,10 +584,7 @@ void loadData()
                 if (!row.is_string()) {
                     continue;
                 }
-                std::string alias = row.get<std::string>();
-                for (char& ch : alias) {
-                    ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-                }
+                std::string alias = foldCase(row.get<std::string>());
                 if (alias.empty()) {
                     continue;
                 }
@@ -589,11 +608,17 @@ void loadData()
                 continue;
             }
             const auto& arr = it.value();
+            bool anyLevel = false;
             for (size_t d = 0; d < arr.size() && d < 5; ++d) {
                 if (arr[d].is_number()) {
                     gSongs[found->second].levels[d] = arr[d].get<int>();
+                    anyLevel = anyLevel || arr[d].get<int>() > 0;
                 }
             }
+            // An all-zero row is not knowledge, it is a placeholder: leave the
+            // song marked unknown so the detail panel keeps every difficulty
+            // on offer (see Song::levelsKnown).
+            gSongs[found->second].levelsKnown = anyLevel;
         }
     }
 }
@@ -836,6 +861,18 @@ void queueSong(const Song& song, const Request& request, const fs::path& dir, bo
     std::error_code ec;
     fs::create_directories(dir, ec);
     auto add = [&](const std::string& url, const fs::path& path) {
+        std::lock_guard<std::mutex> lock(gJobMutex);
+        // One file, one job. A path can legitimately be asked for twice - the
+        // 下载内容 panel can hand out the same vocal index twice (see the guard
+        // in updateDetailPanel, which is what keeps the duplicated row from ever
+        // being created), and two entries of a vocal table can share an asset -
+        // and a second job would just re-fetch what the first one is already
+        // writing to the same .part.
+        for (const Job& existing : gJobs) {
+            if (existing.path == path) {
+                return;
+            }
+        }
         Job job;
         job.url = url;
         job.path = path;
@@ -843,7 +880,6 @@ void queueSong(const Song& song, const Request& request, const fs::path& dir, bo
             job.state = JobState::Skipped;
             job.note = "already there";
         }
-        std::lock_guard<std::mutex> lock(gJobMutex);
         gJobs.push_back(std::move(job));
     };
 
@@ -1375,10 +1411,14 @@ namespace
         if (filter.empty()) {
             return true;
         }
+        // Fold the query once and compare folded-to-folded: "hype" has to find
+        // "Hype Dive". Kana and kanji have no case, so they pass through
+        // unchanged and their compares stay exact.
+        const std::string needle = foldCase(filter);
         if (std::to_string(song.id).find(filter) != std::string::npos) {
             return true;
         }
-        if (song.title.find(filter) != std::string::npos
+        if (foldCase(song.title).find(needle) != std::string::npos
             || song.kana.find(filter) != std::string::npos) {
             return true;
         }
@@ -1386,10 +1426,6 @@ namespace
         // short entries ("hs", "kz", "emu") that as substrings would match
         // half the list. See gAliasIndex.
         {
-            std::string needle = filter;
-            for (char& ch : needle) {
-                ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-            }
             const auto hit = gAliasIndex.find(needle);
             if (hit != gAliasIndex.end()
                 && std::find(hit->second.begin(), hit->second.end(), song.id) != hit->second.end()) {
@@ -1399,8 +1435,8 @@ namespace
         // Romaji fallback, for a player with no Japanese IME: "gurume" finds
         // 「いますぐ輪廻」. The official reading is all kana, so folding the
         // query to kana is enough - see romaji_search.hpp.
-        const std::string kana = romaji::toKana(filter);
-        return !kana.empty() && kana != filter && song.kana.find(kana) != std::string::npos;
+        const std::string kana = romaji::toKana(needle);
+        return !kana.empty() && kana != needle && song.kana.find(kana) != std::string::npos;
     }
 
     // Fills the list from gSongs, keeping the current search filter and the
@@ -2856,12 +2892,20 @@ namespace
 
         for (int d = 0; d < 5; ++d) {
             const int level = song.levels[d];
-            const bool available = level > 0;
-            const bool onDisk = available && files.chart[d];
+            // "Has this difficulty" is `level > 0` *only* when the official
+            // level table actually knows the song. For anything else - the
+            // CN-only songs, which the shipped music-levels.json had no row for
+            // at all, and any JP song newer than the table - all five levels
+            // read 0, and gating on that alone greyed out every difficulty box
+            // and left the song with nothing but its jacket and its BGM to
+            // download. The charts are there (the bucket serves all five); it
+            // was only the table that had not caught up.
+            const bool available = !song.levelsKnown || level > 0;
+            const bool onDisk = files.chart[d];
             std::wstring label = widen(kDiffNames[d]);
-            if (available) {
+            if (level > 0) {
                 label += L"  Lv." + std::to_wstring(level);
-            } else {
+            } else if (!available) {
                 label += L"  （无）";
             }
             if (onDisk) {
@@ -2878,6 +2922,16 @@ namespace
         }
         y += gap;
         for (std::size_t v = 0; v < song.vocals.size(); ++v) {
+            // One control per version. The id is kIdVocalBase + v, so a second
+            // row for the same v would be a second window with the same id under
+            // the same parent - GetDlgItem can only ever return one of them, and
+            // the queue reads *both* (gVocalChecks), which queued the same BGM
+            // twice. Seen on the packaged 2026-09-20 build as two identical
+            // "バーチャル・シンガーver." rows: this is the cheap guard, and the
+            // duplicate job it caused is dropped again in queueSong regardless.
+            if (GetDlgItem(body, kIdVocalBase + static_cast<int>(v)) != nullptr) {
+                continue;
+            }
             const VocalVersion& version = song.vocals[v];
             const bool onDisk = v < files.vocal.size() && files.vocal[v];
             std::wstring label = widen(version.caption.empty() ? version.type : version.caption);
@@ -2996,6 +3050,18 @@ namespace
         }
         if (gDuplicateIds > 0) {
             appendLog("[data] dropped " + std::to_string(gDuplicateIds) + " duplicate song id(s)");
+        }
+        // See the same line in main(): a stale level table is silent otherwise.
+        {
+            int unknown = 0;
+            for (const Song& song : gSongs) {
+                unknown += song.levelsKnown ? 0 : 1;
+            }
+            if (unknown > 0) {
+                appendLog("[data] " + std::to_string(unknown)
+                    + " song(s) have no levels in music-levels.json (run "
+                      "update_music_db.py to refresh the table)");
+            }
         }
         // Flatten the alias index before the window exists: WM_CREATE hands the
         // row count to the virtual list, and it must be right from the start.
@@ -3119,11 +3185,40 @@ namespace
     }
 } // namespace
 
+// The narrow argv a Windows GUI-subsystem program gets is decoded with the
+// *ANSI* code page, so `chartdl.exe --list 镜中少女` arrives as mojibake (the
+// bytes of the console's code page, not UTF-8) and matches nothing. Every
+// string this program handles - the JSON tables, the ListView, the log - is
+// UTF-8, so re-read the command line as UTF-16 and re-encode it once, here.
+std::vector<std::string> utf8Args()
+{
+    std::vector<std::string> args;
+    int count = 0;
+    LPWSTR* wide = CommandLineToArgvW(GetCommandLineW(), &count);
+    if (wide == nullptr) {
+        return args;
+    }
+    args.reserve(static_cast<std::size_t>(count));
+    for (int i = 0; i < count; ++i) {
+        args.push_back(toUtf8(wide[i]));
+    }
+    LocalFree(wide);
+    return args;
+}
+
 int main(int argc, char** argv)
 {
+    // The parsed command line, in UTF-8 (see utf8Args). argc/argv stay as the
+    // fallback for the impossible case where the wide one is unavailable.
+    std::vector<std::string> args = utf8Args();
+    if (args.empty()) {
+        for (int i = 0; i < argc; ++i) {
+            args.emplace_back(argv[i] == nullptr ? "" : argv[i]);
+        }
+    }
     // Built as a GUI subsystem app (no console flash when double-clicked), so a
     // command line run has to borrow the shell's console back for its output.
-    if (argc > 1) {
+    if (args.size() > 1) {
         // Only when nothing is connected already: a shell that piped our output
         // (git bash, cmd) has a valid handle and must keep it.
         const HANDLE standardOut = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -3156,17 +3251,19 @@ int main(int argc, char** argv)
     bool wantJacket = true;
     bool wantSidecar = true;
 
-    for (int i = 1; i < argc; ++i) {
-        const std::string arg = argv[i];
+    const int argCount = static_cast<int>(args.size());
+    for (int i = 1; i < argCount; ++i) {
+        const std::string arg = args[static_cast<std::size_t>(i)];
         auto next = [&](std::string& out) {
-            if (i + 1 < argc) {
-                out = argv[++i];
+            if (i + 1 < argCount) {
+                out = args[static_cast<std::size_t>(++i)];
             }
         };
         if (arg == "--list") {
             wantList = true;
-            if (i + 1 < argc && argv[i + 1][0] != '-') {
-                listFilter = argv[++i];
+            if (i + 1 < argCount && !args[static_cast<std::size_t>(i + 1)].empty()
+                && args[static_cast<std::size_t>(i + 1)][0] != '-') {
+                listFilter = args[static_cast<std::size_t>(++i)];
             }
         } else if (arg == "--download") {
             next(downloadIds);
@@ -3226,6 +3323,20 @@ int main(int argc, char** argv)
         std::fprintf(stderr, "[data] %s\n", gDataError.c_str());
     }
     note("[data] " + std::to_string(gSongs.size()) + " songs");
+    // Counted rather than assumed: a level table that lags behind musics.json
+    // used to be invisible, and its only symptom was a song whose difficulty
+    // boxes were all greyed out (see Song::levelsKnown).
+    {
+        int unknown = 0;
+        for (const Song& song : gSongs) {
+            unknown += song.levelsKnown ? 0 : 1;
+        }
+        if (unknown > 0) {
+            note("[data] " + std::to_string(unknown)
+                + " song(s) have no levels in music-levels.json (difficulties shown as \"-\"; "
+                  "they stay tickable, run .workbuddy/tools/update_music_db.py to refresh the table)");
+        }
+    }
     if (gDuplicateIds > 0) {
         note("[data] dropped " + std::to_string(gDuplicateIds) + " duplicate song id(s)");
     }

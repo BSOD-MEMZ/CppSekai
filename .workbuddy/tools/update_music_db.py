@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
-"""同步 musics.json / music-vocals.json（日服全量 + 国服独占曲）。
+"""同步 musics.json / music-vocals.json / music-levels.json（日服全量 + 国服独占曲）。
 
 为什么需要它
 ------------
-chartdl 的曲库来自本地这两个表。它们不是运行时从网上拉的，所以**表一旧就下不了新歌**：
+chartdl 的曲库来自本地这几个表。它们不是运行时从网上拉的，所以**表一旧就下不了新歌**：
 GUI 列表和 `--download <id>` 都要先在表里查到 `assetbundleName` 才能拼出 URL。
 实测（2026-09-19）本地日服表停在 id 804，而当日日服已经到 811 —— 缺 敗走 / ヘレディティ，
 两首的资源在 unipjsk 上都是 200，纯属表没跟上。
+
+`music-levels.json`（难度定数）同样要一起同步，而且**缺它的后果比缺歌更阴**：
+- 游戏侧：选曲界面那一列定数显示 `-`；
+- chartdl 侧：定数的有无被当成「这首有没有这个难度」的判据，17 首国服独占曲
+  在这张表里一行都没有 → 5 个难度框全被灰掉，点排队只能下到曲绘和 BGM。
+  （2026-09-20 报的这个 bug。chartdl 那边已经改成「表里没这行 = 未知 = 照常可勾」，
+  所以这里慢一拍不再致命，但表还是得跟上。）
 
 数据源（都公开）
 ----------------
@@ -14,16 +21,21 @@ GUI 列表和 `--download <id>` 都要先在表里查到 `assetbundleName` 才�
         备选 Team-Haruki/haruki-sekai-master    （实时收集，717 首，少两首老歌）
   国服  Team-Haruki/haruki-sekai-sc-master      （实时收集，含 17 首独占曲 11001+）
         备选 Sekai-World/sekai-master-db-cn-diff
+  定数  上面两边的 musicDifficulties.json（日服管 id < 10000，国服管独占号段）
   资源  unipjsk 走 assets.unipjsk.com；国服独占曲走 storage.sekai.best/sekai-cn-assets
         （见 downloader/chartdl.cpp 的 URL 函数）
+  每个仓库都同时给 raw.githubusercontent.com 和 jsDelivr 两条地址：国内直连 raw
+  经常整段不通（2026-09-20 实测超时），只留它等于没法重新同步。
 
-两个坑
+三个坑
 ------
 1. 国服表的 `pronunciation` 对独占曲填的是**作曲者名**（"Mitchie M"、"敌门"），
    官方这批曲子没给读音数据。照抄会毁掉排序（两个界面都按读音排）和罗马音搜索，
    所以下面手工补 KANA_OVERRIDE：中文标题填**拼音**、日文/英文标题填**假名**。
-2. 这两个 json 是**单行紧凑格式**，用 json.dump 带缩进重写会得到整文件 diff。
-   这里统一按 `separators=(",", ":")` 写，和原文件一致。
+2. musics / music-vocals 这两个 json 是**单行紧凑格式**，用 json.dump 带缩进重写会得到
+   整文件 diff。这里统一按 `separators=(",", ":")` 写，和原文件一致。
+3. music-levels.json 反过来是**一行一首**的格式，且按 id 升序 —— 它也有自己的 writer
+   （write_levels），别顺手改成一行。
 
 用法
 ----
@@ -40,18 +52,27 @@ import urllib.request
 REPO = pathlib.Path(__file__).resolve().parents[2]
 
 # 日服曲库：id < CN_ID_MIN。排在前面的源优先，拉失败就换下一个。
+#
+# 每个仓库都给两条地址：GitHub 原始地址 + jsDelivr 镜像（/gh/ 前缀是同一份内容）。
+# raw.githubusercontent.com 在国内经常整段连不上（2026-09-20 实测直接超时），
+# 只留它的话「表旧了重新同步一次」根本跑不起来。
+def _mirrors(owner_repo, subdir=""):
+    """同一个仓库的两条取数地址；haruki 系列的 master 表在仓库的 master/ 子目录下。"""
+    tail = f"/{subdir}" if subdir else ""
+    return [
+        (owner_repo, f"https://raw.githubusercontent.com/{owner_repo}/main{tail}"),
+        (f"{owner_repo} (jsDelivr)", f"https://cdn.jsdelivr.net/gh/{owner_repo}@main{tail}"),
+    ]
+
+
 JP_SOURCES = [
-    ("Sekai-World/sekai-master-db-diff",
-     "https://raw.githubusercontent.com/Sekai-World/sekai-master-db-diff/main"),
-    ("Team-Haruki/haruki-sekai-master",
-     "https://raw.githubusercontent.com/Team-Haruki/haruki-sekai-master/main/master"),
+    *_mirrors("Sekai-World/sekai-master-db-diff"),
+    *_mirrors("Team-Haruki/haruki-sekai-master", "master"),
 ]
 # 国服曲库：只取 id >= CN_ID_MIN 的独占曲。
 CN_SOURCES = [
-    ("Team-Haruki/haruki-sekai-sc-master",
-     "https://raw.githubusercontent.com/Team-Haruki/haruki-sekai-sc-master/main/master"),
-    ("Sekai-World/sekai-master-db-cn-diff",
-     "https://raw.githubusercontent.com/Sekai-World/sekai-master-db-cn-diff/main"),
+    *_mirrors("Team-Haruki/haruki-sekai-sc-master", "master"),
+    *_mirrors("Sekai-World/sekai-master-db-cn-diff"),
 ]
 
 # 国服独占曲的号段。日服表最大 811（2026-09），四位数留给两边共有的曲目；
@@ -175,6 +196,37 @@ def write_compact(path, obj):
                     encoding="utf-8")
 
 
+# 难度顺序 = music-levels.json 里那个五元组的顺序，也是 chartdl 的 kDiffNames。
+DIFF_ORDER = ["easy", "normal", "hard", "expert", "master"]
+
+
+def levels_from(rows):
+    """musicDifficulties 行 -> {musicId: [easy, normal, hard, expert, master]}。
+
+    该难度没有定数（表里没这行 / playLevel 是 0）就留 0，和原表一致；两个界面都用
+    «> 0» 判断「有没有这一档」。
+    """
+    out = {}
+    for row in rows:
+        mid = row.get("musicId", 0)
+        diff = row.get("musicDifficulty", "")
+        level = row.get("playLevel", 0)
+        if mid <= 0 or diff not in DIFF_ORDER or not isinstance(level, int) or level <= 0:
+            continue
+        out.setdefault(mid, [0] * 5)[DIFF_ORDER.index(diff)] = level
+    return out
+
+
+def write_levels(path, levels):
+    """一行一首、按 id 升序 —— 这是 music-levels.json 原文件的形状（不是单行紧凑）。
+
+    写成 json.dump(indent=1) 之类会得到整文件 diff；这里手工拼，只让真正变化的行出现。
+    """
+    entries = sorted(levels.items())
+    body = ",\n".join(f'"{mid}":[{",".join(str(v) for v in lv)}]' for mid, lv in entries)
+    path.write_text("{\n" + body + "\n}\n", encoding="utf-8")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--check", action="store_true", help="只报告差集，不写文件")
@@ -187,14 +239,18 @@ def main():
                  for c in fetch_first(JP_SOURCES, "gameCharacters.json")}
         cn_raw = fetch_first(CN_SOURCES, "musics.json")
         cn_vocals_raw = fetch_first(CN_SOURCES, "musicVocals.json")
+        jp_diff_raw = fetch_first(JP_SOURCES, "musicDifficulties.json")
+        cn_diff_raw = fetch_first(CN_SOURCES, "musicDifficulties.json")
     except Exception as exc:  # noqa: BLE001
         print(f"[error] {exc}", file=sys.stderr)
         return 1
 
     songs_path = REPO / "musics.json"
     vocals_path = REPO / "music-vocals.json"
+    levels_path = REPO / "music-levels.json"
     old_songs = {s["id"]: s for s in json.loads(songs_path.read_text(encoding="utf-8"))}
     old_vocals = json.loads(vocals_path.read_text(encoding="utf-8"))
+    old_levels = {int(k): v for k, v in json.loads(levels_path.read_text(encoding="utf-8")).items()}
 
     jp_songs = songs_from(jp_raw, want_cn=False)
     cn_songs = songs_from(cn_raw, want_cn=True)
@@ -228,13 +284,39 @@ def main():
     print(f"\n演唱版本 {len(vocals)} 组，其中 {len(changed_vocals)} 组与本地不同"
           f"（新增演唱版本也算）：{changed_vocals[:12]}")
 
+    # 定数表：日服那份管 id < 10000，国服那份管独占号段（两边表都含对方的曲子，
+    # 所以只按号段合并，别整份覆盖）。只保留 musics.json 里真有的 id —— 表跑到
+    # 歌单前面去没有意义，而且会让 chartdl 的「有没有这行」判断失去意义。
+    levels = {mid: lv for mid, lv in levels_from(jp_diff_raw).items() if mid < CN_ID_MIN}
+    levels.update({mid: lv for mid, lv in levels_from(cn_diff_raw).items() if mid >= CN_ID_MIN})
+    known_ids = {s["id"] for s in songs}
+    dropped = sorted(mid for mid in levels if mid not in known_ids)
+    levels = {mid: lv for mid, lv in levels.items() if mid in known_ids}
+
+    new_levels = sorted(set(levels) - set(old_levels))
+    gone_levels = sorted(set(old_levels) - set(levels))
+    changed_levels = sorted(mid for mid in old_levels
+                            if mid in levels and old_levels[mid] != levels[mid])
+    print(f"\n定数表 {len(levels)} 首（本地 {len(old_levels)} 首）："
+          f"新增 {len(new_levels)} / 变化 {len(changed_levels)}")
+    for mid in new_levels:
+        title = next((s["title"] for s in songs if s["id"] == mid), "?")
+        print(f"  + {mid:<6} {title:<30} {levels[mid]}")
+    for mid in changed_levels[:12]:
+        print(f"  ~ {mid:<6} {old_levels[mid]} -> {levels[mid]}")
+    if gone_levels:
+        print(f"  表里不再有（会被删掉）{len(gone_levels)} 首：{gone_levels[:12]}")
+    if dropped:
+        print(f"  （官方表里有、歌单里没有的 {len(dropped)} 首已丢弃：{dropped[:12]}）")
+
     if args.check:
         print("\n--check：没有写文件。")
         return 0
 
     write_compact(songs_path, songs)
     write_compact(vocals_path, vocals)
-    print(f"\n[ok] 已写入 {songs_path.name} / {vocals_path.name}")
+    write_levels(levels_path, levels)
+    print(f"\n[ok] 已写入 {songs_path.name} / {vocals_path.name} / {levels_path.name}")
     return 0
 
 
