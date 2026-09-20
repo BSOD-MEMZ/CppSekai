@@ -906,6 +906,7 @@ void loadUserData(const std::string& path, UserSettings& settings,
             settings.noteSpeed = s.value("noteSpeed", settings.noteSpeed);
             settings.seVolume = s.value("seVolume", settings.seVolume);
             settings.bgmVolume = s.value("bgmVolume", settings.bgmVolume);
+            settings.padRumble = s.value("padRumble", settings.padRumble);
             settings.offsetSec = s.value("offsetSec", settings.offsetSec);
             settings.leadInSec = s.value("leadInSec", settings.leadInSec);
             settings.windowMode = s.value("windowMode", settings.windowMode);
@@ -1034,6 +1035,7 @@ void saveUserData(const std::string& path, const UserSettings& settings,
         {"noteSpeed", settings.noteSpeed},
         {"seVolume", settings.seVolume},
         {"bgmVolume", settings.bgmVolume},
+        {"padRumble", settings.padRumble},
         {"offsetSec", settings.offsetSec},
         {"leadInSec", settings.leadInSec},
         {"windowMode", settings.windowMode},
@@ -3242,7 +3244,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         };
         ImGui::PushFont(body, 19.0f * k);
         emptyText(rowX, rowY + 20.0f * k, ImVec4(0.75f, 0.75f, 0.82f, 1.0f),
-            "没有找到谱面。把 .sus 放到 charts/ 目录下，再按 F5 重新扫描（命名规则见 CHARTS.md）。");
+            "没有找到谱面。把 .sus 放到 charts/ 目录下，再按 F5 重新扫描");
         ImGui::PopFont();
         // A dead end otherwise: the player just installed the game and has no
         // charts at all, so offer the bundled downloader right here instead of
@@ -3250,7 +3252,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         // it (main.cpp polls the process and re-scans when it exits).
         ImGui::SetCursorScreenPos(ImVec2(rowX, rowY + 78.0f * k));
         ImGui::PushFont(body, 19.0f * k);
-        if (ui::capsuleButton("下载谱面（chartdl）", ImVec2(268.0f * k, 46.0f * k), true)) {
+        if (ui::capsuleButton("下载谱面", ImVec2(268.0f * k, 46.0f * k), true)) {
             emptyAction = SelectDownload;
             std::printf("[select] 下载谱面 pressed\n");
             std::fflush(stdout);
@@ -3258,7 +3260,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         ImGui::PopFont();
         ImGui::PushFont(body, 17.0f * k);
         emptyText(rowX, rowY + 138.0f * k, ImVec4(0.6f, 0.6f, 0.68f, 1.0f),
-            "会打开独立的下载器；关掉它之后这里会自动重新扫描。");
+            "这会跳转到音乐商店。");
         ImGui::PopFont();
     }
 

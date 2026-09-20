@@ -187,6 +187,170 @@ namespace
         st.lastFrame = frame;
         return fresh;
     }
+
+    // ------------------------------------------------------------------
+    // Game controller focus (see Ui.hpp). The widgets a pad cannot click
+    // report themselves here while they lay out; the one that owns the focus
+    // gets whatever the last pad press asked for.
+    // ------------------------------------------------------------------
+    enum PadKind
+    {
+        PadKSlider = 0,
+        PadKCheck,
+        PadKStepper,
+        PadKButton,
+        PadKCombo,
+    };
+
+    struct PadItem
+    {
+        ImGuiID id = 0;
+        int kind = PadKButton;
+        ImVec4 rect{0.0f, 0.0f, 0.0f, 0.0f}; // x0, y0, x1, y1 in screen pixels
+        float* f = nullptr;
+        bool* b = nullptr;
+        const std::vector<float>* deltas = nullptr;
+        const std::vector<std::string>* presets = nullptr;
+        float step = 0.0f;
+        float minV = 0.0f;
+        float maxV = 0.0f;
+        bool enabled = true;
+    };
+
+    struct PadReply
+    {
+        bool focused = false; // owns the ring this frame
+        bool pressed = false; // A landed on a checkbox / capsule
+        int delta = 0;        // left / right on a slider, stepper or combo
+    };
+
+    // The list a press navigates from describes the *previous* frame: the
+    // layout is settled by then, while the current one is still being built as
+    // the widgets draw themselves.
+    std::vector<PadItem>& padPrevItems()
+    {
+        static std::vector<PadItem> items;
+        return items;
+    }
+    std::vector<PadItem>& padCurItems()
+    {
+        static std::vector<PadItem> items;
+        return items;
+    }
+    ImGuiID gPadFocus = 0;
+    int gPadPending = -1; // a ui::PadAction waiting for the focused widget
+    bool gPadCollect = false; // only the scoped screen registers (see PadScope)
+
+    float padCenterY(const PadItem& item)
+    {
+        return (item.rect.y + item.rect.w) * 0.5f;
+    }
+
+    int padIndexOf(const std::vector<PadItem>& items, ImGuiID id)
+    {
+        if (id == 0) {
+            return -1;
+        }
+        for (std::size_t i = 0; i < items.size(); ++i) {
+            if (items[i].id == id) {
+                return static_cast<int>(i);
+            }
+        }
+        return -1;
+    }
+
+    // The nearest band in that direction. Every card in this project is a
+    // single column, so "the closest one below" is exactly the next row.
+    int padStep(const std::vector<PadItem>& items, int from, int dir)
+    {
+        if (items.empty()) {
+            return -1;
+        }
+        if (from < 0 || from >= static_cast<int>(items.size())) {
+            return dir > 0 ? 0 : static_cast<int>(items.size()) - 1;
+        }
+        const float fromY = padCenterY(items[static_cast<std::size_t>(from)]);
+        int best = -1;
+        float bestY = 0.0f;
+        for (std::size_t i = 0; i < items.size(); ++i) {
+            const float y = padCenterY(items[i]);
+            if (dir > 0 ? (y <= fromY + 2.0f) : (y >= fromY - 2.0f)) {
+                continue;
+            }
+            if (best < 0 || (dir > 0 ? y < bestY : y > bestY)) {
+                bestY = y;
+                best = static_cast<int>(i);
+            }
+        }
+        return best;
+    }
+
+    // Registers a widget and answers what the pad wants from it. Every
+    // component calls it the moment its rectangle is known.
+    PadReply padWidget(ImGuiID id, int kind, const ImVec4& rect, float* f, bool* b,
+        const std::vector<float>* deltas, const std::vector<std::string>* presets, float step,
+        float minV, float maxV, bool enabled)
+    {
+        PadItem item;
+        item.id = id;
+        item.kind = kind;
+        item.rect = rect;
+        item.f = f;
+        item.b = b;
+        item.deltas = deltas;
+        item.presets = presets;
+        item.step = step;
+        item.minV = minV;
+        item.maxV = maxV;
+        item.enabled = enabled;
+        if (gPadCollect) {
+            padCurItems().push_back(item);
+        }
+
+        const bool hot = enabled && id != 0 && id == gPadFocus;
+        // Eased both ways, so the ring fades in and out instead of blinking -
+        // the same curve the widgets use for hover.
+        const float glow = animToggle(id ^ 0x7a11u, hot, 22.0f);
+        if (glow > 0.012f) {
+            const float r = std::min(12.0f, (rect.w - rect.y) * 0.5f);
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            dl->AddRectFilled(ImVec2(rect.x, rect.y), ImVec2(rect.z, rect.w),
+                IM_COL32(106, 232, 208, static_cast<int>(46.0f * glow)), r);
+            dl->AddRect(ImVec2(rect.x, rect.y), ImVec2(rect.z, rect.w),
+                IM_COL32(46, 186, 164, static_cast<int>(225.0f * glow)), r, 0, 2.0f * scale());
+        }
+
+        PadReply reply;
+        if (!hot || gPadPending < 0) {
+            return reply;
+        }
+        reply.focused = true;
+        const int action = gPadPending;
+        gPadPending = -1; // consumed: one press moves exactly one widget
+        std::printf("[pad] focus action %d -> widget kind %d\n", action, kind);
+        std::fflush(stdout);
+        const bool left = action == ui::PadLeft;
+        const bool right = action == ui::PadRight;
+        const bool accept = action == ui::PadAccept;
+        switch (kind) {
+        case PadKSlider:
+        case PadKCombo:
+            reply.delta = left ? -1 : (right ? 1 : 0);
+            break;
+        case PadKStepper:
+            // A has nothing else to do on this row (the capsules are all one
+            // band wide), so it walks the presets too.
+            reply.delta = left ? -1 : ((right || accept) ? 1 : 0);
+            break;
+        case PadKCheck:
+        case PadKButton:
+            reply.pressed = accept;
+            break;
+        default:
+            break;
+        }
+        return reply;
+    }
 } // namespace
 
 float scale()
@@ -506,6 +670,9 @@ bool slider(const char* id, float* value, float minV, float maxV, float step, co
     const float rowW = width > 0.0f ? width : ImGui::GetContentRegionAvail().x;
     ImGui::Dummy(ImVec2(rowW, rowH)); // reserve the block
     ImGui::PushID(id);
+    const PadReply pad = padWidget(ImGui::GetID("##pad"), PadKSlider,
+        ImVec4(pos.x, pos.y, pos.x + rowW, pos.y + rowH), value, nullptr, nullptr, nullptr, step,
+        minV, maxV, enabled);
     // A disabled row is drawn washed out and eats every click: it is meant for
     // values that are currently derived from another setting (BAD while it is
     // slaved to MISS), where letting the user drag it would be a lie.
@@ -517,6 +684,16 @@ bool slider(const char* id, float* value, float minV, float maxV, float step, co
     const float trackX0 = pos.x + btnSize + 16.0f * s;
     const float trackX1 = pos.x + rowW - btnSize - 16.0f * s;
     bool changed = false;
+    // Pad: left / right walk the value by one button step, exactly like the
+    // dark -/+ buttons beside it (and clamped the same way).
+    if (pad.delta != 0) {
+        const float next = std::clamp(*value + step * static_cast<float>(pad.delta), minV, maxV);
+        if (next != *value) {
+            *value = next;
+            changed = true;
+            se(SeClick);
+        }
+    }
 
     // Value above the track, centered, in pink.
     char valueText[32];
@@ -651,14 +828,17 @@ bool capsuleButton(const char* label, const ImVec2& sizeIn, bool primary)
     const bool clicked = ImGui::IsItemClicked();
     const bool hovered = ImGui::IsItemHovered();
     const bool held = ImGui::IsItemActive();
-    if (clicked) {
+    const PadReply pad = padWidget(ImGui::GetItemID(), PadKButton,
+        ImVec4(lo.x - 5.0f * s, lo.y - 5.0f * s, hi.x + 5.0f * s, hi.y + 5.0f * s), nullptr, nullptr,
+        nullptr, nullptr, 0.0f, 0.0f, 0.0f, true);
+    if (clicked || pad.pressed) {
         se(SeClick);
     }
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImGuiID btnKey = ImGui::GetItemID();
     const float hov = animToggle(btnKey ^ 0x11u, hovered, 16.0f);
-    const float press = animToggle(btnKey ^ 0x12u, held, 28.0f);
+    const float press = animToggle(btnKey ^ 0x12u, held || pad.pressed, 28.0f);
     // The capsule grows a hair on hover and gives a little while pressed.
     const float grow = 1.0f + 0.02f * hov - 0.03f * press;
     if (grow != 1.0f) {
@@ -681,7 +861,7 @@ bool capsuleButton(const char* label, const ImVec2& sizeIn, bool primary)
     const ImVec2 textSize = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, label);
     dl->AddText(font, fontSize,
         ImVec2((lo.x + hi.x - textSize.x) * 0.5f, (lo.y + hi.y - textSize.y) * 0.5f), kBtnText, label);
-    return clicked;
+    return clicked || pad.pressed;
 }
 
 bool combo(const char* id, const char* preview, const std::vector<std::string>& items, int* index,
@@ -746,6 +926,20 @@ bool combo(const char* id, const char* preview, const std::vector<std::string>& 
     // the list opens and back when it closes.
     const ImVec2 lo = ImGui::GetItemRectMin();
     const ImVec2 hi = ImGui::GetItemRectMax();
+    // Pad: the row is a focus band like any other widget, and left / right
+    // cycle the options - a controller has no way to open the popup.
+    const PadReply pad = padWidget(key, PadKCombo,
+        ImVec4(lo.x - 3.0f * s, lo.y - 3.0f * s, hi.x + 3.0f * s, hi.y + 3.0f * s), nullptr, nullptr,
+        nullptr, nullptr, 0.0f, 0.0f, 0.0f, true);
+    if (pad.delta != 0 && !items.empty()) {
+        const int count = static_cast<int>(items.size());
+        const int next = ((*index + pad.delta) % count + count) % count;
+        if (next != *index) {
+            *index = next;
+            changed = true;
+            se(SeClick);
+        }
+    }
     const ImVec2 mid(hi.x - 13.0f * s, (lo.y + hi.y) * 0.5f);
     const float r = 5.5f * s;
     const float ang = t * 3.14159265f; // 0 = pointing down, pi = pointing up
@@ -760,6 +954,82 @@ bool combo(const char* id, const char* preview, const std::vector<std::string>& 
     dl->AddTriangleFilled(a, b, c, mixColor(IM_COL32(120, 120, 140, 255), kTitleText, t));
     ImGui::PopID();
     return changed;
+}
+
+// ----------------------------------------------------------------------
+// Game controller focus (see Ui.hpp).
+// ----------------------------------------------------------------------
+PadScope::PadScope(bool on) : previous_(gPadCollect)
+{
+    gPadCollect = on;
+}
+
+PadScope::~PadScope()
+{
+    gPadCollect = previous_;
+}
+
+void padFrame()
+{
+    padPrevItems() = std::move(padCurItems());
+    padCurItems().clear();
+    // The focused widget can be gone - another tab, another card, a row that
+    // only exists while a setting is off. Forget it, so the next press starts
+    // at the top instead of chasing an id nothing draws any more. An action
+    // nobody consumed last frame is dropped with it.
+    if (padIndexOf(padPrevItems(), gPadFocus) < 0) {
+        gPadFocus = 0;
+    }
+    gPadPending = -1;
+}
+
+void padNav(PadAction action)
+{
+    std::vector<PadItem>& items = padPrevItems();
+    int cur = padIndexOf(items, gPadFocus);
+    if (action == PadDown || action == PadUp) {
+        const int next = padStep(items, cur, action == PadDown ? 1 : -1);
+        if (next >= 0) {
+            gPadFocus = items[static_cast<std::size_t>(next)].id;
+            se(SeSelect); // the tick the keyboard's list navigation plays
+            std::printf("[pad] focus row %d / %d\n", next, static_cast<int>(items.size()));
+        } else {
+            std::printf("[pad] focus already at the %s (%d rows)\n",
+                action == PadDown ? "bottom" : "top", static_cast<int>(items.size()));
+        }
+        std::fflush(stdout);
+    } else if (cur < 0 && !items.empty()) {
+        // Nothing focused yet (the first press after the card opened): land on
+        // the first widget, so left / right / A do something visible.
+        gPadFocus = items[0].id;
+        std::printf("[pad] focus -> first of %d rows\n", static_cast<int>(items.size()));
+        std::fflush(stdout);
+    }
+    gPadPending = static_cast<int>(action);
+}
+
+void padFocusClear()
+{
+    gPadFocus = 0;
+    gPadPending = -1;
+}
+
+bool padComboNudge(int* index, int count)
+{
+    if (index == nullptr || count <= 0) {
+        return false;
+    }
+    const ImVec2 lo = ImGui::GetItemRectMin();
+    const ImVec2 hi = ImGui::GetItemRectMax();
+    const PadReply reply = padWidget(ImGui::GetItemID(), PadKCombo,
+        ImVec4(lo.x - 3.0f, lo.y - 3.0f, hi.x + 3.0f, hi.y + 3.0f), nullptr, nullptr, nullptr,
+        nullptr, 0.0f, 0.0f, 0.0f, true);
+    if (reply.delta == 0) {
+        return false;
+    }
+    *index = ((*index + reply.delta) % count + count) % count;
+    se(SeClick);
+    return true;
 }
 
 float anim(ImGuiID id, bool target, float rate)
@@ -825,13 +1095,21 @@ bool checkBox(const char* label, bool* value, float rowWidth, bool enabled)
     ImGui::InvisibleButton(label, ImVec2(groupW, boxSize));
     const bool clicked = enabled && ImGui::IsItemClicked();
     const bool hovered = enabled && ImGui::IsItemHovered();
+    // Registered after the invisible button so the id is the same one ImGui
+    // used for the hit test. The band is a little wider than the box + label,
+    // otherwise the ring would sit *under* the pink fill and never be seen.
+    const PadReply pad = padWidget(ImGui::GetItemID(), PadKCheck,
+        ImVec4(boxLo.x - 7.0f * s, boxLo.y - 6.0f * s, boxLo.x + groupW + 7.0f * s,
+            boxLo.y + boxSize + 6.0f * s),
+        nullptr, value, nullptr, nullptr, 0.0f, 0.0f, 0.0f, enabled);
     if (!enabled) {
         ImGui::EndDisabled();
     }
-    if (clicked && value != nullptr) {
+    const bool toggled = clicked || pad.pressed;
+    if (toggled && value != nullptr) {
         *value = !*value;
     }
-    if (clicked) {
+    if (toggled) {
         se(SeClick);
     }
     const bool checked = value != nullptr && *value;
@@ -895,6 +1173,9 @@ bool stepper(const char* id, float* value, const std::vector<float>& deltas, con
     const float btnH = 50.0f * s;
     ImGui::Dummy(ImVec2(rowW, btnH + 8.0f * s)); // reserve the row
     ImGui::PushID(id);
+    const PadReply pad = padWidget(ImGui::GetID("##pad"), PadKStepper,
+        ImVec4(pos.x, y, pos.x + rowW, y + btnH + 8.0f * s), value, nullptr, &deltas, &presets,
+        0.0f, 0.0f, 0.0f, true);
 
     // Capsule widths. Numeric mode is fixed (a "+1" label is narrow). Pick-one
     // measures the widest preset name and splits whatever is left over, so
@@ -980,6 +1261,38 @@ bool stepper(const char* id, float* value, const std::vector<float>& deltas, con
         }
         return true;
     };
+
+    // Pad: left / right walks the row. Pick-one mode moves to the neighbouring
+    // preset (A too - the ring covers all three capsules, so there is nothing
+    // for A to aim at); a numeric row adds its smallest step that way.
+    if (pad.delta != 0) {
+        if (pickOne) {
+            const int count = static_cast<int>(deltas.size());
+            int target = pickIdx < 0 ? (pad.delta > 0 ? 0 : count - 1) : pickIdx + pad.delta;
+            target = std::clamp(target, 0, count - 1);
+            if (target != pickIdx) {
+                *value = static_cast<float>(target);
+                changed = true;
+                se(SeClick);
+            }
+        } else {
+            float pick = 0.0f;
+            bool have = false;
+            for (const float d : deltas) {
+                if (pad.delta < 0 ? d < 0.0f : d > 0.0f) {
+                    if (!have || std::fabs(d) < std::fabs(pick)) {
+                        pick = d;
+                        have = true;
+                    }
+                }
+            }
+            if (have) {
+                *value += pick;
+                changed = true;
+                se(SeClick);
+            }
+        }
+    }
 
     int slot = 0;
     // Pick-one walks presets in list order; the value-based layout keeps the

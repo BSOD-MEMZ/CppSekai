@@ -2984,6 +2984,11 @@ int main(int argc, char** argv)
         }
         const bool settingsJustOpened = !settingsWasOpen;
         settingsWasOpen = true;
+        // Only this card's widgets join the pad's focus ring (see ui::PadScope):
+        // the song select's combos are drawn on the same frame and would
+        // otherwise show up in the middle of the D-pad's walk. During the close
+        // animation showDebug is already false, so the ring is let go with it.
+        ui::PadScope padScope(showDebug);
         // pjsk style settings panel (tabbed card, pjsk sliders).
         const float s = ui::scale();
         const ImVec2 display = ImGui::GetIO().DisplaySize;
@@ -3111,6 +3116,17 @@ int main(int argc, char** argv)
                     ui::bindSe(&audio, 0.8f * seVolume);
                     persistUserData();
                 }
+                contentLeft();
+                ImGui::Text("手柄震动");
+                // Scales the song-start buzz and the result screen's score roll
+                // (see the `rumble` lambda). 0 turns both off; a pad without
+                // motors ignores it either way.
+                float rumblePct = userSettings.padRumble * 100.0f;
+                contentLeft();
+                if (ui::slider("padrumble", &rumblePct, 0.0f, 100.0f, 5.0f, "%.0f%%", interior)) {
+                    userSettings.padRumble = std::clamp(rumblePct / 100.0f, 0.0f, 1.0f);
+                    persistUserData();
+                }
             } else if (tab == 1) {
                 // 画面: resolution + window mode + frame rate.
                 // UI zoom for the two screens that are laid out on a virtual
@@ -3159,10 +3175,13 @@ int main(int argc, char** argv)
                 }(resW, resH);
                 contentLeft();
                 ImGui::SetNextItemWidth(interior);
-                if (ImGui::Combo("##resolution", &resIdx,
-                        "640 x 360\0" "800 x 450\0" "960 x 540\0" "1024 x 576\0" "1120 x 630\0"
-                        "1280 x 720\0" "1366 x 768\0" "1600 x 900\0" "1920 x 1080\0" "2560 x 1440\0"
-                        "自定义…\0")) {
+                bool resPicked = ImGui::Combo("##resolution", &resIdx,
+                    "640 x 360\0" "800 x 450\0" "960 x 540\0" "1024 x 576\0" "1120 x 630\0"
+                    "1280 x 720\0" "1366 x 768\0" "1600 x 900\0" "1920 x 1080\0" "2560 x 1440\0"
+                    "自定义…\0");
+                // Pad: left / right walk this combo's options (see padComboNudge).
+                resPicked |= ui::padComboNudge(&resIdx, kResCount + 1);
+                if (resPicked) {
                     if (resIdx < kResCount) {
                         resW = kResW[resIdx];
                         resH = kResH[resIdx];
@@ -3200,8 +3219,10 @@ int main(int argc, char** argv)
                     // struct and a stale index would show the wrong mode.
                     int renderModeSel = userSettings.renderScale;
                     ImGui::SetNextItemWidth(interior);
-                    if (ImGui::Combo("##renderscale", &renderModeSel,
-                            "跟随窗口分辨率\0固定分辨率\0")) {
+                    bool renderPicked = ImGui::Combo("##renderscale", &renderModeSel,
+                        "跟随窗口分辨率\0固定分辨率\0");
+                    renderPicked |= ui::padComboNudge(&renderModeSel, 2);
+                    if (renderPicked) {
                         userSettings.renderScale = std::clamp(renderModeSel, 0, 1);
                         applyRenderMode();
                         persistUserData();
@@ -3212,7 +3233,10 @@ int main(int argc, char** argv)
                 static int winMode = windowMode;
                 contentLeft();
                 ImGui::SetNextItemWidth(interior);
-                if (ImGui::Combo("##window-mode", &winMode, "borderless\0windowed\0fullscreen\0")) {
+                bool winPicked = ImGui::Combo("##window-mode", &winMode,
+                    "borderless\0windowed\0fullscreen\0");
+                winPicked |= ui::padComboNudge(&winMode, 3);
+                if (winPicked) {
                     windowMode = winMode;
                     if (winMode == 2) {
                         SDL_SetWindowFullscreen(window, SDL_WINDOW_FULLSCREEN_DESKTOP);
@@ -3263,7 +3287,10 @@ int main(int argc, char** argv)
                 // The Aero entry only exists where Aero does - see aeroGlassAvailable.
                 const char* bgItems = aeroGlass ? "默认渐变\0桌面壁纸\0透明（Aero 玻璃）\0"
                                                 : "默认渐变\0桌面壁纸\0";
-                if (ImGui::Combo("##bgstyle", &bgMode, bgItems)) {
+                const int bgCount = aeroGlass ? 3 : 2;
+                bool bgPicked = ImGui::Combo("##bgstyle", &bgMode, bgItems);
+                bgPicked |= ui::padComboNudge(&bgMode, bgCount);
+                if (bgPicked) {
                     userSettings.bgStyle = bgMode;
                     // The frameless choice lives in the profile but is only in force
                     // while the background is the Aero one (see the declaration).
@@ -3288,8 +3315,10 @@ int main(int argc, char** argv)
                     // worse than what it removes. See AGENTS.md.
                     static int glassModeUi = userSettings.glassMode == 2 ? 1 : 0;
                     ImGui::SetNextItemWidth(interior);
-                    if (ImGui::Combo("##glassmode", &glassModeUi,
-                            "extend frame（默认）\0自绘无框（窗口无边框）\0")) {
+                    bool glassPicked = ImGui::Combo("##glassmode", &glassModeUi,
+                        "extend frame（默认）\0自绘无框（窗口无边框）\0");
+                    glassPicked |= ui::padComboNudge(&glassModeUi, 2);
+                    if (glassPicked) {
                         const int chosen = glassModeUi == 1 ? 2 : 0;
                         userSettings.glassMode = chosen;
                         glassMode = chosen; // the helper reads this one
@@ -3514,9 +3543,11 @@ int main(int argc, char** argv)
                 {
                     int mode = userSettings.instanceMode;
                     ImGui::SetNextItemWidth(interior);
-                    if (ImGui::Combo("##instancemode", &mode,
-                            "只允许一个实例\0"
-                            "允许多开，新实例登录另一个用户\0")) {
+                    bool modePicked = ImGui::Combo("##instancemode", &mode,
+                        "只允许一个实例\0"
+                        "允许多开，新实例登录另一个用户\0");
+                    modePicked |= ui::padComboNudge(&mode, 2);
+                    if (modePicked) {
                         const int picked = std::clamp(mode, 0, 1);
                         // 多开是实验性功能：第一次开启要先确认（已经确认过就直接写）。
                         if (picked == 1 && userSettings.instanceMode == 0
@@ -3614,8 +3645,13 @@ int main(int argc, char** argv)
                     }
                     int chosen = current;
                     ImGui::SetNextItemWidth(interior);
-                    if (!labels.empty()
-                        && ImGui::Combo("##profile", &chosen, labels.data(), static_cast<int>(labels.size()))) {
+                    bool profilePicked = !labels.empty()
+                        && ImGui::Combo("##profile", &chosen, labels.data(),
+                            static_cast<int>(labels.size()));
+                    if (!labels.empty()) {
+                        profilePicked |= ui::padComboNudge(&chosen, static_cast<int>(labels.size()));
+                    }
+                    if (profilePicked) {
                         if (chosen != current) {
                             activateProfile(profiles[static_cast<std::size_t>(chosen)].id);
                         }
@@ -4278,6 +4314,31 @@ int main(int argc, char** argv)
     };
     openPad();
 
+    // -----------------------------------------------------------------------
+    // Rumble. Two moments ask for a buzz - the song starting and the score
+    // counting up on the result screen - so both go through here: the strength
+    // setting and the "does this pad even have motors" check live in one place,
+    // and a missing pad is simply a no-op (which is also every headless run).
+    // `low` drives the heavy motor, `high` the light one; the light one alone
+    // reads as a buzz rather than as a thud.
+    // -----------------------------------------------------------------------
+    double lastRumbleSongTime = -1.0;
+    int resultRumbleTick = -1;
+    auto rumble = [&](float strength, Uint32 ms, const char* why) {
+        // Logged whether or not a pad is there: a headless run has none, and
+        // this line is the only way to check *when* the two buzz moments fire.
+        const bool canRumble = pad != nullptr && userSettings.padRumble > 0.0f
+            && SDL_GameControllerHasRumble(pad) != SDL_FALSE;
+        std::printf("[pad] rumble '%s' strength %.2f %ums -> %s\n", why, strength, ms,
+            canRumble ? "buzz" : (pad == nullptr ? "no pad" : "off / no motors"));
+        std::fflush(stdout);
+        if (!canRumble) {
+            return;
+        }
+        const float k = std::clamp(strength * userSettings.padRumble, 0.0f, 1.0f);
+        SDL_GameControllerRumble(pad, static_cast<Uint16>(k * 24000.0f),
+            static_cast<Uint16>(k * 52000.0f), ms);
+    };
     // -----------------------------------------------------------------------
     // Opening-card skip, shared by the mouse / touch paths and the pad's A.
     // The button only exists while the card is on screen, so `available` is
@@ -5022,6 +5083,32 @@ int main(int argc, char** argv)
         // the main loop). Runs after the SDL event pump, so a pulse lands in
         // the queue and is consumed by ImGui at the start of the next frame.
         // ------------------------------------------------------------------
+        // The focus ring (see game/Ui.hpp) may only rotate the widget list it
+        // built last frame - every frame, pad or no pad, because the list is
+        // also what the components register into.
+        ui::padFrame();
+        // A card that just opened starts with no focus; the first D-pad press
+        // then lands on its first widget instead of on a stale row.
+        {
+            static bool padSettingsWasOpen = false;
+            if (showDebug != padSettingsWasOpen) {
+                padSettingsWasOpen = showDebug;
+                ui::padFocusClear();
+            }
+        }
+        // Rumble: the song starting. The chart clock crossing 0 is the instant
+        // the music really begins - the lead-in before it runs on a silent
+        // clock (see Audio::start) - and it is the same instant on every window
+        // of a 多人游玩 round, so a room buzzes together.
+        if (state == AppState::Play && session.active) {
+            const double rumbleTime = songClock();
+            if (lastRumbleSongTime < 0.0 && rumbleTime >= 0.0) {
+                rumble(1.0f, 230, "song-start");
+            }
+            lastRumbleSongTime = rumbleTime;
+        } else {
+            lastRumbleSongTime = -1.0;
+        }
         // Release whatever pulsed last frame.
         if (!padReleaseQueue.empty()) {
             for (SDL_Scancode sc : padReleaseQueue) {
@@ -5070,6 +5157,13 @@ int main(int argc, char** argv)
             };
 
             // Directions: D-pad or left stick, with auto-repeat while held.
+            //
+            // The settings card is the exception: its sliders, checkboxes and
+            // steppers are custom-drawn (InvisibleButton hit tests), so no
+            // arrow key can ever reach them - there the same four directions
+            // drive the focus ring instead (see game/Ui.hpp), with left/right
+            // changing the focused value and up/down moving between rows.
+            const bool padFocusMode = showDebug;
             {
                 const Sint16 lx = pad != nullptr
                     ? SDL_GameControllerGetAxis(pad, SDL_CONTROLLER_AXIS_LEFTX)
@@ -5085,6 +5179,8 @@ int main(int argc, char** argv)
                 };
                 const SDL_Scancode dirKey[4] = {SDL_SCANCODE_UP, SDL_SCANCODE_DOWN, SDL_SCANCODE_LEFT,
                     SDL_SCANCODE_RIGHT};
+                static const ui::PadAction dirFocus[4] = {ui::PadUp, ui::PadDown, ui::PadLeft,
+                    ui::PadRight};
                 const Uint32 nowMs = SDL_GetTicks();
                 for (int i = 0; i < 4; ++i) {
                     if (!dir[i]) {
@@ -5094,7 +5190,11 @@ int main(int argc, char** argv)
                     // First repeat is slow, the ones after it fast - the usual
                     // keyboard feel for a list that can hold hundreds of songs.
                     if (!padDirHeld[i] || nowMs >= padDirNext[i]) {
-                        pulse(dirKey[i]);
+                        if (padFocusMode) {
+                            ui::padNav(dirFocus[i]);
+                        } else {
+                            pulse(dirKey[i]);
+                        }
                         padDirNext[i] = nowMs + (padDirHeld[i] ? 110u : 400u);
                     }
                     padDirHeld[i] = true;
@@ -5131,7 +5231,12 @@ int main(int argc, char** argv)
             // same button in one frame returns false the second time (prev is
             // already true), which is how "A also confirms the pause dialog"
             // silently stops working.
-            if (pauseDialogOpen) {
+            if (showDebug && padA) {
+                // Settings card: A presses whatever the focus ring is on - a
+                // checkbox, a stepper capsule, a capsule button. Up/down/left/
+                // right (above) are what moved the ring there.
+                ui::padNav(ui::PadAccept);
+            } else if (pauseDialogOpen) {
                 // Pause dialog: every button has to be reachable from the pad.
                 // The dialog is custom-drawn, so the choice is handed to
                 // ui::messageDialog as a forced click (same close animation).
@@ -6625,6 +6730,22 @@ int main(int argc, char** argv)
             renderer.renderFrame(nullptr, 0, 0.85f, 0.0f);
 
             const float resultElapsed = static_cast<float>(uiClock - resultShownAt);
+            // Rumble: the score counting up. drawResult eases the counter from
+            // 0 to the final score between 0.85s and 1.80s (its `countUp`), so
+            // the same curve is replayed here and quantised into 24 ticks: they
+            // come fast and stretch out exactly like the digits do, which is
+            // what makes it read as a roll rather than as a motor switching on.
+            {
+                const float rolled = std::clamp((resultElapsed - 0.85f) / 0.95f, 0.0f, 1.0f);
+                const float inv = 1.0f - rolled;
+                const int tick = static_cast<int>((1.0f - inv * inv * inv) * 24.0f);
+                if (tick != resultRumbleTick) {
+                    resultRumbleTick = tick;
+                    if (tick > 0) {
+                        rumble(0.30f + 0.45f * (1.0f - rolled), 55, "score-roll");
+                    }
+                }
+            }
             // Looping result track; a no-op while it is already playing, and
             // silence when the file is not shipped.
             if (!audio.resultBgmActive()) {
@@ -6701,14 +6822,7 @@ int main(int argc, char** argv)
                 }
                 const int eulaAction = ui::eulaDialog(renderer, "##eula", "关于本软件",
                     {
-                        "CppSekai 是免费、开源、非营利的同人练习工具（AGPL-3.0）。"
-                            "它与 SEGA、Colorful Palette 以及《世界计划》官方没有任何关系。",
-                        "本程序不含官方游戏的任何代码、音频、曲绘或谱面；谱面与素材需由使用者"
-                            "自行下载，仅供本地学习与练习使用。",
-                        "请勿将本程序用于任何商业用途，也请勿传播你无权传播的素材。"
-                            "一切权利归各自权利人所有。",
-                        "程序按现状提供，不附带任何担保；本机数据（成绩、设置）只保存在本地，"
-                            "不会上传到任何服务器。",
+                        "CppSekai 是免费、开源、非营利的同人练习工具（AGPL-3.0）。它与 SEGA、Colorful Palette 以及《初音未来：缤纷舞台》官方没有任何关系，仅供本地学习与练习使用。一切权利归各自权利人所有。"
                     },
                     "以后不再显示", &eulaNoShow, {std::string("知道了")}, {true}, -1);
                 // A button press (>= 0) records the choice and lets the card animate

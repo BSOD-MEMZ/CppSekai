@@ -195,6 +195,49 @@ bool combo(const char* id, const char* preview, const std::vector<std::string>& 
 // as `0x4a552000u + index` work fine as keys.
 float anim(ImGuiID id, bool target, float rate = 18.0f);
 
+// ---- Game controller focus ---------------------------------------------
+// A pad has no pointer, so everything that is clicked rather than typed -
+// sliders, checkboxes, steppers, combos, capsules - used to be unreachable
+// from a controller. Instead of a second input path per screen, the components
+// expose a focus ring: main.cpp turns the pad's edges into padNav() calls,
+// every component reports the band it just laid out, and the one that owns the
+// focus gets the pending action. Keyboard / mouse behaviour is untouched.
+enum PadAction
+{
+    PadAccept = 0, // A  - press a capsule, toggle a checkbox / combo option
+    PadUp,         // D-pad up    - previous widget
+    PadDown,       // D-pad down  - next widget
+    PadLeft,       // D-pad left  - decrease / previous option
+    PadRight,      // D-pad right - increase / next option
+};
+
+// Rotates the per-frame widget list. Once per frame, before the first padNav()
+// and before any component is drawn.
+void padFrame();
+// Only widgets drawn inside a scope take part in the focus ring. The ring is
+// the settings card's, and the song select's combos (or any other dialog that
+// happens to be up on the same frame) must not end up in the list the D-pad
+// walks - they are not on screen with it in any useful sense.
+struct PadScope
+{
+    explicit PadScope(bool on);
+    ~PadScope();
+    PadScope(const PadScope&) = delete;
+    PadScope& operator=(const PadScope&) = delete;
+
+private:
+    bool previous_ = false;
+};
+// A pad edge: moves the focus, or arms an action for the focused widget.
+void padNav(PadAction action);
+// Forgets the focus - a card opened / closed, or the page switched.
+void padFocusClear();
+
+// ImGui::Combo has no drawing hook to register itself from, so a plain combo
+// calls this right after it: while that combo owns the focus, left / right move
+// its selection. Returns true when *index changed.
+bool padComboNudge(int* index, int count);
+
 // Linear RGBA blend of two IM_COL32 colours, t clamped to 0..1.
 ImU32 mix(ImU32 from, ImU32 to, float t);
 
