@@ -481,4 +481,8 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
 // when the level chip is clicked, which a --screenshot run cannot do.
 void debugOpenProfileCard(bool open);
 
+// Debug (`--guess`): open the 猜歌 quiz (the header button's card) at boot, for
+// the same reason. Also usable to close it again.
+void debugOpenGuessDialog(bool open);
+
 } // namespace game

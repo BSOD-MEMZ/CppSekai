@@ -399,8 +399,8 @@ namespace
             "                [--show-pause-dialog] [--test-restart] [--restart-at <sec>]\n"
             "                [--result-preview] [--result-at <sec>] [--help]\n"
             "                [--confirm-flash [<sec>]] [--settings] [--settings-tab <n>]\n"
-            "                [--profile] [--player <name[:org]>] [--player-rank <n>]\n"
-            "                [--player-exp <0..1>]\n\n"
+            "                [--profile] [--guess] [--player <name[:org]>]\n"
+            "                [--player-rank <n>] [--player-exp <0..1>]\n\n"
 
             "No --sus: opens the song select screen (scans --charts, then charts/ next\n"
             "to the exe, then the charts/ of the parent folder).\n"
@@ -453,6 +453,7 @@ namespace
             "--settings [--settings-tab <0-4>]: open the settings card at boot on the\n"
             "          given page (0 演奏 / 1 画面 / 2 判定 / 3 系统 / 4 账户).\n"
             "--profile: open the player profile card (the level chip's card) at boot.\n"
+            "--guess: open the 猜歌 alias quiz (the header button's card) at boot.\n"
             "--flick-log: write flick_debug.log (every touch sample + the swipe\n"
             "          measurement + the judgement it produced; same switch as\n"
             "          settings > 判定 > Flick 调试日志). For touch-flick diagnosis.\n"
@@ -923,6 +924,7 @@ int main(int argc, char** argv)
     bool showSettingsShot = false; // headless check: force the settings card open
     int settingsTabShot = -1;      // headless check: which settings tab to show
     bool profileShot = false;      // headless check: force the profile card open
+    bool guessShot = false;        // headless check: force the 猜歌 card open
     std::string playerSpec;        // --player 昵称[:组织]
     bool playerSpecGiven = false;
     int playerRankGiven = -1;      // --player-rank
@@ -1110,6 +1112,10 @@ int main(int argc, char** argv)
             // select, so a --screenshot run can look at it (the card normally
             // appears when the level chip is clicked).
             profileShot = true;
+        } else if (arg == "--guess") {
+            // Headless check: open the 猜歌 card on the song select, so a
+            // --screenshot run can look at it without a click to hit.
+            guessShot = true;
         } else if (arg == "--player") {
             // Headless check: seed the account (昵称:组织) without touching
             // userdata.json - the profile card and the settings tab need
@@ -2329,6 +2335,9 @@ int main(int argc, char** argv)
     if (profileShot) {
         game::debugOpenProfileCard(true);
     }
+    if (guessShot) {
+        game::debugOpenGuessDialog(true);
+    }
     Uint64 perfFreq = SDL_GetPerformanceFrequency();
     Uint64 perfStart = SDL_GetPerformanceCounter();
 
@@ -2768,14 +2777,22 @@ int main(int argc, char** argv)
     constexpr float kConfirmAttack = 0.09f; // soft onset - no hard "pop" on frame 0
     constexpr float kConfirmHold = 0.16f;   // brightest, session loads here
     constexpr float kConfirmFade = 0.75f;   // the glow lifts off over the intro
-    // Peak brightness of the flash. Deliberately below 1: a frame of solid
-    // white is a cut, not light (the old 1.0 + flat 50% ray triangles is what
-    // read as "hard and untransparent").
-    constexpr float kConfirmPeak = 0.88f;
+    // Peak brightness. Full white on purpose: this burst exists to *hide* the
+    // load stall, and anything under 1.0 lets the song list show through the
+    // frame that is on screen while startSession() blocks (0.88 was still
+    // visibly "透" - the old 1.0 + flat 50% ray triangles is what used to read
+    // as harsh, and that was the rays' fault, not the disc's).
+    constexpr float kConfirmPeak = 1.0f;
     bool confirmFlashActive = false;
     float confirmFlashTime = 0.0f;
     ImVec2 confirmFlashOrigin{0.0f, 0.0f};
     bool confirmStartPending = false;
+    // Set by the overlay pass on the first frame it actually paints a *fully*
+    // white screen. The session is only started on the frame after that, so the
+    // stall happens with a completely white frame already presented - starting
+    // it on the same frame it became white only ever showed the near-white
+    // frame before it (see the confirm-flash block below).
+    bool confirmWhiteShown = false;
     bool confirmFlashShotFired = false;
     game::ChartEntry confirmPendingEntry;
     ImVec2 selectConfirmCenter{0.0f, 0.0f}; // filled by drawSongSelect each frame
@@ -5472,6 +5489,7 @@ int main(int argc, char** argv)
                     // white (see the confirm-flash block below).
                     confirmPendingEntry = playEntry;
                     confirmStartPending = true;
+                    confirmWhiteShown = false; // the new burst has to earn it again
                     confirmFlashActive = true;
                     confirmFlashTime = 0.0f;
                     confirmFlashOrigin = selectConfirmCenter;
@@ -5758,6 +5776,7 @@ int main(int argc, char** argv)
                                 // load (see confirmFlashActive): arm it here,
                                 // with nothing for it to load of its own.
                                 confirmStartPending = false;
+                                confirmWhiteShown = false;
                                 confirmFlashActive = true;
                                 confirmFlashTime = 0.0f;
                                 confirmFlashOrigin = selectConfirmCenter;
@@ -6732,7 +6751,11 @@ int main(int argc, char** argv)
             // timeline has to keep its shape across it (the frame the load happens
             // in simply takes a little longer, and the white covers it).
             confirmFlashTime += std::min(frameDelta, 0.05f);
-            if (confirmStartPending && confirmFlashTime >= kConfirmExpand) {
+            // Not `>= kConfirmExpand`: the screen is only white *after* the
+            // overlay pass has drawn a full-coverage frame, which is what
+            // confirmWhiteShown records. Loading on the expand tick instead put
+            // the stall behind the last frame that was merely near-white.
+            if (confirmStartPending && confirmWhiteShown) {
                 confirmStartPending = false;
                 if (startSession(session, confirmPendingEntry, renderer, audio, judgement, noteSpeed,
                         error)) {
@@ -6750,7 +6773,12 @@ int main(int argc, char** argv)
                 } else {
                     std::fprintf(stderr, "%s\n", error.c_str());
                     error.clear();
-                    confirmFlashActive = false; // nothing to reveal: drop the white
+                    // Nothing to reveal - but cut to the fade rather than
+                    // dropping the white on this frame: a hard cut back to the
+                    // list reads as a glitch, and the session failure is already
+                    // on stderr. (The "white gone = intro is up" rule only holds
+                    // when there *is* an intro; this is the error path.)
+                    confirmFlashTime = kConfirmExpand + kConfirmHold;
                 }
             }
             if (!confirmStartPending
@@ -6801,6 +6829,12 @@ int main(int argc, char** argv)
                     env *= inv * inv * (3.0f - 2.0f * inv); // smoothstep out: slow, soft tail
                 }
                 const float alpha = kConfirmPeak * env;
+                // This frame is about to be presented as a fully white screen.
+                // The session load waits for it (see confirmStartPending), which
+                // is what makes the stall invisible instead of "mostly white".
+                if (cover >= 1.0f && alpha >= 0.999f) {
+                    confirmWhiteShown = true;
+                }
                 if (alpha > 0.002f) {
                     const ImVec2 o = confirmFlashOrigin;
                     // Distance the light has to travel to leave no pixel dark.

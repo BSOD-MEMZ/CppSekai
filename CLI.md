@@ -73,7 +73,7 @@ cppsekai [--sus <file.sus>] [--bgm <audio>] [--charts <dir>] [--cover <image>]
          [--select-id <musicId>] [--select-vocal <n>] [--dump-events <n>]
          [--test-restart] [--restart-at <sec>]
          [--result-preview] [--result-at <sec>] [--confirm-flash [<sec>]]
-         [--profile] [--player <昵称[:组织]>] [--player-rank <n>] [--help]
+         [--profile] [--guess] [--player <昵称[:组织]>] [--player-rank <n>] [--help]
 ```
 
 ### 4.1 内容 / 对齐
@@ -131,6 +131,7 @@ cppsekai [--sus <file.sus>] [--bgm <audio>] [--charts <dir>] [--cover <image>]
 | `--flick-log` | 开触摸 flick 调试日志（等同设置里「判定 > Flick 调试日志」，但不写档案）。写 `flick_debug.log`：每个触摸采样（坐标/位移/dt/vel/travel/分类出的方向）+ 每次 flick 判定的结果，**没打中时还会列出附近 flick 音符的 dt / 轨道偏差 / 需要的方向**——触摸 flick 老 MISS 就靠它定位 |
 | `--confirm-flash [<sec>]` | 在选曲界面单独放一次「确定」的白色爆发光效（默认 1.0s 处，**不加载歌曲**），配合 `--screenshot` 抓爆发过程 |
 | `--profile` | 启动即打开选曲界面的**个人资料卡**（平时要点右上角的等级牌才出来），配合 `--screenshot` 截它 |
+| `--guess` | 启动即打开**猜歌**卡片（平时要点选曲界面头排的「猜歌」按钮），配合 `--screenshot` 截它 |
 | `--player <昵称[:组织]>` | 无头检查用：把账户的昵称 / 学校塞进内存（**不读也不写 userdata.json**），让资料卡和设置「账户」页有东西可看 |
 | `--player-rank <n>` | 同上，直接把等级设成 n（本级经验清零），用来对比不同等级下的等级牌 |
 | `--player-exp <0..1>` | 同上，把本级经验设成「升到下一级所需经验的这个比例」——等级牌左端那截绿色进度条就是它，`0.35` = 35% |

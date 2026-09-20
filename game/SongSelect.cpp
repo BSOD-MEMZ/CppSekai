@@ -23,6 +23,7 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <random>
 #include <sstream>
 #include <string>
 
@@ -406,6 +407,176 @@ bool gProfileOpen = false;
 void debugOpenProfileCard(bool open)
 {
     gProfileOpen = open;
+}
+
+// ---------------------------------------------------------------------------
+// 猜歌 (guess the song): one community alias, four titles, pick the right one.
+//
+// The alias table is the one piece of *content* this game has that the official
+// master data does not - it is what players actually call their songs ("tyw",
+// "梦开始的地方", "mmj团歌") - and until now it only ever served as a search
+// shortcut. The quiz reuses the same card + capsule chrome as 个人资料.
+//
+// Question rules, all of them there to keep a question *fair*:
+//   * the alias must map to exactly one song (a group name or a series alias
+//     has several right answers - guessable, not fair);
+//   * at least two bytes long, and not pure digits (the table is full of
+//     "hs" / "kz" / "emu", which are no signal at all);
+//   * it must not equal the song's own title or reading (that is a freebie);
+//   * and there must be no *other* song whose title is that alias, which would
+//     make a decoy also correct.
+// The pool is built once and cached - the checks below are O(all aliases x all
+// titles) and the tables do not change while the game runs.
+// ---------------------------------------------------------------------------
+struct GuessState
+{
+    bool open = false;
+    std::string alias;
+    std::vector<int> options; // 4 song ids; options[answer] is the right one
+    int answer = 0;
+    int picked = -1; // -1 until the player answers
+    int asked = 0;
+    int correct = 0;
+    int streak = 0;
+    int bestStreak = 0;
+    int lastAnswerId = 0; // never ask the same song twice in a row
+};
+GuessState gGuess;
+std::vector<std::pair<std::string, int>> gGuessPool;
+bool gGuessPoolBuilt = false;
+
+std::mt19937& guessRng()
+{
+    static std::mt19937 rng(static_cast<std::uint32_t>(
+        std::chrono::steady_clock::now().time_since_epoch().count()));
+    return rng;
+}
+
+bool guessAliasIsUsable(const std::string& alias, int musicId)
+{
+    if (alias.size() < 2) {
+        return false;
+    }
+    if (std::all_of(alias.begin(), alias.end(),
+            [](unsigned char c) { return std::isdigit(c) != 0; })) {
+        return false;
+    }
+    const std::string title = toLower(titleFor(musicId));
+    if (title.empty() || title == alias) {
+        return false;
+    }
+    if (toLower(pronunciationFor(musicId)) == alias) {
+        return false;
+    }
+    // Someone else's title must not *be* the alias, or that decoy is right too.
+    for (const auto& song : gMusicTitles) {
+        if (song.first != musicId && toLower(song.second) == alias) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void buildGuessPool()
+{
+    gGuessPool.clear();
+    gGuessPoolBuilt = true;
+    for (const auto& entry : gAliasIndex) {
+        if (entry.second.size() != 1) {
+            continue;
+        }
+        const int musicId = entry.second.front();
+        if (guessAliasIsUsable(entry.first, musicId)) {
+            gGuessPool.emplace_back(entry.first, musicId);
+        }
+    }
+    std::printf("[guess] %zu usable alias(es) of %zu\n", gGuessPool.size(), gAliasIndex.size());
+    std::fflush(stdout);
+}
+
+// Builds one question. Leaves gGuess.open false when there is nothing to ask
+// (no alias table next to the exe, or a pool too small to fill four options).
+void newGuessQuestion()
+{
+    if (!gGuessPoolBuilt) {
+        buildGuessPool();
+    }
+    if (gGuessPool.size() < 4 || gMusicTitles.size() < 4) {
+        gGuess.open = false;
+        return;
+    }
+    std::uniform_int_distribution<std::size_t> pick(0, gGuessPool.size() - 1);
+    std::size_t chosen = pick(guessRng());
+    for (int attempt = 0; attempt < 12 && gGuessPool[chosen].second == gGuess.lastAnswerId;
+         ++attempt) {
+        chosen = pick(guessRng());
+    }
+    gGuess.alias = gGuessPool[chosen].first;
+    const int answerId = gGuessPool[chosen].second;
+    gGuess.lastAnswerId = answerId;
+
+    gGuess.options.clear();
+    gGuess.options.push_back(answerId);
+    const std::string answerTitle = toLower(titleFor(answerId));
+    // Decoys: any other song, as long as the four labels are distinguishable.
+    std::vector<int> ids;
+    ids.reserve(gMusicTitles.size());
+    for (const auto& song : gMusicTitles) {
+        if (song.first != answerId) {
+            ids.push_back(song.first);
+        }
+    }
+    std::shuffle(ids.begin(), ids.end(), guessRng());
+    for (const int id : ids) {
+        if (gGuess.options.size() >= 4) {
+            break;
+        }
+        const std::string title = toLower(titleFor(id));
+        if (title.empty() || title == answerTitle) {
+            continue;
+        }
+        bool duplicate = false;
+        for (const int already : gGuess.options) {
+            duplicate = duplicate || toLower(titleFor(already)) == title;
+        }
+        if (!duplicate) {
+            gGuess.options.push_back(id);
+        }
+    }
+    if (gGuess.options.size() < 4) {
+        gGuess.open = false;
+        return;
+    }
+    std::shuffle(gGuess.options.begin(), gGuess.options.end(), guessRng());
+    gGuess.answer = static_cast<int>(
+        std::find(gGuess.options.begin(), gGuess.options.end(), answerId) - gGuess.options.begin());
+    gGuess.picked = -1;
+    gGuess.open = true;
+    // Logged like [aliases]: a question is generated, not read, so a headless
+    // check has no other way to see what was asked (or that the four options
+    // are actually distinct).
+    std::printf("[guess] \"%s\" -> %04d %s |", gGuess.alias.c_str(), answerId,
+        titleFor(answerId).c_str());
+    for (std::size_t i = 0; i < gGuess.options.size(); ++i) {
+        std::printf(" %s%s", i == static_cast<std::size_t>(gGuess.answer) ? "*" : "",
+            titleFor(gGuess.options[i]).c_str());
+        if (i + 1 < gGuess.options.size()) {
+            std::printf(" /");
+        }
+    }
+    std::printf("\n");
+    std::fflush(stdout);
+}
+
+// Debug (`--guess`): open the quiz at boot, so a --screenshot run can look at
+// it without a click to hit.
+void debugOpenGuessDialog(bool open)
+{
+    if (open) {
+        newGuessQuestion();
+    } else {
+        gGuess.open = false;
+    }
 }
 
 // Blurred desktop wallpaper used as the screen backdrop (0 = draw the built-in
@@ -2185,6 +2356,36 @@ void loadMusicVocals(const std::string& path)
     }
 }
 
+// One 猜歌 option: the same capsule as ui::capsuleButton (soft drop shadow,
+// half-height rounding, body font sized to the button), but with the fill
+// handed in - the quiz needs a mint "right answer" and a red "you picked this",
+// which capsuleButton's mint-or-white cannot express. `clickable` is false once
+// the question has been answered, so the verdict cannot be clicked away.
+bool guessOptionPill(const char* label, const ImVec2& size, ImU32 fill, float s, bool clickable)
+{
+    ImVec2 lo = ImGui::GetCursorScreenPos();
+    ImVec2 hi(lo.x + size.x, lo.y + size.y);
+    ImGui::InvisibleButton(label, size);
+    const bool clicked = clickable && ImGui::IsItemClicked();
+    if (clicked) {
+        ui::se(ui::SeClick);
+    }
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const float radius = (hi.y - lo.y) * 0.5f;
+    if (clickable && ImGui::IsItemHovered()) {
+        fill = ui::mix(fill, ui::kWhiteHover, 0.35f);
+    }
+    dl->AddRectFilled(ImVec2(lo.x, lo.y + 3.0f * s), ImVec2(hi.x, hi.y + 3.0f * s),
+        IM_COL32(150, 150, 170, 60), radius);
+    dl->AddRectFilled(lo, hi, fill, radius);
+    ImFont* font = game::bodyFont();
+    const float fontSize = std::min(22.0f * s, size.y * 0.42f);
+    const ImVec2 text = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, label);
+    dl->AddText(font, fontSize,
+        ImVec2((lo.x + hi.x - text.x) * 0.5f, (lo.y + hi.y - text.y) * 0.5f), ui::kBtnText, label);
+    return clicked;
+}
+
 int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& entries, int& selected,
     int windowW, int windowH, float timeSec, int& sortMode, int& groupMode, int& vocalIndex,
     float uiScale, ImVec2* confirmCenter, const AccountData* account, const SelectPartyInfo* party,
@@ -2491,6 +2692,11 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     // state and from the settings, but on a full list there was nothing.
     const float storeW = 144.0f * k;
     const float storeX = rescanX + rescanW + 10.0f * k;
+    // 猜歌 sits right of 音乐商店. It is the one button here that does not touch
+    // the filesystem - it opens a card, so it does not queue an action for
+    // main.cpp to run (see the 猜歌 card at the end of this function).
+    const float guessW = 104.0f * k;
+    const float guessX = storeX + storeW + 10.0f * k;
     {
         const float rowH = headerRowH;
         const float btnW = rescanW;
@@ -2560,6 +2766,37 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         }
         addTextLeft(dl, body, 17.0f * k, ImVec2(c.x + 18.0f * k, c.y), fg, "音乐商店");
     }
+    {
+        // 猜歌: same chrome, guess.png, opens the alias quiz.
+        const float rowH = headerRowH;
+        const float btnW = guessW;
+        const float btnX = guessX;
+        const ImU32 fg = IM_COL32(238, 238, 248, 255);
+        ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(58, 52, 92, 235));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(76, 68, 118, 245));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(90, 80, 138, 255));
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, rowH * 0.5f);
+        ImGui::SetCursorScreenPos(ImVec2(btnX, headerRowY));
+        if (ImGui::Button("##guess", ImVec2(btnW, rowH))) {
+            ui::se(ui::SeClick);
+            newGuessQuestion();
+        }
+        const bool hovered = ImGui::IsItemHovered();
+        ImGui::PopStyleVar();
+        ImGui::PopStyleColor(3);
+
+        const ImVec2 c(btnX + 26.0f * k, headerRowY + rowH * 0.5f);
+        const GLuint guessIcon = selectTex(renderer, "guess");
+        if (guessIcon != 0) {
+            const float iconSize = 20.0f * k;
+            const int iconAlpha = hovered ? 255 : 232;
+            dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(guessIcon)),
+                ImVec2(c.x - iconSize * 0.5f, c.y - iconSize * 0.5f),
+                ImVec2(c.x + iconSize * 0.5f, c.y + iconSize * 0.5f), ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f),
+                IM_COL32(255, 255, 255, iconAlpha));
+        }
+        addTextLeft(dl, body, 17.0f * k, ImVec2(c.x + 18.0f * k, c.y), fg, "猜歌");
+    }
     ImGui::EndDisabled();
 
     // ------------------------------------------------------------------
@@ -2570,7 +2807,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     if (partyReadOnly) {
         const float bannerH = headerRowH + 12.0f * k;
         const ImVec2 b0(listX, headerRowY - 6.0f * k);
-        const ImVec2 b1(storeX + storeW, b0.y + bannerH);
+        const ImVec2 b1(guessX + guessW, b0.y + bannerH);
         const float cy = (b0.y + b1.y) * 0.5f;
         dl->AddRectFilled(b0, b1, IM_COL32(18, 20, 38, 246), 12.0f * k);
         dl->AddRect(b0, b1, IM_COL32(255, 255, 255, 46), 12.0f * k, 0, 1.5f * k);
@@ -4003,6 +4240,111 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             ui::endCard();
         } else {
             profileOpen = false;
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // 猜歌. Drawn after the list window (like 个人资料) so it is a modal card
+    // of its own and nothing behind it can be clicked.
+    // ------------------------------------------------------------------
+    if (gGuess.open && gGuess.options.size() == 4) {
+        const float s = ui::scale();
+        ImVec2 cardSize(560.0f * s, 424.0f * s);
+        ImVec2 cardCenter(w * 0.5f, h * 0.5f);
+        bool closeClicked = false;
+        if (ui::beginCard("##guess", &cardCenter, &cardSize, true, true, &closeClicked, gGuess.open)) {
+            if (closeClicked) {
+                gGuess.open = false;
+            }
+            const float padX = 30.0f * s;
+            const float interior = cardSize.x - padX * 2.0f;
+            const float leftX = cardCenter.x - cardSize.x * 0.5f + padX;
+            const float topY = cardCenter.y - cardSize.y * 0.5f;
+            const ImDrawList* dl2 = ImGui::GetWindowDrawList();
+
+            ImGui::SetCursorScreenPos(ImVec2(leftX, topY + 16.0f * s));
+            ui::cardTitle("猜歌", interior);
+
+            ImGui::SetCursorScreenPos(ImVec2(leftX, topY + 64.0f * s));
+            ui::caption("这个别名指的是哪首歌？", 18.0f * s, ui::kTitleText, interior);
+
+            // The alias, big and pink - the whole question.
+            ImGui::SetCursorScreenPos(ImVec2(leftX, topY + 92.0f * s));
+            ImGui::PushFont(titleFont(), 34.0f * s);
+            const std::string aliasText = "「" + gGuess.alias + "」";
+            const ImVec2 aliasSize = ImGui::CalcTextSize(aliasText.c_str());
+            ImGui::SetCursorScreenPos(
+                ImVec2(cardCenter.x - aliasSize.x * 0.5f, topY + 92.0f * s));
+            ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(ui::kNotePink), "%s",
+                aliasText.c_str());
+            ImGui::PopFont();
+
+            // Four options in a 2x2 grid. The fill carries the verdict after a
+            // pick (mint = right, red = the one you took) - capsuleButton only
+            // knows mint-or-white, hence the local pill.
+            const bool answered = gGuess.picked >= 0;
+            const float optW = (interior - 14.0f * s) * 0.5f;
+            const float optH = 52.0f * s;
+            for (int i = 0; i < 4; ++i) {
+                const int col = i % 2;
+                const int row = i / 2;
+                ImGui::SetCursorScreenPos(ImVec2(leftX + static_cast<float>(col) * (optW + 14.0f * s),
+                    topY + (146.0f + static_cast<float>(row) * 62.0f) * s));
+                std::string label = std::to_string(i + 1) + ". " + titleFor(gGuess.options[i]);
+                if (answered && i == gGuess.answer) {
+                    label = "✓ " + label;
+                } else if (answered && i == gGuess.picked) {
+                    label = "✗ " + label;
+                }
+                ImU32 fill = ui::kWhiteBtn;
+                if (answered && i == gGuess.answer) {
+                    fill = ui::kPrimary;
+                } else if (answered && i == gGuess.picked) {
+                    fill = IM_COL32(255, 138, 150, 255);
+                }
+                if (guessOptionPill(label.c_str(), ImVec2(optW, optH), fill, s, !answered)) {
+                    gGuess.picked = i;
+                    ++gGuess.asked;
+                    if (i == gGuess.answer) {
+                        ++gGuess.correct;
+                        ++gGuess.streak;
+                        gGuess.bestStreak = std::max(gGuess.bestStreak, gGuess.streak);
+                    } else {
+                        gGuess.streak = 0;
+                    }
+                }
+            }
+
+            // Verdict + tally.
+            const std::string verdict = !answered
+                ? std::string()
+                : (gGuess.picked == gGuess.answer
+                          ? std::string("答对了！")
+                          : std::string("答错了，正确答案是「") + titleFor(gGuess.options[gGuess.answer])
+                                + "」");
+            char tally[96];
+            std::snprintf(tally, sizeof(tally), "答对 %d / %d    连对 %d（最佳 %d）", gGuess.correct,
+                gGuess.asked, gGuess.streak, gGuess.bestStreak);
+            ImGui::SetCursorScreenPos(ImVec2(leftX, topY + 276.0f * s));
+            ui::caption(verdict.empty() ? " " : verdict.c_str(), 18.0f * s,
+                gGuess.picked == gGuess.answer ? IM_COL32(46, 168, 140, 255)
+                                               : IM_COL32(214, 74, 104, 255),
+                interior);
+            ImGui::SetCursorScreenPos(ImVec2(leftX, topY + 302.0f * s));
+            ui::caption(tally, 16.0f * s, ui::kTitleText, interior);
+
+            const float footY = topY + cardSize.y - 66.0f * s;
+            const float btnW = (interior - 14.0f * s) * 0.5f;
+            ImGui::SetCursorScreenPos(ImVec2(leftX, footY));
+            if (ui::capsuleButton(answered ? "下一题" : "跳过", ImVec2(btnW, 50.0f * s), true)) {
+                newGuessQuestion();
+            }
+            ImGui::SetCursorScreenPos(ImVec2(leftX + btnW + 14.0f * s, footY));
+            if (ui::capsuleButton("关闭", ImVec2(btnW, 50.0f * s), false)) {
+                gGuess.open = false;
+            }
+            (void)dl2;
+            ui::endCard();
         }
     }
 

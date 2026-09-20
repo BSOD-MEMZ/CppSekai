@@ -132,13 +132,11 @@
   有一次 ~46MB 的**延迟归还**，别当成泄漏、也别当成"切设置释放了内存"（bgStyle 0/1 都有）。
 
 ## 最近工作（细节一律看 AGENTS.md 对应小节 + 当日日志）
-- **2026-09-20**：chartdl 数据源体检 —— ① 搜索改成大小写不敏感（`hype` 找不到 `Hype Dive`），
-  ② `main()` 用 `utf8Args()` 重读命令行（GUI 子系统的 argv 是 ANSI 码页，中文过滤从来无效），
-  ③ `Song::levelsKnown`：定数表没有这首歌 = 未知，不再把 5 个难度框全灰掉（国服曲因此下不到谱面），
-  ④ `update_music_db.py` 纳入 `music-levels.json` + jsDelivr 镜像，表刷到 733 首
-  （+敗走/ヘレディティ/17 首国服曲）。新工具 `.workbuddy/tools/chartdl_detail_check.py`
-  （跨进程读回面板勾选框状态，比截图直给）。遗留：面板会重复建同一个演唱版本勾选框，
-  成因未定，已从面板守卫 + 队列去重两头堵死。
+- **2026-09-20**：① chartdl 数据源体检（搜索大小写 / CLI 参数编码 / 定数表 `levelsKnown` /
+  `update_music_db.py` 纳入 `music-levels.json` + jsDelivr 镜像，表刷到 733 首）；
+  ② **确定闪光改成全白**（`kConfirmPeak` 1.0 + `confirmWhiteShown`：先出全白帧、下一帧才加载）
+  —— 加载卡顿的遮羞布不能再透出列表；③ 新功能 **猜歌**（选曲头排「音乐商店」右边，
+  `guess.png`，卡片复用 dialog 样式，题库 = 唯一且有意义的社区别名，`--guess` 可无头截）。
 - **2026-09-19**：多人开局倒计时删了（改成「最慢窗口加载 + 0.8s」两段 charge）；失血阴影几何
   重做（探针 `CPSEKAI_VIGNETTE`）；**Win7 三连修**：① libc++ chrono 静态导入
   `GetSystemTimePreciseAsFileTime`（启动即失败，build.sh 打补丁）② 系统字体候选表扩到三层 +

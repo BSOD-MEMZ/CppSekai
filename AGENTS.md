@@ -1906,6 +1906,52 @@ ImGui 后端降级 + 去掉 `glBindSampler`），那是一块真活儿，而目�
 - 验收办法：两个窗口都开 `--flick-log`（各自 cwd 下的 `flick_debug.log`，**要放不同目录**
   否则互相覆盖），或者直接看 HUD 左下角队友分数条——某个窗口如果摸不到，它的分数就一直是 0。
 
+## 确定闪光 / 猜歌（2026-09-20）
+
+### 确定闪光必须"全白"，并且加载只发生在全白之后
+
+它是加载卡顿的遮羞布：`startSession()` 要花一秒左右，那一秒里屏幕上是什么，玩家就看着什么。
+
+- **峰值改成 1.0**（原来是 0.88）。0.88 加上远处仍在渐变里，卡住的那一帧就是"88% 白"，
+  能透出选曲列表 —— 用户报的"有点透"就是这个。射线（rays）是**故意**在 cover→1 时退场的
+  （`rayFade = 1 - cover*1.3`），所以纯白只剩那颗盘，不再是"硬"的那种白。
+- **加载改由 `confirmWhiteShown` 把关**：以前是 `confirmFlashTime >= kConfirmExpand` 就加载，
+  而 `cover` 恰好在这一刻才到 1，也就是说**卡住的那一帧画的是它上一帧**（还没铺满）。
+  现在：本帧画满（`cover >= 1 && alpha >= 0.999`）→ 置 `confirmWhiteShown` → **下一帧**才 `startSession()`。
+  时间线加了不到 16 ms，但保证卡顿发生时屏幕上已经是纯白。
+- **"白色消失 ⇒ 已经在 intro 里"** 靠三件事共同成立：① 白色只在 `startSession()` 成功后才可能退场
+  （`!confirmStartPending` 才允许关闭）；② 同一分支里 `state = Play` + `beginSessionClock()`，
+  歌内时间从 0 开始；③ intro 卡片在 `outputTime` 0~3.4s 是**不透明**的（`introCardAlpha` = 1）
+  且遮罩 `INTRO_BG_ALPHA` 也开着。所以白色是在 intro 卡片之上淡出的。
+  失败路径（`startSession` 返回 false）没有 intro 可露，改成**跳到淡出阶段**而不是硬切回列表，
+  否则看着像故障；错误本身还是只打 stderr。
+- 验证手法：`--confirm-flash <sec>` 起爆 + `--screenshot-time <sec+0.35>` 抓**平台期**那一帧，
+  然后逐像素断言**整屏纯白（含四角）**。2026-09-20 实测 1280x720 全采样点 `min(r,g,b) = 255`。
+  别拿攻击段（前 0.09s）或淡出段去抓，那两段本来就不是全白。
+
+### 猜歌（选曲界面头排「猜歌」按钮 / `--guess`）
+
+用社区别名表当题库：`assets/select/guess.png` 图标，按钮就排在「音乐商店」右边
+（`guessX = storeX + storeW + 10k`；**多人横幅的右边界也跟着改成 `guessX + guessW`**，
+不然成员窗口的横幅盖不住这个新按钮）。点开是 `ui::beginCard` 卡片，
+和 个人资料 / messageDialog 同一套外壳：标题 + 细线 + 胶囊按钮。
+
+- 状态与出题都在 `game/SongSelect.cpp` 第一个匿名 namespace（`GuessState gGuess`），
+  因为别名表（`gAliasIndex`）和曲名表（`gMusicTitles` / `titleFor()`）都住在那里。
+- **题库只收"唯一且有意义"的别名**：`gAliasIndex[alias].size() == 1`（多个答案不算题）、
+  长度 ≥ 2 字节、不是纯数字、不等于这首的曲名或读音、**且没有别的歌的曲名正好是这个别名**
+  （否则那个错项也是对的）。2026-09-20 实测 12896 条里 12660 条可用。题库建一次就缓存
+  （后面那条检查是 O(别名×曲名)，表在运行时不变）。
+- 干扰项是随机别的曲名，只要求四项**互不相同**且不同于正确答案；`std::shuffle` 打乱后才记
+  `answer` 下标。答完锁定（胶囊 `clickable = false`），正确项染薄荷、选错的那项染红，
+  下面是"答对 x / y 连对 z（最佳 w）"+ 下一题 / 关闭。
+- 出题时打一行 `[guess] "别名" -> <id> 正确曲名 | *正确曲名 / 干扰 / ...`，
+  无头跑只能靠它看到出了什么题（`--guess` 起手就能抓）。
+- `--guess` 是给 `--screenshot` 用的钩子，同 `--profile`；正式入口就是头排那个按钮。
+- 实现细节：选项胶囊不能用 `ui::capsuleButton`（它只认薄荷/白两色），所以
+  `guessOptionPill()` 照它的外观重画一遍（半高圆角 + 底部浅阴影 + `bodyFont` 居中），
+  但填充色由调用方给。
+
 ## ELUA（首次启动的「关于本软件」弹窗）2026-09-18
 
 - `ui::eulaDialog`（`game/Ui.*`）就是 `messageDialog` 的加强版：可带一段说明文字 +
@@ -1922,7 +1968,6 @@ ImGui 后端降级 + 去掉 `glBindSampler`），那是一块真活儿，而目�
   ④ 按现状提供无担保，本机数据只存本地不上传。
 
 ## 空谱面时的「下载谱面（chartdl）」按钮 2026-09-18
-
 - 列表为空时（`rowCount == 0`）在选曲界面画一句提示 + 一个
   `ui::capsuleButton("下载谱面（chartdl）")`，返回 `SelectAction::SelectDownload(-5)`。
   **`emptyAction` 优先于列表本身产出的 action 返回**（列表为空，本来就产不出别的）。
