@@ -4292,9 +4292,9 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
                     topY + (146.0f + static_cast<float>(row) * 62.0f) * s));
                 std::string label = std::to_string(i + 1) + ". " + titleFor(gGuess.options[i]);
                 if (answered && i == gGuess.answer) {
-                    label = "✓ " + label;
+                    label = label;
                 } else if (answered && i == gGuess.picked) {
-                    label = "✗ " + label;
+                    label = label;
                 }
                 ImU32 fill = ui::kWhiteBtn;
                 if (answered && i == gGuess.answer) {

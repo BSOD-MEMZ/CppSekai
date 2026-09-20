@@ -2909,7 +2909,7 @@ namespace
                 label += L"  （无）";
             }
             if (onDisk) {
-                label += L"  ✓已下载";
+                label += L"  已下载";
             }
             SetWindowTextW(gDiffChecks[d], label.c_str());
             // Already there: the box is disabled *and* unticked, so it can never
@@ -2939,7 +2939,7 @@ namespace
                 label += L"  " + widen(version.singers);
             }
             if (onDisk) {
-                label += L"  ✓已下载";
+                label += L"  已下载";
             }
             HWND check = CreateWindowExW(0, L"BUTTON", label.c_str(),
                 WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | WS_CLIPSIBLINGS, baseX, y, contentWidth,
