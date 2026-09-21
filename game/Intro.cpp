@@ -4,6 +4,8 @@
 // core/native/src/mmw_overlay_player.cpp (sekai-mmw-preview-web, AGPL-3.0).
 #include "Intro.hpp"
 
+#include "Ui.hpp" // ui::anim - the skip button's hover / press easing
+
 #include "imgui.h"
 
 #include <algorithm>
@@ -50,6 +52,24 @@ namespace
     constexpr float INTRO_BODY_DRAW_SIZE_PX = 26.0f;
     constexpr float INTRO_DESC1_ROW_OFFSET_PX = 88.0f;
     constexpr float INTRO_DESC2_ROW_OFFSET_PX = 136.0f;
+
+    // ---- Opening-card skip button ---------------------------------------
+    // pjsk's round back / skip key: a white disc with a hairline grey rim and
+    // a dark navy glyph, parked in the top-right corner. The glyph is
+    // assets/mmw/ui/skip.png - pure white ">>" on transparent, so the navy
+    // comes from the draw-time tint and the file never needs recolouring.
+    // Shared by drawIntro() and introSkipHitTest() so the two cannot drift.
+    constexpr float SKIP_BTN_RADIUS_PX = 46.0f;
+    constexpr float SKIP_BTN_MARGIN_PX = 34.0f;   // from the top and right edges
+    constexpr float SKIP_BTN_ICON_W_PX = 46.0f;   // height follows the 44x28 source
+    constexpr float SKIP_BTN_DISC_ALPHA = 0.90f;  // white disc opacity
+    // Navy sampled from the pjsk reference screenshot (avg of its dark pixels).
+    constexpr int SKIP_BTN_NAVY_R = 61;
+    constexpr int SKIP_BTN_NAVY_G = 60;
+    constexpr int SKIP_BTN_NAVY_B = 92;
+    // Hover / press feedback, matching the eased blends game/Ui.cpp uses.
+    constexpr ImGuiID SKIP_BTN_HOVER_ID = 0x4a553000u;
+    constexpr ImGuiID SKIP_BTN_PRESS_ID = 0x4a553001u;
 
     ImFont* gTitleFont = nullptr;
     ImFont* gBodyFont = nullptr;
@@ -813,25 +833,45 @@ void drawIntro(platform::Renderer& renderer, const IntroInfo& intro, float outpu
             ps(textMaxWidth));
     }
 
-    // Skip button, bottom-right: a quiet translucent pill with 跳过 >>.
-    // Draw-only here - the click lands in main.cpp via introSkipHitTest().
+    // Skip button, top-right: pjsk's round key - white disc, hairline rim, dark
+    // navy ">>" glyph (assets/mmw/ui/skip.png tinted navy, so the asset stays
+    // the untouched white original). Draw-only here - the click lands in
+    // main.cpp via introSkipHitTest().
     const float skipFade = clamp01((kHudIntroDurationSec - outputTimeSec) / 0.5f);
     if (outputTimeSec >= 0.0f && skipFade > 0.001f) {
-        constexpr float kSkipW = 128.0f;
-        constexpr float kSkipH = 46.0f;
-        constexpr float kSkipMargin = 40.0f;
-        const float bx = px(1920.0f - kSkipMargin - kSkipW);
-        const float by = py(1080.0f - kSkipMargin - kSkipH);
-        overlay->AddRectFilled(ImVec2(bx, by), ImVec2(bx + ps(kSkipW), by + ps(kSkipH)),
-            IM_COL32(255, 255, 255, alphaByte(0.14f * skipFade)), ps(0.5f * kSkipH));
-        overlay->AddRect(ImVec2(bx, by), ImVec2(bx + ps(kSkipW), by + ps(kSkipH)),
-            IM_COL32(255, 255, 255, alphaByte(0.42f * skipFade)), ps(0.5f * kSkipH));
-        const char* label = "跳过 >>";
-        const float labelSize = ps(22.0f);
-        const ImVec2 labelSize2 = gBodyFont->CalcTextSizeA(labelSize, FLT_MAX, 0.0f, label);
-        overlay->AddText(gBodyFont, labelSize,
-            ImVec2(bx + 0.5f * (ps(kSkipW) - labelSize2.x), by + 0.5f * (ps(kSkipH) - labelSize2.y)),
-            IM_COL32(255, 255, 255, alphaByte(0.85f * skipFade)), label);
+        const ImVec2 skipCenter(
+            px(1920.0f - SKIP_BTN_MARGIN_PX - SKIP_BTN_RADIUS_PX),
+            py(SKIP_BTN_MARGIN_PX + SKIP_BTN_RADIUS_PX));
+
+        // Hover / press feedback. The pointer test is the same disc the hit
+        // test below uses, in window pixels.
+        const ImVec2 mouse = ImGui::GetIO().MousePos;
+        const float mouseDx = mouse.x - skipCenter.x;
+        const float mouseDy = mouse.y - skipCenter.y;
+        const bool hovered = (mouseDx * mouseDx + mouseDy * mouseDy) <= (ps(SKIP_BTN_RADIUS_PX) + ps(6.0f)) * (ps(SKIP_BTN_RADIUS_PX) + ps(6.0f));
+        const bool pressed = hovered && ImGui::IsMouseDown(ImGuiMouseButton_Left);
+        const float hover = ui::anim(SKIP_BTN_HOVER_ID, hovered, 22.0f);
+        const float press = ui::anim(SKIP_BTN_PRESS_ID, pressed, 30.0f);
+        // Pjsk keys grow a touch on hover and dip back on press.
+        const float radius = ps(SKIP_BTN_RADIUS_PX) * (1.0f + 0.05f * hover - 0.04f * press);
+
+        overlay->AddCircleFilled(skipCenter, radius,
+            IM_COL32(255, 255, 255, alphaByte((SKIP_BTN_DISC_ALPHA + 0.08f * hover) * skipFade)), 64);
+        overlay->AddCircle(skipCenter, radius - ps(1.6f),
+            IM_COL32(210, 214, 226, alphaByte(0.95f * skipFade)), 64, ps(3.2f));
+
+        const platform::Renderer::HudSprite* skipIcon = renderer.hud("ui_skip");
+        if (skipIcon != nullptr && skipIcon->id != 0 && skipIcon->width > 0 && skipIcon->height > 0) {
+            const float iconW = ps(SKIP_BTN_ICON_W_PX) * (1.0f + 0.05f * hover - 0.04f * press);
+            const float iconH = iconW * static_cast<float>(skipIcon->height) / static_cast<float>(skipIcon->width);
+            const int navy = IM_COL32(SKIP_BTN_NAVY_R, SKIP_BTN_NAVY_G, SKIP_BTN_NAVY_B,
+                alphaByte((0.90f + 0.10f * hover) * skipFade));
+            overlay->AddImage(
+                reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(skipIcon->id)),
+                ImVec2(skipCenter.x - 0.5f * iconW, skipCenter.y - 0.5f * iconH),
+                ImVec2(skipCenter.x + 0.5f * iconW, skipCenter.y + 0.5f * iconH),
+                ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), navy);
+        }
     }
 
     (void)INTRO_ENTER_FADE_SEC;
@@ -839,18 +879,18 @@ void drawIntro(platform::Renderer& renderer, const IntroInfo& intro, float outpu
 
 bool introSkipHitTest(int windowW, int windowH, int x, int y)
 {
-    // Same transform + rect constants drawIntro() uses for the pill.
-    constexpr float kSkipW = 128.0f;
-    constexpr float kSkipH = 46.0f;
-    constexpr float kSkipMargin = 40.0f;
+    // Same transform + disc constants drawIntro() uses for the button.
     const float scale = std::min(static_cast<float>(windowW) / 1920.0f, static_cast<float>(windowH) / 1080.0f);
     const float offsetX = (static_cast<float>(windowW) - 1920.0f * scale) * 0.5f;
     const float offsetY = (static_cast<float>(windowH) - 1080.0f * scale) * 0.5f;
-    const float bx = offsetX + (1920.0f - kSkipMargin - kSkipW) * scale;
-    const float by = offsetY + (1080.0f - kSkipMargin - kSkipH) * scale;
-    const float fx = static_cast<float>(x);
-    const float fy = static_cast<float>(y);
-    return fx >= bx && fx <= bx + kSkipW * scale && fy >= by && fy <= by + kSkipH * scale;
+    const float cx = offsetX + (1920.0f - SKIP_BTN_MARGIN_PX - SKIP_BTN_RADIUS_PX) * scale;
+    const float cy = offsetY + (SKIP_BTN_MARGIN_PX + SKIP_BTN_RADIUS_PX) * scale;
+    // A couple of pixels of slack: the rim is drawn just inside the disc, and a
+    // round target is harder to hit than a rectangle.
+    const float radius = SKIP_BTN_RADIUS_PX * scale + 6.0f;
+    const float dx = static_cast<float>(x) - cx;
+    const float dy = static_cast<float>(y) - cy;
+    return dx * dx + dy * dy <= radius * radius;
 }
 
 } // namespace game

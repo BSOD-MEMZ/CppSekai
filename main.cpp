@@ -921,6 +921,12 @@ int main(int argc, char** argv)
     bool testHits = false; // debug: fire hit effects without player input
     int judgeAnimFrame = -1; // debug: freeze the judge text on this animation frame
     bool showPauseDialogShot = false; // headless check: force the pause dialog open
+    // Headless check: pin the opening card's output clock so the overlay stays
+    // up for a screenshot. The real intro only ever lives before chart time 0
+    // (outputTime = songTime + leadIn, and leadIn is clamped to >= 5.8s), and
+    // --screenshot can only fire at chart time >= 0.5, so without this the card
+    // is unreachable in a shot.
+    double introPreviewSec = -1.0;
     bool showSettingsShot = false; // headless check: force the settings card open
     int settingsTabShot = -1;      // headless check: which settings tab to show
     bool profileShot = false;      // headless check: force the profile card open
@@ -1091,6 +1097,10 @@ int main(int argc, char** argv)
             judgeAnimFrame = std::atoi(utf8Argv[++i]);
         } else if (arg == "--show-pause-dialog") {
             showPauseDialogShot = true;
+        } else if (arg == "--intro-preview") {
+            // Seconds into the opening card to hold (default 1.5 = fully up).
+            introPreviewSec = (i + 1 < utf8Argc && utf8Argv[i + 1][0] != '-')
+                ? std::atof(utf8Argv[++i]) : 1.5;
         } else if (arg == "--test-vocal-switch" && i + 1 < utf8Argc) {
             testVocalSwitchSec = std::atof(utf8Argv[++i]);
         } else if (arg == "--dump-stage-bg" && i + 1 < utf8Argc) {
@@ -5007,7 +5017,7 @@ int main(int argc, char** argv)
                         tapEffect.spawn(static_cast<float>(event.button.x),
                             static_cast<float>(event.button.y));
                     }
-                    // Opening-card skip button (bottom-right): jump the
+                    // Opening-card skip button (top-right): jump the
                     // lead-in straight to chart time 0 and start the music
                     // now. Works in autoplay previews too.
                     if (state == AppState::Play && !paused && !ImGui::GetIO().WantCaptureMouse) {
@@ -6565,7 +6575,9 @@ int main(int argc, char** argv)
                 game::drawHud(renderer, hudState, static_cast<float>(songTime), windowW, windowH,
                     static_cast<float>(leadInSec), dumpJudgeSheet);
             }
-            game::drawIntro(renderer, session.intro, outputTime, windowW, windowH);
+            game::drawIntro(renderer, session.intro,
+                introPreviewSec >= 0.0 ? static_cast<float>(introPreviewSec) : outputTime,
+                windowW, windowH);
 
             // 多人游玩: the other players' score / combo, and - while the host
             // has the shared clock on hold - why nothing is moving.

@@ -929,6 +929,9 @@ bool Renderer::loadHud(const std::string& overlayDir, std::string& outError)
     add("life_overflow", "life/v3/overflow.png");
     add("auto_badge", "autolive.png");
     add("ui_close", "../ui/close.png");
+    // White ">>" glyph, tinted at draw time by the intro card's skip button
+    // (game/Intro.cpp). White-on-alpha so the tint picks the colour.
+    add("ui_skip", "../ui/skip.png");
 
     for (int i = 1; i <= 6; ++i) {
         add("judge_" + std::to_string(i), "judge/v3/" + std::to_string(i) + ".png");

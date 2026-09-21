@@ -795,6 +795,24 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
   （cover 铺满 + dim 黑罩）。模糊只在滑条松手时重算，拖动期间别重算（CPU pass）。
 
 
+## 开场卡片的跳过键（2026-09-21，`game/Intro.cpp`）
+
+- **形状**：照 pjsk 的圆形返回键做的——白圆盘 + 一圈细灰边 + 深藏青图标，钉在**右上角**。
+  几何常量（`SKIP_BTN_RADIUS_PX` / `SKIP_BTN_MARGIN_PX` / `SKIP_BTN_ICON_W_PX`）在
+  `Intro.cpp` 的匿名 namespace 里，`drawIntro()` 和 `introSkipHitTest()` **共用同一份**，
+  改一处就够；命中测试是**圆形**（半径 + 6px 余量），不是矩形。
+- **图标是 `assets/mmw/ui/skip.png`**：44x28 的**纯白 ">>"**（白色 + alpha，没有别的颜色）。
+  `Renderer::loadHud` 注册成 `ui_skip`，绘制时用 `AddImage` 的 tint 染成藏青
+  （`61,60,92` 是从 pjsk 参考截图里取样的均值）—— **所以不需要拿 PS 换色，也不要往这个
+  PNG 里烤颜色**（染不了的话就失去 hover 提亮的能力）。同一张图在 `combo`、别处若要用，
+  自己 tint 就行。
+- **只画不判**：点击走 `main.cpp` 的事件层（鼠标 / 触摸 / 手柄 A 三条路），
+  `drawIntro()` 只负责画 + 悬停放大/按压回弹（`ui::anim`，id 常量 `0x4a5530xx`）。
+- **位置与 HUD 暂停键不冲突**：暂停键在右上角，但开场卡片期间 `openingPlayfieldVisibility()`
+  是 0，`drawHud()` 根本不画、`hudPausePress()` 也主动吞掉点击。
+- **截图**：卡片只活在谱面时间 0 之前（`outputTime = songTime + leadIn`，而 `leadIn >= 5.8s`），
+  普通 `--screenshot` 抓不到。用 `--intro-preview [sec]`（默认 1.5）把输出时钟钉住再截。
+
 ## 结算画面（2026-09-13，`game/Result.cpp`）
 
 **2026-09-19 改版（用户点名的四条）**：
@@ -926,7 +944,8 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
   完全不写 `userdata.json`。
 - **触摸路径要自己 hit-test 所有按钮**：触摸的合成鼠标事件带 `SDL_TOUCH_MOUSEID`，在
   `SDL_MOUSEBUTTONDOWN` 分支里被过滤掉了，所以**任何只在鼠标分支里判定的按钮，触摸屏上都点不到**。
-  踩过两次：HUD 暂停按钮（已修）、开场卡片右下角的「跳过 >>」按钮（2026-09-12 修）。
+  踩过两次：HUD 暂停按钮（已修）、开场卡片右下角的「跳过 >>」按钮（2026-09-12 修；
+  2026-09-21 已改成右上角的圆形跳过键，见「开场卡片的跳过键」一节）。
   新增可点元素时，要么放进 ImGui（合成鼠标事件能到 ImGui），要么在 `SDL_FINGERDOWN` 里补一份
   同样的 hit-test（`game::introSkipHitTest` / `isPauseButton` 就是这个模式）。
 

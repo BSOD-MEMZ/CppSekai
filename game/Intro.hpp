@@ -84,9 +84,9 @@ IntroInfo buildIntroInfo(const IntroMetadata& metadata, bool hasCover);
 void drawIntro(platform::Renderer& renderer, const IntroInfo& info, float outputTimeSec,
     int windowW, int windowH);
 
-// Hit test for the "skip" button drawIntro() puts in the bottom-right corner
-// while the opening card is up (window pixel coordinates). Clicking it makes
-// the host jump the lead-in clock to chart time 0.
+// Hit test for the round "skip" button drawIntro() puts in the *top-right*
+// corner while the opening card is up (window pixel coordinates). Clicking it
+// makes the host jump the lead-in clock to chart time 0.
 bool introSkipHitTest(int windowW, int windowH, int x, int y);
 
 // Upstream introCardAlpha(): 1 while the card is up, fading over the last

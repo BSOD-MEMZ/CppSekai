@@ -49,7 +49,7 @@ void drawResult(platform::Renderer& renderer, const ResultData& data, float elap
 
 // Hit test for the 继续 button, in *window pixel* coordinates. The press is
 // handled by the SDL event path (the same way the HUD pause button and the
-// intro's skip pill are), not by ImGui: the synthesized mouse events touch
+// intro's round skip key are), not by ImGui: the synthesized mouse events touch
 // contacts produce are filtered out in main.cpp, so an ImGui-only test would
 // leave the button dead on a touchscreen. Pass the same uiScale the frame was
 // drawn with, or the hitbox and the button drift apart.
