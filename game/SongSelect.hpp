@@ -113,9 +113,16 @@ struct UserSettings
     float noteSpeed = 8.0f;
     float seVolume = 0.8f;   // hit / UI sound effects
     float bgmVolume = 1.0f;  // music: chart track, select preview, result BGM
-    // Game controller vibration (0 = off). Scales both the song-start kick and
-    // the result screen's score roll; a pad without motors just ignores it.
+    // Game controller vibration (0 = off). Scales the song-start kick, the
+    // result screen's score roll, the 确定 flash and the per-hit flavours
+    // below; a pad without motors just ignores it.
     float padRumble = 0.7f;
+    // Which moments buzz (settings > 判定). Each one is a short kick while the
+    // pad is already busy with the two above; all of them are moot while
+    // padRumble is 0.
+    bool rumbleFlick = true;    // a flick note was cleared
+    bool rumbleCritical = true; // a 绝赞 (yellow / critical) note was cleared
+    bool rumbleMiss = false;    // a note was missed / life was lost
     double offsetSec = 0.0; // audio offset; the UI shows it in ms
     double leadInSec = 6.0;
     int windowMode = 1; // 0=borderless 1=windowed 2=fullscreen

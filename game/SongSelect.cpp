@@ -907,6 +907,9 @@ void loadUserData(const std::string& path, UserSettings& settings,
             settings.seVolume = s.value("seVolume", settings.seVolume);
             settings.bgmVolume = s.value("bgmVolume", settings.bgmVolume);
             settings.padRumble = s.value("padRumble", settings.padRumble);
+            settings.rumbleFlick = s.value("rumbleFlick", settings.rumbleFlick);
+            settings.rumbleCritical = s.value("rumbleCritical", settings.rumbleCritical);
+            settings.rumbleMiss = s.value("rumbleMiss", settings.rumbleMiss);
             settings.offsetSec = s.value("offsetSec", settings.offsetSec);
             settings.leadInSec = s.value("leadInSec", settings.leadInSec);
             settings.windowMode = s.value("windowMode", settings.windowMode);
@@ -1036,6 +1039,9 @@ void saveUserData(const std::string& path, const UserSettings& settings,
         {"seVolume", settings.seVolume},
         {"bgmVolume", settings.bgmVolume},
         {"padRumble", settings.padRumble},
+        {"rumbleFlick", settings.rumbleFlick},
+        {"rumbleCritical", settings.rumbleCritical},
+        {"rumbleMiss", settings.rumbleMiss},
         {"offsetSec", settings.offsetSec},
         {"leadInSec", settings.leadInSec},
         {"windowMode", settings.windowMode},
@@ -2598,13 +2604,21 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     // title / artist substring.
     static char searchBuf[64] = "";
     const float searchW = listW;
-    const float searchH = 46.0f * k;
+    // One top edge for the whole header row (search box, combos, 刷新 / 音乐商店 /
+    // 猜歌, level chip): equal heights only read as a row if they also start at
+    // the same y, and the official top bar does exactly that.
+    const float headerRowY = listTop;
+    // Same height as the combos and the level chip (17k font + 2x8k frame
+    // padding = 33k, and ui::playerLevelChip is 33k too): the official top bar
+    // lines the whole row up at one height and only varies the corner radius,
+    // which is what the search pill (fully round) and the combos (12k) do here.
+    const float searchH = 33.0f * k;
     // 多人游玩 member: the header row (search box, sort / grouping, 刷新) all
     // work on the list, and the list is the host's. Everything is disabled
     // rather than skipped so the geometry below stays where it is, and the room
     // banner is drawn over it (see after the 刷新 button).
     ImGui::BeginDisabled(partyReadOnly);
-    ImGui::SetCursorScreenPos(ImVec2(listX, listTop));
+    ImGui::SetCursorScreenPos(ImVec2(listX, headerRowY));
     // Same translucent-white pill as ui::combo's box, so the search field and
     // the two selectors beside it read as one row (see ui::combo for the look).
     ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(255, 255, 255, 244));
@@ -2614,16 +2628,17 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, searchH * 0.5f);
     // Frame padding doubles as "leave room for the magnifier": the text starts
     // this far in, and the icon (assets/select/search.png) is drawn at the
-    // box's left end, *inside* the pill.
+    // box's left end, *inside* the pill. The vertical half is what makes the
+    // field exactly searchH tall (font + 2x padding).
     const float searchIconBox = searchH * 0.86f;
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(searchIconBox, searchH * 0.28f));
-    ImGui::PushFont(body, 19.0f * k);
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(searchIconBox, searchH * 0.25f));
+    ImGui::PushFont(body, 17.0f * k);
     // Full width: the icon lives inside the field, so the field has to be the
     // whole pill. (It used to be shortened by searchH and the magnifier drawn
     // past its right edge, which left it hanging outside the box.)
     // Same faint shadow the combo boxes get, so the whole header row reads as
     // one lifted row instead of "one field with a shadow, two without".
-    ui::dropShadow(dl, ImVec2(listX, listTop), ImVec2(listX + searchW, listTop + searchH),
+    ui::dropShadow(dl, ImVec2(listX, headerRowY), ImVec2(listX + searchW, headerRowY + searchH),
         searchH * 0.5f, k);
     ImGui::SetNextItemWidth(searchW);
     ImGui::InputTextWithHint("##search", "根据歌曲名·作者名查找", searchBuf, sizeof(searchBuf));
@@ -2634,7 +2649,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         const GLuint searchIcon = selectTex(renderer, "search");
         if (searchIcon != 0) {
             const float iconSize = searchH * 0.44f;
-            const ImVec2 c(listX + searchIconBox * 0.5f + 2.0f * k, listTop + searchH * 0.5f);
+            const ImVec2 c(listX + searchIconBox * 0.5f + 2.0f * k, headerRowY + searchH * 0.5f);
             dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(searchIcon)),
                 ImVec2(c.x - iconSize * 0.5f, c.y - iconSize * 0.5f),
                 ImVec2(c.x + iconSize * 0.5f, c.y + iconSize * 0.5f), ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f),
@@ -2654,7 +2669,6 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     const float comboW = 168.0f * k;
     const float comboX0 = listX + searchW + 18.0f * k;
     const float comboGap = 12.0f * k;
-    const float headerRowY = listTop + 4.0f * k;
     {
         const char* kSortLabels[2] = {"按名称", "按难度"};
         const char* kGroupLabels[kGroupCount] = {"关闭", "按难度段", "按读音", "按首字"};
@@ -2687,7 +2701,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     //
     // The geometry is computed out here because the 多人游玩 banner has to cover
     // the whole header row, this button included.
-    const float headerRowH = 36.0f * k;
+    const float headerRowH = 33.0f * k; // same as the search box / combos / chip
     const float rescanW = 104.0f * k;
     const float rescanX = comboX0 + (comboW + comboGap) * 2.0f + 4.0f * k;
     // 下载谱面 sits right of 刷新: the downloader was reachable from the empty-list
@@ -2699,105 +2713,51 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     // main.cpp to run (see the 猜歌 card at the end of this function).
     const float guessW = 104.0f * k;
     const float guessX = storeX + storeW + 10.0f * k;
-    {
+    // 刷新 / 音乐商店 / 猜歌: one pjsk-style header button each - white capsule,
+    // faint shadow, dark label - i.e. the same chrome as the search box and the
+    // combos beside them. The shipped icons (assets/select/*.png) are white on
+    // transparent, so the navy comes from the tint (same trick as the intro
+    // card's skip key).
+    auto headerButton = [&](const char* id, float x, float w, const char* iconKey,
+                            const char* label) -> bool {
         const float rowH = headerRowH;
-        const float btnW = rescanW;
-        const float btnX = rescanX;
-        const ImU32 fg = IM_COL32(238, 238, 248, 255);
-        ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(58, 52, 92, 235));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(76, 68, 118, 245));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(90, 80, 138, 255));
+        ui::dropShadow(dl, ImVec2(x, headerRowY), ImVec2(x + w, headerRowY + rowH), rowH * 0.5f, k);
+        ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(255, 255, 255, 244));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(255, 255, 255, 255));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(232, 232, 242, 255));
         ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, rowH * 0.5f);
-        ImGui::SetCursorScreenPos(ImVec2(btnX, headerRowY));
-        if (ImGui::Button("##rescan", ImVec2(btnW, rowH))) {
-            ui::se(ui::SeClick);
-            action = SelectRescan;
-        }
+        ImGui::SetCursorScreenPos(ImVec2(x, headerRowY));
+        const bool clicked = ImGui::Button(id, ImVec2(w, rowH));
         const bool hovered = ImGui::IsItemHovered();
         ImGui::PopStyleVar();
         ImGui::PopStyleColor(3);
-        // No SetTooltip here on purpose. ImGui's default font atlas has no CJK
-        // glyphs, so a Chinese tooltip renders as a row of '?'; and the button
-        // already says 刷新 with F5 documented in the empty-state hint.
-        (void)hovered;
-
-        // Official icon (assets/select/refresh.png - a white circular arrow, so
-        // it needs no tint). Falls back to nothing if the file is missing; the
-        // label still says what the button does.
-        const ImVec2 c(btnX + 26.0f * k, headerRowY + rowH * 0.5f);
-        const GLuint refreshIcon = selectTex(renderer, "refresh");
-        if (refreshIcon != 0) {
+        const ImU32 labelCol = hovered ? IM_COL32(38, 38, 58, 255) : IM_COL32(60, 60, 82, 255);
+        const ImVec2 c(x + 26.0f * k, headerRowY + rowH * 0.5f);
+        const GLuint icon = selectTex(renderer, iconKey);
+        if (icon != 0) {
             const float iconSize = 20.0f * k;
-            const int iconAlpha = hovered ? 255 : 232; // the icon is already white
-            dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(refreshIcon)),
+            dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(icon)),
                 ImVec2(c.x - iconSize * 0.5f, c.y - iconSize * 0.5f),
                 ImVec2(c.x + iconSize * 0.5f, c.y + iconSize * 0.5f), ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f),
-                IM_COL32(255, 255, 255, iconAlpha));
+                labelCol);
         }
-        addTextLeft(dl, body, 17.0f * k, ImVec2(c.x + 18.0f * k, c.y), fg, "刷新");
+        addTextLeft(dl, body, 17.0f * k, ImVec2(c.x + 18.0f * k, c.y), labelCol, label);
+        return clicked;
+    };
+    // No SetTooltip on these on purpose. ImGui's default font atlas has no CJK
+    // glyphs, so a Chinese tooltip renders as a row of '?'; the label already
+    // says what the button does (刷新 also has F5 in the empty-state hint).
+    if (headerButton("##rescan", rescanX, rescanW, "refresh", "刷新")) {
+        ui::se(ui::SeClick);
+        action = SelectRescan;
     }
-    {
-        // Same chrome as 刷新, with the store icon (assets/select/store.png) and
-        // SelectDownload - the action the empty list already used (main.cpp).
-        const float rowH = headerRowH;
-        const float btnW = storeW;
-        const float btnX = storeX;
-        const ImU32 fg = IM_COL32(238, 238, 248, 255);
-        ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(58, 52, 92, 235));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(76, 68, 118, 245));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(90, 80, 138, 255));
-        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, rowH * 0.5f);
-        ImGui::SetCursorScreenPos(ImVec2(btnX, headerRowY));
-        if (ImGui::Button("##store", ImVec2(btnW, rowH))) {
-            ui::se(ui::SeClick);
-            action = SelectDownload;
-        }
-        const bool hovered = ImGui::IsItemHovered();
-        ImGui::PopStyleVar();
-        ImGui::PopStyleColor(3);
-
-        const ImVec2 c(btnX + 26.0f * k, headerRowY + rowH * 0.5f);
-        const GLuint storeIcon = selectTex(renderer, "store");
-        if (storeIcon != 0) {
-            const float iconSize = 20.0f * k;
-            const int iconAlpha = hovered ? 255 : 232;
-            dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(storeIcon)),
-                ImVec2(c.x - iconSize * 0.5f, c.y - iconSize * 0.5f),
-                ImVec2(c.x + iconSize * 0.5f, c.y + iconSize * 0.5f), ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f),
-                IM_COL32(255, 255, 255, iconAlpha));
-        }
-        addTextLeft(dl, body, 17.0f * k, ImVec2(c.x + 18.0f * k, c.y), fg, "音乐商店");
+    if (headerButton("##store", storeX, storeW, "store", "音乐商店")) {
+        ui::se(ui::SeClick);
+        action = SelectDownload;
     }
-    {
-        // 猜歌: same chrome, guess.png, opens the alias quiz.
-        const float rowH = headerRowH;
-        const float btnW = guessW;
-        const float btnX = guessX;
-        const ImU32 fg = IM_COL32(238, 238, 248, 255);
-        ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(58, 52, 92, 235));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(76, 68, 118, 245));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(90, 80, 138, 255));
-        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, rowH * 0.5f);
-        ImGui::SetCursorScreenPos(ImVec2(btnX, headerRowY));
-        if (ImGui::Button("##guess", ImVec2(btnW, rowH))) {
-            ui::se(ui::SeClick);
-            newGuessQuestion();
-        }
-        const bool hovered = ImGui::IsItemHovered();
-        ImGui::PopStyleVar();
-        ImGui::PopStyleColor(3);
-
-        const ImVec2 c(btnX + 26.0f * k, headerRowY + rowH * 0.5f);
-        const GLuint guessIcon = selectTex(renderer, "guess");
-        if (guessIcon != 0) {
-            const float iconSize = 20.0f * k;
-            const int iconAlpha = hovered ? 255 : 232;
-            dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(guessIcon)),
-                ImVec2(c.x - iconSize * 0.5f, c.y - iconSize * 0.5f),
-                ImVec2(c.x + iconSize * 0.5f, c.y + iconSize * 0.5f), ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f),
-                IM_COL32(255, 255, 255, iconAlpha));
-        }
-        addTextLeft(dl, body, 17.0f * k, ImVec2(c.x + 18.0f * k, c.y), fg, "猜歌");
+    if (headerButton("##guess", guessX, guessW, "guess", "猜歌")) {
+        ui::se(ui::SeClick);
+        newGuessQuestion();
     }
     ImGui::EndDisabled();
 

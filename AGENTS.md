@@ -702,6 +702,20 @@ tio.AddMouseWheelEvent(0.0f, -2.0f);           // 滚轮两格
 python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h> [zoom]
 ```
 
+## 选曲顶栏（2026-09-21，`game/SongSelect.cpp` + `ui::combo` / `ui::dropShadow`）
+
+一整行，从左到右：搜索框 → 排序 / 分组下拉 → 刷新 → 音乐商店 → 猜歌 →（最右）等级框。
+
+- **全都 33k 高、顶边都在 `headerRowY`（= `listTop`）**，这是照着官服顶栏做的（那里只有圆角
+  不一样）。33k 的来历：combo / 按钮 = `17k` 字号 + `2 x 8k` FramePadding；搜索框 = 同样的
+  `17k` 字号，FramePadding 用 `searchH*0.25`；等级框本来就是 `ui::playerLevelChip` 的 `33u`。
+  **改任何一个的高度都要同时看这一行的其它几个**，否则一行里冒出三种高度。
+- **配色统一是"白胶囊 + 淡投影 + 深藏青字/图标"**：搜索框和三个按钮自己推白底 + 调
+  `ui::dropShadow`，下拉框的白色来自 `ui::combo` 内部（见架构那段的 combo 一段）。
+- **三个按钮的图标是白图**（`assets/select/refresh|store|guess.png`），白底上必须靠
+  `AddImage` 的 tint 染成深色 —— 以前是深紫底 + 原样白图，换白底时**别顺手把 tint 去掉**。
+- 三个按钮共用 `headerButton` lambda（含投影 / 悬停变深 / 图标与文字），要加第四个按钮照抄。
+
 ## 选曲列表的滚动模型（2026-09-12 重写，动之前先读）
 
 `game/SongSelect.cpp` 的列表**不是 ImGui 的滚动控件**，是自己写的状态机，因为官方 UI 的行为
@@ -1698,6 +1712,17 @@ ImGui 后端降级 + 去掉 `glBindSampler`），那是一块真活儿，而目�
 - **结算数字滚动**：`drawResult` 的 `countUp` 是 `easeOutCubic(span(t, 0.85, 0.95))`，这里把同一条
   曲线**量化成 24 个 tick**（每 tick 55ms，强度随进度递减），tick 变了才震 —— 数字滚得快就震得密、
   慢下来就稀疏。实测日志 23 行、强度 0.74 → 0.30。
+- **确定白屏**（2026-09-21）：三处 `ui::se(ui::SeStart)` 后面各跟一句 `rumble(0.90f, 200, "confirm")`
+  —— 白屏就是"要开始读谱了"的那一刻，最长的一脚给在这里。**新增"确定"入口时三处都要记得加**
+  （选曲确定 / 重试 / `--confirm-flash` 调试路径）。
+- **命中口味**（2026-09-21，设置→判定「震动」三个勾选框，存 userdata.json 的
+  `rumbleFlick` / `rumbleCritical` / `rumbleMiss`）：Flick、绝赞（黄键）、MISS 时各来一小脚
+  （55/65/95ms，0.50/0.55/0.75）。实现要点：**不要看 `lastHitKind` / `lastJudgeCritical`**
+  —— 一帧里判两个音（和弦、或者自动演奏一次跑好几个）时它们只剩最后一个音，
+  绝赞会被吃掉（实测 25s 的 `--auto` 一脚都没有）。正确做法是 `JudgementStats` 里的
+  `hitCount` / `criticalHitCount` / `flickHitCount` 三个**只增不减的计数**（在
+  `registerJudge` 里加，那里只有真命中会经过），`main.cpp` 在 `judgement.update()` 之后
+  比一次增量；同一个音既 flick 又绝赞时让绝赞优先，一帧最多一脚。
 - **窗口不能拖边框缩放（2026-09-16 修）**：开屏样式是图片时窗口被强制建为 `SDL_WINDOW_BORDERLESS`，
   加载完再 `SDL_SetWindowBordered(window, SDL_TRUE)`。**这个调用只把标题栏加回来，不会恢复
   `WS_THICKFRAME`**，于是窗口看起来正常但拖边缘毫无反应（`WS_MAXIMIZEBOX` 也一起没了）。

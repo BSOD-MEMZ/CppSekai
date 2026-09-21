@@ -3387,6 +3387,33 @@ int main(int argc, char** argv)
                 // 判定: judgement windows.
                 contentLeft();
                 ImGui::Text("判定窗口 (ms)");
+                // 震动: which hits are worth a kick. The strength / master switch
+                // is on the 演奏 tab (手柄震动); these pick the moments. Each one
+                // is a short buzz, so it rides on top of the long song-start /
+                // result-roll vibrations instead of replacing them.
+                contentLeft();
+                ImGui::Text("震动");
+                contentLeft();
+                bool rumbleFlickBox = userSettings.rumbleFlick;
+                ui::checkBox("命中 Flick 时震动", &rumbleFlickBox, interior);
+                if (rumbleFlickBox != userSettings.rumbleFlick) {
+                    userSettings.rumbleFlick = rumbleFlickBox;
+                    persistUserData();
+                }
+                contentLeft();
+                bool rumbleCriticalBox = userSettings.rumbleCritical;
+                ui::checkBox("命中绝赞（黄键）时震动", &rumbleCriticalBox, interior);
+                if (rumbleCriticalBox != userSettings.rumbleCritical) {
+                    userSettings.rumbleCritical = rumbleCriticalBox;
+                    persistUserData();
+                }
+                contentLeft();
+                bool rumbleMissBox = userSettings.rumbleMiss;
+                ui::checkBox("MISS 时震动", &rumbleMissBox, interior);
+                if (rumbleMissBox != userSettings.rumbleMiss) {
+                    userSettings.rumbleMiss = rumbleMissBox;
+                    persistUserData();
+                }
                 // The working copy is rebuilt from the engine whenever the
                 // dialog opens, so the sliders always show what is in force
                 // (and a linked BAD/MISS always moves as one).
@@ -4337,15 +4364,25 @@ int main(int argc, char** argv)
     openPad();
 
     // -----------------------------------------------------------------------
-    // Rumble. Two moments ask for a buzz - the song starting and the score
-    // counting up on the result screen - so both go through here: the strength
-    // setting and the "does this pad even have motors" check live in one place,
-    // and a missing pad is simply a no-op (which is also every headless run).
+    // Rumble. A handful of moments ask for a buzz - the song starting, the score
+    // counting up on the result screen, the 确定 white flash, and (opt-in, see
+    // settings > 判定) the player's own hits - so they all go through here: the
+    // strength setting and the "does this pad even have motors" check live in
+    // one place, and a missing pad is simply a no-op (which is also every
+    // headless run).
     // `low` drives the heavy motor, `high` the light one; the light one alone
     // reads as a buzz rather than as a thud.
     // -----------------------------------------------------------------------
     double lastRumbleSongTime = -1.0;
     int resultRumbleTick = -1;
+    // Per-hit flavours: the judgement counters only ever grow, so diffing them
+    // is what turns "a note landed" into one kick without touching every
+    // judgement call site. The dedicated hit tallies in JudgementStats (not
+    // lastHitKind) are what make this exact for chords, where several notes are
+    // judged inside a single frame.
+    int lastRumbleFlicks = 0;
+    int lastRumbleCriticals = 0;
+    int lastRumbleMisses = 0;
     auto rumble = [&](float strength, Uint32 ms, const char* why) {
         // Logged whether or not a pad is there: a headless run has none, and
         // this line is the only way to check *when* the two buzz moments fire.
@@ -5640,6 +5677,9 @@ int main(int argc, char** argv)
                     confirmFlashTime = 0.0f;
                     confirmFlashOrigin = selectConfirmCenter;
                     ui::se(ui::SeStart); // start.mp3, fires with the burst
+                    // The white flash is also the moment the pad should kick:
+                    // it covers the chart load, so the buzz lands with it.
+                    rumble(0.90f, 200, "confirm");
                 }
             } else if (action == game::SelectSettings) {
                 showDebug = true;
@@ -5681,6 +5721,7 @@ int main(int argc, char** argv)
                 confirmFlashTime = 0.0f;
                 confirmFlashOrigin = selectConfirmCenter;
                 ui::se(ui::SeStart);
+                rumble(0.90f, 200, "confirm");
                 std::printf("[ui] confirm flash at %.0f,%.0f (debug)\n", selectConfirmCenter.x,
                     selectConfirmCenter.y);
                 std::fflush(stdout);
@@ -5927,6 +5968,7 @@ int main(int argc, char** argv)
                                 confirmFlashTime = 0.0f;
                                 confirmFlashOrigin = selectConfirmCenter;
                                 ui::se(ui::SeStart);
+                                rumble(0.90f, 200, "confirm");
                                 // Still 准备 until the clock is armed (below),
                                 // so the room does not claim this seat is
                                 // already playing during the lead-in.
@@ -6172,6 +6214,31 @@ int main(int argc, char** argv)
             judgement.setAutoPlay(autoPlay);
             core_api::setEffectAutoplay(autoPlay);
             judgement.update(static_cast<float>(songTime));
+
+            // Rumble flavours (settings > 判定 > 震动). Checked here, after the
+            // event pump has already fed this frame's taps / flicks into the
+            // engine, so one kick per note - never one per frame.
+            // 绝赞 is the chart's own critical flag (SUS flags & 1).
+            {
+                const game::JudgementStats& jst = judgement.stats();
+                const bool flick = jst.flickHitCount > lastRumbleFlicks;
+                const bool critical = jst.criticalHitCount > lastRumbleCriticals;
+                lastRumbleFlicks = jst.flickHitCount;
+                lastRumbleCriticals = jst.criticalHitCount;
+                // A chord can tick both boxes in one frame; 绝赞 wins so the pad
+                // gets one kick instead of two overlapping ones.
+                if (critical && userSettings.rumbleCritical) {
+                    rumble(0.55f, 65, "critical-hit");
+                } else if (flick && userSettings.rumbleFlick) {
+                    rumble(0.50f, 55, "flick-hit");
+                }
+                if (jst.miss > lastRumbleMisses) {
+                    lastRumbleMisses = jst.miss;
+                    if (userSettings.rumbleMiss) {
+                        rumble(0.75f, 95, "miss");
+                    }
+                }
+            }
 
             // Long notes the player let go of too early keep scrolling but are
             // drawn washed out by the core until the lane is held again (pjsk).

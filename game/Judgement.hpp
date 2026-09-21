@@ -113,6 +113,14 @@ struct JudgementStats
     int miss = 0;
     int combo = 0;
     int maxCombo = 0;
+    // Successful-hit tallies, for the host's per-hit feedback (the pad rumble
+    // flavours in main.cpp). Counted inside registerJudge - i.e. where only real
+    // hits pass - so diffing them is exact even when a chord is judged within a
+    // single frame, which lastHitKind / lastJudgeCritical cannot do (they only
+    // describe the last note of that frame).
+    int hitCount = 0;
+    int criticalHitCount = 0; // 绝赞: the chart's critical flag (SUS flags & 1)
+    int flickHitCount = 0;    // HitEvent kind 2
     double score = 0.0;
     // Score gained by the most recent judgement, and the chart time of the
     // note that produced it. The HUD prints it as the floating "+N" next to the

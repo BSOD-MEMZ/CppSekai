@@ -81,6 +81,9 @@
 - **截图能直接看**（Read 一张 PNG）。`--party-auto` 会在结算 2s 后自动按「继续」，拍结算别加它。
   **自己拿到的 PNG 先看尺寸**：窗口多大截图就多大（1280x720 常见），别按 1920x1080 算裁剪框。
   开场卡片只活在谱面时间 0 之前，要 `--intro-preview [sec]` 才截得到。
+- **"这一帧发生了什么判定"别只读 `lastHitKind` / `lastJudge*`**：一帧里判多个音时它们只剩最后一个
+  （和弦、自动演奏一次跨好几个音）。要统计就用只增不减的计数（`JudgementStats::hitCount` /
+  `criticalHitCount` / `flickHitCount`），在 `main.cpp` 里比增量。2026-09-21 用手柄震动实测踩到。
 - 无头自检：`--screenshot` + `--screenshot-time`，断言看 `[stats]`/`[score]`/`[result]` 行；
   设置卡片用 `--settings --settings-tab N`。截图逐像素比的噪声基线只有 6 px，画面回归能靠 diff。
   `--no-party` 别忘（多人默认开着）。
@@ -92,6 +95,10 @@
   （后者已激活窗口 + SetCursorPos）点选曲界面的 combo / 设置齿轮 / 刷新**全都没反应**，能到的只有
   SDL 事件层的自绘热区（开场跳过键、HUD 暂停键）。要看「弹出来的东西长什么样」，临时加个 env
   探针在代码里 `OpenPopup`，**只开一次**（每帧开会让弹层永久 hidden），验完删干净。
+- **残留实例会同时骗你两次**（2026-09-21）：`Get-Process cppsekai` 看不到它（`tasklist | grep`
+  才看得到），一边占着 exe 让链接报 `failed to write output ... Permission denied`，一边用单实例
+  mutex 把下一次无头跑挡掉（日志只有 `[instance] already running`）。清理：
+  `MSYS_NO_PATHCONV=1 taskkill /PID <pid> /F`。
 - 拖动窗口会让 Windows 跑模态循环把消息泵挂住（画面冻结、音频照跑）；已用
   `SDL_SetWindowsMessageHook` 变成静默暂停。
 - 临时条件探针**别设计数上限**（`if (n < 8)` 会掩盖"条件没满足"和"分支没走"的区别）。

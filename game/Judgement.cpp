@@ -273,6 +273,16 @@ double JudgementEngine::scoreDeltaFor(float kind, bool critical) const
 Judge JudgementEngine::registerJudge(Judge judge, bool critical, float volume, float kind, float noteTimeSec)
 {
     (void)volume;
+    // Hit tallies for the host's per-hit feedback (pad rumble): this is the one
+    // place every successful hit goes through, so a chord judged in one frame
+    // still counts every note.
+    mStats.hitCount += 1;
+    if (critical) {
+        mStats.criticalHitCount += 1;
+    }
+    if (static_cast<int>(kind) == 2) {
+        mStats.flickHitCount += 1;
+    }
     switch (judge) {
         case Judge::Perfect:
             mStats.perfect += 1;
