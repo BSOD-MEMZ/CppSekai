@@ -88,7 +88,10 @@
   **Git Bash 不等 GUI exe**，要 `( exe & wait )` 或 `exe & sleep N`（`for` 里直接跑会互抢 GPU，
   测过 245fps 假基线）。
 - 无交互会话下 PostMessage 到不了某些 ImGui 界面 → 在代码里加自动按的调试开关（`--fake-pad`、
-  `--chartdl-test`），别在输入注入上死磕。
+  `--chartdl-test`），别在输入注入上死磕。**2026-09-21 实测确认**：`winmsg click` / `winsend click`
+  （后者已激活窗口 + SetCursorPos）点选曲界面的 combo / 设置齿轮 / 刷新**全都没反应**，能到的只有
+  SDL 事件层的自绘热区（开场跳过键、HUD 暂停键）。要看「弹出来的东西长什么样」，临时加个 env
+  探针在代码里 `OpenPopup`，**只开一次**（每帧开会让弹层永久 hidden），验完删干净。
 - 拖动窗口会让 Windows 跑模态循环把消息泵挂住（画面冻结、音频照跑）；已用
   `SDL_SetWindowsMessageHook` 变成静默暂停。
 - 临时条件探针**别设计数上限**（`if (n < 8)` 会掩盖"条件没满足"和"分支没走"的区别）。
