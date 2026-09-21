@@ -1638,6 +1638,11 @@ ImGui 后端降级 + 去掉 `glBindSampler`），那是一块真活儿，而目�
   **原生 `ImGui::Combo` 要手动接**：它没有绘制回调可挂，调用点后面加一句
   `xxx |= ui::padComboNudge(&idx, count);`（设置里 7 处：分辨率 / 渲染模式 / 窗口模式 / 背景样式 /
   玻璃实现 / 多开 / 用户档案）。**以后新增原生 combo 别忘这句。**
+- **两张自绘卡片另外走 `forcedChoice`**（和暂停对话框同一套）：多开确认框
+  （`multiAskPadChoice`）与首启 ELUA（`eulaPadChoice`）—— A/START = 主按钮，B/X = 取消（ELUA
+  只有一个按钮，B/X 也是关掉它）。它们**优先于其它一切按键**（`padModalCard`），否则漏过去的
+  START 会在卡片背后再开一张设置卡。`eulaAlive` / `eulaDismissedThisRun` 原来埋在帧体的
+  function-local static 里，手柄块在帧首读不到 —— 已提到 main 作用域（同 `settingsTab`）。
 - **焦点环**：`(46,186,164)` 2px 圆角描边 + 薄荷淡填充，`animToggle` 双向缓动，画在
   `GetWindowDrawList()`。checkBox 的矩形要外扩 6~7px，否则环被粉色填充盖住看不见。
 - **无头验证**：`--settings --settings-tab N --fake-pad DOWN,LEFT --screenshot`，看 `cppsekai.log`

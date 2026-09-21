@@ -3837,6 +3837,16 @@ int main(int argc, char** argv)
     // animation state mid-flight, which made the next raise flash at full size,
     // shrink and pop back (see ui::cardRaisedFresh).
     bool multiInstanceAskAlive = false;
+    // Two card choices the pad has to be able to make, handed to
+    // ui::eulaDialog's forcedChoice the way pauseDialogChoice is (the pad block
+    // runs at the top of the frame, so these have to be declared before the
+    // lambdas that draw the cards read them). -1 = nothing pressed yet.
+    // `eulaAlive` / `eulaDismissedThisRun` used to be function-local statics
+    // deep inside the frame body - the pad block cannot see those.
+    int multiAskPadChoice = -1;
+    int eulaPadChoice = -1;
+    bool eulaAlive = false;
+    bool eulaDismissedThisRun = false;
     auto drawMultiInstanceAskDialog = [&]() {
         if (multiInstanceAsk) {
             multiInstanceAskAlive = true;
@@ -3853,7 +3863,9 @@ int main(int argc, char** argv)
                 "它没有网络校验，机器一忙可能掉帧或时钟漂移；窗口越多越明显。",
                 "每个窗口各登录一个用户，各自记成绩。确定开启吗？",
             },
-            nullptr, nullptr, {std::string("取消"), std::string("确定开启")}, {false, true});
+            nullptr, nullptr, {std::string("取消"), std::string("确定开启")}, {false, true},
+            multiAskPadChoice);
+        multiAskPadChoice = -1; // one press is one pick
         if (action == -2) {
             multiInstanceAskAlive = false; // close animation over, drop the card
             return;
@@ -5231,7 +5243,26 @@ int main(int argc, char** argv)
             // same button in one frame returns false the second time (prev is
             // already true), which is how "A also confirms the pause dialog"
             // silently stops working.
-            if (showDebug && padA) {
+            //
+            // 多开确认 / 首启 ELUA outrank everything else: they are modal, and
+            // a START that slipped through to "open the settings card" behind
+            // them would leave two cards fighting over the same input.
+            const bool padModalCard = multiInstanceAsk || eulaAlive;
+            if (padModalCard) {
+                if (multiInstanceAsk) {
+                    multiAskPadChoice = (padA || padStart) ? 1 : ((padB || padX) ? 0 : -1);
+                } else {
+                    // ELUA has one button; B/X dismiss it the same way.
+                    if (padA || padStart || padB || padX) {
+                        eulaPadChoice = 0;
+                    }
+                }
+                if (padA || padStart || padB || padX) {
+                    std::printf("[pad] modal card -> choice %d\n",
+                        multiInstanceAsk ? multiAskPadChoice : eulaPadChoice);
+                    std::fflush(stdout);
+                }
+            } else if (showDebug && padA) {
                 // Settings card: A presses whatever the focus ring is on - a
                 // checkbox, a stepper capsule, a capsule button. Up/down/left/
                 // right (above) are what moved the ring there.
@@ -5262,7 +5293,7 @@ int main(int argc, char** argv)
                     pulse(SDL_SCANCODE_RETURN);
                 }
             }
-            if (padStart) {
+            if (padStart && !padModalCard) {
                 if (state == AppState::Play && !pauseDialogOpen && !countdownActive) {
                     // Same as the HUD pause button / Space: the dialog appears
                     // and its window_open sound plays.
@@ -5273,14 +5304,14 @@ int main(int argc, char** argv)
                     pulse(SDL_SCANCODE_H); // settings card
                 }
             }
-            if (padB) {
+            if (padB && !padModalCard) {
                 if (showDebug) {
                     pulse(SDL_SCANCODE_H); // close the settings card
                 } else if (pauseDialogOpen || state == AppState::Result) {
                     pulse(SDL_SCANCODE_ESCAPE);
                 }
             }
-            if (!pauseDialogOpen && padY && state == AppState::Select) {
+            if (!padModalCard && !pauseDialogOpen && padY && state == AppState::Select) {
                 pulse(SDL_SCANCODE_F5); // re-scan charts/
             }
             // BACK used to send Escape everywhere except the song list, i.e.
@@ -6795,13 +6826,11 @@ int main(int argc, char** argv)
         // (this program has no EULA to agree to - the license is the AGPL, and
         // it comes with the source), so the card states facts instead.
         // ------------------------------------------------------------------
-        static bool eulaAlive = false;
         // 这次运行里已经关掉过了。以前没有这个标志：eulaAlive 每帧被
         // `state == Select && !eulaAccepted` 重新置真，而「知道了」按未勾选的
         // 复选框写入 eulaAccepted = false —— 于是关掉的下一帧又被打开，
         // 无限弹。「不再提示」的复选框是**下次启动**要不要再看到的记录，
         // 不是「能不能关掉这一张」的开关，两者必须分开。
-        static bool eulaDismissedThisRun = false;
         if (state == AppState::Select && !userSettings.eulaAccepted && !eulaDismissedThisRun) {
             eulaAlive = true;
         }
@@ -6824,7 +6853,8 @@ int main(int argc, char** argv)
                     {
                         "CppSekai 是免费、开源、非营利的同人练习工具（AGPL-3.0）。它与 SEGA、Colorful Palette 以及《初音未来：缤纷舞台》官方没有任何关系，仅供本地学习与练习使用。一切权利归各自权利人所有。"
                     },
-                    "以后不再显示", &eulaNoShow, {std::string("知道了")}, {true}, -1);
+                    "以后不再显示", &eulaNoShow, {std::string("知道了")}, {true}, eulaPadChoice);
+                eulaPadChoice = -1; // one press is one pick
                 // A button press (>= 0) records the choice and lets the card animate
                 // out; only -2 (close finished) takes it down. Dropping the card on
                 // the press is what made the EULA have no closing animation - and it

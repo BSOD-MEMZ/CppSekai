@@ -1,157 +1,102 @@
 # CppSekai — 项目长期记忆（索引版）
 
 > **权威文档在仓库里，不在这个文件**：改代码前读 `AGENTS.md`（架构 + 全部坑 + 各功能一节），
-> 体量/巨型函数看 `CODE-REVIEW.md`，命令行 `CLI.md`，谱面数据 `CHARTS.md`，能发什么 `COPYRIGHT.md`。
-> 这里只放跨会话必须记住的**约定与索引**；历史细节翻 `.workbuddy/memory/2026-09-*.md`（append-only）。
+> 体量看 `CODE-REVIEW.md`，命令行 `CLI.md`，谱面 `CHARTS.md`，能发什么 `COPYRIGHT.md`。
+> 这里只放跨会话必须记住的**约定与索引**；细节翻 `.workbuddy/memory/2026-09-*.md`（append-only）。
 
 ## 协作约定
 - **改完 + 验证过就 commit**（用户明确要求），别攒着。
 - **禁止 `git checkout <file>` / `git restore` 撤临时改动**：2026-09-18 为撤一个调试探针 checkout
-  了 main.cpp，把同文件一大轮未提交的改动全冲掉了。撤动用精确编辑，或先 commit。用户原话：
+  了 main.cpp，把同文件一大轮未提交的改动全冲掉。撤动用精确编辑或先 commit。用户原话：
   「不要乱 checkout，有什么问题我们手动改」。
-- 加新 .cpp 到 `game/` / `platform/` 必须同时加进 `build.sh` 的 `SOURCES`，否则链接期才报错。
-- 中文注释的脚本（build.sh 等）用 Git Bash 跑；含中文的 PowerShell 脚本用 pwsh。
-- **验证卡住几分钟就先停手**，把「需要人工点哪里、期望什么」交代清楚交给他，别硬磕自动化。
+- 加新 .cpp 到 `game/` / `platform/` 必须同时加进 `build.sh` 的 `SOURCES`（否则链接期才报错）。
+- 中文注释的脚本（build.sh 等）用 Git Bash；含中文的 PowerShell 脚本用 pwsh。
+- **验证卡住几分钟就先停手**，把「需要人工点哪里、期望什么」交代清楚交给他。
 
 ## 构建 / 运行硬性坑
-- `bash build.sh`（Git Bash）。zig **0.14.1**（`toolchain/`，不入库），别换 0.16（吞 `-I`）；
-  zig 缓存必须在 C 盘（build.sh 已设 `ZIG_GLOBAL_CACHE_DIR`，D 盘文件系统不支持）。
+- `bash build.sh`（Git Bash）。zig **0.14.1**（`toolchain/` 不入库），别换 0.16（吞 `-I`）；
+  zig 缓存必须在 C 盘（build.sh 已设 `ZIG_GLOBAL_CACHE_DIR`）。全量编译 35~45s。
 - `main.cpp` 必须在 `#include <SDL.h>` 前 `#define SDL_MAIN_HANDLED`，否则"秒退无输出"。
-- exe 是 Windows 子系统；日志去 `cppsekai.log`（`--screenshot` 一定写文件）；
-  `--screenshot` 的参数是**文件路径**（给目录会静默失败），父目录必须已存在。
-  screenshot 是 RGBA PNG → **量 alpha 就能验透明**（Pillow 在 venv
-  `~/.workbuddy/binaries/python/envs/default`）。
-- **Win7 兼容补丁在 build.sh 顶部**（2026-09-19）：zig 自带 libc++ 的 chrono.cpp 在
-  `_WIN32_WINNT>=0x0602` 时静态导入 `GetSystemTimePreciseAsFileTime`（Win8+），Win7 加载即报
-  "无法定位程序输入点"。build.sh 幂等 sed 强制走运行时探测分支（`grep -c CPPSEKAI-WIN7 = 2`
-  断言，打不上就 exit 1）。**toolchain 重新解压会自动重打，别删这段**。复查用
-  `.workbuddy/tools/pe_imports.py`（看导入表；**别用 strings|grep**，函数名字面量还在）。
-  Win7 还缺 UCRT（`api-ms-win-crt-*`），处置待用户拍板 —— 见 AGENTS.md「Windows 7 兼容」。
+- exe 是 Windows 子系统；日志去 **cwd 的 `cppsekai.log`**；`--screenshot` 的参数是**文件路径**
+  （给目录会静默失败），父目录必须已存在。
+- **Win7 补丁在 build.sh 顶部**（2026-09-19）：zig 的 libc++ chrono.cpp 在 `_WIN32_WINNT>=0x0602`
+  静态导入 `GetSystemTimePreciseAsFileTime`（Win8+），Win7 启动即报"无法定位程序输入点"。
+  build.sh 用幂等 sed 强制走运行时探测（`grep -c CPPSEKAI-WIN7 = 2` 断言）。**toolchain 重解压
+  会自动重打，别删**。复查用 `.workbuddy/tools/pe_imports.py`（**别用 strings|grep**，字面量还在）。
+  Win7 还缺 UCRT，处置待拍板 —— 见 AGENTS.md「Windows 7 兼容」。
 
 ## 发布 / 打包
-- `bash package.sh [版本]`（内部会先跑 build.sh）→ `dist/CppSekai-<日期>/` + zip。
-  默认带 assets（解压即玩）；`--no-assets` 出精简包。charts / toolchain 一律不发。
-  包内已排除 `assets/mmw/{overlay,effects,sound}`（运行时都不读）→ 目录 13MB / zip 6.8MB。
-- 图标：`app.rc`（`zig rc` 编资源，id 1）+ 运行时 `SDL_SetWindowIcon(icon.png)`；
-  改 id 要同步改 chartdl 的 `LoadImageW(MAKEINTRESOURCE(1))`。
+- `bash package.sh [版本]`（内部先跑 build.sh）→ `dist/CppSekai-<日期>/` + zip。默认带 assets，
+  `--no-assets` 出精简包；charts / toolchain 一律不发 → 目录 13MB / zip 6.8MB。
+- 图标：`app.rc`（`zig rc`，id 1）+ `SDL_SetWindowIcon(icon.png)`；改 id 要同步改 chartdl 的
+  `LoadImageW(MAKEINTRESOURCE(1))`。
 
 ## 资源 / 工具 / git
 - `.gitignore` 忽略 `assets/`、`charts/`、`build/`、`toolchain/`、`userdata.json`、`profiles/`、
-  `chartdl.json`。**新加的 `assets/` 子目录要 `git add -f`**（`assets/select/**` 就这样丢过）。
-  `.workbuddy/` 不入 ignore（记忆 + 工具，工具是入库的）。
-- **不要删 `.workbuddy/`**。工具：`winmd_*.py`（查 WinRT 槽位）、`pngcrop.py`、
-  `shot_probe.py`（像素探针，带 Pillow 回退）、`asset_audit.py`、`shrink_assets.py`、
-  `mp_verify.sh`（多人回归）、`pe_imports.py`（PE 导入表 → Win7 兼容检查）、
-  `update_music_db.py`（曲库 + 定数表同步）、`chartdl_detail_check.py`
-  （跨进程读回 chartdl 右侧面板的勾选框状态，验证"哪些框能勾"比截图直给）。
-- `build/winsend.exe` / `winmsg.exe` 不在库里，要自己编（见 AGENTS.md 工具一节）。
+  `chartdl.json`。**新加的 `assets/` 子目录要 `git add -f`**。`.workbuddy/` 不入 ignore（工具入库）。
+- **不要删 `.workbuddy/`**。工具在 `.workbuddy/tools/`：`png_color_probe.js`（纯 Node 的 PNG
+  颜色探针，支持裁剪框，**Pillow 装不上时的兜底**）、`shot_probe.py`、`pngcrop.py`、`pe_imports.py`、
+  `mem_sample.py`、`update_music_db.py`、`fetch_music_aliases.py`、`mp_verify.sh`、`asset_audit.py`、
+  `shrink_assets.py`、`chartdl_detail_check.py`、`winmd_*.py`。
+- `build/winsend.exe` / `winmsg.exe` 不在库里，要自己编（见 AGENTS.md）。
 
-## 素材现状（2026-09-19 大清理后 10MB / 248 文件，清理前 56.1MB）
-- **字体只用系统字体**（`assets/mmw/font/` 已删，`--pjsk-font` 已去掉），别再往仓库放字体。
-  候选表三层：SPI 讯息字体 → 固定 face 名（中英两套）→ **按文件名兜底**（msyh/meiryo/msgothic/
-  simsun/simhei…，Win7 全靠这层，注册表值名随语言变）。**注册表值可能是完整路径**，别无脑拼
-  `\Fonts\`。字形探测是日文+简中混合（初/ミ/詞/设），日文字体会因缺 `设` 被拒 —— 故意的。
-  「字体变点阵 + 中文变问号」= 所有候选都没过 → 看 `cppsekai.log` 的 `[intro]` 几行
-  （候选表 + 拒绝原因），`CPSEKAI_FONT_FILE=<路径>` 可强制指定。
-  **粗体 face 已删**（2026-09-19：msyhbd.ttc 被加载两遍、各 16.1MB → 省 31.9MB），
-  `boldFont()` 现在返回 bodyFont。结算画面的 RESULT 大字**不走字体**，走
-  `platform/FontOutline.cpp` 生成的真空心轮廓纹理（ImGui 只会盖实心字形，挖空色在带图案的
-  背景上会露出色块）。
-- `assets/se/**` 是白名单，用户自己加的，哪怕没接线也不许删。
-- **精灵图集不许缩**：`notes*` / `effect.png` / `longNoteLine*` / `touchLine*`
-  —— 精灵矩形是像素坐标写死在 `core/native/generated/generated_resources.h`，缩文件 = 音符错位。
+## 素材现状（2026-09-19 清理后 10MB / 248 文件）
+- **字体只用系统字体**（`assets/mmw/font/` 已删，`--pjsk-font` 已去掉）。候选表三层：SPI 讯息字体
+  → 固定 face 名 → **按文件名兜底**（msyh/meiryo/msgothic/simsun…，Win7 全靠这层）。字形探测是
+  日文+简中混合（初/ミ/詞/设），日文字体缺 `设` 会被拒 —— 故意的。「字体变点阵 + 中文变问号」=
+  候选全没过 → 看 `cppsekai.log` 的 `[intro]` 几行，`CPSEKAI_FONT_FILE=<路径>` 可强制指定。
+  粗体 face 已删（`boldFont()` 返回 bodyFont）；结算 RESULT 大字走 `platform/FontOutline.cpp`
+  的真空心轮廓纹理，不走字体。
+- `assets/se/**` 是白名单，用户自己加的，不许删。
+- **精灵图集不许缩**：`notes*` / `effect.png` / `longNoteLine*` / `touchLine*`（矩形是像素坐标写死
+  在 `core/native/generated/generated_resources.h`，缩文件 = 音符错位）。
 
-## 谱面目录 / 数据文件
-- 仓库根有**四个**数据表，都在 `main.cpp` 里按 `baseDir` → `..` → cwd 三级候选找，
-  打包时由 `package.sh` 一起拷进包内：`musics.json`（曲名/读音/组）、`music-vocals.json`
-  （演唱版本）、`music-levels.json`（定数）、**`music-aliases.json`（社区别名）**。
-  四个都是**可选**的，缺一个只会少一块功能、不会崩 —— 别名表丢了是**静默降级**，
-  所以启动打了一行 `[aliases] N aliases`。
-- 别名表来自 HarukiBot 的公开 API（社区提交 + 审核），703 首 / 1.3 万条，搜 `tyw`、
-  `梦开始的地方`、`mmj团歌` 都能命中。**匹配是精确的**（表里全是两字母词），
-  两个界面的搜索顺序都是：标题 → 作者 → 别名 → 读音原文 → 读音（罗马音折假名）。
-  重抓跑 `.workbuddy/tools/fetch_music_aliases.py`。chartdl 里还有一块「别名」分组框
-  （下载内容下面，两者之间有可拖的分隔条），把这张表整个列出来（1.2 万行，
-  **用 LVS_OWNERDATA 虚拟列表**，普通插入会卡）。
-- 谱面只认 **exe 同级的 `charts\`**（下载器默认输出）；游戏扫 `chartCandidates` 全部候选**合并**、
-  按 .sus 文件名去重。下载器设置存 `<exe>\chartdl.json`。
-- 多用户：`<dataDir>\profiles\<id>.json`（`{settings, scores, account}`）+ `index.json`；
-  首次运行把 `userdata.json` **复制**成 `default`。`<dataDir>`：有 `<exe>\..\charts` 就用那一层。
-- 优先级：命令行 > 档案 > 内置默认；`--screenshot` 不写成绩。
-- **曲库有两个源，按 id 分派（2026-09-19）**：日服曲（id ≤ 804）走 `assets.unipjsk.com`；
-  **国服独占曲 17 首（id 11001–11017，独立号段）走 `storage.sekai.best/sekai-cn-assets`**，
-  布局三处不同：谱面 **带 `.txt`**、音频前缀是 `vs_/se_/an_`、曲绘是 5 位 `jacket_s_11xxx`。
-  判据只有 `id >= 10000`（chartdl 的 `kCnIdMin`）——**别往 10000 以上放新 id**。
-  曲库总同步用 `.workbuddy/tools/update_music_db.py`（日服全量 + 国服独占 **+ 定数表
-  `music-levels.json`**，`--check` 只报告；musics / music-vocals 是单行紧凑格式，脚本按无缩进
-  整体写回，diff 才只有一行，**定数表反过来是一行一首**、有专门的 writer）。
-  每个仓库都配了 raw.github + **jsDelivr 镜像**两条地址（国内直连 raw 会整段不通）。
-  **表是本地快照、会过时**：2026-09-19 实测它停在日服 id 804 而当天已经 811，缺 敗走 /
-  ヘレディティ 两首，而它们的资源在 unipjsk 上本来就是 200 —— **日服出新曲就跑这个脚本**。
-  **国服表把独占曲的读音填成了作曲者名**，脚本里手工补过 —— 中文标题填的是**拼音**，
-  别拿它当假名用（主程序搜索为此外加了一条原文比对）。
-- **定数表（`music-levels.json`）2026-09-20 才纳入同步**：此前它停在 712 首 / 无国服曲，
-  后果是 chartdl 里「定数表没有这一行」被当成「这首没有这个难度」→ 国服曲 5 个难度框全灰、
-  只能下到曲绘和 BGM。现在 chartdl 用 `Song::levelsKnown` 区分「未知」和「确实没有」，
-  所以表旧了不再挡住下载，但**新曲还是要跑脚本刷表**（启动日志会打
-  `[data] N song(s) have no levels ...`）。表里没有只在界面上表现为定数 `-`。
+## 数据表 / 谱面目录
+- 仓库根四个**可选**表（`main.cpp` 按 baseDir → .. → cwd 三级候选找，`package.sh` 拷进包）：
+  `musics.json`、`music-vocals.json`、`music-levels.json`（定数）、`music-aliases.json`（社区别名）。
+  缺一个只少一块功能、不会崩；别名表丢了是静默降级（启动打 `[aliases] N aliases`）。
+- 曲库两源按 id 分派：日服曲（id ≤ 804）走 `assets.unipjsk.com`；**国服独占曲（id 11001+）走
+  `storage.sekai.best/sekai-cn-assets`**，布局三处不同（谱面带 `.txt`、音频前缀 `vs_/se_/an_`、
+  曲绘 5 位 `jacket_s_11xxx`）。判据只有 `id >= 10000` —— **别往 10000 以上放新 id**。
+  总同步用 `update_music_db.py`（含定数表；`--check` 只报告；每个仓库配 raw.github + jsDelivr
+  两条地址，国内直连 raw 会整段不通）。**表是本地快照会过时，日服出新曲就跑它**。
+- 谱面只认 **exe 同级的 `charts\`**；游戏扫 `chartCandidates` 全部候选**合并**、按 .sus 文件名去重。
+- 多用户：`<dataDir>\profiles\<id>.json` + `index.json`；首次运行把 `userdata.json` **复制**成
+  `default`。优先级：命令行 > 档案 > 内置默认；`--screenshot` 不写成绩。**加设置字段要同时改
+  `game/SongSelect.cpp` 里 `loadUserData` 的 `s.value(...)` 与 `saveUserData` 的 `doc["settings"]`**
+  （漏一处就是静默丢设置）。
 
-## UI 通则（所有画面都是「1920x1080 虚拟画布 + 缩放」）
+## UI 通则（1920x1080 虚拟画布 + 缩放）
 - HUD / 结算 / 选曲都用 `px()/py()/ps()` 换算。**ImGui `AddText(font,size,...)` 的 size 是像素**，
-  虚拟单位必须自己乘 scale（非 1080p 窗口文字偏大就是漏了这步）。
-- 数值/文字优先用游戏自带精灵（`score/digit/*`、`combo/p*`、HUD overlay），别用字体凑。
+  虚拟单位必须自己乘 scale（非 1080p 文字偏大就是漏了这步）。
+- 数值/文字优先用游戏自带精灵（`score/digit/*`、`combo/p*`），别用字体凑。
+- 自绘控件（`ui::slider` / `checkBox` / `stepper` / `capsuleButton`）**键盘焦点够不着** —— 手柄靠
+  焦点环驱动（`ui::PadScope` + `padNav`，见 AGENTS.md「手柄焦点环 / 震动」）；**新增原生
+  `ImGui::Combo` 要接一句 `ui::padComboNudge`**。
 
-## 验证手法
-- **截图是能直接看的**（Read 一张 PNG 即可），选曲/房间这类界面改动直接抓图确认最快。
-  但 `--party-auto` 会在结算 2s 后自动按「继续」，要拍结算就别加它。
-- 无头自检：`--screenshot` + `--screenshot-time`，断言看日志 `[stats]`/`[score]`/`[result]` 行。
-  **截图逐像素比的噪声基线只有 6 个像素**（同版本跑两次），所以画面回归可以靠 diff；
-  `winmsg.exe <class> raw <hex> [wparam] [lparam]` 能伪造任意窗口消息（PostMessage 一样走 SDL
-  的窗口过程 → 消息钩子能被无头验证）。`--no-party` 别忘：多人默认开着。
-- **拖动窗口会让 Windows 跑模态循环把整个消息泵挂住**（画面冻结、音频照跑）。已用
-  `SDL_SetWindowsMessageHook` 把拖动变成静默暂停（`[window] WM_ENTERSIZEMOVE ...` 日志）；
-  要让画面继续渲染得把 main() 的帧体抽出来 —— 大改，用户还没拍板（见 AGENTS.md）。
-- 日志"跑着跑着不打了"是缓冲假死（已改无条件 `setvbuf(_IONBF)`，读旧日志仍要记住）。
+## 验证手法（精选）
+- **截图能直接看**（Read 一张 PNG）。`--party-auto` 会在结算 2s 后自动按「继续」，拍结算别加它。
+- 无头自检：`--screenshot` + `--screenshot-time`，断言看 `[stats]`/`[score]`/`[result]` 行；
+  设置卡片用 `--settings --settings-tab N`。截图逐像素比的噪声基线只有 6 px，画面回归能靠 diff。
+  `--no-party` 别忘（多人默认开着）。
+- **日志按 cwd 落盘、进程启动时截断**：并发跑只能看到最后一个 —— **一个测试用一个独立目录**。
+  **Git Bash 不等 GUI exe**，要 `( exe & wait )` 或 `exe & sleep N`（`for` 里直接跑会互抢 GPU，
+  测过 245fps 假基线）。
+- 无交互会话下 PostMessage 到不了某些 ImGui 界面 → 在代码里加自动按的调试开关（`--fake-pad`、
+  `--chartdl-test`），别在输入注入上死磕。
+- 拖动窗口会让 Windows 跑模态循环把消息泵挂住（画面冻结、音频照跑）；已用
+  `SDL_SetWindowsMessageHook` 变成静默暂停。
 - 临时条件探针**别设计数上限**（`if (n < 8)` 会掩盖"条件没满足"和"分支没走"的区别）。
-- 无交互会话下 `winsend.exe` 的 PostMessage 到不了某些 ImGui 界面 → 在代码里加自动按的
-  调试开关（如 `--chartdl-test`），别在输入注入上死磕。
-- **Git Bash 不等 GUI 子系统 exe**：`for ...; do ./cppsekai.exe ...; done` 会让几个实例几乎同时
-  启动互抢 GPU，测出过 245fps 的假基线。串行要 `exe & sleep N`。**日志落在 cwd 的 `cppsekai.log`**
-  （从仓库根跑就去根目录捞），不是 build/ 那份。
-- **chartdl 的窗口/下载坑**（2026-09-19 修）：设置窗口是 `WS_OVERLAPPED` **顶层**窗口 + owner，
-  `GetParent()` 对它返回 **0** → 关闭设置后主窗口永久禁用（点什么都只有系统提示音），
-  必须用 `GetWindow(hwnd, GW_OWNER)`。验证：`--open-settings` 起 GUI，Python ctypes 按类名
-  （`CppSekaiChartDl` / `CppSekaiChartDlSettings`）发 `WM_CLOSE`，前后读 `IsWindowEnabled`。
-  下载侧：4 线程 + `thread_local` 缓存 WinHTTP session/connection（原来每个文件都重新握手），
-  31 文件 / 63.9 MB 实测 **19.0s → 9.8s**。**测下载别拿单曲做样本**（10 文件时只有 8% 差异，
-  噪声级）。国服曲库不在这个源里（`musics.json` 是日服表 + `assets.unipjsk.com`）。
-- **内存怎么查**：`.workbuddy/tools/mem_sample.py`（每 150ms 打 WorkingSetSize / **峰值** / 提交，
-  tasklist 4 秒粒度看不出启动期台阶）。2026-09-19 实测：GL 空窗口基线 **72MB**，游戏稳态
-  **245MB**（峰值 291MB）—— 大头是**常驻的 TTF 数据 ~37MB**（msyh 19.7 + msyhbd 16.9，新版
-  ImGui 要整份字体常驻，换来 atlas 只有 0.25MB），贴图 13.5MB、壁纸 2.2MB。启动后 10~12s
-  有一次 ~46MB 的**延迟归还**，别当成泄漏、也别当成"切设置释放了内存"（bgStyle 0/1 都有）。
+- 内存用 `mem_sample.py`：GL 空窗口 72MB、游戏稳态 212MB（删粗体后）；启动后 10~12s 有一次
+  ~46MB 的延迟归还，别当泄漏。
+- chartdl：设置窗口是**顶层**窗口，关闭判定用 `GetWindow(hwnd, GW_OWNER)` 而非 `GetParent()`；
+  下载 4 线程 + `thread_local` 缓存 session；**测下载别拿单曲做样本**。
 
-## 最近工作（细节一律看 AGENTS.md 对应小节 + 当日日志）
-- **2026-09-20**：① chartdl 数据源体检（搜索大小写 / CLI 参数编码 / 定数表 `levelsKnown` /
-  `update_music_db.py` 纳入 `music-levels.json` + jsDelivr 镜像，表刷到 733 首）；
-  ② **确定闪光改成全白**（`kConfirmPeak` 1.0 + `confirmWhiteShown`：先出全白帧、下一帧才加载）
-  —— 加载卡顿的遮羞布不能再透出列表；③ 新功能 **猜歌**（选曲头排「音乐商店」右边，
-  `guess.png`，卡片复用 dialog 样式，题库 = 唯一且有意义的社区别名，`--guess` 可无头截）。
-- **2026-09-19**：多人开局倒计时删了（改成「最慢窗口加载 + 0.8s」两段 charge）；失血阴影几何
-  重做（探针 `CPSEKAI_VIGNETTE`）；**Win7 三连修**：① libc++ chrono 静态导入
-  `GetSystemTimePreciseAsFileTime`（启动即失败，build.sh 打补丁）② 系统字体候选表扩到三层 +
-  按文件名兜底（点阵字/中文问号）③ 新增 `bgStyle = 2`「透明（Aero 玻璃）」背景
-  （不填背景、保留漂浮三角形，Renderer + SongSelect + 窗口 DWM 四处联动）；素材压到 10MB。
-  另：**渲染质量档评估过，用户拍板先不做** —— 实测瓶颈不在填充率（窗口 1920x1080 + autoplay，
-  渲染 1080p 与 540p 都是 ~1.0ms/帧、950+fps），只对弱 GPU/VM 有意义。已知待办：拖动窗口时
-  38~51fps（见「验证手法」）。
-  另二：**内存审计 + 结算界面改版** —— 壁纸背景只值 2.2MB（「切背景省 50MB」其实是启动期临时
-  分配在 10~12s 的延迟归还，bgStyle 0/1 都有）；删粗体 face 后稳态 **245.4 → 212.3MB**；
-  结算界面去掉 wash/框线/斜带、不画舞台、判定与 combo 计数换系统字体、RESET 大字改真空心轮廓
-  纹理。新工具 `.workbuddy/tools/mem_sample.py`（峰值/工作集采样）。
-- **2026-09-18**：空谱面「下载谱面」按钮、首启 ELUA 弹窗、**多人"连不上"真根因在选曲界面**
-  （`selected` 被 `diffIndex` 反推成 -1）、暂停没冻住主机时钟、多人流程重做、多人不进结算。
-- **2026-09-17**：多人游玩（`platform/Party.*` + `game/PartyScreen.*`，同机多窗口共享内存总线）。
-- **2026-09-16**：多用户 `profiles/`、渲染模式（固定分辨率 FBO）、谱面目录 `./charts`、下载器大改。
-- 更早（9-13~9-15）：结算画面、设置 4 页、选曲分组/多歌手、长条尾判、舞台背景、HUD 徽章、
-  贴图尺寸策略与 UTF-8 路径规则。
+## 最近工作（细节看 AGENTS.md 对应小节 + 当日日志）
+- **2026-09-20**：① chartdl 数据源体检 + 定数表纳入同步；② 确定闪光改全白；③ 猜歌卡片；
+  ④ **手柄焦点环**（设置卡片里的滑块/复选框/stepper/下拉框都能用手柄操作）**+ 开局与结算数字
+  滚动的震动**（新设置 `UserSettings::padRumble`）。
+- **2026-09-19**：多人开局倒计时删掉；失血阴影重做；Win7 三连修（chrono / 字体候选表 /
+  `bgStyle=2` Aero 玻璃）；素材压到 10MB；内存审计 + 结算界面改版。渲染质量档评估过、用户拍板先不做。
+- 更早：多人游玩（9-17）、多用户 profiles 与下载器大改（9-16）、结算画面 / 设置 4 页 / 长条尾判 /
+  ELUA 弹窗 / 选曲分组（9-13 ~ 9-15）。
