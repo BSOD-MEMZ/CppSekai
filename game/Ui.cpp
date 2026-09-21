@@ -174,6 +174,29 @@ namespace
         return ImGui::ColorConvertFloat4ToU32(ImVec4(ca.x + (cb.x - ca.x) * k, ca.y + (cb.y - ca.y) * k,
             ca.z + (cb.z - ca.z) * k, ca.w + (cb.w - ca.w) * k));
     }
+
+    // Soft drop shadow under a rounded box: three stacked rects, drawn back to
+    // front, each one wider and fainter than the last, so only the fringe
+    // outside the box ends up visible. Call it *before* whatever draws the box
+    // itself. This ImGui (1.92.5) has no shadow primitive - no AddShadowRect,
+    // no ImGuiCol_WindowShadow - and pjsk's panels all carry one, so this is the
+    // shared stand-in for "just a little raised off the page".
+    // Public entry point: ui::dropShadow() below.
+    void shadowLayers(ImDrawList* dl, const ImVec2& lo, const ImVec2& hi, float rounding, float s,
+        float strength)
+    {
+        // 58,58,96 rather than pure black: the shadow reads as the same navy the
+        // UI text uses, so it does not go muddy on the purple backdrop.
+        constexpr ImU32 kShadow = IM_COL32(58, 58, 96, 255);
+        for (int layer = 3; layer >= 1; --layer) {
+            const float grow = static_cast<float>(layer) * 1.6f * s;
+            const float drop = (1.4f + 0.6f * static_cast<float>(layer)) * s;
+            const float alpha = (layer == 3 ? 0.06f : (layer == 2 ? 0.09f : 0.13f)) * strength;
+            dl->AddRectFilled(ImVec2(lo.x - grow, lo.y - grow + drop),
+                ImVec2(hi.x + grow, hi.y + grow + drop),
+                withAlpha(kShadow, alpha), rounding + grow);
+        }
+    }
     // True when this card was *not* submitted on the previous frame, i.e. its caller
     // dropped it (hid the dialog, changed screen) and is raising it again now. The
     // animation state left behind then describes a close that never finished - the
@@ -352,6 +375,12 @@ namespace
         return reply;
     }
 } // namespace
+
+void dropShadow(ImDrawList* dl, const ImVec2& lo, const ImVec2& hi, float rounding, float s,
+    float strength)
+{
+    shadowLayers(dl, lo, hi, rounding, s, strength);
+}
 
 float scale()
 {
@@ -896,11 +925,50 @@ bool combo(const char* id, const char* preview, const std::vector<std::string>& 
     // (t is ~0 on the frame the popup opens) without the lie.
     static std::unordered_map<ImGuiID, bool> comboOpen;
     const float t = animValue(key, comboOpen[key] ? 1.0f : 0.0f, 14.0f);
+
+    // ---- pjsk look ------------------------------------------------------
+    // White pill for the closed box, translucent white panel for the list, a
+    // soft shadow under both (that is what the official top bar looks like).
+    // Everything has to be pushed *before* BeginCombo: ImGui paints a popup's
+    // background inside Begin() - which BeginCombo calls - and whether the list
+    // opens at all is only known after that call returns, so there is no way to
+    // style it retroactively.
+    const ImGuiStyle& st = ImGui::GetStyle();
+    const float boxW = width > 0.0f ? width : ImGui::CalcItemWidth();
+    const float boxH = ImGui::GetFrameHeight();
+    const ImVec2 boxLo = ImGui::GetCursorScreenPos();
+    dropShadow(dl, boxLo, ImVec2(boxLo.x + boxW, boxLo.y + boxH), st.FrameRounding, s);
+    constexpr ImU32 kComboBg = IM_COL32(255, 255, 255, 244);
+    constexpr ImU32 kComboText = IM_COL32(60, 60, 82, 255);
+    constexpr ImU32 kComboPopupBg = IM_COL32(255, 255, 255, 232); // translucent
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, kComboBg);
+    ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, IM_COL32(255, 255, 255, 255));
+    ImGui::PushStyleColor(ImGuiCol_FrameBgActive, IM_COL32(255, 255, 255, 255));
+    ImGui::PushStyleColor(ImGuiCol_Text, kComboText);
+    ImGui::PushStyleColor(ImGuiCol_PopupBg, kComboPopupBg);
+    ImGui::PushStyleColor(ImGuiCol_Header, IM_COL32(232, 228, 242, 255));        // picked row
+    ImGui::PushStyleColor(ImGuiCol_HeaderHovered, IM_COL32(243, 240, 250, 255)); // hovered row
+    ImGui::PushStyleColor(ImGuiCol_HeaderActive, IM_COL32(224, 219, 238, 255));
+    const float popupRound = 14.0f * s;
+    ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, popupRound);
+    ImGui::PushStyleVar(ImGuiStyleVar_PopupBorderSize, 0.0f);
+    // No WindowPadding push here: BeginComboPopup() already pins the popup's
+    // horizontal padding to FramePadding.x to line its rows up with the box, and
+    // overriding the vertical part made the auto-sized popup ~14px too short -
+    // which shows up as a scrollbar and a clipped last row, not as padding.
     ImGui::SetNextItemWidth(width);
     bool changed = false;
     const bool popupOpen = ImGui::BeginCombo("##combo", preview, flags | ImGuiComboFlags_NoArrowButton);
     comboOpen[key] = popupOpen;
     if (popupOpen) {
+        // Shadow for the list: drawn into the *caller's* draw list, which ImGui
+        // renders before the popup's own (windows are submitted in stack order,
+        // popups last), so it lands under the panel instead of on it. The popup
+        // is AlwaysAutoResize, so on the very first frame its rect is only the
+        // previous frame's estimate - invisible, because the rows fade in.
+        const ImVec2 pLo = ImGui::GetWindowPos();
+        const ImVec2 pSize = ImGui::GetWindowSize();
+        dropShadow(dl, pLo, ImVec2(pLo.x + pSize.x, pLo.y + pSize.y), popupRound, s);
         // NOTE: never SetWindowPos() the popup to animate it in - moving the
         // window mid-frame leaves its content outside the clip rectangle that
         // Begin() already computed, so whichever row ends up outside simply
@@ -921,6 +989,8 @@ bool combo(const char* id, const char* preview, const std::vector<std::string>& 
         }
         ImGui::EndCombo();
     }
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor(8);
     // Own chevron: the built-in one is painted inside the widget and cannot be
     // animated, so it is suppressed above and drawn here instead - it rotates as
     // the list opens and back when it closes.

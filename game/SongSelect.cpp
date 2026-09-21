@@ -2605,7 +2605,9 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     // banner is drawn over it (see after the 刷新 button).
     ImGui::BeginDisabled(partyReadOnly);
     ImGui::SetCursorScreenPos(ImVec2(listX, listTop));
-    ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(250, 250, 253, 210));
+    // Same translucent-white pill as ui::combo's box, so the search field and
+    // the two selectors beside it read as one row (see ui::combo for the look).
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(255, 255, 255, 244));
     ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, IM_COL32(255, 255, 255, 235));
     ImGui::PushStyleColor(ImGuiCol_FrameBgActive, IM_COL32(255, 255, 255, 255));
     ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(70, 70, 90, 255));
@@ -2619,6 +2621,10 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     // Full width: the icon lives inside the field, so the field has to be the
     // whole pill. (It used to be shortened by searchH and the magnifier drawn
     // past its right edge, which left it hanging outside the box.)
+    // Same faint shadow the combo boxes get, so the whole header row reads as
+    // one lifted row instead of "one field with a shadow, two without".
+    ui::dropShadow(dl, ImVec2(listX, listTop), ImVec2(listX + searchW, listTop + searchH),
+        searchH * 0.5f, k);
     ImGui::SetNextItemWidth(searchW);
     ImGui::InputTextWithHint("##search", "根据歌曲名·作者名查找", searchBuf, sizeof(searchBuf));
     ImGui::PopFont();
@@ -2654,14 +2660,9 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         const char* kGroupLabels[kGroupCount] = {"关闭", "按难度段", "按读音", "按首字"};
         const std::string sortPreview = std::string("排序：") + kSortLabels[sortMode];
         const std::string groupPreview = std::string("分组：") + kGroupLabels[groupMode];
-        ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(58, 52, 92, 235));
-        ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, IM_COL32(76, 68, 118, 245));
-        ImGui::PushStyleColor(ImGuiCol_FrameBgActive, IM_COL32(90, 80, 138, 255));
-        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(238, 238, 248, 255));
-        ImGui::PushStyleColor(ImGuiCol_PopupBg, IM_COL32(46, 40, 76, 250));
-        ImGui::PushStyleColor(ImGuiCol_Header, IM_COL32(110, 106, 190, 200));
-        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, IM_COL32(140, 136, 225, 220));
-        ImGui::PushStyleColor(ImGuiCol_HeaderActive, IM_COL32(170, 166, 255, 240));
+        // No colours here any more: ui::combo brings the pjsk look itself (white
+        // box, translucent white list, faint shadow). Only the metrics are the
+        // caller's - rounding is what the shadow follows, padding is the height.
         ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 12.0f * k);
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(14.0f * k, 8.0f * k));
         ImGui::PushFont(body, 17.0f * k);
@@ -2678,7 +2679,6 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             ImGuiComboFlags_HeightSmall, k);
         ImGui::PopFont();
         ImGui::PopStyleVar(2);
-        ImGui::PopStyleColor(8);
     }
 
     // Rescan button, in the same row as the selectors. F5 has always done this

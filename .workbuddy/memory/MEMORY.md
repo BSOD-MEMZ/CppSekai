@@ -19,6 +19,9 @@
 - `main.cpp` 必须在 `#include <SDL.h>` 前 `#define SDL_MAIN_HANDLED`，否则"秒退无输出"。
 - exe 是 Windows 子系统；日志去 **cwd 的 `cppsekai.log`**；`--screenshot` 的参数是**文件路径**
   （给目录会静默失败），父目录必须已存在。
+- **无头跑看日志别重定向 stdout**：`( exe >/dev/null 2>&1 & )` 会让它继续写 stdout，于是
+  `cppsekai.log` 根本不生成（main.cpp 开头那段按"stdout 是否已重定向"决定）。要 `( exe & )`
+  或 `( exe & wait )`，或加 `--screenshot` 让它自己退。
 - **Win7 补丁在 build.sh 顶部**（2026-09-19）：zig 的 libc++ chrono.cpp 在 `_WIN32_WINNT>=0x0602`
   静态导入 `GetSystemTimePreciseAsFileTime`（Win8+），Win7 启动即报"无法定位程序输入点"。
   build.sh 用幂等 sed 强制走运行时探测（`grep -c CPPSEKAI-WIN7 = 2` 断言）。**toolchain 重解压
@@ -76,6 +79,8 @@
 
 ## 验证手法（精选）
 - **截图能直接看**（Read 一张 PNG）。`--party-auto` 会在结算 2s 后自动按「继续」，拍结算别加它。
+  **自己拿到的 PNG 先看尺寸**：窗口多大截图就多大（1280x720 常见），别按 1920x1080 算裁剪框。
+  开场卡片只活在谱面时间 0 之前，要 `--intro-preview [sec]` 才截得到。
 - 无头自检：`--screenshot` + `--screenshot-time`，断言看 `[stats]`/`[score]`/`[result]` 行；
   设置卡片用 `--settings --settings-tab N`。截图逐像素比的噪声基线只有 6 px，画面回归能靠 diff。
   `--no-party` 别忘（多人默认开着）。

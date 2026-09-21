@@ -4,7 +4,8 @@
 // core/native/src/mmw_overlay_player.cpp (sekai-mmw-preview-web, AGPL-3.0).
 #include "Intro.hpp"
 
-#include "Ui.hpp" // ui::anim - the skip button's hover / press easing
+#include "Hud.hpp" // lifePauseRect - the skip key lines up with the pause key
+#include "Ui.hpp"  // ui::anim - the skip button's hover / press easing
 
 #include "imgui.h"
 
@@ -54,15 +55,17 @@ namespace
     constexpr float INTRO_DESC2_ROW_OFFSET_PX = 136.0f;
 
     // ---- Opening-card skip button ---------------------------------------
-    // pjsk's round back / skip key: a white disc with a hairline grey rim and
-    // a dark navy glyph, parked in the top-right corner. The glyph is
-    // assets/mmw/ui/skip.png - pure white ">>" on transparent, so the navy
-    // comes from the draw-time tint and the file never needs recolouring.
-    // Shared by drawIntro() and introSkipHitTest() so the two cannot drift.
-    constexpr float SKIP_BTN_RADIUS_PX = 46.0f;
-    constexpr float SKIP_BTN_MARGIN_PX = 34.0f;   // from the top and right edges
-    constexpr float SKIP_BTN_ICON_W_PX = 46.0f;   // height follows the 44x28 source
-    constexpr float SKIP_BTN_DISC_ALPHA = 0.90f;  // white disc opacity
+    // pjsk's round back / skip key: a white disc with a soft drop shadow and a
+    // dark navy glyph. The glyph is assets/mmw/ui/skip.png - pure white ">>" on
+    // transparent, so the navy comes from the draw-time tint and the file never
+    // needs recolouring.
+    //
+    // Size and place are taken from the in-play pause key: the disc is as big as
+    // the one the life sheet draws inside `lifePauseRect()`, and it sits at that
+    // rect's centre, so the skip key turns into the pause key in place when the
+    // card hands over. (Both are 1920x1080 virtual coordinates.)
+    constexpr float SKIP_BTN_RADIUS_PX = 40.0f;
+    constexpr float SKIP_BTN_ICON_W_PX = 40.0f;   // height follows the 44x28 source
     // Navy sampled from the pjsk reference screenshot (avg of its dark pixels).
     constexpr int SKIP_BTN_NAVY_R = 61;
     constexpr int SKIP_BTN_NAVY_G = 60;
@@ -70,6 +73,12 @@ namespace
     // Hover / press feedback, matching the eased blends game/Ui.cpp uses.
     constexpr ImGuiID SKIP_BTN_HOVER_ID = 0x4a553000u;
     constexpr ImGuiID SKIP_BTN_PRESS_ID = 0x4a553001u;
+
+    ImVec2 skipButtonCenter()
+    {
+        const HudRect pause = lifePauseRect();
+        return ImVec2(pause.x + pause.w * 0.5f, pause.y + pause.h * 0.5f);
+    }
 
     ImFont* gTitleFont = nullptr;
     ImFont* gBodyFont = nullptr;
@@ -833,32 +842,41 @@ void drawIntro(platform::Renderer& renderer, const IntroInfo& intro, float outpu
             ps(textMaxWidth));
     }
 
-    // Skip button, top-right: pjsk's round key - white disc, hairline rim, dark
-    // navy ">>" glyph (assets/mmw/ui/skip.png tinted navy, so the asset stays
-    // the untouched white original). Draw-only here - the click lands in
-    // main.cpp via introSkipHitTest().
+    // Skip button, top-right: pjsk's round key - white disc with a soft drop
+    // shadow and the dark navy ">>" glyph (assets/mmw/ui/skip.png tinted navy,
+    // so the asset stays the untouched white original). Draw-only here - the
+    // click lands in main.cpp via introSkipHitTest().
     const float skipFade = clamp01((kHudIntroDurationSec - outputTimeSec) / 0.5f);
     if (outputTimeSec >= 0.0f && skipFade > 0.001f) {
         const ImVec2 skipCenter(
-            px(1920.0f - SKIP_BTN_MARGIN_PX - SKIP_BTN_RADIUS_PX),
-            py(SKIP_BTN_MARGIN_PX + SKIP_BTN_RADIUS_PX));
+            px(skipButtonCenter().x),
+            py(skipButtonCenter().y));
 
         // Hover / press feedback. The pointer test is the same disc the hit
         // test below uses, in window pixels.
         const ImVec2 mouse = ImGui::GetIO().MousePos;
         const float mouseDx = mouse.x - skipCenter.x;
         const float mouseDy = mouse.y - skipCenter.y;
-        const bool hovered = (mouseDx * mouseDx + mouseDy * mouseDy) <= (ps(SKIP_BTN_RADIUS_PX) + ps(6.0f)) * (ps(SKIP_BTN_RADIUS_PX) + ps(6.0f));
+        const float hitRadius = ps(SKIP_BTN_RADIUS_PX) + ps(6.0f);
+        const bool hovered = (mouseDx * mouseDx + mouseDy * mouseDy) <= hitRadius * hitRadius;
         const bool pressed = hovered && ImGui::IsMouseDown(ImGuiMouseButton_Left);
         const float hover = ui::anim(SKIP_BTN_HOVER_ID, hovered, 22.0f);
         const float press = ui::anim(SKIP_BTN_PRESS_ID, pressed, 30.0f);
         // Pjsk keys grow a touch on hover and dip back on press.
         const float radius = ps(SKIP_BTN_RADIUS_PX) * (1.0f + 0.05f * hover - 0.04f * press);
 
+        // Soft drop shadow instead of a flat rim (pjsk's key has one): three
+        // stacked discs, each one wider and fainter than the last, all pushed
+        // slightly down. The white disc then covers the middle.
+        for (int layer = 3; layer >= 1; --layer) {
+            const float grow = ps(static_cast<float>(layer) * 1.5f);
+            const float drop = ps(1.2f + 0.5f * static_cast<float>(layer));
+            const float alpha = layer == 3 ? 0.07f : (layer == 2 ? 0.11f : 0.15f);
+            overlay->AddCircleFilled(ImVec2(skipCenter.x, skipCenter.y + drop), radius + grow,
+                IM_COL32(22, 24, 46, alphaByte(alpha * skipFade)), 64);
+        }
         overlay->AddCircleFilled(skipCenter, radius,
-            IM_COL32(255, 255, 255, alphaByte((SKIP_BTN_DISC_ALPHA + 0.08f * hover) * skipFade)), 64);
-        overlay->AddCircle(skipCenter, radius - ps(1.6f),
-            IM_COL32(210, 214, 226, alphaByte(0.95f * skipFade)), 64, ps(3.2f));
+            IM_COL32(255, 255, 255, alphaByte((0.94f + 0.06f * hover) * skipFade)), 64);
 
         const platform::Renderer::HudSprite* skipIcon = renderer.hud("ui_skip");
         if (skipIcon != nullptr && skipIcon->id != 0 && skipIcon->width > 0 && skipIcon->height > 0) {
@@ -879,14 +897,15 @@ void drawIntro(platform::Renderer& renderer, const IntroInfo& intro, float outpu
 
 bool introSkipHitTest(int windowW, int windowH, int x, int y)
 {
-    // Same transform + disc constants drawIntro() uses for the button.
+    // Same transform + disc drawIntro() uses for the button.
     const float scale = std::min(static_cast<float>(windowW) / 1920.0f, static_cast<float>(windowH) / 1080.0f);
     const float offsetX = (static_cast<float>(windowW) - 1920.0f * scale) * 0.5f;
     const float offsetY = (static_cast<float>(windowH) - 1080.0f * scale) * 0.5f;
-    const float cx = offsetX + (1920.0f - SKIP_BTN_MARGIN_PX - SKIP_BTN_RADIUS_PX) * scale;
-    const float cy = offsetY + (SKIP_BTN_MARGIN_PX + SKIP_BTN_RADIUS_PX) * scale;
-    // A couple of pixels of slack: the rim is drawn just inside the disc, and a
-    // round target is harder to hit than a rectangle.
+    const ImVec2 center = skipButtonCenter();
+    const float cx = offsetX + center.x * scale;
+    const float cy = offsetY + center.y * scale;
+    // A couple of pixels of slack: a round target is harder to hit than a
+    // rectangle, and the pause key next to it is as big as its whole zone.
     const float radius = SKIP_BTN_RADIUS_PX * scale + 6.0f;
     const float dx = static_cast<float>(x) - cx;
     const float dy = static_cast<float>(y) - cy;

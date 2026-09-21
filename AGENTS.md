@@ -70,6 +70,17 @@ game/Ui.*         # pjsk 风格弹窗组件库：beginCard（缩放入/出场动
                   # `presets` 和 `deltas` 一样长时，*value 被当成"选中第几项"（-1 = 没选中），
                   # 每个胶囊就是它自己那一项、按一下就选它，中间的灰 pill 显示 `presets[i]`
                   # 而不是数字；胶囊宽度按 rowW 和最长标签现算，三字标签也不会顶出卡片。
+                  # **`combo` 自带 pjsk 的配色（2026-09-21）**：关着的框是白胶囊、下拉是
+                  # **半透明白面板**、两者都带一层很淡的投影；调用方只需要给尺寸相关的
+                  # 样式（FrameRounding / FramePadding / 字体），别再推颜色 —— 内部的
+                  # push 在后面，会盖掉。实现要点：① 颜色必须在 `BeginCombo` **之前**推，
+                  # 因为弹层背景是在 `Begin()`（BeginCombo 里调的）里画的，之后推就晚了；
+                  # ② 弹层的投影画进**调用方的 draw list**（父窗口比弹窗先提交，所以落在
+                  # 面板底下）；③ 别覆盖 `WindowPadding.y`（BeginComboPopup 自己会钉 x，
+                  # y 一改弹层就矮 14px，表现为滚动条 + 最后一行被切）。
+                  # `ui::dropShadow(dl, lo, hi, rounding, s)` 是共用的那层投影（三层同心
+                  # 形状叠出软边），自绘面板也可以用；这版 ImGui 没有 AddShadowRect /
+                  # ImGuiCol_WindowShadow。
 game/Result.*     # 结算画面（PRESENT/RESULT）：参考原版截图 1:1 复刻，全部画在 ImGui
                   # background draw list 上的 1920x1080 虚拟画布（和 HUD 同一套 px/py/ps 变换）。
                   # 左半边（RESULT 水印、曲目卡、得分、判定行）用参考截图的绝对 x；
@@ -797,10 +808,14 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
 
 ## 开场卡片的跳过键（2026-09-21，`game/Intro.cpp`）
 
-- **形状**：照 pjsk 的圆形返回键做的——白圆盘 + 一圈细灰边 + 深藏青图标，钉在**右上角**。
-  几何常量（`SKIP_BTN_RADIUS_PX` / `SKIP_BTN_MARGIN_PX` / `SKIP_BTN_ICON_W_PX`）在
-  `Intro.cpp` 的匿名 namespace 里，`drawIntro()` 和 `introSkipHitTest()` **共用同一份**，
-  改一处就够；命中测试是**圆形**（半径 + 6px 余量），不是矩形。
+- **形状**：照 pjsk 的圆形返回键做的——白圆盘 + **柔和的投影**（不是描边圈）+ 深藏青图标。
+  尺寸和位置**跟着演出中的暂停键走**：中心取 `lifePauseRect()` 的中心，圆盘半径 40（= 生命条
+  贴图里那个键的圆盘半径，2026-09-21 从 1280x720 截图量出来的），所以开场结束的瞬间这个键
+  原位变成暂停键。几何常量在 `Intro.cpp` 的匿名 namespace 里（`SKIP_BTN_RADIUS_PX` /
+  `SKIP_BTN_ICON_W_PX` / `skipButtonCenter()`），`drawIntro()` 和 `introSkipHitTest()`
+  **共用同一份**；命中测试是**圆形**（半径 + 6px 余量），不是矩形。
+- **阴影怎么画的**：这版 ImGui（1.92.5）没有阴影图元，`ui::dropShadow()` 是三层同心形状
+  叠出来的（越外面越大越淡，只露边缘），见 `game/Ui.*`。
 - **图标是 `assets/mmw/ui/skip.png`**：44x28 的**纯白 ">>"**（白色 + alpha，没有别的颜色）。
   `Renderer::loadHud` 注册成 `ui_skip`，绘制时用 `AddImage` 的 tint 染成藏青
   （`61,60,92` 是从 pjsk 参考截图里取样的均值）—— **所以不需要拿 PS 换色，也不要往这个

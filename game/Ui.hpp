@@ -195,6 +195,16 @@ bool combo(const char* id, const char* preview, const std::vector<std::string>& 
 // as `0x4a552000u + index` work fine as keys.
 float anim(ImGuiID id, bool target, float rate = 18.0f);
 
+// Soft drop shadow under a rounded box, for the parts of a screen that draw
+// themselves (the song-select search pill, any panel that should sit "just a
+// little raised"). Call it *before* the box itself, on the same draw list:
+// three stacked rounded rects, each wider and fainter than the last, so only
+// the fringe outside the box shows. `s` is the px-per-unit scale of the caller,
+// `rounding` the box's corner radius. ui::combo() draws its own. This ImGui has
+// no shadow primitive (no AddShadowRect / ImGuiCol_WindowShadow).
+void dropShadow(ImDrawList* dl, const ImVec2& lo, const ImVec2& hi, float rounding, float s,
+    float strength = 1.0f);
+
 // ---- Game controller focus ---------------------------------------------
 // A pad has no pointer, so everything that is clicked rather than typed -
 // sliders, checkboxes, steppers, combos, capsules - used to be unreachable
