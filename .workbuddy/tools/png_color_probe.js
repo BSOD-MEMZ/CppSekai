@@ -6,6 +6,14 @@
 //   e.g. node png_color_probe.js shot.png 20-115 150-215 130-195 60 15
 // The optional last argument restricts the scan to a rectangle, which is how a
 // widget's own colour is told apart from a background that happens to use it.
+//
+// minGminusR / minGminusB are **>=** tests, so leaving them at 0 is *not* "no
+// filter" - it also demands g >= r and g >= b. A pale lavender / off-white
+// target (g below b) therefore matches nothing at all and the probe reads as
+// "no such colour" (2026-09-22, measuring a reference screenshot's light cards:
+// #DDDEE9 came back as 19 px). They are positional, so to actually switch one
+// off pass a large negative (`-255`); for a green/teal target the filter is
+// what you want and 0 is harmless.
 'use strict';
 const fs = require('fs');
 const zlib = require('zlib');
