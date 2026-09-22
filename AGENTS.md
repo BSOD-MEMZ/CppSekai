@@ -454,9 +454,12 @@ bash build.sh          # 仅需 Git Bash；产物 build/cppsekai.exe + SDL2.dll 
   并排（原图不染色，没有的难度调 84 透明度压暗），再按该难度唱片记录把 `clear_indicate.png`
   （金）/ `fullcombo_indicate.png`（粉）盖在同一个矩形上——三张图都是 38x38，直接同尺寸叠加。
 - 右侧手机整体倾斜：先按正放坐标画完整块（手机框、封面、文字、难度圆、按钮），再用
-  `dl->VtxBuffer` 把这一段的顶点统一绕手机中心旋转 -5°。命中框不能旋转，所以难度圆 /
+  `dl->VtxBuffer` 把这一段的顶点统一绕手机中心旋转 **+5°**（2026-09-22 之前是 -5°，
+  用户要求换成"向右倾"，就是取正号：顶边左高右低）。命中框不能旋转，所以难度圆 /
   图标按钮 / 确定按钮的 `InvisibleButton` 用 `tiltedItemPos()` 放到旋转后的中心；
   「确定」原来用 `ui::capsuleButton`，为了跟着倾斜改成手绘圆角矩形（同色 `ui::kPrimary`）。
+  验证"倒向哪边"别靠肉眼：取手机框顶边在左右两个 x 上的 y，左高就是右倾
+  （`.workbuddy/tools/pngcrop.py` + 扫列找框的浅紫 `6c6ca6`）。
 - HUD 分数与血量是真的：分数 = 上游 overlay 的公式（`(kTeamPower / Σ权重) * 4 * 权重 *
   levelFactor * comboFactor`，权重表见 `JudgementEngine::hudWeight`，levelFactor 用该谱面难度定数，
   combo 每 100 连击 +1%，上限 1.1），再乘判定系数（Perfect 1.0 / Great 0.7 / Good 0.5，MISS 不加分
@@ -789,19 +792,38 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
   等级用 `chartRatingFor()`，取值顺序**故意和 main.cpp 的 `setChartRating()` 一致**
   （官方等级表 → 谱面自带 level → 26），这样徽章和演奏中 HUD 的 SCORE RANK 永远一致。
   三行文字都用 `ellipsize()` 截到 `textMaxW = 内容框宽 - 徽章直径 - 12k`，绝不会钻到徽章底下。
+  字号（2026-09-22 用户要求"歌手、作者信息字号加大点"）：曲名 `26k`、**作者 `20k`**（原 17k，
+  行距 35k）、**`Vo.` 行 `18k`**（原 15k，行距 32k；超宽时仍按 `textMaxW` 先缩后截）。
+- **底部两颗圆钮（随机 / 切换歌手）没有圆底**（2026-09-22 用户点名去掉）：
+  `shufflebutton.png` / `singer.png` 直接画在手机面板上，悬停反馈只剩"图标放大 10% +
+  白度从 226 提到 255"（多人成员那颗用 alpha 90 压暗）。别再往回加 `AddCircleFilled` 深色盘
+  或薄荷描边环。
 - **切换歌手面板**（2026-09-22）：手机面板原来那排版本 chip **已删**，改成底部那颗圆形
   「切换歌手」按钮（`assets/select/singer.png`，麦克风 + 环绕箭头）；点它从**右侧滑进**一块
-  半透明深色面板，里面每个版本一张带单选框的卡片（仿官方「选择歌手」页）。
+  半透明深色抽屉，里面每个版本一张带单选框的卡片（仿官方「选择歌手」页）。
   要点：
-  - 布局参数全是按用户给的参考截图量出来的（卡片 `#DDDEE9` / 锁定卡 `#686980`、圆角 16k、
-    单选盘半径 17k 居中薄荷点、锁居中、文字左缘 = 卡左 + 68k）；标签走 `vocalVersionLabel()`
-    （`sekai` → `「世界」ver.`、`virtual_singer`/`original_song` → `虚拟歌手ver.`、
-    `another_vocal` → `Another Vocal ver.`，其余回落到官方 `caption`）。
-  - **列表用 `vocalTable` 全量**（`musicVocals()`），磁盘上没有 mp3 的版本画成**锁定卡**
-    （暗底 + 居中白挂锁 + 打孔钥匙孔）。`availableVocals()` 只是同一张表按文件存在性过滤，
-    顺序不变，所以两表并排走一遍就能给每行算出 `availIndex`（-1 = 锁定）。
-  - 顶栏要留在面板**上面**（`vpY0 = 76k`，压在表头行 30..63k 之下）：它是个抽屉，不是整页。
-    相应地 `--singer-panel` 打开时别把等级牌做成不可点。
+  - 布局参数全是按用户给的参考截图量出来的（卡片 `#DEDFEC` 上下浮动、圆角 16k、
+    单选白盘半径 17k（下面垫一圈更淡的圆当阴影）+ 居中薄荷点、文字左缘 = 卡左 + 68k）；
+    标签走 `vocalVersionLabel()`（`sekai` → `「世界」ver.`、`virtual_singer`/`original_song`
+    → `虚拟歌手ver.`、`another_vocal` → `Another Vocal ver.`，其余回落到官方 `caption`）。
+  - **卡片没有描边**（2026-09-22 用户点名）：选中与否只靠单选盘里那颗薄荷点区分，
+    指针悬停也只是把卡片底色提亮一档。**不要**再加 `AddRect` 描边或暗色锁定卡 ——
+    用户明确要求"有几个版本就显示几个"，所以列表**直接就是 `availableVocals()`**，
+    行号即 `vocalIndex`，没有锁定态、没有挂锁、也不需要 `musicVocals()` 全量。
+  - **整窗口高度、贴右缘**：`vpY0 = 0 / vpY1 = h`，`vpX1 = w`，圆角只给左边
+    （`ImDrawFlags_RoundCornersLeft`）—— 它是从屏幕右侧滑进来的抽屉，右边就是窗口边。
+    宽度 `min(620k, w*0.46)`。
+  - **抽屉半透明（`alpha 198`）+ 整高 ⇒ 它盖住的东西会透出来**，而"透出底下那个亮薄荷
+    确定按钮 / 等级牌 / 顶栏白胶囊"看着像 bug 不像玻璃。处置是 `drawerCover(x)`
+    （`clamp((x - vocalPX0) / 40k, 0, 1)`，40k 软边）：
+    · 顶栏 `headerButton()` 按覆盖比例缩自己的底色 / 图标 / 文字 alpha，
+      **并且吞掉点击**（否则点抽屉的标题会打到下面的「设置」）；
+    · 等级牌先记 `chipVtxFirst` 再整段改 alpha（它不走 ImGui item，手动命中测试，
+      `hot` 里要带 `!vocalPanelUp`）；
+    · 手机面板的**内容**（封面、难度圆、确定、两个图标）在旋转那一趟里按**每个顶点自己的 x**
+      淡出 —— 框本身留着，于是玻璃后面剩的是它该有的那个手机剪影。
+    几何（`vocalEase` / `vocalPW` / `vocalPX0` / `drawerCover` / `easeOutCubic`）因此全部
+    **提前到顶栏之前**算；`easeOutCubic` 原来是列表动画那边的局部 lambda，已经挪上去了。
   - 面板一打开，**手机面板上所有按钮都变 `Dummy`**（`vocalPanelUp` 门控）：ImGui 的 hover
     给的是本帧**先提交**的那个 item，而面板盖在手机面板上——不门控的话卡片永远点不动。
   - 滚轮滚动**没有用 ImGui item**（同样理由：整块列表上放一个 `InvisibleButton` 会先抢走 hover），
