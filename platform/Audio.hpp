@@ -49,6 +49,7 @@ class AudioEngine
     {
         UiSeClick = 0,
         UiSeSelect,
+        UiSeSlide, // a settings slider moved one step
         UiSeLevelChoose,
         UiSeWindowOpen,
         UiSeWindowClose,

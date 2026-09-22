@@ -150,6 +150,7 @@ void AudioEngine::loadUiSe(const std::string& dir)
     static const char* kFiles[UiSeCount] = {
         "click.mp3",
         "select.mp3",
+        "slide.mp3", // the settings card's sliders: one tick per step
         "level_choose.mp3",
         "window_open.mp3",
         "window_close.mp3",

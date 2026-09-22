@@ -813,19 +813,22 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
   - **整窗口高度、贴右缘**：`vpY0 = 0 / vpY1 = h`，`vpX1 = w`，圆角只给左边
     （`ImDrawFlags_RoundCornersLeft`）—— 它是从屏幕右侧滑进来的抽屉，右边就是窗口边。
     宽度 `min(620k, w*0.46)`。
-  - **抽屉半透明（`alpha 198`）+ 整高 ⇒ 它盖住的东西会透出来**，而"透出底下那个亮薄荷
-    确定按钮 / 等级牌 / 顶栏白胶囊"看着像 bug 不像玻璃。处置是 `drawerCover(x)`
-    （`clamp((x - vocalPX0) / 40k, 0, 1)`，40k 软边）：
-    · 顶栏 `headerButton()` 按覆盖比例缩自己的底色 / 图标 / 文字 alpha，
-      **并且吞掉点击**（否则点抽屉的标题会打到下面的「设置」）；
-    · 等级牌先记 `chipVtxFirst` 再整段改 alpha（它不走 ImGui item，手动命中测试，
-      `hot` 里要带 `!vocalPanelUp`）；
-    · 手机面板的**内容**（封面、难度圆、确定、两个图标）在旋转那一趟里按**每个顶点自己的 x**
-      淡出 —— 框本身留着，于是玻璃后面剩的是它该有的那个手机剪影。
-    几何（`vocalEase` / `vocalPW` / `vocalPX0` / `drawerCover` / `easeOutCubic`）因此全部
-    **提前到顶栏之前**算；`easeOutCubic` 原来是列表动画那边的局部 lambda，已经挪上去了。
-  - 面板一打开，**手机面板上所有按钮都变 `Dummy`**（`vocalPanelUp` 门控）：ImGui 的 hover
-    给的是本帧**先提交**的那个 item，而面板盖在手机面板上——不门控的话卡片永远点不动。
+  - **它是一层半透明遮罩，不是不透明面板**（`IM_COL32(38, 36, 58, 168)`）：
+    盖住的东西**照原样透出来**（底下的确定按钮、难度圆、封面、顶栏的白胶囊、等级牌），
+    这是**要的效果**（用户原话：「本来就可以透出来，就和之前一样，只是一个半透明遮罩而已」）。
+    ⚠ 不要再给"被盖住的东西"加淡出/变暗（2026-09-22 我加过一轮 `drawerCover` 按覆盖比例
+    淡出顶栏按钮 / 等级牌 / 手机内容，被用户明确否掉，已回滚）。唯一要拿掉的是**输入**：
+    · 顶栏 `headerButton()` 的 `return clicked && !vocalPanelUp`（ImGui 的 hover 给本帧
+      **先提交**的 item，而顶栏比抽屉先画，于是不吞的话点抽屉标题会打到下面的「设置」）；
+    · 等级牌是**手动**命中测试，`hot` 里要带 `!vocalPanelUp`；
+    · 手机面板所有按钮变 `Dummy`。
+  - 点**空白处**（`mouse.x < vocalPX0`）关闭：按下的那一帧就判，和 X 走同一条路
+    （`se(SeWindowClose)` + `gVocalPanelOpen = false`）。注意这只能在**帧末**判——
+    `vocalPanelUp` / `vocalPX0` 是在顶栏之前算好的，所以抽屉自己那些 item（卡片 / X）
+    先提交、先拿 hover，点它们不会同时被当成"外面"；反过来"开抽屉的那一次点击"
+    因为 `vocalPanelUp` 那帧还是 false 也不会立刻关掉自己。
+  - 抽屉几何（`vocalEase` / `vocalPW` / `vocalPX0` / `easeOutCubic`）全部**提前到顶栏之前**算；
+    `easeOutCubic` 原来是列表动画那边的局部 lambda，已经挪上去了。
   - 滚轮滚动**没有用 ImGui item**（同样理由：整块列表上放一个 `InvisibleButton` 会先抢走 hover），
     直接读 `io.MouseWheel`；裁剪用 `ImGui::PushClipRect`（它同时改 `window->ClipRect`，
     所以滚出去的卡片连命中测试一起被剔除）。
@@ -1490,17 +1493,25 @@ ImGui 后端降级 + 去掉 `glBindSampler`），那是一块真活儿，而目�
 
 ## UI 音效（2026-09-15，`ui::se` / `ui::flushSe`）
 
-- 素材在 `assets/se/`：`click.mp3`（任意组件按下）、`select.mp3`（选曲列表每动一格）、
+- 素材在 `assets/se/`：`click.mp3`（任意组件按下）、`select.mp3`（选曲列表每动一格 /
+  手柄焦点环移动）、`slide.mp3`（**设置卡里滑杆每动一格**，`SeSlide`，2026-09-22 加）、
   `level_choose.mp3`（难度按钮）、`window_open.mp3` / `window_close.mp3`（卡片 / 弹窗）、
   `start.mp3`（点「确定」起白光的那一下，`SeStart`，优先级最高）。
   `AudioEngine::loadUiSe` 在 `loadSe` 末尾加载（每种 3 个声部），**缺文件只打印一行日志**，
   不报错——所以精简包 / 无素材时界面照样能跑，只是没声音。
-  加一种新音效要**同步改三处**：`ui::SeKind`（末尾追加 = 优先级最高）、
-  `platform::AudioEngine::UiSe`（同样的顺序，`flushSe` 直接 `static_cast`）、
-  `loadUiSe` 里的 `kFiles[]`，以及 `Ui.cpp` 顶部的 `kSeKindCount`。
+  加一种新音效要**同步改三处**：`ui::SeKind`、`platform::AudioEngine::UiSe`（**同样的顺序**，
+  `flushSe` 直接 `static_cast`）、`loadUiSe` 里的 `kFiles[]`（还有 `Ui.cpp` 里的
+  `kSeRequestCount` static_assert 和 `CPSEKAI_SE_TRACE` 用的名字表）。
+- **`SeSlide` 故意排在 `SeSelect` 后面（= 优先级更高）**：滑杆动一格和焦点环挪一下可能落在
+  **同一帧**（手柄摇杆一次压过两个方向，`padNav` 是按方向逐个调的），那时该听见的是"格"，
+  不是环。调试开关：`CPSEKAI_SE_TRACE=1` 会在帧尾打一行 `[se] <名字>`，
+  无头跑（`--settings --fake-pad DOWN,RIGHT`）就能断言滑杆确实响了——没有这张表就只能靠猜。
+- 滑杆的"一格"是**跨过 `step` 的边界**，不是"值变了"（拖动时值每帧都在变）：
+  `slider()` 进来时记 `stepSlot(value)`，出去时比一次，只有槽位变了才 `se(SeSlide)`。
+  于是拖拽 / 深色 ± / 手柄左右三条路都正好一次一格（± 在两端被 clamp 掉时不响）。
 - 播放**不在按下瞬间**：组件只 `ui::se(...)` 记一个请求，主循环帧尾调一次 `ui::flushSe()`
   （`main.cpp` 里紧挨 `ImGui::Render()` 之前），由它挑**本帧最高优先级**的那一个播。
-  `ui::SeKind` 的顺序 = 优先级（click < select < level_choose < window_open < window_close），
+  `ui::SeKind` 的顺序 = 优先级（click < select < slide < level_choose < window_open < window_close），
   必须和 `platform::AudioEngine::UiSe` 一一对应（目前直接 static_cast）。
 - 为什么要这么绕：**`window_open.mp3` 里本身就混了 click 声**。按下的那一帧弹窗同时开，
   如果 click 也播就成了双击；同一帧里更高的那个（open/close）把 click 顶掉，正好对上官方手感。

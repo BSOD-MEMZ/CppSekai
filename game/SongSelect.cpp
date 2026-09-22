@@ -2686,12 +2686,12 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     }
     const float vocalPanelT = ui::anim(0x4a576000u, gVocalPanelOpen, 15.0f);
     const bool vocalPanelUp = gVocalPanelOpen || vocalPanelT > 0.0005f;
-    // The drawer's own geometry, hoisted for the same reason: its fill is
-    // translucent on purpose, so every widget it slides over has to fade as the
-    // edge passes it - otherwise the covered top-bar buttons and the level chip
-    // stay legible *through* the sheet, which reads as a rendering bug rather
-    // than as glass. `drawerCover` is that "how much of me is under it" test,
-    // with a soft 40k transition so nothing pops.
+    // The drawer's own geometry, hoisted for the same reason: its left edge is
+    // what tells a click on the blank area (close me) from a click on the drawer
+    // itself, and that test has to run before the frame's widgets are built.
+    // NOTE: the panel is a plain translucent mask - whatever it covers keeps its
+    // own brightness, on purpose (it shows through the fill). Only the *input*
+    // is taken away from it, below.
     const auto easeOutCubic = [](float t) {
         const float inv = 1.0f - std::clamp(t, 0.0f, 1.0f);
         return 1.0f - inv * inv * inv;
@@ -2699,9 +2699,6 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     const float vocalEase = easeOutCubic(vocalPanelT);
     const float vocalPW = std::min(620.0f * k, w * 0.46f);
     const float vocalPX0 = w + (1.0f - vocalEase) * (vocalPW + 44.0f * k) - vocalPW;
-    const auto drawerCover = [&](float x) {
-        return std::clamp((x - vocalPX0) / (40.0f * k), 0.0f, 1.0f);
-    };
 
     // ------------------------------------------------------------------
     // Left: song list
@@ -2831,24 +2828,17 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     auto headerButton = [&](const char* id, float x, float w, const char* iconKey,
                             const char* label) -> bool {
         const float rowH = headerRowH;
-        // Faded out where the translucent 切换歌手 drawer has slid over it (see
-        // drawerCover): the sheet is dark but see-through, and a white capsule
-        // glowing behind its title looks like a mistake.
-        const float cover = drawerCover(x + w);
-        const int bgA = static_cast<int>(244.0f * (1.0f - cover));
-        const int fgA = static_cast<int>(255.0f * (1.0f - cover));
-        ui::dropShadow(dl, ImVec2(x, headerRowY), ImVec2(x + w, headerRowY + rowH), rowH * 0.5f, k,
-            1.0f - cover);
-        ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(255, 255, 255, bgA));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(255, 255, 255, bgA));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(232, 232, 242, bgA));
+        ui::dropShadow(dl, ImVec2(x, headerRowY), ImVec2(x + w, headerRowY + rowH), rowH * 0.5f, k);
+        ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(255, 255, 255, 244));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(255, 255, 255, 255));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(232, 232, 242, 255));
         ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, rowH * 0.5f);
         ImGui::SetCursorScreenPos(ImVec2(x, headerRowY));
         const bool clicked = ImGui::Button(id, ImVec2(w, rowH));
         const bool hovered = ImGui::IsItemHovered();
         ImGui::PopStyleVar();
         ImGui::PopStyleColor(3);
-        const ImU32 labelCol = (hovered ? IM_COL32(38, 38, 58, fgA) : IM_COL32(60, 60, 82, fgA));
+        const ImU32 labelCol = hovered ? IM_COL32(38, 38, 58, 255) : IM_COL32(60, 60, 82, 255);
         const ImVec2 c(x + 26.0f * k, headerRowY + rowH * 0.5f);
         const GLuint icon = selectTex(renderer, iconKey);
         if (icon != 0) {
@@ -2859,8 +2849,10 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
                 labelCol);
         }
         addTextLeft(dl, body, 17.0f * k, ImVec2(c.x + 18.0f * k, c.y), labelCol, label);
-        // The drawer also swallows the click, so pressing the panel's own header
-        // cannot reach a button that is hidden underneath it.
+        // The drawer paints over this row but is not opaque, so the button stays
+        // *visible* through it - and ImGui would still hand a click to it, since
+        // it was submitted first. Swallow the click instead: the drawer is the
+        // thing under the pointer.
         return clicked && !vocalPanelUp;
     };
     // No SetTooltip on these on purpose. ImGui's default font atlas has no CJK
@@ -4121,24 +4113,17 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     const float enter = easeOutCubic(enterAnim);
     const float phoneSlide = (1.0f - enter) * 300.0f * k;
     const int enterAlpha = static_cast<int>(std::clamp(enter, 0.0f, 1.0f) * 255.0f);
-    // The 切换歌手 drawer slides over the phone. Its fill is translucent on
-    // purpose, so whatever is under it shows through - and the phone's *content*
-    // (a bright jacket, five coloured difficulty rings, the mint 确定) showing
-    // through reads as a ghost of a button, not as glass over a backdrop. Fade
-    // each content vertex out as the drawer's edge passes over it; the phone
-    // frame itself stays, so what the glass ends up showing is the silhouette it
-    // should.
+    // The 切换歌手 drawer slides over the phone. It is a translucent mask, not an
+    // opaque one: the phone's content keeps its own brightness and shows through
+    // it, which is the point. Only the phone's *controls* go inert while the
+    // drawer is up (the Dummy gates below).
     for (int i = phoneVtxFirst; i < dl->VtxBuffer.Size; ++i) {
         ImVec2& p = dl->VtxBuffer[i].pos;
         const bool isContent = i >= phoneContentVtxFirst;
-        const float preX = p.x;
         const float dx = p.x + phoneSlide - tiltPivot.x;
         const float dy = p.y + (isContent ? panelRise : 0.0f) - tiltPivot.y;
         p = ImVec2(tiltPivot.x + dx * tiltCos - dy * tiltSin, tiltPivot.y + dx * tiltSin + dy * tiltCos);
-        int vtxAlpha = isContent ? std::min(enterAlpha, panelAlpha) : enterAlpha;
-        if (isContent) {
-            vtxAlpha = static_cast<int>(vtxAlpha * (1.0f - drawerCover(preX)));
-        }
+        const int vtxAlpha = isContent ? std::min(enterAlpha, panelAlpha) : enterAlpha;
         if (vtxAlpha < 255) {
             ImU32& col = dl->VtxBuffer[i].col;
             const ImU32 a = (col >> IM_COL32_A_SHIFT) & 0xFF;
@@ -4184,15 +4169,12 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         const double need = game::expToNextRank(account->rank);
         const float expRatio = need > 0.0 ? static_cast<float>(account->exp / need) : 1.0f;
         const ImVec2 chipAnchor(w - 26.0f * k, headerRowY);
-        // The 切换歌手 drawer runs the full height of the window and its fill is
-        // translucent, so this chip fades out under it with everything else it
-        // slides over (see drawerCover) - a mint blob behind the drawer's title
-        // would look like a bug.
-        const int chipVtxFirst = dl->VtxBuffer.Size;
         const ImVec4 chip = ui::playerLevelChip(dl, body, chipAnchor, account->rank, k, true, expRatio);
         const ImVec2 mouse = ImGui::GetIO().MousePos;
         // Manual hit test (the chip is not an ImGui item), so it needs its own
-        // "something is over me" test: the drawer covers it.
+        // "something is over me" test: the 切换歌手 drawer covers it. (It still
+        // *shows through* the drawer - the drawer is a translucent mask - it just
+        // does not react to the pointer.)
         const bool hot = !profileOpen && !vocalPanelUp && mouse.x >= chip.x && mouse.x <= chip.x + chip.z
             && mouse.y >= chip.y && mouse.y <= chip.y + chip.w;
         if (hot) {
@@ -4203,16 +4185,6 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
                 profileOpen = true;
                 ui::se(ui::SeClick);
-            }
-        }
-        if (vocalPanelUp) {
-            const float cover = drawerCover(chip.x + chip.z);
-            for (int v = chipVtxFirst; v < dl->VtxBuffer.Size; ++v) {
-                ImU32& col = dl->VtxBuffer[v].col;
-                const ImU32 a = (col >> IM_COL32_A_SHIFT) & 0xFF;
-                col = (col & ~IM_COL32_A_MASK)
-                    | (static_cast<ImU32>(a * static_cast<ImU32>(255.0f * (1.0f - cover)) / 255u)
-                        << IM_COL32_A_SHIFT);
             }
         }
     }
@@ -4231,6 +4203,17 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             gVocalPanelSong = vocalSong->musicId;
             gVocalPanelScroll = 0.0f;
         }
+        // A click on the blank area (anything left of the drawer) closes it, the
+        // way a translucent mask does. Press, not release: it is the same edge
+        // the X uses, and it means a press that lands on the drawer itself (a
+        // card, the X, the scrollbar strip) never also counts as "outside".
+        {
+            const ImVec2 vpMouse = ImGui::GetIO().MousePos;
+            if (vpMouse.x < vocalPX0 && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                ui::se(ui::SeWindowClose);
+                gVocalPanelOpen = false;
+            }
+        }
         // Geometry comes from the hoisted block above (the header row and the
         // level chip needed the same numbers to know they are covered).
         const float vpEase = vocalEase;
@@ -4246,7 +4229,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         const int vpVtxFirst = dl->VtxBuffer.Size;
 
         ui::dropShadow(dl, ImVec2(vpX0, vpY0), ImVec2(vpX1, vpY1), 22.0f * k, k);
-        dl->AddRectFilled(ImVec2(vpX0, vpY0), ImVec2(vpX1, vpY1), IM_COL32(38, 36, 58, 198), 22.0f * k,
+        dl->AddRectFilled(ImVec2(vpX0, vpY0), ImVec2(vpX1, vpY1), IM_COL32(38, 36, 58, 168), 22.0f * k,
             ImDrawFlags_RoundCornersLeft);
 
         // Header: what this panel is, and which song it is showing.

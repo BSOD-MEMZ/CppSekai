@@ -36,7 +36,7 @@ namespace
     // start.mp3 was queued and dropped in the same frame, silently. Deriving it
     // from the enum keeps the two in step for good.
     constexpr int kSeRequestCount = static_cast<int>(SeKindCount);
-    static_assert(kSeRequestCount == 6, "ui::SeKind grew: check the priority order below");
+    static_assert(kSeRequestCount == 7, "ui::SeKind grew: check the priority order below");
     bool gSeRequest[kSeRequestCount] = {};
 } // namespace
 
@@ -67,6 +67,16 @@ void flushSe()
         gSeRequest[i] = false;
     }
     if (pick >= 0 && gSeAudio != nullptr) {
+        // `CPSEKAI_SE_TRACE=1` names the sound that won the frame. Headless runs
+        // have no speakers, and "the slider does not tick" / "the wrong file
+        // plays" are otherwise unobservable - the enum index is also the file
+        // order in platform/Audio.cpp, so this is what a mismatch shows up as.
+        if (std::getenv("CPSEKAI_SE_TRACE") != nullptr) {
+            static const char* kNames[kSeRequestCount] = {"click", "select", "slide", "level_choose",
+                "window_open", "window_close", "start"};
+            std::printf("[se] %s\n", kNames[pick]);
+            std::fflush(stdout);
+        }
         gSeAudio->playUiSe(static_cast<platform::AudioEngine::UiSe>(pick), gSeVolume);
     }
 }
@@ -697,6 +707,16 @@ bool slider(const char* id, float* value, float minV, float maxV, float step, co
 
     const ImVec2 pos = ImGui::GetCursorScreenPos();
     const float rowW = width > 0.0f ? width : ImGui::GetContentRegionAvail().x;
+    // Which step slot the value sits in. A slider is dragged freely, so "play a
+    // tick" cannot mean "the value changed" - that is every frame - it means the
+    // value crossed into another `step`. One request per slot change is also
+    // exactly what the -/+ buttons and the controller's left/right do (they move
+    // the whole step at once), so all three input paths sound the same.
+    const float stepUnit = std::max(step, 1e-6f);
+    const auto stepSlot = [&](float v) {
+        return static_cast<long long>(std::floor((v - minV) / stepUnit));
+    };
+    const long long slotBefore = stepSlot(*value);
     ImGui::Dummy(ImVec2(rowW, rowH)); // reserve the block
     ImGui::PushID(id);
     const PadReply pad = padWidget(ImGui::GetID("##pad"), PadKSlider,
@@ -810,6 +830,9 @@ bool slider(const char* id, float* value, float minV, float maxV, float step, co
     }
     ImGui::PopID();
     ImGui::SetCursorScreenPos(ImVec2(pos.x, pos.y + rowH));
+    if (changed && stepSlot(*value) != slotBefore) {
+        se(SeSlide);
+    }
     return changed;
 }
 

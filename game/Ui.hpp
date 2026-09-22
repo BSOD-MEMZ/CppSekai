@@ -33,10 +33,20 @@ namespace ui
 // highest-priority sound of that frame. That is what keeps a click from
 // doubling up with the dialog it opened: window_open.mp3 already contains a
 // click, so the click is dropped. Order matters - later = stronger.
+//
+// The order is ALSO the bridge to the audio layer: flushSe() casts the winning
+// index straight to platform::AudioEngine::UiSe, whose enum and file table
+// (platform/Audio.cpp) have to list the same kinds in the same order.
 enum SeKind
 {
     SeClick = 0,   // any UI component press
-    SeSelect,      // song list moved one slot / a section jump
+    SeSelect,      // song list moved one slot / a section jump / the pad's focus ring
+    // A slider moved one step (the settings card's sliders). Above SeSelect on
+    // purpose: a step is a *result*, and it can share a frame with the focus
+    // ring's own move (the pad's stick passes through two directions, and
+    // `padNav` is called once per direction) - the tick is what the player
+    // should hear there, not the ring.
+    SeSlide,
     SeLevelChoose, // difficulty button
     SeWindowOpen,  // a card / dialog appeared
     SeWindowClose, // a card / dialog started closing
