@@ -725,7 +725,13 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
 
 ## 选曲顶栏（2026-09-21，`game/SongSelect.cpp` + `ui::combo` / `ui::dropShadow`）
 
-一整行，从左到右：搜索框 → 排序 / 分组下拉 → 刷新 → 音乐商店 → 猜歌 →（最右）等级框。
+一整行，从左到右：搜索框 → 排序 / 分组下拉 → 刷新 → 音乐商店 → 猜歌 → 设置 →（最右）等级框。
+
+- **设置（2026-09-22）**：原来是手机面板底部那颗齿轮，挪上来了（那颗位置换成「切换歌手」）。
+  理由：音量 / 判定窗口是**本窗口自己的事**，不属于"这首歌"的面板。
+  它**画在 `partyReadOnly` 那段 `BeginDisabled` 之外、且排在多人横幅之后**——多人成员
+  仍然要能开自己的设置，而横幅只铺到「猜歌」右缘、够不着它（横幅宽度按 `guessX+guessW` 算，
+  往右加按钮时记得同步看这里）。
 
 - **全都 33k 高、顶边都在 `headerRowY`（= `listTop`）**，这是照着官服顶栏做的（那里只有圆角
   不一样）。33k 的来历：combo / 按钮 = `17k` 字号 + `2 x 8k` FramePadding；搜索框 = 同样的
@@ -783,6 +789,27 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
   等级用 `chartRatingFor()`，取值顺序**故意和 main.cpp 的 `setChartRating()` 一致**
   （官方等级表 → 谱面自带 level → 26），这样徽章和演奏中 HUD 的 SCORE RANK 永远一致。
   三行文字都用 `ellipsize()` 截到 `textMaxW = 内容框宽 - 徽章直径 - 12k`，绝不会钻到徽章底下。
+- **切换歌手面板**（2026-09-22）：手机面板原来那排版本 chip **已删**，改成底部那颗圆形
+  「切换歌手」按钮（`assets/select/singer.png`，麦克风 + 环绕箭头）；点它从**右侧滑进**一块
+  半透明深色面板，里面每个版本一张带单选框的卡片（仿官方「选择歌手」页）。
+  要点：
+  - 布局参数全是按用户给的参考截图量出来的（卡片 `#DDDEE9` / 锁定卡 `#686980`、圆角 16k、
+    单选盘半径 17k 居中薄荷点、锁居中、文字左缘 = 卡左 + 68k）；标签走 `vocalVersionLabel()`
+    （`sekai` → `「世界」ver.`、`virtual_singer`/`original_song` → `虚拟歌手ver.`、
+    `another_vocal` → `Another Vocal ver.`，其余回落到官方 `caption`）。
+  - **列表用 `vocalTable` 全量**（`musicVocals()`），磁盘上没有 mp3 的版本画成**锁定卡**
+    （暗底 + 居中白挂锁 + 打孔钥匙孔）。`availableVocals()` 只是同一张表按文件存在性过滤，
+    顺序不变，所以两表并排走一遍就能给每行算出 `availIndex`（-1 = 锁定）。
+  - 顶栏要留在面板**上面**（`vpY0 = 76k`，压在表头行 30..63k 之下）：它是个抽屉，不是整页。
+    相应地 `--singer-panel` 打开时别把等级牌做成不可点。
+  - 面板一打开，**手机面板上所有按钮都变 `Dummy`**（`vocalPanelUp` 门控）：ImGui 的 hover
+    给的是本帧**先提交**的那个 item，而面板盖在手机面板上——不门控的话卡片永远点不动。
+  - 滚轮滚动**没有用 ImGui item**（同样理由：整块列表上放一个 `InvisibleButton` 会先抢走 hover），
+    直接读 `io.MouseWheel`；裁剪用 `ImGui::PushClipRect`（它同时改 `window->ClipRect`，
+    所以滚出去的卡片连命中测试一起被剔除）。
+  - 选择**按曲存**（`gVocalChoiceBySong`，musicId → `availableVocals()` 下标），
+    手机面板的 `Vo.` 行和主循环取音源都读同一个 `vocalIndex`。
+  - 无头看它：`--singer-panel`（配 `--select-id <音乐 id>`）。
 - **刷新按钮**（2026-09-14）：列表头部、两个 combobox 右边那颗深色胶囊（环形箭头 + “刷新”，
   图标是 `dl` 手画的弧 + 三角箭头，不需要素材），点了返回 `SelectRescan`，和 F5 走同一条路。
   悬停有 tooltip 写着 F5。注意**重扫之后 main.cpp 会把选中项重置成第一首**（F5 一直是这行为），
@@ -1461,7 +1488,7 @@ ImGui 后端降级 + 去掉 `glBindSampler`），那是一块真活儿，而目�
   再响一次。X 的 `*closeClicked` 语义没变。
 - 接好的地方：`game/Ui.cpp` 全部组件（滑杆、勾选框、stepper、combo、卡片 X）、
   `main.cpp` 的 HUD 暂停键、`game/SongSelect.cpp` 的滚轮 / 方向键 / 拖拽落点 / 分区字母 /
-  演唱版本 chip / 难度按钮 / 确定 / 随机 / 设置 / 重扫。**拖拽连续滚动只在落点响**（按格响只给
+  难度按钮 / 确定 / 随机 / 切换歌手（+ 面板里的卡片与 X） / 重扫。**拖拽连续滚动只在落点响**（按格响只给
   滚轮和键盘，否则 fling 会连成一片噪音）。
 
 ## 手柄 / 音量 / 结算配色（2026-09-15）
@@ -2171,7 +2198,8 @@ ImGui 后端降级 + 去掉 `glBindSampler`），那是一块真活儿，而目�
 3. 连击特效（judge v3 的 1~5 已用于判定文字，6=AUTO 仍未用）
 4. 键盘 12 键布局可能不顺手，考虑做成可配置；键盘也打不了 left/right flick（只能发 FlickUp），
    要么给按键加"按住+方向键"的组合，要么引导玩家用鼠标/触摸
-5. 【暂缓·长期，想清楚再做】歌手 / 音源版本选择。同一首歌的 `SEKAI ver.` / `VIRTUAL SINGER ver.` /
+5. 【**已实现** 2026-09-22，下面这段是当初的设计稿，实际走的是官方 `music-vocals.json`
+   表而不是 `<id4>__<tag>` 文件名 —— 见「选曲界面」里的「切换歌手面板」】歌手 / 音源版本选择。同一首歌的 `SEKAI ver.` / `VIRTUAL SINGER ver.` /
    `アナザーボーカル` **共用同一份谱面**，差别只在音源（以及 Vo. 署名、可能的头部静音）——
    所以**绝不复制 SUS**，只把「音源」做成可选列表：
    - `ChartEntry.bgmPath` → `std::vector<AudioVariant>{ label, path, vocal, fillerSec }` + `audioIndex`
@@ -2185,4 +2213,7 @@ ImGui 后端降级 + 去掉 `glBindSampler`），那是一块真活儿，而目�
      `CHARTS.md`（sidecar 字段表补 `audio`）
 
 > 已实现的旧待办：flick 严格方向校验（见「约定与坑」里的说明）、hold 尾判（松手判定）、
-> HUD 真实分数与血量、放弃后重选曲卡死、**结算画面**（见「结算画面」一节）。
+> HUD 真实分数与血量、放弃后重选曲卡死、**结算画面**（见「结算画面」一节）、
+> **歌手 / 音源版本选择**（见「选曲界面」里的「切换歌手面板」——最后没走这条
+> `<id4>__<tag>` 文件名方案，而是直接吃官方 `music-vocals.json` 表 + 官方资源名
+> `se_/vs_/an_/cl_<id>_<n>.mp3`，见 CHARTS.md）。

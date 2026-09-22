@@ -67,7 +67,7 @@ CppSekai（本仓库）            AGPL-3.0-only
 |---|---|---|---|
 | `assets/mmw/**`（**669** 个文件：overlay HUD 全套 566、特效 75、notes/长条/触摸线/stage 顶层 13、uo 关闭键、sound 11、font 3） | SEGA / Colorful Palette | **是（在库！）** | 早期先 commit 后加 gitignore，规则管不了已跟踪文件。README 里写的「素材不入库」与事实不符 |
 | `Drafts/**`（**64** 个文件：官方头像 `profile_icon_*` 42、活动图、clear/FC 指示灯草稿） | SEGA / Colorful Palette | **是（在库！）** | 素材暂存区，一直被跟踪 |
-| `assets/select/**`（12：选曲界面全套） | SEGA / Colorful Palette | **是** | 与 2026-09-12 的结论不同——当天它还是「否」，后来进了库 |
+| `assets/select/**`（14：选曲界面全套，含 2026-09-22 加的 `singer.png`（切换歌手按钮）/ `singerclose.png`（该面板的关闭 X）） | SEGA / Colorful Palette | **是** | 与 2026-09-12 的结论不同——当天它还是「否」，后来进了库 |
 | `assets/se/**`（20：UI + 判定音效）、`assets/ost/**`（2：结算 BGM + 一首 OST） | SEGA / Colorful Palette | **是** | 同上，当天标的是「否」 |
 | `assets/fx/**`（4：打击特效）、`assets/splashscreen.png` | SEGA / Colorful Palette | **是** | 同上 |
 | `musics.json`（392 KB）、`music-levels.json`（17 KB）、`music-vocals.json`（241 KB） | 官方数据（曲库元数据 / 难度定数表 / 演唱版本表） | **是** | 事实数据（标题、数字），著作权风险低，但属于官方数据库的整表复制 |

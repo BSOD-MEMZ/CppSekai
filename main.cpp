@@ -398,7 +398,7 @@ namespace
             "                [--show-pause-dialog] [--test-restart] [--restart-at <sec>]\n"
             "                [--result-preview] [--result-at <sec>] [--help]\n"
             "                [--confirm-flash [<sec>]] [--settings] [--settings-tab <n>]\n"
-            "                [--profile] [--guess] [--player <name[:org]>]\n"
+            "                [--profile] [--guess] [--singer-panel] [--player <name[:org]>]\n"
             "                [--player-rank <n>] [--player-exp <0..1>]\n\n"
 
             "No --sus: opens the song select screen (scans --charts, then charts/ next\n"
@@ -453,6 +453,9 @@ namespace
             "          given page (0 演奏 / 1 画面 / 2 判定 / 3 系统 / 4 账户).\n"
             "--profile: open the player profile card (the level chip's card) at boot.\n"
             "--guess: open the 猜歌 alias quiz (the header button's card) at boot.\n"
+            "--singer-panel: open the 切换歌手 vocal-version panel (the phone panel's\n"
+            "          singer button) at boot. Only shows versions for a song that has a\n"
+            "          vocal table, so combine with --select-id.\n"
             "--flick-log: write flick_debug.log (every touch sample + the swipe\n"
             "          measurement + the judgement it produced; same switch as\n"
             "          settings > 判定 > Flick 调试日志). For touch-flick diagnosis.\n"
@@ -930,6 +933,7 @@ int main(int argc, char** argv)
     int settingsTabShot = -1;      // headless check: which settings tab to show
     bool profileShot = false;      // headless check: force the profile card open
     bool guessShot = false;        // headless check: force the 猜歌 card open
+    bool singerPanelShot = false;  // headless check: force the 切换歌手 panel open
     std::string playerSpec;        // --player 昵称[:组织]
     bool playerSpecGiven = false;
     int playerRankGiven = -1;      // --player-rank
@@ -1125,6 +1129,11 @@ int main(int argc, char** argv)
             // Headless check: open the 猜歌 card on the song select, so a
             // --screenshot run can look at it without a click to hit.
             guessShot = true;
+        } else if (arg == "--singer-panel") {
+            // Headless check: open the 切换歌手 panel on the song select. Same
+            // reason - it is opened by a click on the phone panel's singer
+            // button, which a --screenshot run cannot press.
+            singerPanelShot = true;
         } else if (arg == "--player") {
             // Headless check: seed the account (昵称:组织) without touching
             // userdata.json - the profile card and the settings tab need
@@ -2346,6 +2355,9 @@ int main(int argc, char** argv)
     }
     if (guessShot) {
         game::debugOpenGuessDialog(true);
+    }
+    if (singerPanelShot) {
+        game::debugOpenSingerPanel(true);
     }
     Uint64 perfFreq = SDL_GetPerformanceFrequency();
     Uint64 perfStart = SDL_GetPerformanceCounter();

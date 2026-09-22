@@ -405,6 +405,78 @@ void debugOpenProfileCard(bool open)
 }
 
 // ---------------------------------------------------------------------------
+// 切换歌手 (vocal version picker).
+//
+// The phone panel's round singer button opens a dark panel that slides in from
+// the right edge, one radio card per vocal version of the song the list is
+// parked on. The versions whose mp3 sits next to the chart are pickable; the
+// rest are shown locked - the reference screen does exactly that, and it is
+// more honest than hiding a version that exists but was never downloaded (the
+// セカイver is not always the one a chart folder has).
+//
+// This replaces the chip row that used to live in the phone panel: it could
+// only show the versions that happened to be on disk, and had no room for the
+// singer list of a five-person セカイver.
+//
+// The choice is kept per *song* (musicId -> index into availableVocals()), not
+// per list cursor: scrolling away and coming back should keep the version the
+// player picked here. The phone panel's "Vo." line and the audio hand-off in
+// main.cpp both read the same index (drawSongSelect's `vocalIndex`).
+// ---------------------------------------------------------------------------
+std::map<int, int> gVocalChoiceBySong;
+bool gVocalPanelOpen = false;
+float gVocalPanelScroll = 0.0f; // card list offset, in screen pixels
+int gVocalPanelSong = -1;       // musicId the offset belongs to (a new song resets it)
+
+void debugOpenSingerPanel(bool open)
+{
+    gVocalPanelOpen = open;
+}
+
+// zh-CN label of one vocal version, mirroring the official client's captions
+// that the reference screenshot shows (虚拟歌手ver. / 「世界」ver. / Another Vocal
+// ver.). The rarer types keep the Japanese caption rather than inventing a
+// translation nobody would recognise.
+std::string vocalVersionLabel(const VocalVersion& version)
+{
+    if (version.type == "sekai") {
+        return "「世界」ver.";
+    }
+    if (version.type == "virtual_singer" || version.type == "original_song") {
+        return "虚拟歌手ver.";
+    }
+    if (version.type == "another_vocal") {
+        return "Another Vocal ver.";
+    }
+    return version.caption;
+}
+
+// Wraps a version's singers into "Vo. A、B、C" lines that fit `maxW` at `size`.
+// Continuation lines start at the same left edge as the first one - the
+// reference card does that, and it keeps the singer list reading as one block.
+std::vector<std::string> vocalSingerLines(const std::vector<std::string>& singers, ImFont* font,
+    float size, float maxW)
+{
+    std::vector<std::string> out;
+    if (singers.empty()) {
+        return out;
+    }
+    std::string line = "Vo. ";
+    for (const std::string& singer : singers) {
+        const std::string piece = line.size() > 4 ? "、" + singer : singer;
+        const std::string trial = line + piece;
+        if (line.size() > 4 && font->CalcTextSizeA(size, FLT_MAX, 0.0f, trial.c_str()).x > maxW) {
+            out.push_back(line);
+            line = singer;
+        } else {
+            line = trial;
+        }
+    }
+    out.push_back(line);
+    return out;
+}
+
+// ---------------------------------------------------------------------------
 // 猜歌 (guess the song): one community alias, four titles, pick the right one.
 //
 // The alias table is the one piece of *content* this game has that the official
@@ -2815,6 +2887,21 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         }
     }
 
+    // 设置, in the same header row as the other buttons. It used to be the round
+    // gear at the bottom of the phone panel; that spot is 切换歌手 now, and a
+    // per-window dialog (volume, judgement windows) belongs with 刷新 / 音乐商店 /
+    // 猜歌 rather than inside a panel that is about the *song*.
+    //
+    // Deliberately outside the partyReadOnly scope above and drawn after the room
+    // banner: a 多人游玩 member keeps its own volume / judgement windows, and the
+    // banner stops at 猜歌 so it never covers this button if the row grows again.
+    const float settingsW = 104.0f * k;
+    const float settingsX = guessX + guessW + 10.0f * k;
+    if (headerButton("##abssettings", settingsX, settingsW, "musicsetting", "设置")) {
+        ui::se(ui::SeClick);
+        action = SelectSettings;
+    }
+
     // Groups matching the search filter. A 多人游玩 member has no search box (it
     // is disabled and covered by the room banner), and a stale filter would be
     // free to hide the very song the room is on - so the filter is ignored
@@ -3632,10 +3719,36 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
 
     // ------------------------------------------------------------------
     // Right: tilted-phone panel (img_smartphone.png) with the jacket, the
-    // difficulty buttons and 确定 / shuffle / settings. The whole block is
-    // laid out flat and then rotated about the phone's centre, like the
-    // reference UI.
+    // difficulty buttons and 确定 / 随机 / 切换歌手. The whole block is laid out
+    // flat and then rotated about the phone's centre, like the reference UI.
     // ------------------------------------------------------------------
+    // The selected song's vocal versions, resolved once: the phone panel's "Vo."
+    // line and the 切换歌手 panel both need them, and availableVocals() stats the
+    // filesystem once per version of the song.
+    //   `vocalVersions` = the ones whose mp3 is next to the chart, i.e. exactly
+    //   what the index `vocalIndex` / gVocalChoiceBySong count into.
+    //   `vocalTable` = the whole official table, which the panel also shows (the
+    //   versions without audio are the locked cards).
+    const ChartEntry* vocalSong = (!groups.empty() && selected >= 0
+                                       && selected < static_cast<int>(entries.size()))
+        ? &entries[static_cast<size_t>(selected)]
+        : nullptr;
+    std::vector<VocalVersion> vocalVersions;
+    std::vector<VocalVersion> vocalTable;
+    if (vocalSong != nullptr) {
+        vocalTable = musicVocals(vocalSong->musicId);
+        vocalVersions = availableVocals(*vocalSong);
+    }
+    // The 切换歌手 panel's slide (see gVocalPanelOpen). Eased 0..1 - off-screen at
+    // 0, fully in at 1. Computed *here* rather than next to the panel's own
+    // drawing code because the phone's controls have to go inert while the panel
+    // is up: they sit under it, and ImGui gives the hover to whichever item was
+    // submitted first.
+    if (vocalSong == nullptr) {
+        gVocalPanelOpen = false;
+    }
+    const float vocalPanelT = ui::anim(0x4a576000u, gVocalPanelOpen, 15.0f);
+    const bool vocalPanelUp = gVocalPanelOpen || vocalPanelT > 0.0005f;
     const float phoneAspect = 1034.0f / 1942.0f;
     float phoneH = (h - 24.0f * kBase) * scale;
     float phoneW = phoneH * phoneAspect;
@@ -3735,22 +3848,20 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             addTextLeft(dl, body, 17.0f * k, ImVec2(contentL, ty), grayText, text.c_str());
             ty += 31.0f * k;
         }
-        // Vocal versions: only when the song actually ships more than one
-        // version's audio next to the chart. The chip row sits between the
-        // credits and the difficulty pads; the "Vo." line follows the chosen
-        // chip (that is the whole point of the switch).
+        // The "Vo." line follows the version picked in the 切换歌手 panel (the
+        // chip row that used to sit here is gone - the panel replaced it, see
+        // the round singer button at the bottom of this panel).
         {
-            const std::vector<VocalVersion> versions = availableVocals(item);
-            static std::map<int, int> vocalChoiceBySong; // musicId -> index
+            const std::vector<VocalVersion>& versions = vocalVersions;
             // The caller's value wins when it is valid for this song, so the
             // version can be driven from outside (--select-vocal, a hand-off,
             // or a test); otherwise fall back to what the player last picked
-            // here, then to the セカイver.
+            // in the panel, then to the セカイver.
             int choice = defaultVocalIndex(item.musicId, versions);
             if (vocalIndex >= 0 && vocalIndex < static_cast<int>(versions.size())) {
                 choice = vocalIndex;
-                vocalChoiceBySong[item.musicId] = choice;
-            } else if (const auto it = vocalChoiceBySong.find(item.musicId); it != vocalChoiceBySong.end()) {
+                gVocalChoiceBySong[item.musicId] = choice;
+            } else if (const auto it = gVocalChoiceBySong.find(item.musicId); it != gVocalChoiceBySong.end()) {
                 choice = it->second;
             }
             // The panel shows the *chosen* version's singers, not the sidecar's
@@ -3786,72 +3897,10 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             // Best-score rank badge: right-aligned to the content box and
             // centred on the metadata block that just ended. In the reference
             // it straddles the artist and Vo. rows, which is where centring on
-            // the whole block lands anyway. Clamped so it can never reach down
-            // into the vocal chip row (only possible for a song that has no
-            // artist and no singers line).
-            const float blockMid = (metaTop + ty) * 0.5f;
-            const float badgeCy = versions.size() > 1
-                ? std::min(blockMid, ty - badgeD * 0.5f - 4.0f * k)
-                : blockMid;
+            // the whole block lands anyway.
+            const float badgeCy = (metaTop + ty) * 0.5f;
             drawBestScoreBadge(dl, renderer, body, item.bestScore, chartRatingFor(item), badgeD,
                 contentR - badgeD * 0.5f, badgeCy);
-
-            if (versions.size() > 1) {
-                // Chip row, centred. Width comes from the label so "バーチャル"
-                // and "花里みのり" both look right.
-                float fontSize = 14.0f * k;
-                float chipH = 26.0f * k;
-                float pad = 12.0f * k;
-                float gap = 6.0f * k;
-                std::vector<float> widths;
-                const auto measure = [&]() {
-                    widths.clear();
-                    float sum = 0.0f;
-                    for (const VocalVersion& version : versions) {
-                        const std::string label = vocalShortLabel(version);
-                        const ImVec2 ts = body->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, label.c_str());
-                        widths.push_back(ts.x + pad * 2.0f);
-                        sum += widths.back();
-                    }
-                    return sum + gap * static_cast<float>(versions.size() - 1);
-                };
-                float total = measure();
-                if (total > panelW) {
-                    // Shrink the whole row (font, padding and gaps together) so
-                    // four chips still fit the phone screen.
-                    const float scale = std::clamp(panelW / total, 0.62f, 1.0f);
-                    fontSize *= scale;
-                    chipH *= scale;
-                    pad *= scale;
-                    gap *= scale;
-                    total = measure();
-                }
-                float chipX = cx - total * 0.5f;
-                const float chipCy = ty + chipH * 0.5f + 2.0f * k;
-                for (size_t i = 0; i < versions.size(); ++i) {
-                    const std::string label = vocalShortLabel(versions[i]);
-                    const ImVec2 lo(chipX, chipCy - chipH * 0.5f);
-                    const ImVec2 hi(chipX + widths[i], chipCy + chipH * 0.5f);
-                    ImGui::SetCursorScreenPos(tiltedItemPos(ImVec2((lo.x + hi.x) * 0.5f, chipCy),
-                        ImVec2(widths[i], chipH)));
-                    ImGui::PushID(static_cast<int>(i) + 9000);
-                    ImGui::InvisibleButton("vocal", ImVec2(widths[i], chipH));
-                    const bool clicked = ImGui::IsItemClicked();
-                    ImGui::PopID();
-                    const bool active = static_cast<int>(i) == (choice < 0 ? 0 : choice);
-                    if (clicked) {
-                        ui::se(ui::SeClick);
-                        vocalChoiceBySong[item.musicId] = static_cast<int>(i);
-                        vocalIndex = static_cast<int>(i);
-                    }
-                    dl->AddRectFilled(lo, hi, active ? ui::kPrimary : IM_COL32(255, 255, 255, 34),
-                        chipH * 0.5f);
-                    addTextCentered(dl, body, fontSize, ImVec2((lo.x + hi.x) * 0.5f, chipCy),
-                        active ? ui::kBtnText : IM_COL32(238, 238, 248, 235), label.c_str());
-                    chipX += widths[i] + gap;
-                }
-                ty += chipH + 16.0f * k;
-            }
         }
 
         // Difficulty buttons. 多人游玩: this row is the member's difficulty
@@ -3864,8 +3913,8 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         const float dcGap = 9.0f * k;
         const float rowW = kDiffCount * dcD + (kDiffCount - 1) * dcGap;
         float dx = cx - rowW * 0.5f + dcD * 0.5f;
-        // Anchored to the content flow (with the old fraction as the floor for
-        // songs without a chip row), so the chips can never overlap it.
+        // Anchored to the content flow (with the old fraction as the floor for a
+        // song whose metadata block is short), so the two can never overlap.
         const float dcY = std::max(scrY0 + phoneH * 0.500f, ty + dcD * 0.5f + 34.0f * k);
         for (int d = 0; d < kDiffCount; ++d) {
             const bool avail = group.idx[d] >= 0;
@@ -3874,7 +3923,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
 
             ImGui::SetCursorScreenPos(tiltedItemPos(c, ImVec2(dcD, dcD)));
             ImGui::PushID(d);
-            if (avail && (!partyPick || partyPickable)) {
+            if (avail && (!partyPick || partyPickable) && !vocalPanelUp) {
                 ImGui::InvisibleButton("diff", ImVec2(dcD, dcD));
                 if (ImGui::IsItemClicked()) {
                     ui::se(ui::SeLevelChoose);
@@ -3922,9 +3971,15 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         const ImVec2 okB(okA.x + okW, okA.y + okH);
         ImGui::SetCursorScreenPos(tiltedItemPos(ImVec2(cx, (okA.y + okB.y) * 0.5f), ImVec2(okW, okH)));
         ImGui::PushID("ok");
-        ImGui::InvisibleButton("ok", ImVec2(okW, okH));
-        const bool okHovered = ImGui::IsItemHovered();
-        const bool okPressed = ImGui::IsItemClicked();
+        if (vocalPanelUp) {
+            // The 切换歌手 panel is over this button; a Dummy keeps the item
+            // stack busy without claiming the hover (see the note at dcY).
+            ImGui::Dummy(ImVec2(okW, okH));
+        } else {
+            ImGui::InvisibleButton("ok", ImVec2(okW, okH));
+        }
+        const bool okHovered = !vocalPanelUp && ImGui::IsItemHovered();
+        const bool okPressed = !vocalPanelUp && ImGui::IsItemClicked();
         ImGui::PopID();
         dl->AddRectFilled(okA, okB,
             okReady ? (okHovered ? ui::kPrimaryHover : ui::kPrimary) : IM_COL32(94, 108, 116, 255),
@@ -3947,10 +4002,16 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             }
         }
 
-        // Shuffle + music settings buttons (pjsk round dark buttons).
+        // Shuffle + 切换歌手 (pjsk round dark buttons).
         // 多人游玩: the shuffle decides *which song the room plays*, so a member
-        // gets a dimmed, inert one. 设置 stays live - volume and judgement
-        // windows are this window's own business.
+        // gets a dimmed, inert one. 切换歌手 stays live - it only changes which
+        // card the phone panel is on (the version itself is picked inside the
+        // panel), and a member's window does not play the BGM anyway.
+        //
+        // 切换歌手 replaced the gear that used to sit here: 设置 moved up to the
+        // header row with the other buttons (a per-window dialog, not a property
+        // of the song), and the spot it left is exactly where a song-level
+        // control belongs.
         const float ibD = 64.0f * k;
         const float ibY = std::max(scrY0 + phoneH * 0.700f, okB.y + 62.0f * k);
         const float ibGap = ibD * 1.7f;
@@ -3959,19 +4020,23 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             const ImVec2 c(cx + (i == 0 ? -ibGap * 0.5f : ibGap * 0.5f), ibY);
             ImGui::SetCursorScreenPos(tiltedItemPos(c, ImVec2(ibD, ibD)));
             ImGui::PushID(i);
-            ImGui::InvisibleButton("iconbtn", ImVec2(ibD, ibD));
-            const bool pressed = !lockedOut && ImGui::IsItemClicked();
-            const bool hovered = !lockedOut && ImGui::IsItemHovered();
+            if (vocalPanelUp) {
+                ImGui::Dummy(ImVec2(ibD, ibD));
+            } else {
+                ImGui::InvisibleButton("iconbtn", ImVec2(ibD, ibD));
+            }
+            const bool pressed = !lockedOut && !vocalPanelUp && ImGui::IsItemClicked();
+            const bool hovered = !lockedOut && !vocalPanelUp && ImGui::IsItemHovered();
             const float hot = ui::anim(ImGui::GetItemID() ^ 0x71u, hovered, 18.0f);
             ImGui::PopID();
             // The disc swells a little and brightens as the pointer comes over it.
             dl->AddCircleFilled(c, ibD * 0.5f * (1.0f + 0.06f * hot),
                 lockedOut ? IM_COL32(52, 50, 74, 255)
                           : ui::mix(IM_COL32(74, 68, 112, 255), IM_COL32(122, 116, 168, 255), hot));
-            const char* texName = i == 0 ? "shufflebutton" : "musicsetting";
+            const char* texName = i == 0 ? "shufflebutton" : "singer";
             const GLuint tex = selectTex(renderer, texName);
             if (tex != 0) {
-                float iw = ibD * 0.62f * (1.0f + 0.06f * hot);
+                float iw = ibD * (i == 0 ? 0.62f : 0.70f) * (1.0f + 0.06f * hot);
                 float ih = iw;
                 // keep each image's own aspect
                 if (i == 0) {
@@ -3983,6 +4048,14 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             if (lockedOut) {
                 // A dark wash over the icon: "this one is not yours to press".
                 dl->AddCircleFilled(c, ibD * 0.5f, IM_COL32(10, 12, 24, 150));
+            }
+            if (i == 1) {
+                // 切换歌手 reads as "on" while its panel is up.
+                const float ring = ui::anim(0x4a578000u, gVocalPanelOpen, 18.0f);
+                if (ring > 0.02f) {
+                    dl->AddCircle(c, ibD * 0.5f + 3.0f * k, IM_COL32(106, 232, 208, static_cast<int>(ring * 235.0f)),
+                        48, 3.0f * k);
+                }
             }
             if (pressed) {
                 ui::se(ui::SeClick);
@@ -3996,7 +4069,8 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
                         groupIndex = next;
                     }
                 } else {
-                    action = SelectSettings;
+                    gVocalPanelOpen = !gVocalPanelOpen;
+                    gVocalPanelScroll = 0.0f;
                 }
             }
         }
@@ -4099,6 +4173,266 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
                 profileOpen = true;
                 ui::se(ui::SeClick);
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // 切换歌手 panel (state + rationale at the top of this file). A dark panel
+    // that slides in from the right edge over the phone: one radio card per
+    // vocal version of the selected song, the versions whose mp3 is next to the
+    // chart pickable and the rest locked - the reference screen's own layout.
+    //
+    // Drawn after the tilt pass on purpose: it is a screen-space overlay, not
+    // part of the phone, so it must not rotate with it. Its slide + fade is the
+    // same vertex-rewrite trick the phone uses for a song change.
+    // ------------------------------------------------------------------
+    if (vocalSong != nullptr && vocalPanelUp) {
+        if (gVocalPanelSong != vocalSong->musicId) {
+            gVocalPanelSong = vocalSong->musicId;
+            gVocalPanelScroll = 0.0f;
+        }
+        const float vpEase = easeOutCubic(vocalPanelT);
+        const float vpW = std::min(600.0f * k, w * 0.46f);
+        const float vpPad = 30.0f * k;
+        const float vpX1 = w - 24.0f * k + (1.0f - vpEase) * (vpW + 44.0f * k);
+        const float vpX0 = vpX1 - vpW;
+        // Below the header row (search box / combos / 刷新 / 音乐商店 / 猜歌 / 设置,
+        // 30..63k) so the whole top bar stays visible and usable while the panel
+        // is up: it is a drawer over the phone panel, not a full page.
+        const float vpY0 = 76.0f * k;
+        const float vpY1 = h - 30.0f * k;
+        const int vpVtxFirst = dl->VtxBuffer.Size;
+
+        ui::dropShadow(dl, ImVec2(vpX0, vpY0), ImVec2(vpX1, vpY1), 22.0f * k, k);
+        dl->AddRectFilled(ImVec2(vpX0, vpY0), ImVec2(vpX1, vpY1), IM_COL32(40, 38, 62, 232), 22.0f * k);
+
+        // Header: what this panel is, and which song it is showing.
+        const float vpHeadCy = vpY0 + 30.0f * k;
+        addTextLeft(dl, body, 24.0f * k, ImVec2(vpX0 + vpPad, vpHeadCy), IM_COL32(242, 242, 252, 255),
+            "切换歌手");
+        if (groupIndex >= 0 && groupIndex < static_cast<int>(groups.size())) {
+            const std::string& songTitle = groups[static_cast<size_t>(groupIndex)].title;
+            const std::string line =
+                ellipsize(body, 15.0f * k, songTitle, vpW - vpPad * 2.0f - 52.0f * k);
+            addTextLeft(dl, body, 15.0f * k, ImVec2(vpX0 + vpPad, vpHeadCy + 25.0f * k),
+                IM_COL32(176, 176, 198, 255), line.c_str());
+        }
+        {
+            // Close: assets/select/singerclose.png (white X on transparent) on the
+            // faint disc the reference puts it in.
+            const float xr = 18.0f * k;
+            const ImVec2 xc(vpX1 - vpPad - xr, vpHeadCy);
+            ImGui::SetCursorScreenPos(ImVec2(xc.x - xr, xc.y - xr));
+            ImGui::PushID("vocalclose");
+            ImGui::InvisibleButton("x", ImVec2(xr * 2.0f, xr * 2.0f));
+            const bool xHot = ImGui::IsItemHovered();
+            const bool xHit = ImGui::IsItemClicked();
+            ImGui::PopID();
+            dl->AddCircleFilled(xc, xr * (1.0f + 0.06f * (xHot ? 1.0f : 0.0f)),
+                xHot ? IM_COL32(255, 255, 255, 76) : IM_COL32(255, 255, 255, 34), 40);
+            const GLuint closeTex = selectTex(renderer, "singerclose");
+            const float icon = xr * 1.30f;
+            if (closeTex != 0) {
+                dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(closeTex)),
+                    ImVec2(xc.x - icon * 0.5f, xc.y - icon * 0.5f),
+                    ImVec2(xc.x + icon * 0.5f, xc.y + icon * 0.5f), ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f),
+                    IM_COL32(255, 255, 255, xHot ? 255 : 225));
+            } else {
+                const float d = xr * 0.40f;
+                dl->AddLine(ImVec2(xc.x - d, xc.y - d), ImVec2(xc.x + d, xc.y + d),
+                    IM_COL32(240, 240, 248, 255), 2.6f * k);
+                dl->AddLine(ImVec2(xc.x + d, xc.y - d), ImVec2(xc.x - d, xc.y + d),
+                    IM_COL32(240, 240, 248, 255), 2.6f * k);
+            }
+            if (xHit) {
+                ui::se(ui::SeWindowClose);
+                gVocalPanelOpen = false;
+            }
+        }
+
+        // ---- cards -------------------------------------------------------
+        const float vpListTop = vpY0 + 74.0f * k;
+        const float vpListBot = vpY1 - 20.0f * k;
+        const float vpCardL = vpX0 + vpPad;
+        const float vpCardR = vpX1 - vpPad;
+        const float vpCardW = vpCardR - vpCardL;
+        const float vpTitleSize = 22.0f * k;
+        const float vpLineSize = 17.0f * k;
+        const float vpTitleH = 33.0f * k;
+        const float vpLineH = 27.0f * k;
+        const float vpCardPadY = 15.0f * k;
+        const float vpRadioCol = 68.0f * k;
+        const float vpGapY = 13.0f * k;
+        // Right margin wide enough that the longest singer list we have (a
+        // five-person セカイver) fits without touching the card edge - the wrap
+        // below only kicks in past that.
+        const float vpTextMaxW = vpCardW - vpRadioCol - 24.0f * k;
+        const float vpMinCardH = 102.0f * k;
+
+        // availableVocals() is the official table with the versions that have no
+        // mp3 filtered out, in the same order - walking both at once hands every
+        // row its index into that list (-1 = no audio, i.e. locked).
+        std::vector<int> vpAvail(vocalTable.size(), -1);
+        for (size_t i = 0, a = 0; i < vocalTable.size(); ++i) {
+            if (a < vocalVersions.size() && vocalVersions[a].id == vocalTable[i].id) {
+                vpAvail[i] = static_cast<int>(a);
+                ++a;
+            }
+        }
+        std::vector<std::vector<std::string>> vpLines(vocalTable.size());
+        std::vector<float> vpCardH(vocalTable.size(), vpMinCardH);
+        float vpTotal = 0.0f;
+        for (size_t i = 0; i < vocalTable.size(); ++i) {
+            vpLines[i] = vocalSingerLines(vocalTable[i].singers, body, vpLineSize, vpTextMaxW);
+            const float content =
+                vpTitleH + static_cast<float>(vpLines[i].size()) * vpLineH + vpCardPadY * 2.0f;
+            vpCardH[i] = std::max(vpMinCardH, content);
+            vpTotal += vpCardH[i] + vpGapY;
+        }
+        if (!vocalTable.empty()) {
+            vpTotal -= vpGapY;
+        }
+
+        const float vpViewH = vpListBot - vpListTop;
+        const float vpMaxScroll = std::max(0.0f, vpTotal - vpViewH);
+        // Wheel over the panel scrolls the list. Deliberately not an ImGui item:
+        // one InvisibleButton over the whole list would claim the hover before
+        // the cards do (ImGui hands it to whichever item was submitted first) and
+        // no card could ever be pressed.
+        {
+            const ImVec2 mouse = ImGui::GetIO().MousePos;
+            if (mouse.x >= vpCardL && mouse.x <= vpCardR && mouse.y >= vpListTop
+                && mouse.y <= vpListBot) {
+                gVocalPanelScroll -= ImGui::GetIO().MouseWheel * 62.0f * k;
+            }
+            gVocalPanelScroll = std::clamp(gVocalPanelScroll, 0.0f, vpMaxScroll);
+        }
+
+        // Which version is picked right now (index into availableVocals()). The
+        // phone panel above already stamped gVocalChoiceBySong for this song, so
+        // the map is authoritative; the default is only for the first frame of a
+        // song nobody has touched yet.
+        int vpCurrent = defaultVocalIndex(vocalSong->musicId, vocalVersions);
+        if (const auto it = gVocalChoiceBySong.find(vocalSong->musicId);
+            it != gVocalChoiceBySong.end()) {
+            vpCurrent = it->second;
+        }
+
+        // ClipRect (not just a draw-list clip): ImGui culls items against the
+        // window's ClipRect, so this is also what keeps a scrolled-out card from
+        // being clickable through the header.
+        ImGui::PushClipRect(ImVec2(vpCardL, vpListTop), ImVec2(vpCardR, vpListBot), true);
+        float vpY = vpListTop - gVocalPanelScroll;
+        for (size_t i = 0; i < vocalTable.size(); ++i) {
+            const float vpTop = vpY;
+            const float vpBot = vpY + vpCardH[i];
+            vpY = vpBot + vpGapY;
+            if (vpBot <= vpListTop || vpTop >= vpListBot) {
+                continue; // scrolled out: no vertices and no hit box
+            }
+            const bool vpLocked = vpAvail[i] < 0;
+            const bool vpPicked = !vpLocked && vpAvail[i] == vpCurrent;
+            const ImVec2 c0(vpCardL, vpTop);
+            const ImVec2 c1(vpCardR, vpBot);
+
+            bool vpHot = false;
+            bool vpHit = false;
+            if (!vpLocked) {
+                ImGui::SetCursorScreenPos(c0);
+                ImGui::PushID(static_cast<int>(i) + 7100);
+                ImGui::InvisibleButton("vocalrow", ImVec2(vpCardW, vpCardH[i]));
+                vpHot = ImGui::IsItemHovered();
+                vpHit = ImGui::IsItemClicked();
+                ImGui::PopID();
+            }
+            const float vpGlow = ui::anim(0x4a577000u + static_cast<ImGuiID>(i), vpHot, 18.0f);
+
+            // Version with audio = light card, without = the reference's dim
+            // slate one (the padlock below is what says why).
+            dl->AddRectFilled(c0, c1,
+                vpLocked ? IM_COL32(104, 105, 128, 242)
+                         : ui::mix(IM_COL32(215, 216, 230, 255), IM_COL32(234, 235, 246, 255), vpGlow),
+                16.0f * k);
+            if (vpPicked) {
+                dl->AddRect(c0, c1, ui::kPrimary, 16.0f * k, 0, 3.0f * k);
+            }
+
+            // Radio: white disc, mint disc inside when this is the chosen one.
+            const float vpCy = (c0.y + c1.y) * 0.5f;
+            const ImVec2 vpRc(c0.x + 34.0f * k, vpCy);
+            const float vpRr = 17.0f * k;
+            dl->AddCircleFilled(vpRc, vpRr, vpLocked ? IM_COL32(140, 141, 160, 255) : IM_COL32(255, 255, 255, 255), 40);
+            if (vpPicked) {
+                dl->AddCircleFilled(vpRc, vpRr * 0.72f, ui::kPrimary, 40);
+            }
+
+            // Caption + singer list, left-aligned right of the radio.
+            const float vpTextX = c0.x + vpRadioCol;
+            float vpTy = c0.y + vpCardPadY;
+            const std::string vpLabel = vocalVersionLabel(vocalTable[i]);
+            addTextLeft(dl, body, vpTitleSize, ImVec2(vpTextX, vpTy + vpTitleH * 0.5f),
+                vpLocked ? IM_COL32(198, 198, 214, 235) : IM_COL32(44, 42, 64, 255), vpLabel.c_str());
+            vpTy += vpTitleH;
+            for (const std::string& vpLine : vpLines[i]) {
+                addTextLeft(dl, body, vpLineSize, ImVec2(vpTextX, vpTy + vpLineH * 0.5f),
+                    vpLocked ? IM_COL32(176, 176, 194, 220) : IM_COL32(74, 72, 98, 255),
+                    vpLine.c_str());
+                vpTy += vpLineH;
+            }
+
+            if (vpLocked) {
+                // Padlock, centred on the card - the reference lets it cover the
+                // tail of a long caption rather than shrinking the text.
+                const float lw = 44.0f * k;
+                const float lh = 52.0f * k;
+                const ImVec2 lc((c0.x + c1.x) * 0.5f, vpCy);
+                const float bodyTop = lc.y - lh * 0.5f + lh * 0.32f;
+                const float bodyBot = lc.y + lh * 0.5f;
+                const ImU32 lockCol = IM_COL32(248, 248, 252, 255);
+                dl->PathArcTo(ImVec2(lc.x, bodyTop - 1.0f * k), lw * 0.30f, 3.14159265f, 6.28318531f, 20);
+                dl->PathStroke(lockCol, 0, lw * 0.16f);
+                dl->AddRectFilled(ImVec2(lc.x - lw * 0.5f, bodyTop), ImVec2(lc.x + lw * 0.5f, bodyBot),
+                    lockCol, lw * 0.13f);
+                // Keyhole, punched in the card's own colour.
+                const ImU32 hole = IM_COL32(104, 105, 128, 255);
+                const float bodyH = bodyBot - bodyTop;
+                dl->AddCircleFilled(ImVec2(lc.x, bodyTop + bodyH * 0.34f), lw * 0.10f, hole, 20);
+                dl->AddLine(ImVec2(lc.x, bodyTop + bodyH * 0.44f),
+                    ImVec2(lc.x, bodyTop + bodyH * 0.76f), hole, lw * 0.13f);
+            }
+
+            if (vpHit && !vpLocked) {
+                ui::se(ui::SeClick);
+                gVocalChoiceBySong[vocalSong->musicId] = vpAvail[i];
+                vocalIndex = vpAvail[i];
+            }
+        }
+        if (vocalTable.empty()) {
+            addTextCentered(dl, body, 18.0f * k, ImVec2((vpCardL + vpCardR) * 0.5f, vpY0 + (vpY1 - vpY0) * 0.5f),
+                IM_COL32(178, 178, 198, 255), "这首曲子没有其他版本");
+        }
+        ImGui::PopClipRect();
+
+        // Scroll hint, outside the clip so it can sit in the panel's margin.
+        if (vpMaxScroll > 0.0f) {
+            const float sx = vpCardR + 10.0f * k;
+            const float thumbH = std::max(40.0f * k, vpViewH * (vpViewH / vpTotal));
+            const float thumbY = vpListTop + (vpViewH - thumbH) * (gVocalPanelScroll / vpMaxScroll);
+            dl->AddRectFilled(ImVec2(sx, vpListTop), ImVec2(sx + 3.0f * k, vpListBot),
+                IM_COL32(255, 255, 255, 28), 2.0f * k);
+            dl->AddRectFilled(ImVec2(sx, thumbY), ImVec2(sx + 3.0f * k, thumbY + thumbH),
+                IM_COL32(255, 255, 255, 96), 2.0f * k);
+        }
+
+        // Slide-in fade: drop the alpha of everything the panel just added.
+        const int vpFade = static_cast<int>(std::clamp(vpEase, 0.0f, 1.0f) * 255.0f);
+        if (vpFade < 255) {
+            for (int v = vpVtxFirst; v < dl->VtxBuffer.Size; ++v) {
+                ImU32& col = dl->VtxBuffer[v].col;
+                const ImU32 a = (col >> IM_COL32_A_SHIFT) & 0xFF;
+                col = (col & ~IM_COL32_A_MASK)
+                    | (static_cast<ImU32>(a * static_cast<ImU32>(vpFade) / 255u) << IM_COL32_A_SHIFT);
             }
         }
     }

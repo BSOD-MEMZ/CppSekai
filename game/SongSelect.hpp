@@ -495,4 +495,9 @@ void debugOpenProfileCard(bool open);
 // the same reason. Also usable to close it again.
 void debugOpenGuessDialog(bool open);
 
+// Debug (`--singer-panel`): open the 切换歌手 panel (the phone panel's singer
+// button) at boot, same reason. It only appears on a song that has a vocal
+// version table, so pair it with --select-id / --select-vocal.
+void debugOpenSingerPanel(bool open);
+
 } // namespace game
