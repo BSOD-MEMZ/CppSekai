@@ -87,6 +87,21 @@ struct Api
     bool valid() const { return dll != nullptr && readData != nullptr && openRequest != nullptr; }
 };
 
+// GetProcAddress 还回来的永远是 FARPROC（一个笼统的 `long long (*)()`），每个 Win32
+// 动态加载器都得把它重解释成真实签名。把它写成一行 inline cast 会触发
+// -Wcast-function-type-mismatch；走 memcpy 则是把一个函数指针的位模式搬进另一个
+// 同宽的函数指针 —— 没有类型谎言的语法形式，clang 也就没得警告。
+// 所有查找都走这里，调用点保持声明式（见下面 api()）。
+template <typename Fn>
+Fn loadSymbol(HMODULE module, const char* name)
+{
+    FARPROC proc = GetProcAddress(module, name);
+    Fn out = nullptr;
+    static_assert(sizeof(out) == sizeof(proc), "function pointer width mismatch");
+    std::memcpy(&out, &proc, sizeof(out));
+    return out;
+}
+
 Api& api()
 {
     static Api instance = [] {
@@ -95,17 +110,17 @@ Api& api()
         if (a.dll == nullptr) {
             return a;
         }
-        auto sym = [&](const char* name) { return GetProcAddress(static_cast<HMODULE>(a.dll), name); };
-        a.open = reinterpret_cast<decltype(a.open)>(sym("WinHttpOpen"));
-        a.connect = reinterpret_cast<decltype(a.connect)>(sym("WinHttpConnect"));
-        a.openRequest = reinterpret_cast<decltype(a.openRequest)>(sym("WinHttpOpenRequest"));
-        a.sendRequest = reinterpret_cast<decltype(a.sendRequest)>(sym("WinHttpSendRequest"));
-        a.receiveResponse = reinterpret_cast<decltype(a.receiveResponse)>(sym("WinHttpReceiveResponse"));
-        a.queryHeaders = reinterpret_cast<decltype(a.queryHeaders)>(sym("WinHttpQueryHeaders"));
-        a.queryDataAvailable = reinterpret_cast<decltype(a.queryDataAvailable)>(sym("WinHttpQueryDataAvailable"));
-        a.readData = reinterpret_cast<decltype(a.readData)>(sym("WinHttpReadData"));
-        a.closeHandle = reinterpret_cast<decltype(a.closeHandle)>(sym("WinHttpCloseHandle"));
-        a.setTimeouts = reinterpret_cast<decltype(a.setTimeouts)>(sym("WinHttpSetTimeouts"));
+        const HMODULE dll = static_cast<HMODULE>(a.dll);
+        a.open = loadSymbol<decltype(a.open)>(dll, "WinHttpOpen");
+        a.connect = loadSymbol<decltype(a.connect)>(dll, "WinHttpConnect");
+        a.openRequest = loadSymbol<decltype(a.openRequest)>(dll, "WinHttpOpenRequest");
+        a.sendRequest = loadSymbol<decltype(a.sendRequest)>(dll, "WinHttpSendRequest");
+        a.receiveResponse = loadSymbol<decltype(a.receiveResponse)>(dll, "WinHttpReceiveResponse");
+        a.queryHeaders = loadSymbol<decltype(a.queryHeaders)>(dll, "WinHttpQueryHeaders");
+        a.queryDataAvailable = loadSymbol<decltype(a.queryDataAvailable)>(dll, "WinHttpQueryDataAvailable");
+        a.readData = loadSymbol<decltype(a.readData)>(dll, "WinHttpReadData");
+        a.closeHandle = loadSymbol<decltype(a.closeHandle)>(dll, "WinHttpCloseHandle");
+        a.setTimeouts = loadSymbol<decltype(a.setTimeouts)>(dll, "WinHttpSetTimeouts");
         return a;
     }();
     return instance;
@@ -1257,9 +1272,9 @@ namespace
     // Turns true once a run has been observed running, so the "queue finished"
     // edge fires exactly once - on the transition running -> idle.
     bool gSawRunning = false;
-    bool gNeedClearTicks = false;
-    std::string gPendingBalloon;
-    std::mutex gPendingMutex;
+    // 2026-09-21: gNeedClearTicks / gPendingBalloon / gPendingMutex 三个声明在这里躺了很久，
+    // 全文件零引用（-Wall 查出来的）。前两个是一个没做完的托盘气泡功能，那个 mutex 更是
+    // 从来没上过锁 —— 留着它只会让人以为气球字符串是线程安全的。已删。
 
     // -----------------------------------------------------------------------
     // DPI. chartdl declares DPI awareness (see chartdl.manifest), which means
@@ -1361,7 +1376,6 @@ namespace
     std::vector<int> gRowSong;   // list row -> gSongs index (after filtering)
     int gDetailSong = -1;        // song the right panel describes
     std::size_t gLogShown = 0;   // log lines already appended to the listbox
-    double gGuiStartSec = 0.0;   // for --screenshot-time
 
     // Output directory in the native Windows form (UTF-16). Keeping it narrow
     // would mean converting it back with fs::path(), which uses the ANSI code
@@ -1931,7 +1945,6 @@ namespace
     {
         switch (message) {
             case WM_CREATE: {
-                const int row = dp(34);
                 auto create = [&](const wchar_t* cls, const wchar_t* text, DWORD style, int id,
                                   int x, int y, int w, int h) {
                     HWND control = CreateWindowExW(0, cls, text, WS_CHILD | WS_VISIBLE | style, x, y, w,
@@ -3372,7 +3385,6 @@ int main(int argc, char** argv)
     if (!downloadIds.empty()) {
         bool diffs[5] = {false, false, false, false, false};
         difficultyMask(diffs);
-        int failed = 0;
         for (size_t start = 0; start <= downloadIds.size();) {
             const size_t comma = downloadIds.find(',', start);
             const std::string token = downloadIds.substr(start, comma == std::string::npos
@@ -3384,7 +3396,6 @@ int main(int argc, char** argv)
                 [&](const Song& song) { return song.id == id; });
             if (found == gSongs.end()) {
                 std::fprintf(stderr, "[skip] %s: unknown song id\n", token.c_str());
-                ++failed;
                 continue;
             }
             Request request;

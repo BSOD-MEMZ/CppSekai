@@ -124,6 +124,11 @@ main.cpp          # SDL2 窗口、事件循环、输入映射、ImGui HUD、截�
 
 ## 代码体量（2026-09-18 实测，改大东西前看这里）
 
+> **2026-09-21 复检：数字已经变了，最新值看 `CODE-REVIEW.md` 第〇节**
+> （原创 23,840 → **27,233** 行；`main()` 5,713 → **6,641**；`drawSongSelect()`
+> 1,746 → **~1,920**；`runFrame` lambda `main.cpp:4476-7206`）。下面这张表只当
+> "哪几个函数是巨型的"用，具体行号以 CODE-REVIEW.md 为准。
+
 原创代码 23,840 行。**问题不在文件多，在两个巨型函数**：
 
 | 位置 | 行数 | 说明 |
@@ -286,6 +291,22 @@ bash build.sh          # 仅需 Git Bash；产物 build/cppsekai.exe + SDL2.dll 
 - SDL2 的 MinGW 导入库需要额外链接 imm32/setupapi/version/oleaut32，且要自己 stub 三个屏保符号（`ScreenSaverProc` 等，在 main.cpp 顶部）。
 - **`main.cpp` 必须在 include SDL.h 之前 `#define SDL_MAIN_HANDLED`**，否则 SDL.h 把 main 重定义为 SDL_main，程序会变成"秒退且无输出"。
 - miniaudio 的实现（`MINIAUDIO_IMPLEMENTATION`）只在 `platform/Audio.cpp` 里定义一次。
+- **警告开关 2026-09-21 起是开着的，保持 0 警告**：`CXXFLAGS` 有 `-Wall -Wextra`（另有
+  `-Wno-unused-parameter` 给回调签名、`-Wno-missing-field-initializers` 给 stb）。
+  **`SOURCES` 要留在一律 `<全量构建> → 0 warning` 的状态**——新代码第一次报警告的场合，
+  先当成"这里有东西没写完"看，别急着加 `-Wno-`。
+- **上游 `core/native/**` 和 vendored `imgui` 是单独编 `.o` 的**（build.sh 里
+  `UPSTREAM_SOURCES` 那段，用 `-w`）。它们自带 174 条 missing-braces / sign-compare /
+  unused-function，混在同一次编译里会把我们自己的警告淹掉——这就是这个仓库之前
+  一直不开 `-Wall` 的实际原因。**加新的上游 .cpp 要加进 `UPSTREAM_SOURCES`**。
+  `game/` `platform/` 是 glob，加文件不用管。
+- ⚠ **`third_party/DirectXMath/Inc` 必须留在 `-I`，不能改成 `-isystem`**（2026-09-21 踩过，
+  整个构建挂掉）。zig 的 builtin 搜索目录排在所有 `-isystem` 之前，而
+  `toolchain/…/libc/include/any-windows-any/` 里有个 MinGW 版**小写** `directxmath.h`
+  桩头（只有 `namespace DirectX`，没有 `XMVECTOR`/`XMMATRIX`）；Windows 大小写不敏感，
+  桩头会把真头顶掉，报 `no type named 'XMVECTOR' in namespace 'DirectX'`。
+  `-I` 的优先级在 builtin 之前，只有 `-I` 能钉住真头。排错用
+  `zig c++ -E -v <file>` 看 `#include <...> search starts here` 那一节。
 
 ## 约定与坑
 

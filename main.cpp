@@ -299,7 +299,6 @@ namespace
 
     // The playfield is a fake perspective: a lane coordinate x at height y is
     // drawn at world (x * y, y). y = 1 is the judge line, y -> 0 the horizon.
-    constexpr float JUDGE_LINE_Y = 1.0f;
     constexpr int LANE_COUNT = 12;
 
     std::string readFile(const std::string& path)
@@ -2403,7 +2402,6 @@ int main(int argc, char** argv)
     int mpSeenChargeEpoch = -1; // last start this window loaded a chart for
     int mpConfirmedEpoch = -1;  // host: the lock epoch its 确定 belongs to
     bool mpStartPending = false;
-    Uint64 mpStartCounter = 0;
     // Host: the charge epoch whose start instant this window has already armed,
     // and when the loading phase opened. The epoch guards the arming block
     // against re-arming every frame (which would push the instant forward for
@@ -2430,7 +2428,6 @@ int main(int argc, char** argv)
     double partyAutoAtSec = 1.8;
     double partyAutoMemberAt = 0.0;
     bool partyAutoContinued = false; // --party-auto: 继续 on the result screen
-    bool partyAutoReady = false;
     bool chartDlTestFired = false;   // --chartdl-test: the auto-press ran once
 
     auto partyUsable = [&]() { return party.active() && party.playerCount() >= 2; };
@@ -3001,7 +2998,6 @@ int main(int argc, char** argv)
         ui::PadScope padScope(showDebug);
         // pjsk style settings panel (tabbed card, pjsk sliders).
         const float s = ui::scale();
-        const ImVec2 display = ImGui::GetIO().DisplaySize;
         // 760 tall (was 520 -> 640 -> 700): the 判定 tab now carries seven rows
         // (Perfect/Great/Good/Bad/Miss + the long-note preset stepper and its
         // two sliders) and 画面 is also deep, so the card has to hold both
@@ -4299,7 +4295,6 @@ int main(int argc, char** argv)
             current.push_back(static_cast<char>(ch >= 'a' && ch <= 'z' ? ch - 32 : ch));
         }
     }
-    bool fakePadHeld = !fakePad.empty();
     int fakePadFrames = 0;
     // How long --fake-pad keeps pressing (in 30-frame cycles). Long enough for
     // the boot + the first dialog, short enough that the run still settles.

@@ -165,43 +165,109 @@ for (const std::string& candidate :
 `getenv` 全局分布：`main.cpp` 9 / `SongSelect.cpp` 2 / `Renderer.cpp` 2 / `Intro.cpp` 1 /
 `Ui.cpp` 1 / `Party.cpp` 1。
 
-### 12. 编译没有 `-Wall`，但**代码其实是干净的** ★白捡
+### 12. 编译没有 `-Wall` —— **已开，结果完全推翻了我第一次的结论** ★
 
-`build.sh:16` 的 `CXXFLAGS` 只有 `-std=c++20 -O2 -s`，**一个警告开关都没有**。
-用 `-Wall -Wextra` 实测（`zig c++ -fsyntax-only`，逐文件，`-Wno-unused-parameter`）：
+`build.sh:16` 的 `CXXFLAGS` 原本只有 `-std=c++20 -O2 -s`，**一个警告开关都没有**。
 
-| 文件 | 警告数 |
-|---|---|
-| **`main.cpp`（7,489 行）** | **0** |
-| `game/Judgement.cpp` `game/Ui.cpp` `game/Result.cpp` | **0** |
-| `game/Hud.cpp` `game/Intro.cpp` `game/PartyScreen.cpp` | **0** |
-| `game/StageBackground.cpp` `game/TapEffect.cpp` | **0** |
-| `platform/Audio.cpp` `CoreApi.cpp` `FontOutline.cpp` | **0** |
-| `platform/Renderer.cpp` `SystemMedia.cpp` `Party.cpp` | **0** |
-| `game/SongSelect.cpp` | 4 |
-| `downloader/chartdl.cpp` | **23** |
+**先说一个测量教训**（我自己踩的，值得记住）：我第一轮体检是**逐文件**跑
+`-fsyntax-only` 然后 `grep -c 'warning:'`，报出「15 个文件 0 警告，含 main.cpp」。
+**这个结论是错的。** 因为我只数了 `warning:` 行、**没看有没有 `error:`** ——
+几个 TU 其实是编译提前中止（缺头文件）了，于是 `warning` 计数为 0，被我读成"干净"。
+**开 `-Wall` 之后跑一次完整 `build.sh`** 才是真的：
 
-**15 个文件 0 警告**，其中包含 7,489 行的 `main.cpp` 和 1,385 行的 `Renderer.cpp`
-——说明这份代码本来就干净，只是从来没开过警报器。
-往 `CXXFLAGS` 加 `-Wall -Wextra` 成本是 0，收益是**以后的新问题当场暴露**。
-**唯一需要先处理的是 `chartdl.cpp`**（见下条）。
-
-### 13. `chartdl.cpp` 的 23 个警告里，藏着 **4 处死声明** ★
-
-11 个 `-Wcast-function-type-mismatch`（`GetProcAddress` → 函数指针）和
-8 个 `-Wmissing-field-initializers` 是 **Win32 惯用写法**，噪音，加个局部 `#pragma`
-压掉即可。**但剩下 4 个是真的**：
-
-| 位置 | 声明 | 情况 |
+| | 第一次（逐文件，方法有缺陷） | 第二次（完整构建，可信） |
 |---|---|---|
-| `:1261` | `std::string gPendingBalloon;` | **全项目仅此一处出现**——从未读写 |
-| `:1262` | `std::mutex gPendingMutex;` | 同上，**声明了却从未加锁** |
-| `:1260` | `bool gNeedClearTicks = false;` | 从未读写 |
-| `:1364` | `double gGuiStartSec = 0.0;` | 注释写着 `for --screenshot-time`，但从未读写——chartdl 的截图计时路径要么被删了、要么没写完 |
+| 第三方 + 上游（`core/native/**`、`imgui`、`DirectXMath`） | — | **174** |
+| **我们自己的代码** | 报 16 | **16**（数值巧合，见下条） |
 
-前两条合起来是**一个被放弃的功能**：托盘气泡通知（pending balloon）连互斥量一起
-声明好了就没再碰。**「声明了却从没上锁的 mutex」是最容易骗人的东西**——读代码的人
-会以为 `gPendingBalloon` 是线程安全的。**这 4 行建议直接删**（零引用，删了必编过）。
+所以「这份代码本来就干净」这个判断**方向是对的，但当时没有证据**。
+真正的证据是下面这场修完之后的结果：**完整构建 0 error / 0 warning**。
+
+### 13. `-Wall` 一开就抓到 **16 条真问题**，其中 1 条是真 bug ★★
+
+这是整次体检里最值钱的产出——**开关装上第一天就回本了**：
+
+| 文件 | 警告 | 性质 |
+|---|---|---|
+| `game/SongSelect.cpp:4257,4259` | `-Wself-assign-overloaded` | **真 bug**：`label = label;` —— 见下 |
+| `game/SongSelect.cpp:319` | `-Wunused-function` | `difficultyBadgeColor()` 只是 `difficultyColor()` 的空壳，零调用 |
+| `game/SongSelect.cpp:3692` | `-Wunused-variable` | `scrY1` |
+| `main.cpp:302` / `2406` / `2433` / `3004` / `4302` | `-Wunused-variable` ×5 | `JUDGE_LINE_Y` / `mpStartCounter` / `partyAutoReady` / `display` / `fakePadHeld` |
+| `platform/SystemMedia.cpp:48,51` | `-Wunused-const-variable` ×2 | `IID_IDisplayUpdater` / `IID_IMusicDisplayProperties` |
+| `platform/SystemMedia.cpp:354-359` | `-Wcast-function-type-mismatch` ×5 | WinRT 入口点的 `GetProcAddress`（同 `chartdl` 的写法） |
+| `downloader/chartdl.cpp:1260,1261,1262,1364,1934` | `-Wunused-*` ×4 + `-Wcast-*` ×11 | 一处被放弃的托盘气泡功能（**含一个声明了却从未上锁的 mutex**）+ 4 处死声明 |
+
+**那条真 bug**（`SongSelect.cpp:4256-4260`，猜歌卡片）：
+
+```cpp
+std::string label = std::to_string(i + 1) + ". " + titleFor(gGuess.options[i]);
+if (answered && i == gGuess.answer) {
+    label = label;            // ← 自己赋值给自己，什么都不做
+} else if (answered && i == gGuess.picked) {
+    label = label;            // ← 同上
+}
+ImU32 fill = ui::kWhiteBtn;
+if (answered && i == gGuess.answer) {   // ← 下面这段才是真正表达"对错"的地方
+    fill = ui::kPrimary;
+} else if (answered && i == gGuess.picked) {
+    fill = IM_COL32(255, 138, 150, 255);
+}
+```
+
+上面 5 行的注释还写着「The fill carries the verdict after a pick」——**判定根本就是由
+颜色表达的**，那两个 `label = label` 分支是更早一版「在文字上加记号」的设计留下的尸体，
+而且和下面的 `if/else if` 条件一模一样（重复的条件对）。**已删 5 行，行为不变。**
+
+### 14. ⚠ 这套 zig 下 `-isystem` 会踩到一个极隐蔽的坑 ★★★
+
+为了让「第三方头的警告不盖住自己的」，我把 `-Ithird_party` 改成了 `-isystem third_party`。
+**结果整个构建挂了**，报一堆：
+
+```
+core/native/mmw_port/Rendering/Camera.h:9:12: error: no type named 'XMVECTOR' in namespace 'DirectX'
+```
+
+根因（`-v` 打搜索顺序才看出来的）：
+
+```
+#include <...> search starts here:
+ toolchain/…/lib/libcxx/include
+ toolchain/…/lib/libc/include/any-windows-any     ← ★ 这里有 directxmath.h
+ third_party/DirectXMath/Inc                       ← 我们的真头排在它后面
+```
+
+zig 自带的 MinGW 头目录里有一个**小写的 `directxmath.h` 桩头**（只有 `namespace DirectX`，
+没有任何 `XMVECTOR` / `XMMATRIX`）。**Windows 文件系统大小写不敏感**，
+所以它在语义上就是 `DirectXMath.h`；而 clang 的搜索顺序里 **`-isystem` 排在 zig 的
+builtin 目录之后**，桩头于是把真头顶掉了。`-I` 的优先级在 builtin **之前**，
+所以只有 `-I` 能钉住我们要的那份。
+
+**结论：这套工具链下，`third_party/DirectXMath/Inc` 必须留在 `-I`，不能改成 `-isystem`。**
+（`build.sh` 里已写了同样内容的警告注释。）
+
+### 15. 最终方案：上游/第三方单独编 `.o`，只给自己人开 `-Wall`
+
+知道了 `-isystem` 不能乱用之后，剩下的正解是**把两次编译分开**：
+
+```bash
+SOURCES=( main.cpp platform/*.cpp game/*.cpp )          # ← 只有这些开 -Wall
+
+# core/native/**（上游 AGPL，AGENTS.md 说不改结构）与 vendored imgui 单独编成 .o，
+# 并且用 -w 关掉它们的警告
+for src in "${UPSTREAM_SOURCES[@]}"; do
+    "$ZIG" c++ "${CXXFLAGS[@]}" -w -c "$src" -o "build/obj/$(basename "${src%.cpp}").o"
+done
+"$ZIG" c++ "${CXXFLAGS[@]}" "${SOURCES[@]}" "${UPSTREAM_OBJS[@]}" … -o build/cppsekai.exe
+```
+
+这样**第三方和上游的 174 条噪音从流程上消失，而不是从开关上消失**：
+下面那次编译里出现的每一条警告，都必然是我们自己写出来的。代价只有 build.sh 多 10 行
+（增量编译的缓存照旧生效，全量时间没变）。
+
+**结果：`bash build.sh` → `0 error / 0 warning`。** 回归验证：
+`--sus charts/0075_master.sus --auto` 跑出 `perfect=770 miss=0 breaks=0 100.0%`，
+选曲界面截图正常。
+
 
 ---
 
@@ -229,19 +295,23 @@ for (const std::string& candidate :
 
 | # | 做什么 | 风险 | 收益 | 状态 |
 |---|---|---|---|---|
-| 1 | **`build.sh` 的 `SOURCES` 改 glob** | 极低 | 永久消除"忘了加文件"事故，改 5 行 | **欠着** |
-| 2 | **`CXXFLAGS` 加 `-Wall -Wextra`**（先删 `chartdl` 的 4 行死声明） | 极低 | 15 个文件实测 0 警告 → 白捡一个回归哨兵 | 新 |
-| 3 | **删 `chartdl.cpp` 的 4 处死声明**（含一对从未使用的 balloon 功能 + mutex） | 极低 | 零引用，删了必编过；去一个骗人的"假线程安全" | 新 |
-| 4 | **重复的 `json.hpp` 换成转发头**（`vendor/` 那份 → `#include <nlohmann/json.hpp>`） | 低 | 消除跨 TU 的静默 ODR 隐患，改 1 行 | 新 |
-| 5 | **抽 `findDataFile()`，替换 7 处手抄的候选路径** | 低 | ~45 行 → ~8 行，把约定固化进代码 | 新 |
-| 6 | **设置页 shadow 变量换成一个 struct** | 低 | 加判定参数从改 3 处变 1 处 | 欠着 |
-| 7 | **调试开关集中进 `DebugSwitches`** | 低 | 16 处裸 `getenv` 收敛到 1 处 | 新 |
-| 8 | **`main()` 里的成块逻辑抽成函数**：参数解析、启动决策、三个画面的 draw | 低（**只搬代码不改逻辑**） | 6,641 → 每块 300~500 行，定位成本断崖下降 | 欠着（**收益最大**） |
-| 9 | **`drawSongSelect` 的 in/out 引用收进 `SelectState` struct** | 中 | 13 参数 → 3~4 个 | 欠着 |
-| 10 | **给上游代码补许可头**（`mmw_preview.cpp`、`mmw_port/**`） | 极低 | 这是**合规**，见 CREDITS.md 第一节末 | 欠着 |
+| 1 | **`build.sh` 的 `SOURCES` 改 glob** | 极低 | 永久消除"忘了加文件"事故 | **✅ 已做** |
+| 2 | **`CXXFLAGS` 加 `-Wall -Wextra`** | 极低 | 装上第一天就抓到 16 条真问题（含 1 条真 bug） | **✅ 已做** |
+| 3 | **删掉全部 16 条警告对应的死代码** | 极低 | 零引用；去一个骗人的"假线程安全" mutex 和一个 `label = label` | **✅ 已做** |
+| 4 | **重复的 `json.hpp` 换成转发头**（`vendor/` 那份 → `#include <nlohmann/json.hpp>`） | 低 | 消除跨 TU 的静默 ODR 隐患，仓库少 25,830 行冗余 | **✅ 已做** |
+| 5 | **上游/第三方单独编 `.o` + `-w`**（见第 15 节） | 低 | 174 条第三方噪音从流程里消失，`-Wall` 只剩自己的信号 | **✅ 已做** |
+| 6 | **抽 `findDataFile()`，替换 7 处手抄的候选路径** | 低 | ~45 行 → ~8 行，把约定固化进代码 | 新 |
+| 7 | **设置页 shadow 变量换成一个 struct** | 低 | 加判定参数从改 3 处变 1 处 | 欠着 |
+| 8 | **调试开关集中进 `DebugSwitches`** | 低 | 16 处裸 `getenv` 收敛到 1 处 | 新 |
+| 9 | **`main()` 里的成块逻辑抽成函数**：参数解析、启动决策、三个画面的 draw | 低（**只搬代码不改逻辑**） | 6,641 → 每块 300~500 行，定位成本断崖下降 | 欠着（**收益最大**） |
+| 10 | **`drawSongSelect` 的 in/out 引用收进 `SelectState` struct** | 中 | 13 参数 → 3~4 个 | 欠着 |
+| 11 | **给上游代码补许可头**（`mmw_preview.cpp`、`mmw_port/**`） | 极低 | 这是**合规**，见 CREDITS.md 第一节末 | 欠着 |
 
-**1~7 条都是当天能做完的机械改动**，合起来能把仓库里"白白浪费的阅读成本"清掉一大半。
-第 8 条是收益最大的一步，因为它"只搬代码不改逻辑"，出错概率比看起来低得多——
+**1~5 条 2026-09-21 已落地**，验证：`bash build.sh` → **0 error / 0 warning**；
+`--sus charts/0075_master.sus --auto` → `perfect=770 miss=0 breaks=0 100.0%`；选曲截图正常。
+第 6~8 条是还能当天做完的机械改动。
+
+第 9 条是收益最大的一步，因为它"只搬代码不改逻辑"，出错概率比看起来低得多——
 建议一次搬一块，搬完跑 `.workbuddy/tools/mp_verify.sh` + 无头 `--screenshot` 对一遍。
 
 ---
@@ -255,6 +325,14 @@ for (const std::string& candidate :
 长到 1,920，两个函数，三天，+1,100 行**。其余增长（`chartdl.cpp` +852、`Ui.cpp` +460）
 都是加函数，是健康的涨法。
 
-所以真正需要的只有两个动作：**把这两个函数拆开**，以及**加上 `-Wall` +
-`build.sh` glob + 把那份重复的 `json.hpp` 换成转发头**——后者加起来不到半小时，
-但能让"不小心碰坏"从"上线后才发现"变成"编译期/链接期就报出来"。
+**2026-09-21 的收获是：把警报器装上了，而且它第一天就响了。**
+`-Wall` 一开就抓出 16 条真问题，其中包括 `SongSelect.cpp:4257` 那句
+`label = label;`——一行已经变成空气、但还留在代码里的旧设计。这类东西
+**不靠工具是看不见的**（它编译通过、运行正常、只是什么都不做），
+而它旁边那 5 行注释还在向读代码的人解释「判定由颜色表达」，
+让你完全不会怀疑上面那两行是废话。
+
+剩下真正的大活只有一件：**把 `main()` 和 `drawSongSelect()` 拆开**。
+它"只搬代码不改逻辑"，所以风险比体量看起来低得多；不拆也能继续跑，
+代价是每次改动都更慢、更容易碰坏别的东西——而能替你发现"碰坏了"的那个哨兵，
+现在总算装上了。

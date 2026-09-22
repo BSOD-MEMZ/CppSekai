@@ -45,11 +45,10 @@ namespace
     const GUID IID_ISystemMediaTransportControls2 = {
         0xEA98D2F6, 0x7F3C, 0x4AF2, {0xA5, 0x86, 0x72, 0x88, 0x98, 0x08, 0xEF, 0xB1}};
     // {8ABBC53E-FA55-4ECF-AD8E-C984E5DD1550}
-    const GUID IID_IDisplayUpdater = {
-        0x8ABBC53E, 0xFA55, 0x4ECF, {0xAD, 0x8E, 0xC9, 0x84, 0xE5, 0xDD, 0x15, 0x50}};
     // {6BBF0C59-D0A0-4D26-92A0-F978E1D18E7B}
-    const GUID IID_IMusicDisplayProperties = {
-        0x6BBF0C59, 0xD0A0, 0x4D26, {0x92, 0xA0, 0xF9, 0x78, 0xE1, 0xD1, 0x8E, 0x7B}};
+    // ^ IID_IDisplayUpdater / IID_IMusicDisplayProperties 两张表已经不再需要：
+    //   -Wunused-const-variable 查出来它们零引用（2026-09-21）。GUID 留在这两行
+    //   注释里，将来要用直接照抄。
     // {5125316A-C3A2-475B-8507-93534DC88F15}
     const GUID IID_ITimelineProperties = {
         0x5125316A, 0xC3A2, 0x475B, {0x85, 0x07, 0x93, 0x53, 0x4D, 0xC8, 0x8F, 0x15}};
@@ -332,6 +331,20 @@ namespace
     using WindowsDeleteStringFn = HRESULT(WINAPI*)(void* str);
     using WindowsGetStringRawBufferFn = const wchar_t*(WINAPI*)(void* str, unsigned* length);
 
+    // GetProcAddress 还回来的永远是 FARPROC（一个笼统的 `long long (*)()`），
+    // 把它 inline 重解释成真实签名会触发 -Wcast-function-type-mismatch。
+    // 走 memcpy 是把一个函数指针的位模式搬进另一个同宽的函数指针 —— 没有类型
+    // 谎言的语法形式，clang 也就没得警告。chartdl.cpp 里有一份同样的实现。
+    template <typename Fn>
+    Fn loadSymbol(HMODULE module, const char* name)
+    {
+        FARPROC proc = GetProcAddress(module, name);
+        Fn out = nullptr;
+        static_assert(sizeof(out) == sizeof(proc), "function pointer width mismatch");
+        std::memcpy(&out, &proc, sizeof(out));
+        return out;
+    }
+
     HMODULE gCombase = nullptr;
     RoGetActivationFactoryFn gRoGetActivationFactory = nullptr;
     RoActivateInstanceFn gRoActivateInstance = nullptr;
@@ -350,13 +363,11 @@ namespace
         if (gCombase == nullptr) {
             return;
         }
-        gRoGetActivationFactory =
-            reinterpret_cast<RoGetActivationFactoryFn>(GetProcAddress(gCombase, "RoGetActivationFactory"));
-        gRoActivateInstance = reinterpret_cast<RoActivateInstanceFn>(GetProcAddress(gCombase, "RoActivateInstance"));
-        gCreateString = reinterpret_cast<WindowsCreateStringFn>(GetProcAddress(gCombase, "WindowsCreateString"));
-        gDeleteString = reinterpret_cast<WindowsDeleteStringFn>(GetProcAddress(gCombase, "WindowsDeleteString"));
-        gGetStringRawBuffer =
-            reinterpret_cast<WindowsGetStringRawBufferFn>(GetProcAddress(gCombase, "WindowsGetStringRawBuffer"));
+        gRoGetActivationFactory = loadSymbol<RoGetActivationFactoryFn>(gCombase, "RoGetActivationFactory");
+        gRoActivateInstance = loadSymbol<RoActivateInstanceFn>(gCombase, "RoActivateInstance");
+        gCreateString = loadSymbol<WindowsCreateStringFn>(gCombase, "WindowsCreateString");
+        gDeleteString = loadSymbol<WindowsDeleteStringFn>(gCombase, "WindowsDeleteString");
+        gGetStringRawBuffer = loadSymbol<WindowsGetStringRawBufferFn>(gCombase, "WindowsGetStringRawBuffer");
     }
 
     // HSTRING wrapper. WinRT strings are ref-counted handles, not raw pointers.

@@ -33,13 +33,22 @@
   `--no-assets` 出精简包；charts / toolchain 一律不发 → 目录 13MB / zip 6.8MB。
 - 图标：`app.rc`（`zig rc`，id 1）+ `SDL_SetWindowIcon(icon.png)`；改 id 要同步改 chartdl 的
   `LoadImageW(MAKEINTRESOURCE(1))`。
-- **`json.hpp` 在仓库里有两份、md5 相同**（`third_party/nlohmann/` 与 `core/native/vendor/nlohmann/`，
+- `json.hpp` 在仓库里有两份、md5 相同（`third_party/nlohmann/` 与 `core/native/vendor/nlohmann/`，
   都是 nlohmann 3.12.0）。**看到重复别直接删**：`mmw_preview.cpp:28` 用相对路径
   `"../vendor/nlohmann/json.hpp"` 钉住 vendor 那份（上游代码，AGENTS.md 说不改结构）。
-  真风险是**跨 TU 的静默 ODR**（只升一份就 UB 且不报错）→ 正解是把 vendor 那份换成一行转发头。
-- `build.sh:16` 的 `CXXFLAGS` **没有任何警告开关**。实测 `-Wall -Wextra -fsyntax-only`
-  15 个文件 0 警告（含 7,489 行的 main.cpp），只有 chartdl 23 个 / SongSelect 4 个 →
-  加 `-Wall -Wextra` 成本几乎为零。
+  → **2026-09-22 已把 vendor 那份换成一行转发头**，只剩 `third_party/` 一份实体，
+  跨 TU 静默 ODR 隐患根除（原来只升一份就是 UB 且不报错）。
+- **警告开关 2026-09-21 起开着，保持 0 警告**（`-Wall -Wextra`）。开的方式是
+  **上游/第三方单独编 `.o` + `-w`**（build.sh 的 `UPSTREAM_SOURCES` 段）——它们自带 174 条
+  missing-braces / sign-compare / unused-function，混在同一次编译里会把我们自己的警告淹掉，
+  这就是之前一直不开 `-Wall` 的实际原因。加新的上游 .cpp 要手工加进 `UPSTREAM_SOURCES`。
+- ⚠ **`third_party/DirectXMath/Inc` 必须留在 `-I`，不能改 `-isystem`**（2026-09-22 踩过，
+  整个构建挂）。zig 的 builtin 搜索目录排在所有 `-isystem` 之前，而
+  `toolchain/…/libc/include/any-windows-any/` 有个 MinGW 版**小写** `directxmath.h` 桩头；
+  Windows 大小写不敏感 → 桩头顶掉真头 → `no type named 'XMVECTOR' in namespace 'DirectX'`。
+  排错用 `zig c++ -E -v` 看 `#include <...> search starts here`。
+- **判断"有没有编译警告"只能跑一次完整 `build.sh` 并同时数 `error:` 和 `warning:`**：
+  逐文件 `-fsyntax-only | grep -c warning:` 会把"编译提前中止"读成"0 警告"（我 09-21 就这么错过）。
 
 ## 资源 / 工具 / git
 - `.gitignore` 忽略 `assets/`、`charts/`、`build/`、`toolchain/`、`userdata.json`、`profiles/`、

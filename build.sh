@@ -22,6 +22,15 @@ CXXFLAGS=(
     # way) and main.cpp re-attaches to the parent console when there is one, so
     # running it from a terminal keeps printing the log there.
     -Wl,--subsystem,windows
+    # 警告开关：2026-09-21 之前一个都没开。实测全项目只有第三方头（stb / imgui）会报警，
+    # 自己的代码是干净的（含 7,489 行的 main.cpp），所以这几行等于白捡一个回归哨兵。
+    # -Wno-unused-parameter：回调签名（WndProc / ImGui / SDL）用不上的参数很常见，噪音。
+    -Wall
+    -Wextra
+    -Wno-unused-parameter
+    # stb_image_write.h 自己带 8 个 missing-field-initializers（它给 stbi__write_context
+    # 做聚合初始化时故意漏掉 context）。这是第三方噪音，定向关掉这一个。
+    -Wno-missing-field-initializers
     -D_XM_NO_INTRINSICS_
     -D_CRT_SECURE_NO_WARNINGS
     # stb_image must read UTF-8 paths (it opens files with _wfopen when this is
@@ -32,29 +41,37 @@ CXXFLAGS=(
     -Icore/native/generated
     -Ithird_party
     -I.
+    # ⚠ DirectXMath 必须走 -I，**不能**改成 -isystem（2026-09-21 试过，编不过）：
+    # 这套 zig 的 builtin 搜索目录排在所有 -isystem 之前，而
+    # toolchain/.../libc/include/any-windows-any/ 里有个 MinGW 版的小写
+    # `directxmath.h` 桩头（只有 namespace DirectX，没有 XMVECTOR / XMMATRIX）。
+    # Windows 文件系统大小写不敏感，桩头会把真头挡在外面，报一堆
+    # "no type named 'XMVECTOR' in namespace 'DirectX'"。-I 的优先级在 builtin 之前，
+    # 只有 -I 能钉住我们要的那份。
     -Ithird_party/DirectXMath/Inc
     -Ithird_party/imgui
     -I"$SDL/include/SDL2"
 )
 
 
+# 我们自己的代码 —— 只有这些文件开 -Wall。
 SOURCES=(
     main.cpp
-    platform/CoreApi.cpp
-    platform/Renderer.cpp
-    platform/FontOutline.cpp
-    platform/Audio.cpp
-    platform/Party.cpp
-    platform/SystemMedia.cpp
-    game/Judgement.cpp
-    game/Hud.cpp
-    game/Ui.cpp
-    game/Intro.cpp
-    game/PartyScreen.cpp
-    game/Result.cpp
-    game/SongSelect.cpp
-    game/TapEffect.cpp
-    game/StageBackground.cpp
+    # game/ 和 platform/ 用 glob：新加一个 .cpp 忘了写进列表，要到**链接期**才报
+    # undefined symbol（2026-09-13 加 game/Result.cpp 时踩过）。
+    platform/*.cpp
+    game/*.cpp
+)
+
+# ---------------------------------------------------------------------------
+# 上游代码 + 第三方库：单独编成 .o，并且用 -w 关掉它们的警告。
+#
+# core/native/** 是上游 AGPL 代码（AGENTS.md 说不改结构），vendored 的 imgui 同理：
+# 它们自带一堆 missing-braces / sign-compare / unused-function（实测 174 条），
+# 全不是我们的问题。但它们要是混在同一次编译里，就会把我们自己代码的警告淹掉 ——
+# 这正是这个仓库之前一直不开 -Wall 的实际原因。分成两次编译之后，下面那次
+# "SOURCES" 编译里出现的每一条警告都必然是我们自己写出来的。
+UPSTREAM_SOURCES=(
     core/native/src/mmw_preview.cpp
     core/native/mmw_port/Math.cpp
     core/native/mmw_port/MinMax.cpp
@@ -66,13 +83,16 @@ SOURCES=(
     core/native/mmw_port/Particle.cpp
     core/native/mmw_port/ResourceManager.cpp
     core/native/mmw_port/Rendering/Camera.cpp
-    third_party/imgui/imgui.cpp
-    third_party/imgui/imgui_draw.cpp
-    third_party/imgui/imgui_tables.cpp
-    third_party/imgui/imgui_widgets.cpp
-    third_party/imgui/imgui_impl_sdl2.cpp
-    third_party/imgui/imgui_impl_opengl3.cpp
+    third_party/imgui/*.cpp
 )
+
+mkdir -p build/obj
+UPSTREAM_OBJS=()
+for src in "${UPSTREAM_SOURCES[@]}"; do
+    obj="build/obj/$(basename "${src%.cpp}").o"
+    "$ZIG" c++ "${CXXFLAGS[@]}" -w -c "$src" -o "$obj"
+    UPSTREAM_OBJS+=("$obj")
+done
 
 mkdir -p build
 # ---------------------------------------------------------------------------
@@ -109,7 +129,7 @@ fi
 # downloader declares DPI awareness, the game does not.
 "$ZIG" rc app.rc build/app.res
 "$ZIG" rc chartdl.rc build/chartdl.res
-"$ZIG" c++ "${CXXFLAGS[@]}" "${SOURCES[@]}" build/app.res \
+"$ZIG" c++ "${CXXFLAGS[@]}" "${SOURCES[@]}" "${UPSTREAM_OBJS[@]}" build/app.res \
     "$SDL/lib/libSDL2.dll.a" \
     -limm32 -lsetupapi -lversion -lole32 -loleaut32 -lwinmm -lgdi32 -luser32 -ladvapi32     -lshell32 \
     -lopengl32 \

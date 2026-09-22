@@ -316,11 +316,6 @@ namespace
         return {};
     }
 
-    ImU32 difficultyBadgeColor(const std::string& difficulty, int alpha)
-    {
-        return difficultyColor(difficulty, alpha);
-    }
-
     // -----------------------------------------------------------------
     // Official master table (musics.json): the reading (sorting / grouping)
     // and the title. unipjsk's SUS exports leave #TITLE empty, so the title
@@ -3689,7 +3684,6 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     const float scrX0 = phoneX + phoneW * 0.034f;
     const float scrX1 = phoneX + phoneW * 0.966f;
     const float scrY0 = phoneY + phoneH * 0.030f;
-    const float scrY1 = phoneY + phoneH * 0.972f;
     const float cx = (scrX0 + scrX1) * 0.5f;
     const float sw = scrX1 - scrX0;
 
@@ -4253,11 +4247,6 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
                 ImGui::SetCursorScreenPos(ImVec2(leftX + static_cast<float>(col) * (optW + 14.0f * s),
                     topY + (146.0f + static_cast<float>(row) * 62.0f) * s));
                 std::string label = std::to_string(i + 1) + ". " + titleFor(gGuess.options[i]);
-                if (answered && i == gGuess.answer) {
-                    label = label;
-                } else if (answered && i == gGuess.picked) {
-                    label = label;
-                }
                 ImU32 fill = ui::kWhiteBtn;
                 if (answered && i == gGuess.answer) {
                     fill = ui::kPrimary;
