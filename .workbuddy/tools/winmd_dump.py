@@ -257,6 +257,17 @@ for i, t in enumerate(ordered):
 for rid, ns, name, flist, mlist in targets:
     end = ends[rid]
     print("=== %s.%s  (methods %d..%d) ===" % (ns, name, mlist, end - 1))
+    seen = {}
     for m in range(mlist, end):
         rva, impl, flags, mname, sig, plist = read_col(0x06, m, 0)
+        seen.setdefault(mname, []).append(m - mlist)
         print("   %2d  %s" % (m - mlist, mname))
+    # A WinRT interface cannot overload, so a repeated name means the metadata
+    # list has more rows than the ABI has slots (IDataWriter prints WriteBuffer
+    # twice: 27 rows for 26 methods). Copying these indices blindly shifts every
+    # later slot by one, which is a silent-wrong-answer bug for anything that
+    # still returns a plausible value and a segfault for anything past the end.
+    dup = {k: v for k, v in seen.items() if len(v) > 1}
+    if dup:
+        print("   !! repeated name(s) %s - count the methods against the official docs"
+              " before using these as vtable slots" % dup)
