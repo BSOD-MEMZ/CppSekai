@@ -367,16 +367,34 @@ bash build.sh          # 仅需 Git Bash；产物 build/cppsekai.exe + SDL2.dll 
   - `winmd_dump.py` 打印**接口方法声明顺序 = ABI 槽位**；`"~name"` 是子串匹配（versioned
     接口名如 `ISystemMediaTransportControls2` 不好猜）。**枚举数值它不导出**（winmd 的
     Constant 表列顺序和 ECMA 不一致，读出来会错配到相邻成员）→ 枚举值查官方文档。
+  - ⚠ 它打印的是 **metadata 原始声明列表，可能含重复行**：`Windows.Storage.Streams.IDataWriter`
+    会多出一行 `WriteBuffer`（27 行 / 26 个真实方法）。照抄就会让该行之后**所有槽位后移一位**
+    （`StoreAsync` 落到 `FlushAsync` 上 —— 照样返回一个状态正常的 async op，看起来没事 ——
+    而 `DetachStream` 落到 vtable 之外，调用即段错误、无栈可查）。用前先对着官方文档数一遍
+    方法个数（属性 get/set 分开算）。
   - `winmd_guid.py` 取 IID，短名也认（它内部是 "命名空间.类型" 的表，早先只支持全名，
-    查短名一律 NOT FOUND）。
-- **SMTC 封面（put_Thumbnail）必须走 Uri，别走 StorageFile**：`StorageFile.GetFileFromPathAsync`
-  是 async 工厂，本线程是 STA，完成回调被投递到 apartment 队列 —— 实测轮询 `IAsyncInfo::get_Status`
-  （带不带消息泵都一样）永远停在 Started，1 秒超时后拿不到 StorageFile。现在用
-  `Windows.Foundation.Uri`（`IUriRuntimeClassFactory::CreateUri`，IID
-  {44A9796F-723E-4FDF-A218-033E75B0C084}）+ `RandomAccessStreamReference::CreateFromUri`
-  （IID {857309DC-3FBF-4E7D-986F-EF3B1A07A964}，statics 槽 1），全程同步。路径要先
-  `weakly_canonical` 绝对化（谱面扫描可能给相对路径）再逐字节百分号编码，保留 `file:///`
-  与盘符冒号；日志里会回读 `get_AbsoluteUri` 确认 shell 看到的是什么。
+    查短名一律 NOT FOUND）。**纯 COM 接口（`IBufferByteAccess` 这种）winmd 里根本没有**，
+    只能查官方头文件/文档。
+- **SMTC 封面（put_Thumbnail）只能用内存流，三条路里只有一条通**（2026-09-23 重写）：
+  - `StorageFile.GetFileFromPathAsync`：async 工厂，本线程是 STA，完成回调投递到 apartment
+    队列，实测轮询 `IAsyncInfo::get_Status`（带不带消息泵都一样）永远停在 Started。
+  - `RandomAccessStreamReference::CreateFromUri`：**文档只接受 ms-appx / ms-appdata / http /
+    https，file:// 不在其中**。偏偏它对 file:// 也返回 S_OK（它压根不碰文件），于是
+    `put_Thumbnail hr=0x00000000` 一直是**假的成功** —— 媒体浮层从头到尾空白，而日志一切正常。
+    这就是"改了还是没封面"的原因。旧的 `fileUriFromPath` + `IUriRuntimeClassFactory` 那套已删。
+  - **实际可用的**：`InMemoryRandomAccessStream`（`RoActivateInstance`，再 QI 到
+    `IRandomAccessStream`）→ `Buffer`（`IBufferFactory::Create`，IID {71AF914D-C10F-484B-BC50-14BC623B3A27}）
+    → 字节用 `IBufferByteAccess` 的 `Buffer()` 取裸指针 memcpy 进去（**纯 COM 接口，不在 winmd 里**，
+    IID **905A0FEF**-BC53-11DF-8C49-001E4FC686DA，注意和 IBuffer 的 905A0FE0 只差一位）
+    → `GetOutputStreamAt(0)` + `IOutputStream::WriteAsync` → `Seek(0)` 校验 `get_Size()`
+    → `CreateFromStream`。Chromium 用的也是这套。
+  - ⚠ `WriteAsync` 返回的 `IAsyncOperation` **永远停在 Started**（消息泵、
+    `CoWaitForMultipleHandles` 都推不动，status 读出来就是 0），而且**碰不得**：`Cancel()` 和
+    `Release()` 各崩一次段错误。但数据是**同步写进流的** —— 拿流自己的 `get_Size()` 判成败就行，
+    op 指针故意丢掉不管（每次换歌一个对象，几 KB，不折腾）。
+  - ⚠ 别想着用 `DataWriter` 绕（`WriteBytes` + `StoreAsync`）：它的 `StoreAsync` 确实会完成，
+    但 `DataWriter` **持有流**、`Release` 会把流关掉，而 `DetachStream` 拿回来的是一个"归属引用"，
+    两种收尾都实测出过 stream 被提前销毁的崩溃（`vt<...>(stream)` 读 vtable 直接段错误）。
 - 窗口/帧率：`--width/--height`（默认 1280x720）、`--window borderless|windowed|fullscreen`、
   `--fps <n>`（vsync 之外的软上限，0=仅垂直同步）；调试面板（H）里可实时切换窗口模式和帧率上限。
 - 输入：触摸（SDL_Finger*）与鼠标（左/右键 = 两个指针，合成负 id）共用 main.cpp 里的

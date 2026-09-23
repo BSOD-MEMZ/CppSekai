@@ -19,6 +19,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -56,15 +57,22 @@ namespace
     // systemmediatransportcontrolsinterop.h.
     const GUID IID_ISystemMediaTransportControlsInterop = {
         0xDDB0472D, 0xC911, 0x4A1F, {0x86, 0xD9, 0xDC, 0x3D, 0x71, 0xA9, 0x5F, 0x5A}};
-    // Cover art plumbing (Windows.Foundation.winmd / Windows.Storage.winmd;
-    // cross-checked against well-known IIDs):
-    // {44A9796F-723E-4FDF-A218-033E75B0C084} Windows.Foundation.IUriRuntimeClassFactory
-    const GUID IID_IUriRuntimeClassFactory = {
-        0x44A9796F, 0x723E, 0x4FDF, {0xA2, 0x18, 0x03, 0x3E, 0x75, 0xB0, 0xC0, 0x84}};
+    // Cover art plumbing (Windows.Storage.winmd):
     // {857309DC-3FBF-4E7D-986F-EF3B1A07A964}
     // Windows.Storage.Streams.IRandomAccessStreamReferenceStatics
     const GUID IID_IRandomAccessStreamReferenceStatics = {
         0x857309DC, 0x3FBF, 0x4E7D, {0x98, 0x6F, 0xEF, 0x3B, 0x1A, 0x07, 0xA9, 0x64}};
+    // {905A0FE1-BC53-11DF-8C49-001E4FC686DA} Windows.Storage.Streams.IRandomAccessStream
+    const GUID IID_IRandomAccessStream = {
+        0x905A0FE1, 0xBC53, 0x11DF, {0x8C, 0x49, 0x00, 0x1E, 0x4F, 0xC6, 0x86, 0xDA}};
+    // {71AF914D-C10F-484B-BC50-14BC623B3A27} Windows.Storage.Streams.IBufferFactory
+    const GUID IID_IBufferFactory = {
+        0x71AF914D, 0xC10F, 0x484B, {0xBC, 0x50, 0x14, 0xBC, 0x62, 0x3B, 0x3A, 0x27}};
+    // {905A0FEF-BC53-11DF-8C49-001E4FC686DA} IBufferByteAccess - a plain COM
+    // interface (not WinRT, so it is absent from the .winmd): the only way to
+    // get at the bytes of an IBuffer.
+    const GUID IID_IBufferByteAccess = {
+        0x905A0FEF, 0xBC53, 0x11DF, {0x8C, 0x49, 0x00, 0x1E, 0x4F, 0xC6, 0x86, 0xDA}};
 
     // {56FDF344-FD6D-11D0-958A-006097C9A090} / {EA1AFB91-9E28-4B86-90E9-9E9F8A5EEFAF}
     const GUID CLSID_TaskbarList_ = {
@@ -232,18 +240,25 @@ namespace
     };
 
     // ---- Thumbnail (cover art) plumbing -----------------------------------
-    // SMTC takes the album picture as a RandomAccessStreamReference. The
-    // documented recipe goes through StorageFile.GetFileFromPathAsync, but that
-    // async factory never completes here: this thread is an STA, so the
-    // completion is queued to the apartment, and polling its status (with or
-    // without message pumping) left it "Started" until the timeout. So the
-    // synchronous route is used instead - Windows.Foundation.Uri built from the
-    // file path, then RandomAccessStreamReference.CreateFromUri, which the
-    // shell resolves itself (a file:// URI is readable in the same user
-    // context). Interface order verified with .workbuddy/tools/winmd_dump.py.
+    // SMTC takes the album picture as a RandomAccessStreamReference, and the
+    // bytes have to reach it *in memory*. Both documented shortcuts are dead
+    // ends here:
+    //   - StorageFile.GetFileFromPathAsync never completes on this STA - the
+    //     completion is queued to the apartment and the frame loop does not
+    //     pump it as we wait.
+    //   - RandomAccessStreamReference.CreateFromUri only accepts ms-appx /
+    //     ms-appdata / http / https. A file:// URI is NOT on that list, yet
+    //     CreateFromUri still returns S_OK for one (it never touches the file),
+    //     so put_Thumbnail looked like a success while the media flyout stayed
+    //     blank the whole time.
+    // What does work is CreateFromStream over an InMemoryRandomAccessStream:
+    // copy the file in, rewind, hand SMTC the reference. Same recipe Chromium
+    // uses. Interface order / IIDs read from the system metadata with
+    // .workbuddy/tools/winmd_dump.py and winmd_guid.py.
     //
-    // Windows.Foundation.IUriRuntimeClassFactory - only CreateUri is called.
-    struct IUriRuntimeClassFactoryVtbl
+    // Windows.Storage.Streams.IRandomAccessStream - GetOutputStreamAt (6+3) to
+    // write into, then Seek (6+5) and get_Size (6+0) to rewind and verify.
+    struct IRandomAccessStreamVtbl
     {
         HRESULT (STDMETHODCALLTYPE* QueryInterface)(void*, const GUID*, void**);
         ULONG (STDMETHODCALLTYPE* AddRef)(void*);
@@ -251,13 +266,20 @@ namespace
         HRESULT (STDMETHODCALLTYPE* GetIids)(void*, ULONG*, GUID**);
         HRESULT (STDMETHODCALLTYPE* GetRuntimeClassName)(void*, void**);
         HRESULT (STDMETHODCALLTYPE* GetTrustLevel)(void*, int*);
-        // 6. CreateUri, 7. CreateWithRelativeUri
-        HRESULT (STDMETHODCALLTYPE* CreateUri)(void*, void*, void**);
+        // 6
+        HRESULT (STDMETHODCALLTYPE* get_Size)(void*, unsigned long long*);
+        HRESULT (STDMETHODCALLTYPE* put_Size)(void*, unsigned long long);
+        HRESULT (STDMETHODCALLTYPE* GetInputStreamAt)(void*, unsigned long long, void**);
+        HRESULT (STDMETHODCALLTYPE* GetOutputStreamAt)(void*, unsigned long long, void**);
+        HRESULT (STDMETHODCALLTYPE* get_Position)(void*, unsigned long long*);
+        HRESULT (STDMETHODCALLTYPE* Seek)(void*, unsigned long long);
+        HRESULT (STDMETHODCALLTYPE* CloneStream)(void*, void**);
+        HRESULT (STDMETHODCALLTYPE* get_CanRead)(void*, unsigned char*);
+        HRESULT (STDMETHODCALLTYPE* get_CanWrite)(void*, unsigned char*);
     };
 
-    // Windows.Foundation.IUriRuntimeClass - only get_AbsoluteUri (6) is read
-    // back, but the leading members keep the offset honest.
-    struct IUriRuntimeClassVtbl
+    // Windows.Storage.Streams.IBufferFactory.
+    struct IBufferFactoryVtbl
     {
         HRESULT (STDMETHODCALLTYPE* QueryInterface)(void*, const GUID*, void**);
         ULONG (STDMETHODCALLTYPE* AddRef)(void*);
@@ -265,18 +287,50 @@ namespace
         HRESULT (STDMETHODCALLTYPE* GetIids)(void*, ULONG*, GUID**);
         HRESULT (STDMETHODCALLTYPE* GetRuntimeClassName)(void*, void**);
         HRESULT (STDMETHODCALLTYPE* GetTrustLevel)(void*, int*);
-        HRESULT (STDMETHODCALLTYPE* get_AbsoluteUri)(void*, void**); // 6
-        HRESULT (STDMETHODCALLTYPE* get_DisplayUri)(void*, void**);
-        HRESULT (STDMETHODCALLTYPE* get_Domain)(void*, void**);
-        HRESULT (STDMETHODCALLTYPE* get_Extension)(void*, void**);
-        HRESULT (STDMETHODCALLTYPE* get_Fragment)(void*, void**);
-        HRESULT (STDMETHODCALLTYPE* get_Host)(void*, void**);
-        HRESULT (STDMETHODCALLTYPE* get_Password)(void*, void**);
-        HRESULT (STDMETHODCALLTYPE* get_Path)(void*, void**);
-        HRESULT (STDMETHODCALLTYPE* get_Query)(void*, void**);
-        HRESULT (STDMETHODCALLTYPE* get_QueryParsed)(void*, void**);
-        HRESULT (STDMETHODCALLTYPE* get_RawUri)(void*, void**);
-        HRESULT (STDMETHODCALLTYPE* get_SchemeName)(void*, void**); // 17
+        // 6. Create(UINT32 capacity, IBuffer**)
+        HRESULT (STDMETHODCALLTYPE* Create)(void*, unsigned, void**);
+    };
+
+    // Windows.Storage.Streams.IBuffer.
+    struct IBufferVtbl
+    {
+        HRESULT (STDMETHODCALLTYPE* QueryInterface)(void*, const GUID*, void**);
+        ULONG (STDMETHODCALLTYPE* AddRef)(void*);
+        ULONG (STDMETHODCALLTYPE* Release)(void*);
+        HRESULT (STDMETHODCALLTYPE* GetIids)(void*, ULONG*, GUID**);
+        HRESULT (STDMETHODCALLTYPE* GetRuntimeClassName)(void*, void**);
+        HRESULT (STDMETHODCALLTYPE* GetTrustLevel)(void*, int*);
+        // 6
+        HRESULT (STDMETHODCALLTYPE* get_Capacity)(void*, unsigned*);
+        HRESULT (STDMETHODCALLTYPE* get_Length)(void*, unsigned*);
+        HRESULT (STDMETHODCALLTYPE* put_Length)(void*, unsigned);
+    };
+
+    // IBufferByteAccess (plain COM).
+    struct IBufferByteAccessVtbl
+    {
+        HRESULT (STDMETHODCALLTYPE* QueryInterface)(void*, const GUID*, void**);
+        ULONG (STDMETHODCALLTYPE* AddRef)(void*);
+        ULONG (STDMETHODCALLTYPE* Release)(void*);
+        // 3. Buffer(BYTE**)
+        HRESULT (STDMETHODCALLTYPE* Buffer)(void*, unsigned char**);
+    };
+
+    // Windows.Storage.Streams.IOutputStream - only WriteAsync (6) is called.
+    // The interface also inherits IClosable, whose Close ends up after its own
+    // methods (slot 8), so the offsets below are unaffected.
+    struct IOutputStreamVtbl
+    {
+        HRESULT (STDMETHODCALLTYPE* QueryInterface)(void*, const GUID*, void**);
+        ULONG (STDMETHODCALLTYPE* AddRef)(void*);
+        ULONG (STDMETHODCALLTYPE* Release)(void*);
+        HRESULT (STDMETHODCALLTYPE* GetIids)(void*, ULONG*, GUID**);
+        HRESULT (STDMETHODCALLTYPE* GetRuntimeClassName)(void*, void**);
+        HRESULT (STDMETHODCALLTYPE* GetTrustLevel)(void*, int*);
+        // 6
+        HRESULT (STDMETHODCALLTYPE* WriteAsync)(void*, void*, void**);
+        HRESULT (STDMETHODCALLTYPE* FlushAsync)(void*, void**);
+        HRESULT (STDMETHODCALLTYPE* Close)(void*);
     };
 
     // Windows.Storage.Streams.IRandomAccessStreamReferenceStatics.
@@ -307,6 +361,16 @@ namespace
         HRESULT (STDMETHODCALLTYPE* MarkFullscreenWindow)(void*, HWND, int);
         HRESULT (STDMETHODCALLTYPE* SetProgressValue)(void*, HWND, unsigned long long, unsigned long long);
         HRESULT (STDMETHODCALLTYPE* SetProgressState)(void*, HWND, int);
+    };
+
+    // The first three slots of every WinRT object: enough to QueryInterface an
+    // IInspectable* that RoActivateInstance handed back (and every other vtable
+    // in this file starts with the same trio, so safeRelease can use it too).
+    struct IUnknownVtbl
+    {
+        HRESULT (STDMETHODCALLTYPE* QueryInterface)(void*, const GUID*, void**);
+        ULONG (STDMETHODCALLTYPE* AddRef)(void*);
+        ULONG (STDMETHODCALLTYPE* Release)(void*);
     };
 
     // obj points at the COM object; obj[0] is the vtable pointer.
@@ -414,105 +478,160 @@ namespace
         bool valid() const { return handle != nullptr; }
     };
 
-    // file:/// URI for an absolute Windows path. Everything outside the
-    // unreserved set is percent-encoded byte by byte, so a jacket whose name
-    // has Japanese characters still produces a valid URI (the URI has to be
-    // UTF-8 encoded; the file system path is already UTF-8 here).
-    std::string fileUriFromPath(const std::string& rawPath)
+    // Whole file into memory. A jacket is a few hundred KB at most.
+    std::vector<unsigned char> readFileBytes(const std::string& path)
     {
-        std::string path = rawPath;
-        {
-            std::error_code ec;
-            const std::filesystem::path full =
-                std::filesystem::weakly_canonical(path_utf8::toPath(rawPath), ec);
-            if (!ec && !full.empty()) {
-                // Back to UTF-8, not to the ANSI code page: the URI below is
-                // percent-encoded byte by byte and has to stay UTF-8.
-                path = path_utf8::fromPath(full);
-            }
+        std::vector<unsigned char> bytes;
+        std::ifstream in(path_utf8::toPath(path), std::ios::binary);
+        if (!in) {
+            return bytes;
         }
-        static const char* kHex = "0123456789ABCDEF";
-        std::string uri = "file:///";
-        for (const unsigned char c : path) {
-            const bool plain = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
-                || c == '-' || c == '_' || c == '.' || c == '~' || c == '/';
-            if (c == '\\') {
-                uri.push_back('/');
-            } else if (plain) {
-                uri.push_back(static_cast<char>(c));
-            } else if (c == ':') {
-                // Keep the drive-letter colon (file:///D:/...); other colons
-                // would start a scheme and must be escaped.
-                if (uri.size() == 8) {
-                    uri.push_back(':');
-                } else {
-                    uri.append("%3A");
-                }
-            } else {
-                uri.push_back('%');
-                uri.push_back(kHex[c >> 4]);
-                uri.push_back(kHex[c & 0x0F]);
-            }
+        in.seekg(0, std::ios::end);
+        const std::streamoff len = in.tellg();
+        in.seekg(0, std::ios::beg);
+        if (len <= 0) {
+            return bytes;
         }
-        return uri;
+        bytes.resize(static_cast<size_t>(len));
+        in.read(reinterpret_cast<char*>(bytes.data()), len);
+        if (!in) {
+            bytes.clear();
+        }
+        return bytes;
     }
 
-    // RandomAccessStreamReference for an image file, or nullptr.
-    void* streamReferenceFromPath(const std::string& path, std::string& outUri)
+    // RandomAccessStreamReference for a picture on disk, or nullptr. `outInfo`
+    // describes where it stopped, for the one-shot diagnostic in setTrack.
+    void* coverStreamReference(const std::string& path, std::string& outInfo)
     {
-        if (gRoGetActivationFactory == nullptr || path.empty()) {
+        if (gRoGetActivationFactory == nullptr || gRoActivateInstance == nullptr || path.empty()) {
+            outInfo = "no WinRT / empty path";
             return nullptr;
         }
-        outUri = fileUriFromPath(path);
-        HString classId(L"Windows.Foundation.Uri");
-        void* factory = nullptr;
-        if (FAILED(gRoGetActivationFactory(classId.handle, &IID_IUriRuntimeClassFactory, &factory))
-            || factory == nullptr) {
+        const std::vector<unsigned char> bytes = readFileBytes(path);
+        if (bytes.empty()) {
+            outInfo = "read failed";
             return nullptr;
-        }
-        HString uriString(outUri);
-        void* uri = nullptr;
-        const HRESULT uriHr = vt<IUriRuntimeClassFactoryVtbl>(factory)->CreateUri(factory, uriString.handle, &uri);
-        safeRelease(factory);
-        if (FAILED(uriHr) || uri == nullptr) {
-            return nullptr;
-        }
-        // Read it back: CreateUri already validates, but this proves the shell
-        // will see the URI we intended (and comes out percent-encoded).
-        void* absolute = nullptr;
-        if (SUCCEEDED(vt<IUriRuntimeClassVtbl>(uri)->get_AbsoluteUri(uri, &absolute)) && absolute != nullptr) {
-            if (gGetStringRawBuffer != nullptr) {
-                unsigned len = 0;
-                const wchar_t* text = gGetStringRawBuffer(absolute, &len);
-                if (text != nullptr && len > 0) {
-                    const int bytes = WideCharToMultiByte(CP_UTF8, 0, text, static_cast<int>(len), nullptr, 0,
-                        nullptr, nullptr);
-                    if (bytes > 0) {
-                        std::string utf8(static_cast<size_t>(bytes), '\0');
-                        WideCharToMultiByte(CP_UTF8, 0, text, static_cast<int>(len), utf8.data(), bytes, nullptr,
-                            nullptr);
-                        outUri = utf8;
-                    }
-                }
-            }
-            if (gDeleteString != nullptr) {
-                gDeleteString(absolute);
-            }
         }
 
+        // 1. The in-memory random access stream the bytes go into.
+        HString streamClass(L"Windows.Storage.Streams.InMemoryRandomAccessStream");
+        void* instance = nullptr;
+        if (FAILED(gRoActivateInstance(streamClass.handle, &instance)) || instance == nullptr) {
+            outInfo = "InMemoryRandomAccessStream activation failed";
+            return nullptr;
+        }
+        void* stream = nullptr;
+        if (FAILED(vt<IUnknownVtbl>(instance)->QueryInterface(instance, &IID_IRandomAccessStream, &stream))
+            || stream == nullptr) {
+            safeRelease(instance);
+            outInfo = "IRandomAccessStream QI failed";
+            return nullptr;
+        }
+        safeRelease(instance);
+
+        // 2. The bytes go into an IBuffer. WinRT gives no direct way to fill
+        //    one: the pointer comes from IBufferByteAccess, a plain COM
+        //    interface every IBuffer implements. (The obvious alternative -
+        //    DataWriter::WriteBytes - was tried first and dropped: releasing the
+        //    writer closes the stream it wrapped and DetachStream takes an owned
+        //    reference back, so the stream kept dying under us.)
+        HString bufferClass(L"Windows.Storage.Streams.Buffer");
+        void* bufferFactory = nullptr;
+        if (FAILED(gRoGetActivationFactory(bufferClass.handle, &IID_IBufferFactory, &bufferFactory))
+            || bufferFactory == nullptr) {
+            safeRelease(stream);
+            outInfo = "Buffer factory unavailable";
+            return nullptr;
+        }
+        void* buffer = nullptr;
+        const HRESULT bufferHr = vt<IBufferFactoryVtbl>(bufferFactory)
+                                     ->Create(bufferFactory, static_cast<unsigned>(bytes.size()), &buffer);
+        safeRelease(bufferFactory);
+        if (FAILED(bufferHr) || buffer == nullptr) {
+            safeRelease(stream);
+            outInfo = "Create buffer failed";
+            return nullptr;
+        }
+        {
+            void* byteAccess = nullptr;
+            if (FAILED(vt<IUnknownVtbl>(buffer)->QueryInterface(buffer, &IID_IBufferByteAccess, &byteAccess))
+                || byteAccess == nullptr) {
+                safeRelease(buffer);
+                safeRelease(stream);
+                outInfo = "IBufferByteAccess QI failed";
+                return nullptr;
+            }
+            unsigned char* raw = nullptr;
+            if (SUCCEEDED(vt<IBufferByteAccessVtbl>(byteAccess)->Buffer(byteAccess, &raw)) && raw != nullptr) {
+                std::memcpy(raw, bytes.data(), bytes.size());
+                vt<IBufferVtbl>(buffer)->put_Length(buffer, static_cast<unsigned>(bytes.size()));
+            }
+            safeRelease(byteAccess);
+        }
+
+        // 3. Write it into the stream.
+        void* output = nullptr;
+        if (FAILED(vt<IRandomAccessStreamVtbl>(stream)->GetOutputStreamAt(stream, 0, &output))
+            || output == nullptr) {
+            safeRelease(buffer);
+            safeRelease(stream);
+            outInfo = "GetOutputStreamAt failed";
+            return nullptr;
+        }
+        // The operation this returns is deliberately never touched - not
+        // waited on, not cancelled, not released. InMemoryRandomAccessStream
+        // copies the bytes inline (the stream's own size, checked below, is the
+        // proof), yet its IAsyncOperation stays in AsyncStatus::Started forever
+        // here - a message pump does not move it, and both Cancel and Release
+        // fault on it (measured: two different crashes). Leaving it alone costs
+        // one small object per track change, which is the cheap way out.
+        void* writeOp = nullptr;
+        HRESULT hr = vt<IOutputStreamVtbl>(output)->WriteAsync(output, buffer, &writeOp);
+        (void)writeOp;
+
+        // 4. Rewind, and check the length actually landed: a write that silently
+        //    goes nowhere is exactly the failure mode this whole path replaced.
+        auto* streamV = vt<IRandomAccessStreamVtbl>(stream);
+        streamV->Seek(stream, 0);
+        unsigned long long size = 0;
+        streamV->get_Size(stream, &size);
+        if (SUCCEEDED(hr) && size != bytes.size()) {
+            hr = E_FAIL;
+        }
+        if (FAILED(hr)) {
+            safeRelease(output);
+            safeRelease(buffer);
+            safeRelease(stream);
+            outInfo = "write failed";
+            return nullptr;
+        }
+
+        // 5. Wrap it for SMTC.
         HString refClassId(L"Windows.Storage.Streams.RandomAccessStreamReference");
         void* refFactory = nullptr;
         if (FAILED(gRoGetActivationFactory(refClassId.handle, &IID_IRandomAccessStreamReferenceStatics, &refFactory))
             || refFactory == nullptr) {
-            safeRelease(uri);
+            safeRelease(output);
+            safeRelease(buffer);
+            safeRelease(stream);
+            outInfo = "reference factory unavailable";
             return nullptr;
         }
         void* reference = nullptr;
-        const HRESULT refHr = vt<IRandomAccessStreamReferenceStaticsVtbl>(refFactory)->CreateFromUri(refFactory,
-            uri, &reference);
+        const HRESULT refHr = vt<IRandomAccessStreamReferenceStaticsVtbl>(refFactory)
+                                  ->CreateFromStream(refFactory, stream, &reference);
         safeRelease(refFactory);
-        safeRelease(uri);
-        return FAILED(refHr) ? nullptr : reference;
+        safeRelease(output);
+        safeRelease(buffer);
+        safeRelease(stream);
+
+        outInfo = std::to_string(bytes.size()) + " bytes in, stream size " + std::to_string(size);
+        if (FAILED(refHr) || reference == nullptr) {
+            outInfo += " (CreateFromStream failed)";
+            return nullptr;
+        }
+        return reference;
     }
 
 #else  // !_WIN32
@@ -684,22 +803,23 @@ void SystemMedia::setTrack(const std::string& title, const std::string& artist, 
         safeRelease(props);
     }
 
-    // Cover art. The flyout looks empty without it; the reference is built from
-    // a file:// URI (see the plumbing above for why not StorageFile).
+    // Cover art: the bytes are copied into an in-memory stream (the plumbing
+    // above explains why neither a file:// URI nor StorageFile works).
     if (!coverPath.empty()) {
-        std::string uri;
+        std::string info;
         if (mThumbnail != nullptr) {
             safeRelease(mThumbnail);
             mThumbnail = nullptr;
         }
-        mThumbnail = streamReferenceFromPath(coverPath, uri);
+        mThumbnail = coverStreamReference(coverPath, info);
         if (mThumbnail != nullptr) {
             diag("put_Thumbnail", vt<IDisplayUpdaterVtbl>(updater)->put_Thumbnail(updater, mThumbnail));
         } else {
             diag("put_Thumbnail SKIPPED (no stream reference)", E_FAIL);
         }
         if (!s_metaDiagLogged) {
-            std::printf("[media] cover -> %s (%s)\n", mThumbnail == nullptr ? "FAILED" : "ok", uri.c_str());
+            std::printf("[media] cover -> %s (%s; %s)\n", mThumbnail == nullptr ? "FAILED" : "ok",
+                coverPath.c_str(), info.c_str());
             std::fflush(stdout);
         }
     }
