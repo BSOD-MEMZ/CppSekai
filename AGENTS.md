@@ -135,7 +135,7 @@ main.cpp          # SDL2 窗口、事件循环、输入映射、ImGui HUD、截�
 |---|---|---|
 | `main.cpp` → `main()` | **5,713**（`:730` 起） | 参数解析 + 初始化 + 启动决策 + 帧循环 + 关停全在一个函数 |
 | `main.cpp` 帧循环体 | ~2,500（`:3989` 起） | `if/else if (state == ...)` 串起 Select/Play/Result，三者变量共享作用域。**2026-09-19 起这段正文被 `runFrame` lambda 包住**（拖动窗口时要从消息钩子里重入，见「拖动窗口」一节），行数与作用域都没变 |
-| `main.cpp` → `drawSettingsCard` lambda | ~769（`:2684-3453`） | 4 个页签用 `if (tab == N)` 展开 |
+| `main.cpp` → `drawSettingsCard` lambda | **~900**（`:3010-3900`） | **6 个页签**用 `if (tab == N)` 展开（2026-09-23 加了「关于」） |
 | `game/SongSelect.cpp` → `drawSongSelect()` | ~1,746（`:2104` 起） | 13 参数含 5 个 in/out 引用（`selected`/`sortMode`/`groupMode`/`vocalIndex`/`confirmCenter`/`partyOut`） |
 
 **健康的部分**（别顺手"优化"）：`game/` `platform/` 分层清楚，绝大多数文件 ≤1000 行；
@@ -512,11 +512,22 @@ bash build.sh          # 仅需 Git Bash；产物 build/cppsekai.exe + SDL2.dll 
   弹出），命中就 `t=0 / open=true / soundOpen=false` 重新入场。没有它，任何"中途撤走再弹出"都会弹
   一下。**暂停框（`##pauseDialog`）还是老写法**（每个分支立刻 `pauseDialogAlive=false`）：它的绘制
   点在状态分支里，要改成画到 -2 得先把绘制点从状态分支里提出来，还没做。
-- 无头看对话框：【`--settings --settings-tab <0-4>`】打开设置卡（页签 0 演奏 / 1 画面 / 2 判定 /
-  3 系统 / 4 账户）；`CPSEKAI_MULTIASK=1` 启动即弹「开启多开？」确认框（点 combo 是唯一其它入口，
+- 无头看对话框：【`--settings --settings-tab <0-5>`】打开设置卡（页签 0 演奏 / 1 画面 / 2 判定 /
+  3 系统 / 4 账户 / 5 关于）；`CPSEKAI_MULTIASK=1` 启动即弹「开启多开？」确认框（点 combo 是唯一其它入口，
   而 PostMessage 假点击进不了 ImGui 按钮）。配合 `CPSEKAI_CARD_T` 抓入场中间帧。
-- 设置卡片 360x640、四个页签（演奏 / 画面 / 判定 / 系统）；`--settings` + `--settings-tab <0-3>`
-  无头打开（按键没法送进无头运行），配合 `--screenshot` 截图。
+  ⚠ **首启那张 ELUA 会盖住设置卡**（两张卡都是独立窗口，ELUA 后画、在**正中间**），
+  要看设置卡下半页就把窗口开**宽**：`ui::scale()` 只看高度（`h/860`），所以
+  `--width 2600 --height 900` 会让 ELUA 跑到屏幕中间偏右、设置卡留在左上角，两者不再重叠。
+- 设置卡片 360x640、六个页签（演奏 / 画面 / 判定 / 系统 / 账户 / 关于）；`--settings` +
+  `--settings-tab <0-5>` 无头打开（按键没法送进无头运行），配合 `--screenshot` 截图。
+  **加页签要同步三处**：`kSettingsTabCount`（LB/RB 循环页签用它）、`ui::tabBar` 的标签数组、
+  以及那条 `if (tab == N) ... else if ...` 链 —— **最后一个分支原本是裸 `else`**，
+  往后面接新页签时得先把它改成 `else if (tab == N)`（2026-09-23 加「关于」时就这么踩了一下，
+  编译报 `expected expression`）。
+  **页签内容的可用宽度是卡片宽 - `padX`**（child 有卡片那么宽、文字从 `padX` 起排），
+  超出的部分会被裁掉（「账户」页那两行「只存在本机 userdata…」一直都在被裁）。
+  要换行的段落别只靠 `TextWrapped`（它按 child 的宽度换，也就是**卡片宽度**，会顶出卡片），
+  用 `PushTextWrapPos(x + 330*s)` 显式钉住。
   **页签内容放在一个裁剪用的 `BeginChild` 里**：「画面」页比卡片高，多出来的行会钻到「关闭」
   按钮底下（按钮后提交，把点击全吃掉）。这个 child 的末尾**必须补一句 `ImGui::Dummy`**——
   `ui::checkBox()` 最后一条是裸的 `SetCursorScreenPos`，child 作为当帧最后一个窗口时

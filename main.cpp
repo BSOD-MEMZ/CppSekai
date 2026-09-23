@@ -449,8 +449,8 @@ namespace
             "--result-at <sec>: show the result screen once the chart reaches <sec>.\n"
             "--confirm-flash [<sec>]: play the 确定 white burst in the song list (debug;\n"
             "                        no song is loaded).\n"
-            "--settings [--settings-tab <0-4>]: open the settings card at boot on the\n"
-            "          given page (0 演奏 / 1 画面 / 2 判定 / 3 系统 / 4 账户).\n"
+            "--settings [--settings-tab <0-5>]: open the settings card at boot on the\n"
+            "          given page (0 演奏 / 1 画面 / 2 判定 / 3 系统 / 4 账户 / 5 关于).\n"
             "--profile: open the player profile card (the level chip's card) at boot.\n"
             "--guess: open the 猜歌 alias quiz (the header button's card) at boot.\n"
             "--singer-panel: open the 切换歌手 vocal-version panel (the phone panel's\n"
@@ -2960,8 +2960,8 @@ int main(int argc, char** argv)
     // play states. Opened with H or the musicsetting button; alive flag
     // keeps it on screen while the close animation plays out.
     // ------------------------------------------------------------------
-    // 演奏 / 画面 / 判定 / 系统 / 账户. Hoisted out of the card lambda so the
-    // pad's shoulder buttons can switch pages from the input side.
+    // 演奏 / 画面 / 判定 / 系统 / 账户 / 关于. Hoisted out of the card lambda so
+    // the pad's shoulder buttons can switch pages from the input side.
     // Long-note tolerance presets (settings > 判定 > 长条容错): {松手容错, 起按容错}.
     // Index 0 is the classic feel the engine shipped with, 2 the tightest.
     static constexpr float kHoldGracePresets[3][2] = {
@@ -2974,8 +2974,14 @@ int main(int argc, char** argv)
     // drawn in this order (left to right) and a press walks the selection by
     // one - so the signs only say which way each capsule moves the selection.
     const std::vector<float> kPresetChoiceDeltas = {-1.0f, -1.0f, -1.0f};
-    constexpr int kSettingsTabCount = 5;
+    constexpr int kSettingsTabCount = 6;
     int settingsTab = settingsTabShot >= 0 ? settingsTabShot : 0;
+    // The ELUA card's liveness. Declared up here (rather than next to the card
+    // itself, further down) so the settings card's 关于 page can raise it again on
+    // demand - "许可与免责声明" is exactly the thing a player looks for there.
+    int eulaPadChoice = -1;
+    bool eulaAlive = false;
+    bool eulaDismissedThisRun = false;
     // True only on the frame the card opens. The judgement page rebuilds its
     // working copy then (see tab 2), which must happen *before* the sliders
     // are laid out - so last frame's value is kept here rather than inside the
@@ -3034,7 +3040,7 @@ int main(int argc, char** argv)
             int& tab = settingsTab;
             ui::tabBar("settings-tabs",
                 {std::string("演奏"), std::string("画面"), std::string("判定"), std::string("系统"),
-                    std::string("账户")},
+                    std::string("账户"), std::string("关于")},
                 &tab, interior);
 
             // ImGui::Text starts each line at the window's left edge
@@ -3650,7 +3656,7 @@ int main(int argc, char** argv)
                 } else {
                     ImGui::TextWrapped("多人游玩：先开的窗口是房主。");
                 }
-            } else {
+            } else if (tab == 4) {
                 // 账户: the local profile. Nothing here leaves the machine, and
                 // none of it is drawn during play - see game/AccountData.
                 // ImGui::InputText wants a mutable char buffer, so the three
@@ -3836,6 +3842,58 @@ int main(int argc, char** argv)
                     {"本级经验", expLine},
                 };
                 ui::infoRows(accRows, interior);
+            } else if (tab == 5) {
+                // 关于: what this is, what it is built on, and what it is not.
+                //
+                // Plain lines rather than ui::infoRows: the value column there is
+                // only half the card, and every line here (a licence name, an
+                // upstream repo name) is longer than that. Watch the line length
+                // instead - the tab body is a child as wide as the card with the
+                // text starting at padX, so anything past ~340*s simply gets
+                // clipped (the 账户 page has been clipping "只存在本机 userdata..."
+                // since forever). The credits block runs a size smaller, which is
+                // also what keeps "SEGA / Colorful Palette" inside.
+                const auto aboutLine = [&](const char* text) {
+                    contentLeft();
+                    ImGui::TextUnformatted(text);
+                };
+                const auto aboutGap = [&]() {
+                    contentLeft();
+                    ImGui::Dummy(ImVec2(1.0f, 9.0f * s));
+                };
+                aboutLine("CppSekai");
+                aboutLine("SUS 谱面播放器");
+                aboutLine("版本 1.0.0");
+                aboutLine("许可 AGPL-3.0-only");
+                aboutGap();
+                ImGui::PushFont(game::bodyFont(), 19.0f * s);
+                aboutLine("上游");
+                aboutLine("sekai-mmw-preview-web");
+                aboutLine("（AGPL-3.0）谱面核心与渲染");
+                aboutLine("MikuMikuWorld（MIT）");
+                aboutLine("mmw_port 移植来源");
+                aboutGap();
+                aboutLine("素材版权");
+                aboutLine("SEGA / Colorful Palette");
+                // Wrapped at an explicit width: TextWrapped alone uses the child's
+                // own width, which is the *card* - the text would run out of the
+                // card instead of onto the next line.
+                contentLeft();
+                ImGui::PushTextWrapPos(cardCenter.x - cardSize.x * 0.5f + padX + 330.0f * s);
+                ImGui::TextWrapped("本项目免费、开源、非营利，与 SEGA、Colorful Palette 及《初音未来："
+                                   "缤纷舞台》官方没有任何关系，仅供本地学习与练习使用；"
+                                   "一切权利归各自权利人所有。");
+                ImGui::PopTextWrapPos();
+                ImGui::PopFont();
+                aboutGap();
+                contentLeft();
+                if (ui::capsuleButton("许可与免责声明", ImVec2(interior, 44.0f * s), false)) {
+                    // Raises the first-run card again - see the eula state up with
+                    // the settings tab.
+                    eulaAlive = true;
+                    eulaDismissedThisRun = false;
+                    eulaPadChoice = -1;
+                }
             }
             // End on an item: the checkbox helper leaves the cursor at the row
             // bottom with a bare SetCursorScreenPos, which trips ImGui's
@@ -3886,12 +3944,9 @@ int main(int argc, char** argv)
     // ui::eulaDialog's forcedChoice the way pauseDialogChoice is (the pad block
     // runs at the top of the frame, so these have to be declared before the
     // lambdas that draw the cards read them). -1 = nothing pressed yet.
-    // `eulaAlive` / `eulaDismissedThisRun` used to be function-local statics
-    // deep inside the frame body - the pad block cannot see those.
+    // `eulaAlive` / `eulaDismissedThisRun` / `eulaPadChoice` are declared up with
+    // the settings card's state (so its 关于 page can raise the licence card).
     int multiAskPadChoice = -1;
-    int eulaPadChoice = -1;
-    bool eulaAlive = false;
-    bool eulaDismissedThisRun = false;
     auto drawMultiInstanceAskDialog = [&]() {
         if (multiInstanceAsk) {
             multiInstanceAskAlive = true;
