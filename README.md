@@ -381,19 +381,7 @@ HUD 和弹窗全部是 ImGui 立即模式画的，统一在 **1920×1080 虚拟�
 - SMTC 只在 Windows 10+ 真正生效；任务栏进度条（`ITaskbarList3`）Win7 就有
 - 每一处失败都降级成 no-op，缺哪个都不会崩
 
-### 6.8 启动：把黑屏压到 0.6 秒
 
-启动是一条被精心排序的流水线，每步都有 `[boot]` 计时：
-
-```
-窗口 + GL 上下文 → glClear 立刻换一帧（窗口不再是「没画过」的黑块）
-  → loadSplash()（只加载 background + stage）→ 再换一帧 → 约 0.6s 有画面
-  → 其余贴图 + HUD 精灵图 → CJK 字库图集 → 整备完成（约 1.3s~3.5s，看机器）
-```
-
-细节：HUD 精灵图优先读 `assets/mmw/overlay_opt/`（离线用 `.workbuddy/tools/shrink_hud.cpp` 按整数倍 alpha 加权缩到 512px，把 HUD 加载从 ~1.0s 压到 ~0.3s）；字体只走系统（`assets/mmw/font` 已在 2026-09-19 删除），先找系统字体文件、再探测是否有 CJK 字形——Yu Gothic UI 是 CFF 轮廓，stb_truetype 渲染不了，会自动落到 Microsoft YaHei UI。
-
----
 
 ## 7. 数据文件
 

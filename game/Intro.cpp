@@ -640,7 +640,7 @@ IntroInfo buildIntroInfo(const IntroMetadata& metadata, bool hasCover)
     const std::string vocal = trimText(metadata.vocal).empty() ? std::string("-") : trimText(metadata.vocal);
 
     intro.description1 = "作词：" + lyricist + "　作曲：" + composer + "　编曲：" + arranger;
-    intro.description2 = "Vo. " + vocal;
+    intro.description2 = "演唱：" + vocal;
     intro.difficulty = normalizeDifficulty(trimText(metadata.difficulty));
     if (intro.difficulty.empty()) {
         intro.difficulty = inferDifficultyFromSusPath(metadata.susPath);

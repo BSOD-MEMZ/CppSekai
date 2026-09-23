@@ -3874,23 +3874,18 @@ int main(int argc, char** argv)
                     ImGui::Dummy(ImVec2(1.0f, 9.0f * s));
                 };
                 aboutLine("CppSekai");
-                aboutLine("SUS 谱面播放器");
                 ImGui::PushFont(game::bodyFont(), 19.0f * s);
-                aboutLine("版本 1.0.0");
+                aboutLine("版本 1.0.0.0");
                 aboutLine("许可 AGPL-3.0-only");
                 aboutGap();
-                aboutLine("制作");
+                aboutLine("策划 / 开发");
                 aboutLine("xxt8582753（BSOD-MEMZ）");
-                aboutLine("程序 / 界面 / 判定 / 平台层");
+                aboutLine("测试");
+                aboutLine("Shitakara4banme");
                 aboutGap();
-                aboutLine("上游");
-                aboutLine("sekai-mmw-preview-web");
-                aboutLine("（AGPL-3.0）谱面核心与渲染");
-                aboutLine("MikuMikuWorld（MIT）");
-                aboutLine("mmw_port 移植来源");
-                aboutGap();
-                aboutLine("素材版权");
-                aboutLine("SEGA / Colorful Palette");
+                aboutLine("");
+                aboutLine("株洲市南方中学");
+                aboutLine("2026年9月");
                 ImGui::PopFont();
                 aboutGap();
                 // The two links side by side: stacked they cost one more row than
@@ -3905,7 +3900,7 @@ int main(int argc, char** argv)
                         openUrl(L"https://github.com/BSOD-MEMZ/CppSekai");
                     }
                     ImGui::SameLine();
-                    if (ui::capsuleButton("个人网站", ImVec2(linkW, 44.0f * s), false)) {
+                    if (ui::capsuleButton("访问 xxtsoft", ImVec2(linkW, 44.0f * s), false)) {
                         openUrl(L"https://xxtsoft.top");
                     }
                 }
