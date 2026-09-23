@@ -1371,6 +1371,29 @@ namespace
         IM_COL32(181, 91, 255, 255),   // MASTER purple
     };
 
+    // A ring with a soft glow bleeding outwards. ImDrawList has no blur, so
+    // this is a short stack of concentric strokes whose radius grows and whose
+    // alpha falls with distance; overlapping widths keep the steps invisible.
+    // `col` sets the hue and the peak intensity, `spread` how far the halo
+    // reaches, `r` is the radius the glow starts at (the ring / disc edge).
+    void addGlowRing(ImDrawList* dl, const ImVec2& c, float r, ImU32 col, float spread)
+    {
+        const int r0 = static_cast<int>((col >> IM_COL32_R_SHIFT) & 0xFF);
+        const int g0 = static_cast<int>((col >> IM_COL32_G_SHIFT) & 0xFF);
+        const int b0 = static_cast<int>((col >> IM_COL32_B_SHIFT) & 0xFF);
+        const int a0 = static_cast<int>((col >> IM_COL32_A_SHIFT) & 0xFF);
+        constexpr int kLayers = 4;
+        const float step = spread / static_cast<float>(kLayers);
+        for (int i = kLayers; i >= 1; --i) {
+            const float t = static_cast<float>(i) / static_cast<float>(kLayers);
+            const int a = static_cast<int>(a0 * 0.26f * (1.0f - t));
+            if (a <= 0) {
+                continue;
+            }
+            dl->AddCircle(c, r + spread * t, IM_COL32(r0, g0, b0, a), 64, step * 2.0f + 1.0f);
+        }
+    }
+
     // One song (grouped by title) and which entry provides each difficulty.
     struct SongGroup
     {
@@ -3955,12 +3978,18 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             ImGui::PopID();
 
             if (active) {
+                // Glow first, so the solid disc and its white rim sit on top of
+                // it: the halo then reads as light coming off the edge.
+                addGlowRing(dl, c, dcD * 0.5f + 2.5f * k, kDiffColors[d], 10.0f * k);
                 dl->AddCircleFilled(c, dcD * 0.5f, kDiffColors[d]);
                 dl->AddCircle(c, dcD * 0.5f + 2.5f * k, white, 48, 3.0f * k);
             } else {
                 // Unselected difficulties are hollow rings - no dark fill, just
-                // the difficulty colour (dimmed for the ones this song lacks).
-                dl->AddCircle(c, dcD * 0.5f, avail ? kDiffColors[d] : IM_COL32(150, 145, 175, 110), 48, 3.0f * k);
+                // the difficulty colour (dimmed for the ones this song lacks)
+                // with the same edge glow.
+                const ImU32 ring = avail ? kDiffColors[d] : IM_COL32(150, 145, 175, 110);
+                addGlowRing(dl, c, dcD * 0.5f, ring, 9.0f * k);
+                dl->AddCircle(c, dcD * 0.5f, ring, 48, 3.0f * k);
             }
             char lvBuf[16];
             const char* lvText = "-";
@@ -3997,11 +4026,19 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         const bool okHovered = !vocalPanelUp && ImGui::IsItemHovered();
         const bool okPressed = !vocalPanelUp && ImGui::IsItemClicked();
         ImGui::PopID();
-        dl->AddRectFilled(okA, okB,
-            okReady ? (okHovered ? ui::kPrimaryHover : ui::kPrimary) : IM_COL32(94, 108, 116, 255),
-            okH * 0.5f);
-        addTextCentered(dl, body, 22.0f * k, ImVec2(cx, (okA.y + okB.y) * 0.5f),
-            okReady ? ui::kBtnText : IM_COL32(206, 210, 220, 255), "确定");
+        // Outline only: the capsule keeps the phone panel's own background (the
+        // reference UI fills nothing in), and only the rim carries the mint.
+        // Hovering / pressing answers with a whisper of colour inside the rim
+        // plus a slightly brighter edge, so the button still feels alive.
+        const ImU32 okEdge = okReady ? (okHovered ? ui::kPrimaryHover : ui::kPrimary)
+                                     : IM_COL32(126, 138, 156, 255);
+        if (okReady && (okHovered || okPressed)) {
+            dl->AddRectFilled(okA, okB,
+                okPressed ? IM_COL32(106, 232, 208, 72) : IM_COL32(106, 232, 208, 34),
+                okH * 0.5f);
+        }
+        dl->AddRect(okA, okB, okEdge, okH * 0.5f, 0, 3.0f * k);
+        addTextCentered(dl, body, 22.0f * k, ImVec2(cx, (okA.y + okB.y) * 0.5f), okEdge, "确定");
         // Where the button actually lands on screen (it is tilted with the phone),
         // so main.cpp can start the confirm flash from it.
         if (confirmCenter != nullptr) {
