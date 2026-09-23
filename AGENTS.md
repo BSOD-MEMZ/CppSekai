@@ -295,6 +295,13 @@ bash build.sh          # 仅需 Git Bash；产物 build/cppsekai.exe + SDL2.dll 
   `-Wno-unused-parameter` 给回调签名、`-Wno-missing-field-initializers` 给 stb）。
   **`SOURCES` 要留在一律 `<全量构建> → 0 warning` 的状态**——新代码第一次报警告的场合，
   先当成"这里有东西没写完"看，别急着加 `-Wno-`。
+  ⚠ **但别信"刚跑完的那次构建报 0 警告"**（2026-09-23 踩）：zig 有全局对象缓存，
+  命令行不变时第二次构建**一个 TU 都不重编**，于是 `warning:` 数是 0 —— 哪怕这个工程的
+  冷编译其实有 30 条。要真切地量一次，给构建加一个无害的多余参数把缓存打掉：
+  `bash build.sh -DCPSEKAI_FORCE_REBUILD=1`，然后同时数 `error:` 和 `warning:`。
+  （那 30 条的真身是 `platform/FontOutline.cpp` include 的 `imstb_truetype.h` 的
+  `-Wunused-function` —— 它是我们的 TU，所以 `-w` 管不到；已在 include 处
+  `#pragma clang diagnostic ignored` 包起来，现在冷编译也是 0 了。）
 - **上游 `core/native/**` 和 vendored `imgui` 是单独编 `.o` 的**（build.sh 里
   `UPSTREAM_SOURCES` 那段，用 `-w`）。它们自带 174 条 missing-braces / sign-compare /
   unused-function，混在同一次编译里会把我们自己的警告淹掉——这就是这个仓库之前
@@ -532,6 +539,16 @@ bash build.sh          # 仅需 Git Bash；产物 build/cppsekai.exe + SDL2.dll 
   按钮底下（按钮后提交，把点击全吃掉）。这个 child 的末尾**必须补一句 `ImGui::Dummy`**——
   `ui::checkBox()` 最后一条是裸的 `SetCursorScreenPos`，child 作为当帧最后一个窗口时
   `EndChild()` 会弹 "SetCursorPos ... to extend window/parent boundaries" 断言。
+- **「关于」页（页签 5，2026-09-23）**：版本 / 许可 / 制作 / 上游 / 素材版权 五段 + 两个链接
+  按钮 + 免责段落 + 「许可与免责声明」按钮（把首启那张 ELUA 再拉起来）。要点：
+  - 链接按钮用 `openUrl()`（= `ShellExecuteW(nullptr, L"open", url, ...)`，和 chartdl 打开
+    输出目录同一个调用；**shell32 早就在链接行上**，不用动 build.sh）。
+  - **两个链接并排、不能上下排**：上下排会多出一行，`used` 超 `view` 约 25s，页面就出滚动条了。
+    并排之后按钮变窄（`(interior - 8s)/2`），而 `capsuleButton` 是**居中且不截断**的
+    ——标签必须短（「GitHub」而不是「GitHub 仓库」，后者会顶出胶囊）。
+  - 免责段落压到 3 行（去掉和 ELUA 卡重复的"一切权利归权利人所有"），再加前面那几行
+    正好卡在 `scrollMax=0`。**加行之前先量**：`CPSEKAI_UI_TRACE=1` 会打
+    `[ui] tab 5 view=.. used=.. scrollMax=..`，`used > view` 就是必然出滚动条。
 - **选曲头部行现在有两个按钮**（2026-09-19）：「刷新」（`refresh.png`，F5 同义）和它右边的
   「下载谱面」（`store.png`，返回既有的 `game::SelectDownload`，主循环已有处理；空列表那个按钮
   用的是同一个 action）。几何在 `game/SongSelect.cpp` 头部一起算（`rescanX/W`、`storeX/W`），
@@ -1751,6 +1768,14 @@ ImGui 后端降级 + 去掉 `glBindSampler`），那是一块真活儿，而目�
     否则第二个窗口会照样挑 `default` 然后两边同时写同一个存档。已有用户都被占了就自动建
     `用户N`（在 设置→账户 里能看到，可改名）。
   - 互斥体靠进程结束由系统释放，崩溃也不会留下死锁。
+  - **用户自己开着游戏时怎么做无头验证**（2026-09-23）：实例互斥体会把无头跑挡掉
+    （日志只有 `[instance] already running`），而且正在运行的 exe 会让链接直接失败
+    （`failed to write output ... Permission denied`）。两条出路一起用：
+    `OUT=build/probe.exe bash build.sh` 换个输出名编译（build.sh 支持 `OUT=`），
+    再 `./build/probe.exe --instance multi ...` 跑——`--instance multi` 会另占一份
+    `Profile.<id>` 锁，既不会撞他的实例，也**不会**像 `--party` 那样加入房间。
+    注意多开实例会挑**另一个档案**（不是他在用的那个），所以截出来的设置/成绩可能不同；
+    验完把 `build/probe.exe` 删掉。
 - **多开的内存**：实测三个实例 207 / 299 / 333 MB（工作集），**线性增长，没有共享**。
   跨进程共享不了 GL 纹理和解码缓冲，想省只能是（a）单进程多窗口，或（b）给非首个实例开
   `CPSEKAI_TEX_RAW=0` 那套贴图缩小策略（`loadTextureFromFile` 的 maxDim/cropHeight 还编在里面，

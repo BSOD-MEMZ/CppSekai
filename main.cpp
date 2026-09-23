@@ -2982,6 +2982,16 @@ int main(int argc, char** argv)
     int eulaPadChoice = -1;
     bool eulaAlive = false;
     bool eulaDismissedThisRun = false;
+    // Opens a URL in the user's default browser (settings > 关于). Same call
+    // chartdl uses to reveal its output folder, and shell32 is already on the
+    // link line; the URLs are literals, never anything the user typed.
+    const auto openUrl = [](const wchar_t* url) {
+#ifdef _WIN32
+        ShellExecuteW(nullptr, L"open", url, nullptr, nullptr, SW_SHOWNORMAL);
+#else
+        (void)url;
+#endif
+    };
     // True only on the frame the card opens. The judgement page rebuilds its
     // working copy then (see tab 2), which must happen *before* the sliders
     // are laid out - so last frame's value is kept here rather than inside the
@@ -3843,7 +3853,9 @@ int main(int argc, char** argv)
                 };
                 ui::infoRows(accRows, interior);
             } else if (tab == 5) {
-                // 关于: what this is, what it is built on, and what it is not.
+                // 关于: what this is, who made it, what it is built on, what it is
+                // not, and the two links (把作者 / 上游 / 素材 / 仓库 / 个人站都放这里,
+                // 免得玩家去翻 README)。
                 //
                 // Plain lines rather than ui::infoRows: the value column there is
                 // only half the card, and every line here (a licence name, an
@@ -3863,10 +3875,14 @@ int main(int argc, char** argv)
                 };
                 aboutLine("CppSekai");
                 aboutLine("SUS 谱面播放器");
+                ImGui::PushFont(game::bodyFont(), 19.0f * s);
                 aboutLine("版本 1.0.0");
                 aboutLine("许可 AGPL-3.0-only");
                 aboutGap();
-                ImGui::PushFont(game::bodyFont(), 19.0f * s);
+                aboutLine("制作");
+                aboutLine("xxt8582753（BSOD-MEMZ）");
+                aboutLine("程序 / 界面 / 判定 / 平台层");
+                aboutGap();
                 aboutLine("上游");
                 aboutLine("sekai-mmw-preview-web");
                 aboutLine("（AGPL-3.0）谱面核心与渲染");
@@ -3875,14 +3891,36 @@ int main(int argc, char** argv)
                 aboutGap();
                 aboutLine("素材版权");
                 aboutLine("SEGA / Colorful Palette");
+                ImGui::PopFont();
+                aboutGap();
+                // The two links side by side: stacked they cost one more row than
+                // the card has left, and this tab is meant to be read without a
+                // scrollbar. Side by side the pills are narrow, so the labels have
+                // to stay short (capsuleButton centres the text and does not
+                // ellipsize - a long label just runs out of the pill).
+                contentLeft();
+                {
+                    const float linkW = (interior - 8.0f * s) * 0.5f;
+                    if (ui::capsuleButton("GitHub", ImVec2(linkW, 44.0f * s), true)) {
+                        openUrl(L"https://github.com/BSOD-MEMZ/CppSekai");
+                    }
+                    ImGui::SameLine();
+                    if (ui::capsuleButton("个人网站", ImVec2(linkW, 44.0f * s), false)) {
+                        openUrl(L"https://xxtsoft.top");
+                    }
+                }
+                aboutGap();
                 // Wrapped at an explicit width: TextWrapped alone uses the child's
                 // own width, which is the *card* - the text would run out of the
                 // card instead of onto the next line.
                 contentLeft();
+                ImGui::PushFont(game::bodyFont(), 19.0f * s);
                 ImGui::PushTextWrapPos(cardCenter.x - cardSize.x * 0.5f + padX + 330.0f * s);
+                // Three lines - the fourth would push the tab past the card and
+                // put a scrollbar on the 关于 page. The full sentence (including
+                // 一切权利归各自权利人所有) is in the card behind the button below.
                 ImGui::TextWrapped("本项目免费、开源、非营利，与 SEGA、Colorful Palette 及《初音未来："
-                                   "缤纷舞台》官方没有任何关系，仅供本地学习与练习使用；"
-                                   "一切权利归各自权利人所有。");
+                                   "缤纷舞台》官方没有任何关系，仅供本地学习与练习使用。");
                 ImGui::PopTextWrapPos();
                 ImGui::PopFont();
                 aboutGap();

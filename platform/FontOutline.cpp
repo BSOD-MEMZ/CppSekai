@@ -8,7 +8,15 @@
 
 #define STB_TRUETYPE_IMPLEMENTATION
 #define STBTT_STATIC
+// A vendored third-party header: its 30 unused-function warnings are not ours to
+// fix, and without this they land in *our* -Wall pass (this file is compiled as
+// one of ours, see build.sh). That is the only reason they are usually
+// invisible - the zig object cache hides them on every build after the first
+// cold one, which is exactly how "0 警告" can be true and false at once.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunused-function"
 #include "imstb_truetype.h"
+#pragma clang diagnostic pop
 
 #include <algorithm>
 #include <climits>

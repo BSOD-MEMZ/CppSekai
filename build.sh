@@ -129,11 +129,17 @@ fi
 # downloader declares DPI awareness, the game does not.
 "$ZIG" rc app.rc build/app.res
 "$ZIG" rc chartdl.rc build/chartdl.res
+# Output path, overridable: Windows refuses to overwrite a *running* exe
+# ("failed to write output ... Permission denied"), and losing half an hour to
+# that has happened more than once. `OUT=build/probe.exe bash build.sh` builds
+# the same thing under another name so it can be run (with `--instance multi`)
+# while the game is still open.
+GAME_OUT="${OUT:-build/cppsekai.exe}"
 "$ZIG" c++ "${CXXFLAGS[@]}" "${SOURCES[@]}" "${UPSTREAM_OBJS[@]}" build/app.res \
     "$SDL/lib/libSDL2.dll.a" \
     -limm32 -lsetupapi -lversion -lole32 -loleaut32 -lwinmm -lgdi32 -luser32 -ladvapi32     -lshell32 \
     -lopengl32 \
-    -o build/cppsekai.exe "$@"
+    -o "$GAME_OUT" "$@"
 
 # ---------------------------------------------------------------------------
 # Chart downloader (a separate, standalone tool: same libraries, no game code).
