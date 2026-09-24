@@ -162,17 +162,18 @@ struct UserSettings
     bool showProgressBar = true;
     // Hide the Windows touch ripple over our window (per-window setting).
     bool hideTouchFeedback = true;
-    float perfectMs = 40.0f;
-    float greatMs = 90.0f;
-    float goodMs = 140.0f;
+    // Judgement windows, in ms. These defaults are the 宽松 preset (the official
+    // set opened up by 30 ms on every window); 设置 > 判定 > 判定预设 offers
+    // 标准 (the bare official set) and 严格 (30 ms tighter) next to it.
+    float perfectMs = 70.0f;
+    float greatMs = 120.0f;
+    float goodMs = 170.0f;
     // BAD window end, and the point where an untouched note auto-misses. With
     // `linkBadMiss` on (default) the two are the same number: BAD stops exactly
     // where the note gives up. Off lets them drift apart, so a press may still
     // read as BAD for a moment after the note has already missed on its own.
-    // 200 = what the engine used to derive as goodMs + 60, so an untouched
-    // profile keeps feeling exactly like it did.
-    float badMs = 200.0f;
-    float missMs = 200.0f;
+    float badMs = 230.0f;
+    float missMs = 230.0f;
     bool linkBadMiss = true;
     // Long-note tolerance. Letting go earlier than holdTailGraceMs before a
     // hold's end breaks it; the lane may be grabbed up to holdStartGraceMs
@@ -293,6 +294,12 @@ void loadUserData(const std::string& path, UserSettings& settings,
 
 void saveUserData(const std::string& path, const UserSettings& settings,
     const std::map<std::string, ScoreRecord>& scores, const AccountData& account);
+
+// True when `path` parses as a profile file - a JSON object carrying a
+// "settings" or a "scores" member. 设置 > 账户 > 导入 asks this before its
+// confirmation card, so a picked file that is *not* user data (any other json
+// on the machine) is rejected while there is still nothing to undo.
+bool isUserDataFile(const std::string& path);
 
 // Records the result of one chart (merges with the existing record) and
 // returns the merged record. `score` only ever raises the stored best.

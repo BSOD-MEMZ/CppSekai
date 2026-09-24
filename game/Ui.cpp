@@ -1245,6 +1245,88 @@ bool checkBox(const char* label, bool* value, float rowWidth, bool enabled)
     return checked;
 }
 
+bool radioRow(const char* id, const std::vector<std::string>& labels, int* selected, float rowWidth)
+{
+    if (selected == nullptr || labels.empty()) {
+        return false;
+    }
+    const float s = scale();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImFont* font = game::bodyFont();
+    // Same label size as checkBox, so the two read as one family of controls.
+    const float fontSize = 22.0f * s;
+    const float dotR = 11.0f * s;
+    const float dotGap = 9.0f * s;
+    const float rowH = dotR * 2.0f;
+
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+    const float rowW = rowWidth > 0.0f ? rowWidth : ImGui::GetContentRegionAvail().x;
+    ImGui::Dummy(ImVec2(rowW, rowH + 12.0f * s)); // reserve the row
+    ImGui::PushID(id);
+
+    // One focus band for the whole row (the same contract as the stepper's
+    // pick-one capsules): left / right steps the selection, and A moves on too -
+    // the ring covers all of the circles, so there is nothing for A to aim at.
+    const PadReply pad = padWidget(ImGui::GetID("##pad"), PadKStepper,
+        ImVec4(pos.x, pos.y, pos.x + rowW, pos.y + rowH + 12.0f * s), nullptr, nullptr, nullptr, nullptr,
+        0.0f, 0.0f, 0.0f, true);
+
+    const int count = static_cast<int>(labels.size());
+    const float cellW = rowW / static_cast<float>(count);
+    bool changed = false;
+    for (int i = 0; i < count; ++i) {
+        const std::string& label = labels[static_cast<std::size_t>(i)];
+        const ImVec2 textSize = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, label.c_str());
+        const float groupW = dotR * 2.0f + dotGap + textSize.x;
+        // Centered in its own cell: the options stay evenly spread whatever the
+        // labels are, so a row never drifts off the card edge.
+        const float groupX = pos.x + cellW * (static_cast<float>(i) + 0.5f) - groupW * 0.5f;
+        const ImVec2 circle(groupX + dotR, pos.y + rowH * 0.5f);
+
+        ImGui::SetCursorScreenPos(ImVec2(groupX, pos.y));
+        ImGui::InvisibleButton(label.c_str(), ImVec2(groupW, rowH));
+        const bool clicked = ImGui::IsItemClicked();
+        const bool hovered = ImGui::IsItemHovered();
+        const ImGuiID key = ImGui::GetItemID();
+        const bool picked = *selected == i;
+        if (clicked && !picked) {
+            *selected = i;
+            changed = true;
+            se(SeClick);
+        }
+
+        // Ring and dot travel with the same eased value, so switching options
+        // reads as one dot growing while the other shrinks.
+        const float t = animValue(key ^ 0x61u, picked ? 1.0f : 0.0f, 20.0f);
+        const float hov = animToggle(key ^ 0x62u, hovered && !picked, 16.0f);
+        const ImU32 fill = mixColor(kWhiteBtn, IM_COL32(255, 235, 243, 255), hov);
+        dl->AddCircleFilled(circle, dotR, fill, 32);
+        dl->AddCircle(circle, dotR, mixColor(kDivider, kCheckPink, t), 32, 2.0f * s);
+        if (t > 0.02f) {
+            dl->AddCircleFilled(circle, dotR * 0.46f * t, withAlpha(kCheckPink, t), 24);
+        }
+        dl->AddText(font, fontSize,
+            ImVec2(circle.x + dotR + dotGap, pos.y + (rowH - textSize.y) * 0.5f),
+            mixColor(kTitleText, kBodyText, t), label.c_str());
+    }
+
+    // Wrap-around is deliberately not offered: the row is three options wide and
+    // the ring already shows where it is.
+    if (pad.delta != 0 && count > 0) {
+        const int from = (*selected >= 0 && *selected < count) ? *selected : (pad.delta > 0 ? -1 : count);
+        const int next = std::clamp(from + pad.delta, 0, count - 1);
+        if (next != *selected) {
+            *selected = next;
+            changed = true;
+            se(SeClick);
+        }
+    }
+
+    ImGui::SetCursorScreenPos(ImVec2(pos.x, pos.y + rowH + 12.0f * s));
+    ImGui::PopID();
+    return changed;
+}
+
 bool stepper(const char* id, float* value, const std::vector<float>& deltas, const char* fmt, float rowWidth,
     const std::vector<std::string>& presets)
 {

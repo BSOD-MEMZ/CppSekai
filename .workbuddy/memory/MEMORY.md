@@ -16,6 +16,7 @@
 ## 构建 / 运行硬性坑
 - `bash build.sh`（Git Bash）。zig **0.14.1**（`toolchain/` 不入库），别换 0.16（吞 `-I`）；
   zig 缓存必须在 C 盘（build.sh 已设 `ZIG_GLOBAL_CACHE_DIR`）。全量编译 35~45s。
+  **游戏 exe 的链接行有 `-lcomdlg32`**（账户页的导入 / 导出文件选择框）。
 - `main.cpp` 必须在 `#include <SDL.h>` 前 `#define SDL_MAIN_HANDLED`，否则"秒退无输出"。
 - exe 是 Windows 子系统；日志去 **cwd 的 `cppsekai.log`**；`--screenshot` 的参数是**文件路径**
   （给目录会静默失败），父目录必须已存在。
@@ -89,9 +90,11 @@
 - HUD / 结算 / 选曲都用 `px()/py()/ps()` 换算。**ImGui `AddText(font,size,...)` 的 size 是像素**，
   虚拟单位必须自己乘 scale（非 1080p 文字偏大就是漏了这步）。
 - 数值/文字优先用游戏自带精灵（`score/digit/*`、`combo/p*`），别用字体凑。
-- 自绘控件（`ui::slider` / `checkBox` / `stepper` / `capsuleButton`）**键盘焦点够不着** —— 手柄靠
-  焦点环驱动（`ui::PadScope` + `padNav`，见 AGENTS.md「手柄焦点环 / 震动」）；**新增原生
+- 自绘控件（`ui::slider` / `checkBox` / `radioRow` / `stepper` / `capsuleButton`）**键盘焦点够不着** ——
+  手柄靠焦点环驱动（`ui::PadScope` + `padNav`，见 AGENTS.md「手柄焦点环 / 震动」）；**新增原生
   `ImGui::Combo` 要接一句 `ui::padComboNudge`**。
+- 设置卡片现在 **380x800**（设计像素，`ui::scale()` = 视高/860 封顶 2.0）；页签内容放在裁剪 child 里，
+  **余量很小**（演奏 515 / 账户 488，720p 下 view=519）。加行先跑 `CPSEKAI_UI_TRACE=1` 看 `used`。
 
 ## 验证手法（精选）
 - **截图能直接看**（Read 一张 PNG）。`--party-auto` 会在结算 2s 后自动按「继续」，拍结算别加它。
@@ -124,6 +127,12 @@
   下载 4 线程 + `thread_local` 缓存 session；**测下载别拿单曲做样本**。
 
 ## 最近工作（细节看 AGENTS.md 对应小节 + 当日日志）
+- **2026-09-24**：设置卡片一批 —— ① 账户页**导入 / 导出用户数据**（comdlg32 原生选择器，
+  **build.sh 游戏链接行新增 `-lcomdlg32`**；导入=覆盖当前档案，先确认）；② 系统页**结束当前 /
+  所有实例**（EnumWindows + PostMessage(WM_CLOSE)，main 里新处理 `SDL_WINDOWEVENT_CLOSE`）；
+  ③ **判定预设 宽松/标准/严格**（出厂**宽松** = 官方各 +30ms：70/120/170/230/230，
+  `UserSettings` 默认值同步改），长条容错也换 radio（新增 `ui::radioRow`）；
+  ④ 震动三勾 + 自动演出挪进演奏页；⑤ **页签支持触摸拖动滚动**（手指竖直位移 → `SetScrollY`）。
 - **2026-09-20**：① chartdl 数据源体检 + 定数表纳入同步；② 确定闪光改全白；③ 猜歌卡片；
   ④ **手柄焦点环**（设置卡片里的滑块/复选框/stepper/下拉框都能用手柄操作）**+ 开局与结算数字
   滚动的震动**（新设置 `UserSettings::padRumble`）。

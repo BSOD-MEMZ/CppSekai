@@ -174,6 +174,16 @@ void cardTitle(const char* text, float interiorWidth, float sizePx = 24.0f);
 // that only make sense under another one (多人游玩 needs 允许多开).
 bool checkBox(const char* label, bool* value, float rowWidth = 0.0f, bool enabled = true);
 
+// Row of radio buttons: one circle + label per option, the options spread
+// evenly across rowWidth so even three Chinese labels fit inside the card.
+// The picked circle fills pink (with the same tween the checkbox's tick uses).
+// Clicks select; left / right on the pad walk the options like the stepper's
+// pick-one capsules do. `selected` is the chosen slot - anything out of range
+// reads as "nothing picked" (i.e. the value under it was customised). Returns
+// true on the frames the selection changed.
+bool radioRow(const char* id, const std::vector<std::string>& labels, int* selected,
+    float rowWidth = 0.0f);
+
 // pjsk number stepper: a row of small white capsules with the +/- deltas
 // around a gray pill showing the current value, all centered in rowWidth.
 // Applies the pressed delta to *value and returns true when it changed.

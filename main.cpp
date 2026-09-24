@@ -37,6 +37,11 @@
 #ifdef _WIN32
 #include <windows.h>
 #include <shellapi.h>
+// 账户 > 导入 / 导出用户数据 uses the classic comdlg32 pickers (GetOpenFileNameW
+// / GetSaveFileNameW). The downloader has linked comdlg32 since it existed for
+// its folder browser; the game only needs it now, and build.sh's link line has
+// it.
+#include <commdlg.h>
 #endif
 
 #include <algorithm>
@@ -46,7 +51,10 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
+#include <filesystem>
 #include <fstream>
+#include <functional>
 #include <set>
 #include <sstream>
 #include <string>
@@ -381,6 +389,52 @@ namespace
         // 7 = FEEDBACK_TOUCH_TAP.
         fn(info.info.win.window, 1, 0, sizeof(BOOL), &value);
         fn(info.info.win.window, 7, 0, sizeof(BOOL), &value);
+    }
+
+    // Text of every CppSekai window's title, minus the optional 多人游玩 label
+    // ("CppSekai - <user>"). The class name is SDL2's own, which is what keeps a
+    // text file called "CppSekai" open in Notepad out of the list.
+    constexpr wchar_t kInstanceWindowClass[] = L"SDL_app";
+    constexpr wchar_t kInstanceTitle[] = L"CppSekai";
+
+    // 设置 > 系统 > 结束所有实例. Asks every window of this game on the desktop
+    // to close, the way clicking its X would: one posted WM_CLOSE each, which
+    // SDL turns into SDL_WINDOWEVENT_CLOSE -> the normal shutdown path, so every
+    // instance saves its own profile on the way out. Nothing is killed here.
+    int postCloseToAllInstances()
+    {
+        struct Finder
+        {
+            int count = 0;
+
+            static BOOL CALLBACK proc(HWND hwnd, LPARAM param)
+            {
+                auto* self = reinterpret_cast<Finder*>(param);
+                if (GetWindow(hwnd, GW_OWNER) != nullptr) {
+                    return TRUE; // owned popups are not main windows
+                }
+                wchar_t className[64] = {};
+                if (GetClassNameW(hwnd, className, 64) == 0
+                    || std::wcscmp(className, kInstanceWindowClass) != 0) {
+                    return TRUE;
+                }
+                wchar_t title[192] = {};
+                if (GetWindowTextW(hwnd, title, 192) == 0) {
+                    return TRUE;
+                }
+                const bool ours = std::wcscmp(title, kInstanceTitle) == 0
+                    || std::wcsncmp(title, L"CppSekai - ", 11) == 0;
+                if (!ours) {
+                    return TRUE;
+                }
+                PostMessageW(hwnd, WM_CLOSE, 0, 0);
+                ++self->count;
+                return TRUE;
+            }
+        };
+        Finder finder;
+        EnumWindows(&Finder::proc, reinterpret_cast<LPARAM>(&finder));
+        return finder.count;
     }
 #endif
 
@@ -2860,6 +2914,13 @@ int main(int argc, char** argv)
     // else (volumes, offset, note speed, judgement, ui scale, background)
     // takes effect on the spot.
     // ------------------------------------------------------------------
+    // Declared here, defined below (see "Re-derive every live mirror"): both
+    // 切用户 and 账户 > 导入用户数据 need to push a freshly loaded
+    // userSettings/scores/account onto the live mirrors, and the body needs
+    // variables that are declared further down (flickAsTapGiven, applyRenderMode,
+    // refreshSelectBackdrop...), so it lives after them. std::function is what
+    // lets this one be referenced from here.
+    std::function<void()> applyProfileLive;
     auto activateProfile = [&](const std::string& id) {
         const auto found = std::find_if(profiles.begin(), profiles.end(),
             [&](const game::UserProfile& user) { return user.id == id; });
@@ -2886,7 +2947,17 @@ int main(int argc, char** argv)
         if (party.active()) {
             party.setName(account.name.empty() ? partyLabel : account.name);
         }
+        applyProfileLive();
+        std::printf("[profile] switched to '%s' (%zu score(s))\n", id.c_str(), scores.size());
+        std::fflush(stdout);
+        persistUserData();
+    };
 
+    // Apply the profile that is currently in userSettings / scores / account to
+    // everything that can change while the game runs. Called right after a
+    // profile switch, and again after 账户 > 导入用户数据 overwrites the active
+    // profile file underneath us.
+    applyProfileLive = [&]() {
         // Re-derive every live mirror from the profile that was just loaded.
         // persistUserData() copies these *into* userSettings before saving, so
         // leaving the old user's values here would write them into the new
@@ -2946,9 +3017,6 @@ int main(int argc, char** argv)
         applyRenderMode();
         systemMedia.setReporting(userSettings.reportSmtc);
         game::applyScores(entries, scores);
-        std::printf("[profile] switched to '%s' (%zu score(s))\n", id.c_str(), scores.size());
-        std::fflush(stdout);
-        persistUserData();
     };
 
     if (!activateProfileArg.empty()) {
@@ -2962,6 +3030,19 @@ int main(int argc, char** argv)
     // ------------------------------------------------------------------
     // 演奏 / 画面 / 判定 / 系统 / 账户 / 关于. Hoisted out of the card lambda so
     // the pad's shoulder buttons can switch pages from the input side.
+    //
+    // Judgement presets (settings > 判定 > 判定窗口): {Perfect, Great, Good, Bad,
+    // Miss} in ms. 标准 is the official table as this engine has always shipped
+    // it, 宽松 / 严格 the same set opened / tightened by 30 ms - and 宽松 is what
+    // a fresh profile starts on (UserSettings' own defaults), so the shipped
+    // order is the order of the radio row. A preset is only ever a shorthand for
+    // the five sliders below it: dragging one walks the selection off to -1.
+    static constexpr float kJudgePresets[3][5] = {
+        {70.0f, 120.0f, 170.0f, 230.0f, 230.0f}, // 宽松
+        {40.0f, 90.0f, 140.0f, 200.0f, 200.0f},  // 标准
+        {10.0f, 60.0f, 110.0f, 170.0f, 170.0f},  // 严格
+    };
+    const std::vector<std::string> kJudgePresetLabels = {"宽松", "标准", "严格"};
     // Long-note tolerance presets (settings > 判定 > 长条容错): {松手容错, 起按容错}.
     // Index 0 is the classic feel the engine shipped with, 2 the tightest.
     static constexpr float kHoldGracePresets[3][2] = {
@@ -2970,10 +3051,6 @@ int main(int argc, char** argv)
         {60.0f, 40.0f},   // 严格
     };
     const std::vector<std::string> kHoldPresetLabels = {"宽容", "较紧", "严格"};
-    // One slot per preset, in list order. In pick-one mode the capsules are
-    // drawn in this order (left to right) and a press walks the selection by
-    // one - so the signs only say which way each capsule moves the selection.
-    const std::vector<float> kPresetChoiceDeltas = {-1.0f, -1.0f, -1.0f};
     constexpr int kSettingsTabCount = 6;
     int settingsTab = settingsTabShot >= 0 ? settingsTabShot : 0;
     // The ELUA card's liveness. Declared up here (rather than next to the card
@@ -2992,11 +3069,93 @@ int main(int argc, char** argv)
         (void)url;
 #endif
     };
-    // True only on the frame the card opens. The judgement page rebuilds its
-    // working copy then (see tab 2), which must happen *before* the sliders
-    // are laid out - so last frame's value is kept here rather than inside the
-    // card lambda, where it would only become visible one frame too late.
-    bool settingsWasOpen = false;
+    // The native picker behind 账户 > 导出 / 导入用户数据. comdlg32 again (the
+    // downloader has used it for its folder browser since forever), so it is the
+    // dialog every Windows user already knows - and it exists on Win7. Paths are
+    // UTF-8 throughout the game, so the buffer is UTF-16 and goes through
+    // path_utf8. Empty return = the user cancelled.
+    //
+    // OFN_NOCHANGEDIR is not optional: without it the dialog leaves the process
+    // in whatever folder was browsed, and the game's cwd is where it looks for
+    // charts\ , writes its log and resolves relative --sus / --bgm paths.
+    const auto pickUserDataFile = [&](bool save, const std::string& suggestedPath) -> std::string {
+#ifdef _WIN32
+        static const wchar_t kFilter[] =
+            L"用户数据 (*.json)\0*.json\0所有文件 (*.*)\0*.*\0";
+        wchar_t buffer[MAX_PATH * 4] = {};
+        const std::wstring wide = path_utf8::widen(suggestedPath);
+        std::wcsncpy(buffer, wide.c_str(), std::size(buffer) - 1);
+        OPENFILENAMEW ofn{};
+        ofn.lStructSize = sizeof(ofn);
+        SDL_SysWMinfo info{};
+        SDL_VERSION(&info.version);
+        if (SDL_GetWindowWMInfo(window, &info) && info.subsystem == SDL_SYSWM_WINDOWS) {
+            ofn.hwndOwner = info.info.win.window;
+        }
+        ofn.lpstrFilter = kFilter;
+        ofn.lpstrFile = buffer;
+        ofn.nMaxFile = static_cast<DWORD>(std::size(buffer));
+        ofn.lpstrDefExt = L"json";
+        ofn.Flags = OFN_EXPLORER | OFN_NOCHANGEDIR
+            | (save ? OFN_OVERWRITEPROMPT : (OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST));
+        const BOOL ok = save ? GetSaveFileNameW(&ofn) : GetOpenFileNameW(&ofn);
+        if (!ok) {
+            return {};
+        }
+        return path_utf8::narrow(buffer);
+#else
+        (void)save;
+        (void)suggestedPath;
+        return {};
+#endif
+    };
+    // 账户 > 导入 asks before it replaces anything: the card gets the file it is
+    // about to read and, for the "确定覆盖" branch, the parsed result.
+    bool importAsk = false;
+    bool importAskAlive = false; // the card stays up until its close animation ends
+    int importPadChoice = -1;    // the pad's pick (see ui::eulaDialog's forcedChoice)
+    std::string importPath;
+    std::string importWho;
+    std::size_t importScores = 0;
+    // 导入 / 导出 的结果行（卡片里没有 toast）：一行小字，几秒后自己走。
+    std::string profileIoStatus;
+    int profileIoStatusFrames = 0;
+    // Last path component, for the status line: a full path would run out of the
+    // card (and the interesting half is the file name anyway).
+    const auto fileLabel = [](const std::string& path) {
+        const std::string name = path_utf8::fromPath(path_utf8::toPath(path).filename());
+        return name.empty() ? path : name;
+    };
+    // yyyymmdd for the default export file name, so a folder of backups sorts.
+    const auto dateStamp = [] {
+        const std::time_t now = std::time(nullptr);
+        const std::tm* local = std::localtime(&now);
+        char out[16] = {};
+        if (local != nullptr) {
+            std::snprintf(out, sizeof(out), "%04d%02d%02d", local->tm_year + 1900,
+                local->tm_mon + 1, local->tm_mday);
+        }
+        return std::string(out);
+    };
+    // Bumped whenever the *contents* of the active profile were replaced under
+    // the 账户 page's feet (导入), so its text buffers re-read instead of typing
+    // the previous user's nickname back into the new data on the next keystroke.
+    int profileDataGeneration = 0;
+    // Touch drag-to-scroll. ImGui only scrolls on a wheel event and a touch panel
+    // never sends one, so a tab taller than the settings card could only be
+    // scrolled by grabbing the 4px scrollbar with a finger. The finger path
+    // banks its vertical travel here and the scrollable child applies it (see
+    // ##tabcontent). The axis is decided once per gesture - a horizontal drag is
+    // a slider being dragged, a vertical one is the page moving - which is what
+    // keeps the two from fighting over a row that is both.
+    float uiTouchScrollPx = 0.0f;
+    bool uiTouchScrollFingerDown = false;
+    bool uiTouchScrollAxisPicked = false;
+    bool uiTouchScrollVertical = false;
+    SDL_FingerID uiTouchScrollId = 0;
+    float uiTouchScrollLastY = 0.0f;
+    float uiTouchScrollFromX = 0.0f;
+    float uiTouchScrollFromY = 0.0f;
     // 开启多开（实验性）的确认框。选「允许多开」或勾「多人游玩」时先弹一张卡
     // 说明这是实验性功能，确认后才真的写进设置。
     bool multiInstanceAsk = false;
@@ -3008,6 +3167,15 @@ int main(int argc, char** argv)
     if (std::getenv("CPSEKAI_MULTIASK") != nullptr) {
         multiInstanceAsk = true;
     }
+    // Same for 导入: CPSEKAI_IMPORTASK=1 raises the confirmation card over the
+    // active profile's own file, which is the one thing about it that cannot be
+    // reached from a script.
+    if (std::getenv("CPSEKAI_IMPORTASK") != nullptr) {
+        importPath = userDataFile;
+        importWho = account.name.empty() ? "(无昵称)" : account.name;
+        importScores = scores.size();
+        importAsk = true;
+    }
 #endif
     auto drawSettingsCard = [&]() {
         static bool settingsAlive = false;
@@ -3017,8 +3185,6 @@ int main(int argc, char** argv)
         if (!settingsAlive) {
             return;
         }
-        const bool settingsJustOpened = !settingsWasOpen;
-        settingsWasOpen = true;
         // Only this card's widgets join the pad's focus ring (see ui::PadScope):
         // the song select's combos are drawn on the same frame and would
         // otherwise show up in the middle of the D-pad's walk. During the close
@@ -3026,12 +3192,14 @@ int main(int argc, char** argv)
         ui::PadScope padScope(showDebug);
         // pjsk style settings panel (tabbed card, pjsk sliders).
         const float s = ui::scale();
-        // 760 tall (was 520 -> 640 -> 700): the 判定 tab now carries seven rows
-        // (Perfect/Great/Good/Bad/Miss + the long-note preset stepper and its
-        // two sliders) and 画面 is also deep, so the card has to hold both
-        // without immediately scrolling. The tab content is still clipped by a
-        // child, so a future row can never run under the 关闭 button.
-        ImVec2 cardSize = ImVec2(380.0f * s, 780.0f * s);
+        // 800 tall (was 520 -> 640 -> 700 -> 780): the 判定 tab keeps growing
+        // (判定预设 + the two long-note rows on top of the five windows) and now
+        // scrolls on purpose - CPSEKAI_UI_TRACE prints what each page needs
+        // against the view. 演奏 / 画面 are the ones that have to fit exactly,
+        // and 演奏 moved right up against the old height (515 used of a 502
+        // view) when 震动 and 自动演出 arrived. The tab content is still clipped
+        // by a child, so nothing can run under the 关闭 button either way.
+        ImVec2 cardSize = ImVec2(380.0f * s, 800.0f * s);
         ImVec2 cardCenter = ImVec2(18.0f * s + cardSize.x * 0.5f, 18.0f * s + cardSize.y * 0.5f);
         const float interior = cardSize.x - 56.0f * s;
         const float padX = 28.0f * s;
@@ -3107,6 +3275,21 @@ int main(int argc, char** argv)
             // ui::cardSubList.
             ui::cardSubList(ImGui::GetWindowDrawList());
             ImGui::PopStyleVar();
+            // Touch drag scroll: the finger travel banked by the SDL_FINGER*
+            // handler, applied to *this* child by hand (see uiTouchScrollPx).
+            // AllowWhenBlockedByActiveItem is deliberate: the gesture the row
+            // under the finger would otherwise own (a slider drag) is a
+            // horizontal one, and the axis was already decided before any of
+            // this was banked - so a vertical swipe over a slider scrolls the
+            // page instead of being swallowed. Deltas from a drag that is not
+            // over this child (the song list is drawn on the same frame) are
+            // dropped rather than left to fire later.
+            if (uiTouchScrollPx != 0.0f) {
+                if (ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem)) {
+                    ImGui::SetScrollY(ImGui::GetScrollY() - uiTouchScrollPx);
+                }
+                uiTouchScrollPx = 0.0f;
+            }
             // Window-local coordinates: an absolute screen y here would pin the
             // first row in place while the rest of the tab scrolls under it.
             ImGui::SetCursorPos(ImVec2(padX, tabSlide));
@@ -3159,6 +3342,47 @@ int main(int argc, char** argv)
                 contentLeft();
                 if (ui::slider("padrumble", &rumblePct, 0.0f, 100.0f, 5.0f, "%.0f%%", interior)) {
                     userSettings.padRumble = std::clamp(rumblePct / 100.0f, 0.0f, 1.0f);
+                    persistUserData();
+                }
+                // 震动: which hits are worth a kick. The strength / master switch
+                // is the slider right above; these pick the moments. Each one is
+                // a short buzz, so it rides on top of the long song-start /
+                // result-roll vibrations instead of replacing them. (Moved here
+                // from 判定 - all of them are "how the run plays", not "how the
+                // notes are judged".)
+                contentLeft();
+                ImGui::Text("震动");
+                contentLeft();
+                bool rumbleFlickBox = userSettings.rumbleFlick;
+                ui::checkBox("命中 Flick 时震动", &rumbleFlickBox, interior);
+                if (rumbleFlickBox != userSettings.rumbleFlick) {
+                    userSettings.rumbleFlick = rumbleFlickBox;
+                    persistUserData();
+                }
+                contentLeft();
+                bool rumbleCriticalBox = userSettings.rumbleCritical;
+                ui::checkBox("命中绝赞（黄键）时震动", &rumbleCriticalBox, interior);
+                if (rumbleCriticalBox != userSettings.rumbleCritical) {
+                    userSettings.rumbleCritical = rumbleCriticalBox;
+                    persistUserData();
+                }
+                contentLeft();
+                bool rumbleMissBox = userSettings.rumbleMiss;
+                ui::checkBox("MISS 时震动", &rumbleMissBox, interior);
+                if (rumbleMissBox != userSettings.rumbleMiss) {
+                    userSettings.rumbleMiss = rumbleMissBox;
+                    persistUserData();
+                }
+                // 自动演出 (moved here from 画面): it is a play-mode switch, not a
+                // display one.
+                contentLeft();
+                // checkBox returns the *new* value, so gate on a real change -
+                // gating on the return value made the box impossible to untick.
+                bool autoPlayBox = autoPlay;
+                ui::checkBox("自动演出", &autoPlayBox, interior);
+                if (autoPlayBox != autoPlay) {
+                    autoPlay = autoPlayBox;
+                    userSettings.autoplay = autoPlayBox;
                     persistUserData();
                 }
             } else if (tab == 1) {
@@ -3397,60 +3621,33 @@ int main(int argc, char** argv)
 #endif
                     persistUserData();
                 }
-                contentLeft();
-                // checkBox returns the *new* value, so gate on a real change -
-                // gating on the return value made the box impossible to untick.
-                bool autoPlayBox = autoPlay;
-                ui::checkBox("自动演出", &autoPlayBox, interior);
-                if (autoPlayBox != autoPlay) {
-                    autoPlay = autoPlayBox;
-                    userSettings.autoplay = autoPlayBox;
-                    persistUserData();
-                }
             } else if (tab == 2) {
-                // 判定: judgement windows.
+                // 判定: judgement windows + the long-note tolerance. 震动 moved
+                // to 演奏 (it is about the run, not about the judgement).
                 contentLeft();
                 ImGui::Text("判定窗口 (ms)");
-                // 震动: which hits are worth a kick. The strength / master switch
-                // is on the 演奏 tab (手柄震动); these pick the moments. Each one
-                // is a short buzz, so it rides on top of the long song-start /
-                // result-roll vibrations instead of replacing them.
-                contentLeft();
-                ImGui::Text("震动");
-                contentLeft();
-                bool rumbleFlickBox = userSettings.rumbleFlick;
-                ui::checkBox("命中 Flick 时震动", &rumbleFlickBox, interior);
-                if (rumbleFlickBox != userSettings.rumbleFlick) {
-                    userSettings.rumbleFlick = rumbleFlickBox;
-                    persistUserData();
-                }
-                contentLeft();
-                bool rumbleCriticalBox = userSettings.rumbleCritical;
-                ui::checkBox("命中绝赞（黄键）时震动", &rumbleCriticalBox, interior);
-                if (rumbleCriticalBox != userSettings.rumbleCritical) {
-                    userSettings.rumbleCritical = rumbleCriticalBox;
-                    persistUserData();
-                }
-                contentLeft();
-                bool rumbleMissBox = userSettings.rumbleMiss;
-                ui::checkBox("MISS 时震动", &rumbleMissBox, interior);
-                if (rumbleMissBox != userSettings.rumbleMiss) {
-                    userSettings.rumbleMiss = rumbleMissBox;
-                    persistUserData();
-                }
-                // The working copy is rebuilt from the engine whenever the
-                // dialog opens, so the sliders always show what is in force
-                // (and a linked BAD/MISS always moves as one).
-                static float perfect = 40.0f;
-                static float great = 90.0f;
-                static float good = 140.0f;
-                static float bad = 200.0f;
-                static float miss = 200.0f;
+                static float perfect = 70.0f;
+                static float great = 120.0f;
+                static float good = 170.0f;
+                static float bad = 230.0f;
+                static float miss = 230.0f;
                 static float holdTail = 180.0f;
                 static float holdStart = 140.0f;
-                static float holdPreset = 0.0f;
+                static int judgePreset = 0; // -1 = the sliders were dragged
+                static int holdPreset = 0;
                 static bool linkBadMiss = true;
-                if (settingsJustOpened) {
+                // The working copy is rebuilt on the first frame this page is
+                // drawn in a card session, and never in the middle of a drag
+                // (it is redrawn every frame then). Gating on "the card just
+                // opened" instead - which is what this used to do - silently
+                // missed the common case of a card opened on 演奏 and switched
+                // to 判定 later, and it left 账户 > 导入 (which replaces the
+                // profile under the card) pushing its pre-import numbers back
+                // into the engine on the first slider nudge.
+                static int judgePageLastFrame = -1000;
+                const bool judgeFresh = ImGui::GetFrameCount() - judgePageLastFrame > 1;
+                judgePageLastFrame = ImGui::GetFrameCount();
+                if (judgeFresh) {
                     const game::JudgementWindows& cur = judgement.windows();
                     perfect = cur.perfectMs;
                     great = cur.greatMs;
@@ -3460,24 +3657,49 @@ int main(int argc, char** argv)
                     holdTail = cur.holdTailGraceMs;
                     holdStart = cur.holdStartGraceMs;
                     linkBadMiss = userSettings.linkBadMiss;
-                    holdPreset = -1.0f;
+                    judgePreset = -1;
+                    for (int i = 0; i < 3; ++i) {
+                        if (std::fabs(perfect - kJudgePresets[i][0]) < 1.0f
+                            && std::fabs(great - kJudgePresets[i][1]) < 1.0f
+                            && std::fabs(good - kJudgePresets[i][2]) < 1.0f
+                            && std::fabs(bad - kJudgePresets[i][3]) < 1.0f
+                            && std::fabs(miss - kJudgePresets[i][4]) < 1.0f) {
+                            judgePreset = i;
+                        }
+                    }
+                    holdPreset = -1;
                     for (int i = 0; i < 3; ++i) {
                         if (std::fabs(holdTail - kHoldGracePresets[i][0]) < 1.0f
                             && std::fabs(holdStart - kHoldGracePresets[i][1]) < 1.0f) {
-                            holdPreset = static_cast<float>(i);
+                            holdPreset = i;
                         }
                     }
                 }
                 bool windowsChanged = false;
+                // 判定预设: a shorthand for the five sliders below. Picking one
+                // sets all five at once; dragging any slider walks the selection
+                // off to -1 (nothing highlighted), which is what the "custom"
+                // state looks like.
                 contentLeft();
-                windowsChanged |= ui::slider("perfect", &perfect, 10.0f, 100.0f, 1.0f, "Perfect %.0f", interior);
+                if (ui::radioRow("judgepreset", kJudgePresetLabels, &judgePreset, interior)) {
+                    const int idx = std::clamp(judgePreset, 0, 2);
+                    perfect = kJudgePresets[idx][0];
+                    great = kJudgePresets[idx][1];
+                    good = kJudgePresets[idx][2];
+                    bad = kJudgePresets[idx][3];
+                    miss = kJudgePresets[idx][4];
+                    windowsChanged = true;
+                }
+                bool windowsDragged = false;
                 contentLeft();
-                windowsChanged |= ui::slider("great", &great, 20.0f, 200.0f, 1.0f, "Great %.0f", interior);
+                windowsDragged |= ui::slider("perfect", &perfect, 10.0f, 100.0f, 1.0f, "Perfect %.0f", interior);
                 contentLeft();
-                windowsChanged |= ui::slider("goodw", &good, 30.0f, 260.0f, 1.0f, "Good %.0f", interior);
+                windowsDragged |= ui::slider("great", &great, 20.0f, 200.0f, 1.0f, "Great %.0f", interior);
+                contentLeft();
+                windowsDragged |= ui::slider("goodw", &good, 30.0f, 260.0f, 1.0f, "Good %.0f", interior);
                 good = std::max(good, great + 10.0f);
                 contentLeft();
-                windowsChanged |= ui::slider("badw", &bad, 40.0f, 400.0f, 5.0f, "Bad %.0f", interior);
+                windowsDragged |= ui::slider("badw", &bad, 40.0f, 400.0f, 5.0f, "Bad %.0f", interior);
                 bad = std::max(bad, good + 10.0f);
                 contentLeft();
                 bool linkBox = linkBadMiss;
@@ -3494,20 +3716,24 @@ int main(int argc, char** argv)
                     miss = bad;
                 }
                 contentLeft();
-                windowsChanged |= ui::slider("missw", &miss, 40.0f, 500.0f, 5.0f, "Miss %.0f", interior,
+                windowsDragged |= ui::slider("missw", &miss, 40.0f, 500.0f, 5.0f, "Miss %.0f", interior,
                     /*enabled=*/!linkBadMiss);
                 miss = std::max(miss, good + 10.0f);
+                // Any slider (and only a slider) takes the row off its preset -
+                // the value is no longer the official one.
+                if (windowsDragged) {
+                    windowsChanged = true;
+                    judgePreset = -1;
+                }
 
                 contentLeft();
                 ImGui::Text("长条容错 (ms)");
-                // Pick-one stepper (see ui::stepper): -1 = the current values
-                // match no preset, i.e. 松手/起按 were dragged by hand. The pill
-                // shows the preset name and each capsule jumps to its own.
+                // Same pick-one shape as the judgement presets above. -1 = the
+                // current values match no preset, i.e. 松手/起按 were dragged by
+                // hand (then no circle is lit).
                 contentLeft();
-                if (ui::stepper("holdpreset", &holdPreset, kPresetChoiceDeltas, "%.0f", interior,
-                        kHoldPresetLabels)) {
-                    const int target = std::clamp(static_cast<int>(std::lround(holdPreset)), 0, 2);
-                    holdPreset = static_cast<float>(target);
+                if (ui::radioRow("holdpreset", kHoldPresetLabels, &holdPreset, interior)) {
+                    const int target = std::clamp(holdPreset, 0, 2);
                     holdTail = kHoldGracePresets[target][0];
                     holdStart = kHoldGracePresets[target][1];
                     windowsChanged = true;
@@ -3518,15 +3744,27 @@ int main(int argc, char** argv)
                 bool startChanged = ui::slider("holdstart", &holdStart, 20.0f, 300.0f, 10.0f, "起按容错 %.0f", interior);
                 if (tailChanged || startChanged) {
                     windowsChanged = true;
-                    holdPreset = -1.0f; // dragged off the presets
+                    holdPreset = -1; // dragged off the presets
                 }
-                static bool strictFlick = judgement.strictFlick();
+                // Read straight off the engine every frame instead of in a static:
+                // 账户 > 导入 can replace these two under the card, and a stale
+                // copy would push its own value back on the next frame.
+                bool strictFlick = judgement.strictFlick();
+                contentLeft();
                 ui::checkBox("严格 Flick 方向", &strictFlick, interior);
-                judgement.setStrictFlick(strictFlick);
-                static bool flickAsTap = judgement.flickAsTap();
+                if (strictFlick != judgement.strictFlick()) {
+                    judgement.setStrictFlick(strictFlick);
+                    userSettings.strictFlick = strictFlick;
+                    persistUserData();
+                }
+                bool flickAsTap = judgement.flickAsTap();
                 contentLeft();
                 ui::checkBox("Flick 视作 Tap", &flickAsTap, interior);
-                judgement.setFlickAsTap(flickAsTap);
+                if (flickAsTap != judgement.flickAsTap()) {
+                    judgement.setFlickAsTap(flickAsTap);
+                    userSettings.flickAsTap = flickAsTap;
+                    persistUserData();
+                }
                 // Starting life. The engine seeds every session's stats from its own
                 // copy on reset(), so pushing it here (and once at boot) is enough.
                 float life = judgement.initialLife();
@@ -3666,6 +3904,36 @@ int main(int argc, char** argv)
                 } else {
                     ImGui::TextWrapped("多人游玩：先开的窗口是房主。");
                 }
+                // 结束实例：一张卡里开几个窗口之后，关掉它们不该靠一个个点右上角
+                // （特别是全屏的那个还未必看得见）。两个按钮都在这里，只有
+                // 结束所有实例 需要二次确认 —— 它会连带关掉别的窗口。
+                contentLeft();
+                {
+                    const float btnW = (interior - 8.0f * s) * 0.5f;
+                    if (ui::capsuleButton("结束当前实例", ImVec2(btnW, 40.0f * s), false)) {
+                        std::printf("[instance] quit requested from the settings card\n");
+                        std::fflush(stdout);
+                        running = false; // the ordinary shutdown path: profile saved on the way out
+                    }
+                    ImGui::SameLine();
+                    static int killAllFrames = 0;
+                    if (killAllFrames > 0) {
+                        if (ui::capsuleButton("确认结束？", ImVec2(btnW, 40.0f * s), true)) {
+                            killAllFrames = 0;
+#ifdef _WIN32
+                            const int asked = postCloseToAllInstances();
+#else
+                            const int asked = 0;
+#endif
+                            std::printf("[instance] closed %d window(s) on request\n", asked);
+                            std::fflush(stdout);
+                            running = false; // ...this window included
+                        }
+                        --killAllFrames;
+                    } else if (ui::capsuleButton("结束所有实例", ImVec2(btnW, 40.0f * s), false)) {
+                        killAllFrames = 180; // the second press has to land within ~3s
+                    }
+                }
             } else if (tab == 4) {
                 // 账户: the local profile. Nothing here leaves the machine, and
                 // none of it is drawn during play - see game/AccountData.
@@ -3678,11 +3946,15 @@ int main(int argc, char** argv)
                 static bool bufReady = false;
                 // Which profile the buffers were filled from. Switching user
                 // has to re-read them, otherwise the next keystroke would write
-                // the previous player's name into the new profile.
+                // the previous player's name into the new profile. The same goes
+                // for 导入, which replaces the file of the profile that is already
+                // active - hence the generation counter.
                 static std::string bufProfile;
-                if (!bufReady || bufProfile != activeProfileId) {
+                static int bufGeneration = -1;
+                if (!bufReady || bufProfile != activeProfileId || bufGeneration != profileDataGeneration) {
                     bufReady = true;
                     bufProfile = activeProfileId;
+                    bufGeneration = profileDataGeneration;
                     std::snprintf(nameBuf, sizeof(nameBuf), "%s", account.name.c_str());
                     std::snprintf(orgBuf, sizeof(orgBuf), "%s", account.org.c_str());
                     std::snprintf(noteBuf, sizeof(noteBuf), "%s", account.note.c_str());
@@ -3852,6 +4124,75 @@ int main(int argc, char** argv)
                     {"本级经验", expLine},
                 };
                 ui::infoRows(accRows, interior);
+
+                // 导入 / 导出. One profile file carries everything this account
+                // owns (settings + scores + 资料), so "backup" and "move to
+                // another machine" are the same operation - and a reinstall can
+                // be undone. Both go through the native picker.
+                contentLeft();
+                {
+                    const float btnW = (interior - 8.0f * s) * 0.5f;
+                    if (ui::capsuleButton("导出用户数据", ImVec2(btnW, 40.0f * s), false)) {
+                        // Nicknames are free text, so illegal file-name
+                        // characters are replaced rather than dropped.
+                        std::string who = account.name.empty() ? activeProfileId : account.name;
+                        for (char& c : who) {
+                            if (std::strchr("\\/:*?\"<>|", c) != nullptr) {
+                                c = '_';
+                            }
+                        }
+                        const std::string suggested = path_utf8::fromPath(path_utf8::toPath(userDataDir)
+                            / ("CppSekai-" + who + "-" + dateStamp() + ".json"));
+                        const std::string path = pickUserDataFile(true, suggested);
+                        if (!path.empty()) {
+                            // persistUserData() first: the live mirrors (note
+                            // speed, offset, judgement...) are what make up
+                            // userSettings, and they are only copied on save.
+                            persistUserData();
+                            game::saveUserData(path, userSettings, scores, account);
+                            profileIoStatus = "已导出：" + fileLabel(path);
+                            profileIoStatusFrames = 300;
+                            std::printf("[profile] exported '%s' to %s\n", activeProfileId.c_str(),
+                                path.c_str());
+                            std::fflush(stdout);
+                        }
+                    }
+                    ImGui::SameLine();
+                    if (ui::capsuleButton("导入用户数据", ImVec2(btnW, 40.0f * s), false)) {
+                        const std::string path = pickUserDataFile(false, std::string());
+                        if (!path.empty()) {
+                            // Screened *before* the confirmation card: a file
+                            // that is not user data must not get a "we are about
+                            // to replace your scores" prompt.
+                            if (game::isUserDataFile(path)) {
+                                game::UserSettings probeSettings;
+                                std::map<std::string, game::ScoreRecord> probeScores;
+                                game::AccountData probeAccount;
+                                game::loadUserData(path, probeSettings, probeScores, probeAccount);
+                                importPath = path;
+                                importWho = probeAccount.name.empty() ? "(无昵称)" : probeAccount.name;
+                                importScores = probeScores.size();
+                                importAsk = true;
+                                std::printf("[profile] import candidate %s (user '%s', %zu score(s))\n",
+                                    path.c_str(), importWho.c_str(), importScores);
+                            } else {
+                                profileIoStatus = "不是用户数据文件：" + fileLabel(path);
+                                profileIoStatusFrames = 300;
+                                std::printf("[profile] import rejected %s (not user data)\n", path.c_str());
+                            }
+                            std::fflush(stdout);
+                        }
+                    }
+                }
+                if (profileIoStatusFrames > 0) {
+                    --profileIoStatusFrames;
+                    contentLeft();
+                    ImGui::PushFont(game::bodyFont(), 19.0f * s);
+                    ImGui::PushTextWrapPos(cardCenter.x - cardSize.x * 0.5f + padX + interior);
+                    ImGui::TextWrapped("%s", profileIoStatus.c_str());
+                    ImGui::PopTextWrapPos();
+                    ImGui::PopFont();
+                }
             } else if (tab == 5) {
                 // 关于: what this is, who made it, what it is built on, what it is
                 // not, and the two links (把作者 / 上游 / 素材 / 仓库 / 个人站都放这里,
@@ -4021,6 +4362,81 @@ int main(int argc, char** argv)
             persistUserData();
             multiInstanceAsk = false;
             multiInstanceAskFromParty = false;
+        }
+    };
+
+    // ------------------------------------------------------------------
+    // 账户 > 导入用户数据 的确认框。
+    //
+    // 导入是覆盖：当前用户（昵称 / 等级 / 成绩 / 全部设置）会被文件里的那份
+    // 整个换掉，而且不可撤销 —— 所以先弹这张卡说清楚，画面板里没有后悔药。
+    // 文件本身在读进来之前就已经过了 isUserDataFile()，走不到这里说明它确实是
+    // 一份用户数据。
+    // ------------------------------------------------------------------
+    auto drawImportAskDialog = [&]() {
+        if (importAsk) {
+            importAskAlive = true;
+        }
+        if (!importAskAlive) {
+            return;
+        }
+        const std::string me = account.name.empty() ? activeProfileId : account.name;
+        const int action = ui::eulaDialog(renderer, "##importask", "导入用户数据？",
+            {
+                "文件：" + fileLabel(importPath),
+                "用户：" + importWho + "，成绩 " + std::to_string(importScores) + " 条",
+                "导入会用这份数据覆盖当前用户（" + me + "）的设置、成绩和资料，无法撤销。",
+            },
+            nullptr, nullptr, {std::string("取消"), std::string("覆盖导入")}, {false, true},
+            importPadChoice);
+        importPadChoice = -1; // one press is one pick
+        if (action == -2) {
+            importAskAlive = false; // close animation over, drop the card
+            return;
+        }
+        if (action == 0) {
+            std::printf("[profile] import cancelled\n");
+            std::fflush(stdout);
+            importAsk = false;
+        } else if (action == 1) {
+            importAsk = false;
+            // The file *is* the format, so it is copied over the profile file
+            // rather than re-serialised from a parsed copy: that keeps keys this
+            // build does not know about (a newer version's settings) alive.
+            std::error_code ec;
+            std::filesystem::copy_file(path_utf8::toPath(importPath), path_utf8::toPath(userDataFile),
+                std::filesystem::copy_options::overwrite_existing, ec);
+            if (ec) {
+                profileIoStatus = "导入失败：" + ec.message();
+                profileIoStatusFrames = 300;
+                std::printf("[profile] import failed: %s\n", ec.message().c_str());
+                std::fflush(stdout);
+                return;
+            }
+            // Same reload as a profile switch: the whole record comes back from
+            // disk, then applyProfileLive() pushes it onto everything that can
+            // change while the game runs.
+            game::UserSettings freshSettings;
+            std::map<std::string, game::ScoreRecord> freshScores;
+            game::AccountData freshAccount;
+            game::loadUserData(userDataFile, freshSettings, freshScores, freshAccount);
+            userSettings = freshSettings;
+            scores = freshScores;
+            account = freshAccount;
+            applyProfileLive();
+            syncProfileLabel(); // the nickname in the 用户 combobox follows the file
+            if (party.active()) {
+                party.setName(account.name.empty() ? partyLabel : account.name);
+            }
+            // The 账户 page's text buffers re-read on the next frame, and the
+            // judgement page rebuilds its own working copy of the windows /
+            // presets the first frame it is drawn (see judgePageLastFrame).
+            ++profileDataGeneration;
+            profileIoStatus = "已导入：" + fileLabel(importPath);
+            profileIoStatusFrames = 300;
+            std::printf("[profile] imported '%s' into '%s' (%zu score(s))\n", importPath.c_str(),
+                activeProfileId.c_str(), scores.size());
+            std::fflush(stdout);
         }
     };
 
@@ -4855,7 +5271,15 @@ int main(int argc, char** argv)
                     break;
                 }
                 case SDL_WINDOWEVENT:
-                    if (event.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
+                    if (event.window.event == SDL_WINDOWEVENT_CLOSE) {
+                        // The X button, and 设置 > 系统 > 结束所有实例 (which posts
+                        // a WM_CLOSE to every window of this game, this one
+                        // included). Either way this is the ordinary exit: the
+                        // loop leaves and the profile is saved on the way out.
+                        std::printf("[instance] window close -> exiting\n");
+                        std::fflush(stdout);
+                        running = false;
+                    } else if (event.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
                         // The real window changed; the render size only follows
                         // it when the render mode is "window sized".
                         winPixelW = event.window.data1;
@@ -4980,6 +5404,19 @@ int main(int argc, char** argv)
                     }
                     break;
                 case SDL_FINGERDOWN: {
+                    if (state != AppState::Play) {
+                        // Drag-to-scroll bookkeeping (see uiTouchScrollPx): the
+                        // gesture starts here and only the first finger counts -
+                        // a second contact is a stray one on a settings card.
+                        uiTouchScrollFingerDown = true;
+                        uiTouchScrollAxisPicked = false;
+                        uiTouchScrollVertical = false;
+                        uiTouchScrollId = event.tfinger.fingerId;
+                        uiTouchScrollLastY = event.tfinger.y * static_cast<float>(windowH);
+                        uiTouchScrollFromX = event.tfinger.x * static_cast<float>(windowW);
+                        uiTouchScrollFromY = uiTouchScrollLastY;
+                        uiTouchScrollPx = 0.0f;
+                    }
                     if (state == AppState::Result) {
                         // Touch contacts only produce SDL_FINGER* events (their
                         // synthetic mouse events carry SDL_TOUCH_MOUSEID and are
@@ -5040,6 +5477,29 @@ int main(int argc, char** argv)
                     break;
                 }
                 case SDL_FINGERMOTION: {
+                    if (uiTouchScrollFingerDown && event.tfinger.fingerId == uiTouchScrollId) {
+                        const float x = event.tfinger.x * static_cast<float>(windowW);
+                        const float y = event.tfinger.y * static_cast<float>(windowH);
+                        // Which way the gesture went is decided once, past a
+                        // small slop, and then kept for the rest of it: a
+                        // vertical swipe scrolls the page even if it started on
+                        // a slider's track (that track only follows x, so
+                        // nothing else moves), and a horizontal one is left to
+                        // whatever widget is under the finger.
+                        if (!uiTouchScrollAxisPicked) {
+                            const float dx = x - uiTouchScrollFromX;
+                            const float dy = y - uiTouchScrollFromY;
+                            const float slop = 12.0f * std::max(1.0f, ui::scale());
+                            if (std::fabs(dx) > slop || std::fabs(dy) > slop) {
+                                uiTouchScrollAxisPicked = true;
+                                uiTouchScrollVertical = std::fabs(dy) > std::fabs(dx);
+                            }
+                        }
+                        if (uiTouchScrollVertical) {
+                            uiTouchScrollPx += y - uiTouchScrollLastY;
+                        }
+                        uiTouchScrollLastY = y;
+                    }
                     if (autoPlay || paused || state != AppState::Play) {
                         break;
                     }
@@ -5050,6 +5510,13 @@ int main(int argc, char** argv)
                     break;
                 }
                 case SDL_FINGERUP: {
+                    if (event.tfinger.fingerId == uiTouchScrollId) {
+                        // Only the finger state goes; whatever was banked stays
+                        // for the card to apply this frame. A quick flick hands
+                        // SDL its down/move/up as one batch, and clearing the
+                        // travel here would throw the whole gesture away.
+                        uiTouchScrollFingerDown = false;
+                    }
                     // Last chance flick: judge the lift-off from the fastest
                     // swipe speed seen during the gesture - short, fast flicks
                     // on touch panels often end before the mid-move check
@@ -6138,6 +6605,8 @@ int main(int argc, char** argv)
             drawSettingsCard();
             // 多开的实验性功能确认框（设置卡片里点出来的）。
             drawMultiInstanceAskDialog();
+            // 导入用户数据的覆盖确认框（同样是设置卡片里点出来的）。
+            drawImportAskDialog();
             // Who else is in the room (hidden while the settings card is up:
             // it draws on the foreground list, above the card). A room with a
             // single seat is just this window, so the badge and its hint - the
@@ -6779,6 +7248,7 @@ int main(int argc, char** argv)
             // Settings card (H key), shared with the song select state.
             drawSettingsCard();
             drawMultiInstanceAskDialog();
+            drawImportAskDialog();
 
             // ----------------------------------------------------------
             // Pause dialog: 重试 / 放弃 / 继续演出.

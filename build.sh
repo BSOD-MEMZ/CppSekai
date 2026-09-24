@@ -138,6 +138,7 @@ GAME_OUT="${OUT:-build/cppsekai.exe}"
 "$ZIG" c++ "${CXXFLAGS[@]}" "${SOURCES[@]}" "${UPSTREAM_OBJS[@]}" build/app.res \
     "$SDL/lib/libSDL2.dll.a" \
     -limm32 -lsetupapi -lversion -lole32 -loleaut32 -lwinmm -lgdi32 -luser32 -ladvapi32     -lshell32 \
+    -lcomdlg32 \
     -lopengl32 \
     -o "$GAME_OUT" "$@"
 

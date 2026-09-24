@@ -1090,6 +1090,20 @@ void loadUserData(const std::string& path, UserSettings& settings,
     account.plays = std::max(account.plays, 0);
 }
 
+bool isUserDataFile(const std::string& path)
+{
+    std::ifstream file(toFsPath(path), std::ios::binary);
+    if (!file) {
+        return false;
+    }
+    try {
+        const nlohmann::json doc = nlohmann::json::parse(file);
+        return doc.is_object() && (doc.contains("settings") || doc.contains("scores"));
+    } catch (const std::exception&) {
+        return false; // not json at all, or truncated
+    }
+}
+
 void saveUserData(const std::string& path, const UserSettings& settings,
     const std::map<std::string, ScoreRecord>& scores, const AccountData& account)
 {

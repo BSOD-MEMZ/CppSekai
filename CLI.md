@@ -201,6 +201,7 @@ cppsekai [--sus <file.sus>] [--bgm <audio>] [--charts <dir>] [--cover <image>]
 | 文件 | 位置 | 说明 |
 |---|---|---|
 | `userdata.json` | `<exe>/../userdata.json`（有 `charts/` 时）否则 `<exe>/userdata.json` | 设置 + 成绩。成绩 key 是**谱面文件名**（`0628_master.sus`），所以重下同样的谱成绩能对上 |
+| `profiles/<id>.json` | 同上一层的 `profiles/` | 多用户：每个用户一份（内容就是上面那份 JSON），`profiles/index.json` 是用户列表。设置 → 账户 里能**导出 / 导入**单份文件（原生文件选择框，导出的是完整一份档案），见 AGENTS.md |
 | `music-levels.json` | exe 同一层或上一层 | `{"628":[8,13,18,26,29]}` 或官方 `musicDifficulties` 原样数组。选曲界面的难度定数来源 |
 | `musics.json` | exe 同一层或上一层 | 官方曲目表（`setup.sh` 拉下来的那份）。只用里面的 `id` + `pronunciation`（读音），给「按名称排序」和「按标题分组」用；缺了就是按标题字符串排 |
 | `cppsekai.log` | 工作目录 | 无控制台时的日志（含 `--screenshot`） |

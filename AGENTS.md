@@ -52,7 +52,8 @@ game/Judgement.*  # 判定引擎（本项目新增，判定逻辑都在这）
                   # （kTeamPower 等常量见 Judgement.hpp），血量 1000 起，整音 MISS -80、长条中断 -40。
 game/Ui.*         # pjsk 风格弹窗组件库：beginCard（缩放入/出场动画 + 标题栏拖动）、
                   # tabBar、slider（深色±按钮+薄荷轨道）、infoRows、capsuleButton、
-                  # cardTitle、checkBox、stepper、messageDialog（-3=动画中 -2=关闭完成）、
+                  # cardTitle、checkBox、radioRow（一排圆点+标签，判定/长条容错的预设）、
+                  # stepper、messageDialog（-3=动画中 -2=关闭完成）、
                   # eulaDialog（关于本软件的首次启动弹窗，见下面「ELUA」一节）、
                   # combo（= BeginCombo + 淡入 + 自绘旋转箭头；最后一个参数 scaleHint 用来
                   # 适配调用方自己的 px-per-unit，比如选曲界面的 k）。动画统一走文件顶部的
@@ -135,7 +136,7 @@ main.cpp          # SDL2 窗口、事件循环、输入映射、ImGui HUD、截�
 |---|---|---|
 | `main.cpp` → `main()` | **5,713**（`:730` 起） | 参数解析 + 初始化 + 启动决策 + 帧循环 + 关停全在一个函数 |
 | `main.cpp` 帧循环体 | ~2,500（`:3989` 起） | `if/else if (state == ...)` 串起 Select/Play/Result，三者变量共享作用域。**2026-09-19 起这段正文被 `runFrame` lambda 包住**（拖动窗口时要从消息钩子里重入，见「拖动窗口」一节），行数与作用域都没变 |
-| `main.cpp` → `drawSettingsCard` lambda | **~900**（`:3010-3900`） | **6 个页签**用 `if (tab == N)` 展开（2026-09-23 加了「关于」） |
+| `main.cpp` → `drawSettingsCard` lambda | **~1,115**（`:3185-4300`） | **6 个页签**用 `if (tab == N)` 展开（2026-09-23 加了「关于」，2026-09-24 加导入/导出与结束实例） |
 | `game/SongSelect.cpp` → `drawSongSelect()` | ~1,746（`:2104` 起） | 13 参数含 5 个 in/out 引用（`selected`/`sortMode`/`groupMode`/`vocalIndex`/`confirmCenter`/`partyOut`） |
 
 **健康的部分**（别顺手"优化"）：`game/` `platform/` 分层清楚，绝大多数文件 ≤1000 行；
@@ -439,7 +440,12 @@ bash build.sh          # 仅需 Git Bash；产物 build/cppsekai.exe + SDL2.dll 
   编译后跑 `build/shrink_hud.exe assets/mmw/overlay assets/mmw/overlay_opt 512 start_grad.png`
   生成（整数倍 alpha 加权 box 缩小到 max dim 512；start_grad 是 1:1 全屏渐变，跳过）。
   这套把 HUD 加载从 ~1.0s 降到 ~0.3s。build.sh 会连 assets 一起拷到 build/。
-- 判定窗口默认 perfect 40ms / great 90ms / good 140ms（非官方数值，做成可调的）。
+- 判定窗口出厂值是**宽松**一档（2026-09-24）：perfect 70 / great 120 / good 170 / bad 230 /
+  miss 230（= 官方那套各放宽 30ms）。设置 → 判定 顶部一排 radio 就是
+  宽松 / 标准（40/90/140/200/200，即原来是默认的官方数值）/ 严格（各收紧 30ms），
+  出厂选中「宽松」；拖任何一根滑杆都会把选中态退到"没选中"（-1）。改预设表
+  `kJudgePresets` 时**三档必须满足 perfect<great<good<bad 且差值 ≥10**（滑杆下方那段
+  `std::max` 阶梯会硬拉，拉完就和预设对不上了）。
 - **trace（kind 3，绿色竹节/滑条）按"覆盖"判定，不是按"点"**（2026-09-12 修）：
   官方规则是手指按住那条轨道就判 PERFECT、没有尾判、头也不用重新点，所以
   `JudgementEngine::update()` 里 kind 3 的分支会用 `mHoldLanes` 做覆盖检测（和"无 marker 的
@@ -492,8 +498,11 @@ bash build.sh          # 仅需 Git Bash；产物 build/cppsekai.exe + SDL2.dll 
   血量 1000 起，MISS -80、长条中途断 -40，HUD 血量 = `judgement.lifeRatio()`。
   分数前言零用 `score/digit/n.png`（它本身就是个浅色 0，8 位补足是上游行为）。
 - UI 缩放：`ui::scale()` 以 860p 为基准（720p 窗口下 ≈0.84）；titlebar 高 `kHeaderH=44` 设计像素。
-  2026-09-19 细节调整：页签高 50→**42**、页签圆角 14→**10**；`ui::stepper` 胶囊高 62→**50**
-  （判定页「长条容错」那一排原来像三块厚板子）。都在 `game/Ui.cpp` 顶部/各自函数里，改数值即可。
+  2026-09-19 细节调整：页签高 50→**42**、页签圆角 14→**10**；`ui::stepper` 胶囊高 62→**50**。
+  2026-09-24：判定页那两排预设从 pick-one `stepper` 换成 `ui::radioRow`（圆点 + 标签，
+  一行平分 `rowWidth`，选中态是粉圈 + 粉点，走和 checkbox 同一套缓动 / 焦点环）；
+  `ui::stepper` 的 pick-one 模式因此暂时没有调用者了（组件保留着）。都在 `game/Ui.cpp`
+  顶部/各自函数里，改数值即可。
   设置卡片 400x500、暂停弹窗 600x250（设计像素）；滑块行高 80。改卡片尺寸时先量内容高度
   （临时 printf `GetCursorScreenPos().y` 对比 cardBottom），别让底部按钮压住内容。
 - UI 组件坑：ImGui::Text 新行会把光标 x 归零（窗口 padding=0），绝对定位内容每行前要
@@ -538,17 +547,25 @@ bash build.sh          # 仅需 Git Bash；产物 build/cppsekai.exe + SDL2.dll 
   一下。**暂停框（`##pauseDialog`）还是老写法**（每个分支立刻 `pauseDialogAlive=false`）：它的绘制
   点在状态分支里，要改成画到 -2 得先把绘制点从状态分支里提出来，还没做。
 - 无头看对话框：【`--settings --settings-tab <0-5>`】打开设置卡（页签 0 演奏 / 1 画面 / 2 判定 /
-  3 系统 / 4 账户 / 5 关于）；`CPSEKAI_MULTIASK=1` 启动即弹「开启多开？」确认框（点 combo 是唯一其它入口，
+  3 系统 / 4 账户 / 5 关于）；`CPSEKAI_MULTIASK=1` 启动即弹「开启多开？」确认框，
+  `CPSEKAI_IMPORTASK=1` 弹「导入用户数据？」确认框（点 combo、选文件是唯一其它入口，
   而 PostMessage 假点击进不了 ImGui 按钮）。配合 `CPSEKAI_CARD_T` 抓入场中间帧。
   ⚠ **首启那张 ELUA 会盖住设置卡**（两张卡都是独立窗口，ELUA 后画、在**正中间**），
   要看设置卡下半页就把窗口开**宽**：`ui::scale()` 只看高度（`h/860`），所以
   `--width 2600 --height 900` 会让 ELUA 跑到屏幕中间偏右、设置卡留在左上角，两者不再重叠。
-- 设置卡片 360x640、六个页签（演奏 / 画面 / 判定 / 系统 / 账户 / 关于）；`--settings` +
+- 设置卡片 380x**800**、六个页签（演奏 / 画面 / 判定 / 系统 / 账户 / 关于）；`--settings` +
   `--settings-tab <0-5>` 无头打开（按键没法送进无头运行），配合 `--screenshot` 截图。
   **加页签要同步三处**：`kSettingsTabCount`（LB/RB 循环页签用它）、`ui::tabBar` 的标签数组、
   以及那条 `if (tab == N) ... else if ...` 链 —— **最后一个分支原本是裸 `else`**，
   往后面接新页签时得先把它改成 `else if (tab == N)`（2026-09-23 加「关于」时就这么踩了一下，
   编译报 `expected expression`）。
+  各页现在的内容（2026-09-24）：演奏 = 音频偏移 / 音符速度 / BGM 音量 / 音效音量 / 手柄震动 /
+  **震动（三个勾）/ 自动演出**（后两块从判定、画面搬过来）；判定 = 判定窗口预设 + 五根滑杆 +
+  Bad与Miss同步 + 长条容错预设 + 松手/起按 + 严格Flick方向 / Flick视作Tap / 初始血量；
+  系统 = 失焦暂停 / SMTC / 多开 + 多人演出 + **结束当前实例 / 结束所有实例**；
+  账户 = 用户 / 新建 / 删除 / 昵称 / 学校 / 签名 / 等级 + **导出 / 导入用户数据**。
+  **页签高度的余量很小**：演奏 515、账户 488（`view` 720p 下 519），加行先看一眼
+  `CPSEKAI_UI_TRACE=1`。判定页是**故意**滚动的（635 > view）。
   **页签内容的可用宽度是卡片宽 - `padX`**（child 有卡片那么宽、文字从 `padX` 起排），
   超出的部分会被裁掉（「账户」页那两行「只存在本机 userdata…」一直都在被裁）。
   要换行的段落别只靠 `TextWrapped`（它按 child 的宽度换，也就是**卡片宽度**，会顶出卡片），
@@ -557,6 +574,20 @@ bash build.sh          # 仅需 Git Bash；产物 build/cppsekai.exe + SDL2.dll 
   按钮底下（按钮后提交，把点击全吃掉）。这个 child 的末尾**必须补一句 `ImGui::Dummy`**——
   `ui::checkBox()` 最后一条是裸的 `SetCursorScreenPos`，child 作为当帧最后一个窗口时
   `EndChild()` 会弹 "SetCursorPos ... to extend window/parent boundaries" 断言。
+- **触摸屏滚这个 child**（2026-09-24）：ImGui 只在**滚轮事件**上滚动，触摸板一个都没有，
+  于是带滚动条的页签以前只能用指尖拖那根 4px 滚动条。现在 SDL 的 `SDL_FINGER*` 路径
+  （`state != Play` 时）把竖直位移攒进 `uiTouchScrollPx`，`##tabcontent` 里
+  `ImGui::SetScrollY(GetScrollY() - px)` 落地。要点：
+  - **手势方向只判一次**（超过 `12*scale()` 的 slop 后取 |dy|>|dx|），竖直就是翻页、
+    横向留给滑杆 —— 否则在一个滑杆上竖划会被 `IsWindowHovered()` 的 active-item 检查吃掉。
+    也正因为要配合它，hover 用的是 `ImGuiHoveredFlags_AllowWhenBlockedByActiveItem`。
+  - `ui::scale()` 在 scale() **之后**拿到也行，slop 用 `12*max(1,scale)`。
+  - `SDL_FINGERUP` **不要**清 `uiTouchScrollPx`：快甩的手势 down/move/up 会挤在同一帧，
+    清了就等于整段抹掉（踩过）。只有下一次 `SDL_FINGERDOWN` 重置。
+  - 无头复现：往队列里塞 `SDL_MOUSEMOTION(which=SDL_TOUCH_MOUSEID)` 把 ImGui 的指针挪到卡片上，
+    再塞 DOWN + 若干 MOTION。**每个事件都要带 `windowID`**，否则 ImGui 后端
+    （`ImGui_ImplSDL2_GetViewportForWindowID`）直接丢掉，鼠标位置不更新就永远 hover 不到。
+    量"到底滚了多少"别数行，直接拿两张截图做配准（`.workbuddy/tools` 那套 PNG 工具 / PIL 都行）。
 - **「关于」页（页签 5，2026-09-23）**：版本 / 许可 / 制作 / 上游 / 素材版权 五段 + 两个链接
   按钮 + 免责段落 + 「许可与免责声明」按钮（把首启那张 ELUA 再拉起来）。要点：
   - 链接按钮用 `openUrl()`（= `ShellExecuteW(nullptr, L"open", url, ...)`，和 chartdl 打开
@@ -618,6 +649,24 @@ bash build.sh          # 仅需 Git Bash；产物 build/cppsekai.exe + SDL2.dll 
   （`put_PlaybackStatus(Stopped)` + `put_IsEnabled(0)`），**不是**只停推送——否则系统浮层
   会一直挂着我们最后一首旧歌。启动时若已关闭，`init()` 之后立刻 `setReporting(false)`。
   任务栏进度条（`ITaskbarList3`）不归这个开关管，始终在跑。
+- **结束实例两个按钮**（系统页签，2026-09-24）：「结束当前实例」= `running = false`（走正常收尾，
+  存盘照做）；「结束所有实例」二次确认（`killAllFrames`，~3s 内再按一下）后
+  `postCloseToAllInstances()`：EnumWindows 找 `GW_OWNER == nullptr` 的窗口，
+  **类名必须是 `SDL_app`**（SDL2 注册的类，靠它把"Notepad 打开了个叫 CppSekai 的文件"排掉）
+  且标题正好 `CppSekai` 或前缀 `CppSekai - `（多人游玩会把用户名缀在后面），然后每窗一个
+  `PostMessageW(WM_CLOSE)`。**没有 kill**：WM_CLOSE → SDL 的 `SDL_WINDOWEVENT_CLOSE` →
+  main 里新加的那个分支置 `running = false`，于是每个实例都自己存盘退出。
+  （实测：PostMessage 之后日志出现 `[instance] window close -> exiting`，profile 完整写回。）
+- **账户页导入 / 导出**（2026-09-24）：一个 profile 文件就是全部（settings + scores + 资料），
+  所以"备份"和"搬家"是同一个操作。导出 = `persistUserData()`（先把活镜像刷进 userSettings）
+  + `game::saveUserData(用户挑的路径, ...)`；导入 = `game::isUserDataFile()` 先筛
+  （**在弹确认框之前**，免得对一份不是用户数据的 json 说"要覆盖你的成绩"）→ 确认后
+  **`std::filesystem::copy_file` 覆盖 profile 文件本身**（不 re-serialize：这样将来新版本
+  加的键也一起搬过来）→ 重新 `loadUserData` + `applyProfileLive()` + `++profileDataGeneration`
+  （账户页那几个 InputText 缓冲要重读；判定页的工作副本靠 `settingsWasOpen = false` 重读）。
+  文件选择器是 comdlg32 的 `GetOpenFileNameW` / `GetSaveFileNameW`（**build.sh 游戏链接行
+  新加了 `-lcomdlg32`**）；`OFN_NOCHANGEDIR` 是必须的，否则挑完目录后进程 cwd 被改掉，
+  `charts\`、日志、相对 `--sus` 全跟着错。
 - 游戏资源（assets/、charts/）来自公开渠道，仅限本地游玩，不要提交或分发。
 
 ## 与上游还没对齐的地方（2026-09-13 盘点）
