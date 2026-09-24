@@ -127,6 +127,13 @@
   下载 4 线程 + `thread_local` 缓存 session；**测下载别拿单曲做样本**。
 
 ## 最近工作（细节看 AGENTS.md 对应小节 + 当日日志）
+- **2026-09-24 第二批**：① 窗口标题跟随切换用户 / 改昵称（`syncWindowTitle`；**
+  单人窗口仍是裸 `CppSekai`**，单实例前台查找按它精确匹配）；② 开「多人演出」弹
+  「立即重启？」（`restartSelf`，**重启前必须 CloseHandle 两个命名互斥体**）；
+  ③ **自动演出给经验但不写谱面成绩**（照官方 AUTO LIVE），`--auto` 连经验也不给；
+  ④ README 581→203 行（原理详解搬 AGENTS.md / chartdl 搬 CLI.md / 打包搬 SETUP.md），
+  **技术细节禁止再往 README 加**；⑤ 审计 md 图片引用（docs/preview_{auto,pause,select,
+  settings,stage,vocal}.png 没有任何 md 精确引用）。
 - **2026-09-24**：设置卡片一批 —— ① 账户页**导入 / 导出用户数据**（comdlg32 原生选择器，
   **build.sh 游戏链接行新增 `-lcomdlg32`**；导入=覆盖当前档案，先确认）；② 系统页**结束当前 /
   所有实例**（EnumWindows + PostMessage(WM_CLOSE)，main 里新处理 `SDL_WINDOWEVENT_CLOSE`）；
