@@ -3464,7 +3464,7 @@ int main(int argc, char** argv)
                 // UI zoom for the two screens that are laid out on a virtual
                 // canvas. The play screen is not affected on purpose.
                 contentLeft();
-                ImGui::Text("界面缩放（选曲 / 结算）");
+                ImGui::Text("界面缩放");
                 float uiScalePct = userSettings.uiScale * 100.0f;
                 contentLeft();
                 if (ui::slider("uiscale", &uiScalePct, 70.0f, 150.0f, 5.0f, "%.0f%%", interior)) {
@@ -3617,7 +3617,7 @@ int main(int argc, char** argv)
                 static int bgMode = userSettings.bgStyle;
                 ImGui::SetNextItemWidth(interior);
                 // The Aero entry only exists where Aero does - see aeroGlassAvailable.
-                const char* bgItems = aeroGlass ? "默认渐变\0桌面壁纸\0透明（Aero 玻璃）\0"
+                const char* bgItems = aeroGlass ? "默认渐变\0桌面壁纸\0Aero 玻璃\0"
                                                 : "默认渐变\0桌面壁纸\0";
                 const int bgCount = aeroGlass ? 3 : 2;
                 bool bgPicked = ImGui::Combo("##bgstyle", &bgMode, bgItems);
@@ -3648,7 +3648,7 @@ int main(int argc, char** argv)
                     static int glassModeUi = userSettings.glassMode == 2 ? 1 : 0;
                     ImGui::SetNextItemWidth(interior);
                     bool glassPicked = ImGui::Combo("##glassmode", &glassModeUi,
-                        "extend frame（默认）\0自绘无框（窗口无边框）\0");
+                        "extend frame\0无边框窗口\0");
                     glassPicked |= ui::padComboNudge(&glassModeUi, 2);
                     if (glassPicked) {
                         const int chosen = glassModeUi == 1 ? 2 : 0;
@@ -3977,7 +3977,7 @@ int main(int argc, char** argv)
                 }
                 contentLeft();
                 if (userSettings.instanceMode == 0) {
-                    ImGui::TextWrapped("多人游玩需要允许多开）。");
+                    ImGui::TextWrapped("多人游玩需要允许多开。");
                 } else if (userSettings.multiplayer) {
                     ImGui::TextWrapped("多人游玩已开启，重开所有窗口生效。");
                 } else {
@@ -4412,10 +4412,7 @@ int main(int argc, char** argv)
         // is title + buttons only), so the notice reuses it with no checkbox.
         const int action = ui::eulaDialog(renderer, "##multiask", "开启多开？",
             {
-                "多开 / 多人游玩是实验性功能：同一台机器开几个窗口，靠共享内存总线同步"
-                "选曲、难度和起奏时刻。",
-                "它没有网络校验，机器一忙可能掉帧或时钟漂移；窗口越多越明显。",
-                "每个窗口各登录一个用户，各自记成绩。确定开启吗？",
+                "多人演出是实验性功能：同一台机器开几个窗口，每个窗口各登录一个用户，窗口多了可能掉帧或时钟漂移，并且存在大量已知 Bug，确定开启吗？",
             },
             nullptr, nullptr, {std::string("取消"), std::string("确定开启")}, {false, true},
             multiAskPadChoice);
@@ -4538,9 +4535,7 @@ int main(int argc, char** argv)
         }
         const int action = ui::eulaDialog(renderer, "##restartask", "多人游玩已开启",
             {
-                "多人游玩的房间是启动时加入的，现在这个窗口还在单人模式里。",
-                "立即重启会关掉本窗口并用同样的参数重新打开一次（刚才的设置已经存好了）。",
-                "想稍后再开也行：手动关掉再启动，或下次启动时生效。",
+                "现在这个窗口还在单人模式里，立即重启窗口来准备多人游玩。",
             },
             nullptr, nullptr, {std::string("稍后"), std::string("立即重启")}, {false, true},
             restartPadChoice);

@@ -1,6 +1,6 @@
 # 下载谱面
 
-> ### ⚠️ 免责声明
+> ### 免责声明
 >
 > CppSekai 是**非官方、非营利的爱好者作品**，与 SEGA、Colorful Palette 及
 > 「プロジェクトセカイ カラフルステージ！ feat. 初音ミク」（Project SEKAI）官方
@@ -13,25 +13,25 @@
 CppSekai 的谱面**不随仓库分发**（官方游戏数据，版权原因）。你需要自己从公开资源站
 [unipjsk](https://assets.unipjsk.com/) 拉下来，放到 `charts/` 目录里。
 
-> ⚠️ 谱面 / BGM / 曲绘都是 Project SEKAI 官方素材，**仅限本地游玩**。
+> 谱面 / BGM / 曲绘都是 Project SEKAI 官方素材，**仅限本地游玩**。
 > 不要把 `charts/` 提交到公开仓库，也不要二次分发。
 
 ---
 
-## 零、图形界面（最省事）
+## 图形界面
 
 ```bash
 bash build.sh              # 会连 build/chartdl.exe 一起编出来
 ./build/chartdl.exe        # 双击也行
 ```
 
-715 首随便搜，勾几个难度和要的演唱版本，点 **下载勾选的歌曲**：谱面 / BGM / 曲绘 / sidecar
+双击 chartdl.exe,715 首随便搜，勾几个难度和要的演唱版本，点 **下载勾选的歌曲**：谱面 / BGM / 曲绘 / sidecar
 一次到位，已存在的文件默认跳过。命令行（`--list` / `--download`）见 `chartdl.exe --help`。
 下面的手工 curl 法在下载器不方便时再用。
 
 ---
 
-## 一、最快路径（推荐）
+## 一、最快路径
 
 ```bash
 bash setup.sh --charts    # 下载 0075 / 0127 两首歌的全部 5 个难度 + BGM
@@ -53,7 +53,7 @@ cd build
 
 ---
 
-## 二、目录与命名约定（**必须按这个来**）
+## 二、目录与命名约定
 
 谱面都放在 `charts/` 下。程序按 **文件名** 认歌，命名错了就不会出现在列表里。
 
@@ -109,7 +109,7 @@ for m in json.load(open('musics.json', encoding='utf-8')):
 
 ---
 
-## 四、URL 模板（已实测可用）
+## 四、URL 模板
 
 ### 1. 谱面
 
@@ -145,7 +145,7 @@ https://assets.unipjsk.com/startapp/music/jacket/jacket_s_<id3>/jacket_s_<id3>.p
 
 ---
 
-## 五、一次下完一首歌（复制即用）
+## 五、一次下完一首歌
 
 把 `ID` 改成你要的曲目 id：
 
@@ -209,7 +209,7 @@ ls -la "$DIR"
 
 ### `fillerSec` 是干嘛的
 
-官服 mp3 不是从音乐第 0 秒开始的——前面有一段静音填充（大多数歌 ≈9 秒），谱面的
+官服 mp3 不是从音乐第 0 秒开始的——前面有一段静音填充，谱面的
 tick 0 落在静音**之后**。不对齐的话整个谱面会早/晚 9 秒，看起来就是"音画完全错位"。
 
 优先级：sidecar 的 `fillerSec` / `offset` > **程序自动检测静音** > 0。
