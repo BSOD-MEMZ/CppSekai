@@ -273,5 +273,26 @@ cppsekai [--sus <file.sus>] [--bgm <audio>] [--charts <dir>] [--cover <image>]
 - **中文 / 日文参数**：程序内部按 UTF-8 处理，命令行也是从 `GetCommandLineW()` 重新取的，
   所以 cmd（GBK 代码页）里敲日文标题也能正确显示。
 - **`--charts` 给了就只用它**：不会再去 `exe/../charts` 兜底。
-- **不要用 `--auto` 当日常启动参数**：虽然现在不会改存档了，但自动演示不写成绩、不接输入。
+- **不要用 `--auto` 当日常启动参数**：它连经验都不给、也不接输入（设置里的「自动演出」是
+  另一回事：给经验、不写谱面成绩，见 README 的 Q&A）。
 - **别在 D 盘跑 zig 编译**（缓存必须放 C 盘，`build.sh` 已经处理）；这条只影响编译，不影响运行。
+
+---
+
+## 十、谱面下载器（`chartdl.exe`）
+
+不想手抄 curl 就双击 `build/chartdl.exe`（界面见 [docs/preview_downloader.png](docs/preview_downloader.png)）：
+
+- 左边是官方曲目表（搜索：id / 曲名 / 读音），勾选多首 → **queue checked** 批量下
+- 右边是选中曲目的详情：5 个难度、**每个演唱版本**（点了就下那个版本的 BGM）、曲绘、sidecar 元数据
+- 下载中显示总进度条 + 当前文件大小，日志在下面；已存在的文件默认跳过
+- 命令行也能用（方便脚本化）：
+
+```bash
+./build/chartdl.exe --list 374                       # 查歌
+./build/chartdl.exe --download 374 --diffs all --vocals all
+./build/chartdl.exe --download 75,127 --out ../charts --force
+```
+
+文件放到 `<out>/`（默认 `..\charts`），命名和游戏要求一致：谱面 `0374_master.sus`、
+BGM `<assetbundleName>.mp3`（`se_0374_01.mp3` / `an_0374_02.mp3` …）、曲绘 `0374.png`、元数据 `0374.json`。

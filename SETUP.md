@@ -40,7 +40,28 @@ cd build
 ./cppsekai.exe --sus <谱面.sus> --bgm <音频.mp3>
 ```
 
-完整参数见 `README.md`。
+完整参数见 **[CLI.md](CLI.md)**。
+
+## 打包发布
+
+```bash
+bash package.sh              # -> dist/CppSekai-<日期>/ + 同名 .zip（自带素材，约 66 MB / 51 MB）
+bash package.sh --no-assets  # 精简包（约 2.7 MB，用户侧跑一次 setup.sh --assets-only 拉素材）
+```
+
+打出来的 `dist/CppSekai-<日期>/` 就是发 Release 该传的全部内容：
+
+| 文件 | 说明 |
+|---|---|
+| `cppsekai.exe` / `chartdl.exe` | 游戏本体 + 谱面下载器（图标与版本信息已由 `app.rc` 嵌进 exe） |
+| `SDL2.dll` | 唯一的运行时依赖，**必须和 exe 同目录** |
+| `icon.png` | 运行时窗口 / 任务栏图标（exe 里另有一份） |
+| `assets/` | 贴图 / UI 音效 / 开屏图（**不含字体**，字体只用系统的）。默认打包；`--no-assets` 不带 |
+| `musics.json` + `music-vocals.json` + `music-levels.json` | 官方事实数据（曲名 / 读音 / 定数 / 演唱版本）。缺了也能开，只是会退化 |
+| `setup.sh` | 精简包用：用户跑一次 `bash setup.sh --assets-only` 补素材 |
+| `README.md` / `SETUP.md` / `COPYRIGHT.md` / `CREDITS.md` / `LICENSE` | 说明与许可（**AGPL-3.0-only，发二进制必须附带**） |
+| `charts/` | 空目录 + 说明，谱面放这里或用 chartdl 下载 |
+
 
 ## 已知的坑（改动前先看 AGENTS.md）
 

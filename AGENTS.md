@@ -5,10 +5,13 @@ CppSekai：Project SEKAI 风格 SUS 谱面 Windows 原生游玩器。
 其谱面核心从 MikuMikuWorld（MIT）移植。**本仓库整体遵循 AGPL-3.0-only，改动必须保持开源。**
 
 配套文档（改代码时按需查）：
+- `SETUP.md` —— 环境配置与**打包发布**（`package.sh` 发 Release 该传什么）。
+- `CLI.md` —— 命令行手册：参数、日志、无头自检、退出码，以及**谱面下载器 chartdl.exe** 的用法。
 - `CODE-REVIEW.md` —— **代码体检（2026-09-18）**：体量分布、巨型函数清单、
   按改动成本排的处置顺序。**动手前扫一眼第二节**，能省很多定位时间。
 - `CREDITS.md` —— 借用清单：每个来源是谁的、什么许可、放在哪（含 Fontworks 字体这条独立风险）。
 - `COPYRIGHT.md` —— 版权与风险：什么能发、什么不能发。
+- `README.md` —— 面向玩家的说明（只放用户最需要的东西，技术细节一律挪到本文件，别往 README 加）。
 
 ## 架构（改代码前先读这段）
 
@@ -657,6 +660,27 @@ bash build.sh          # 仅需 Git Bash；产物 build/cppsekai.exe + SDL2.dll 
   `PostMessageW(WM_CLOSE)`。**没有 kill**：WM_CLOSE → SDL 的 `SDL_WINDOWEVENT_CLOSE` →
   main 里新加的那个分支置 `running = false`，于是每个实例都自己存盘退出。
   （实测：PostMessage 之后日志出现 `[instance] window close -> exiting`，profile 完整写回。）
+- **窗口标题跟着当前用户走**（2026-09-24）：`syncWindowTitle()`（main.cpp，SDL_CreateWindow
+  之后定义）在每个会改名字的地方调一次 —— `activateProfile()`（切档案）与账户页改昵称。
+  标题 = `CppSekai`，或**房间标签存在时** `CppSekai - <玩家名>`（`--party-name` 优先，否则
+  用昵称）。单人窗口保持光秃秃的 `CppSekai`：单实例那个"把已开的窗口叫到前面来"的查找是
+  **按这个名字精确匹配**的（见实例策略那段）。以前只在启动时算一次，切了用户标题就停在旧名字。
+- **开多人游玩时会问「立即重启？」**（2026-09-24，`drawRestartAskDialog` + `restartSelf`）：
+  房间是**启动时**加入的（`party.init()` 在 main 开头），不重开窗口就只能一直是单人，
+  所以勾上「多人演出」（或第一次确认多开那张卡里点的就是多人）之后弹一张 `ui::eulaDialog`，
+  选「立即重启」就走 `restartSelf()`：`persistUserData()` → **先 `CloseHandle` 两个命名互斥体**
+  → `GetModuleFileNameW` + `GetCommandLineW` + `CreateProcessW`（cwd 沿用当前目录）→
+  `running = false` 走正常收尾。
+  ⚠ **互斥体必须先放手**：新进程一启动就 `CreateMutexW` 抢同一个名字，我们还攥着的话它读到
+  "已经有一个实例在跑"，于是把老窗口叫到前台然后自己退出 —— 重启完一个窗口都不剩。
+  实测过：重启后子进程日志是 `[instance] single owner of profile 'X'`（拿到的是父进程那把锁），
+  且只活一个进程、不再继续重启（无头复现的临时探针已删，见当日日志）。
+- **自动演出给经验、不给成绩**（2026-09-24）：设置里的「自动演出」按官方 AUTO LIVE 处理 ——
+  照算经验 / 场次 / 总分，但**不写 `cleared` / `fullCombo` / `bestScore`**（AUTO 是全程
+  PERFECT，写进去等于把记录本作废），结算里也强制 `newRecord = false`。
+  命令行的 `--auto` 连经验也不给（那是看谱面的预览，不该动档案）。
+  读旧最高分用 `scores.find(key)` 而**不是 `scores[key]`** —— 后者会**凭空建一条空记录**
+  （自动演出跑完会在档案里多出一个全 false 的 key）。
 - **账户页导入 / 导出**（2026-09-24）：一个 profile 文件就是全部（settings + scores + 资料），
   所以"备份"和"搬家"是同一个操作。导出 = `persistUserData()`（先把活镜像刷进 userSettings）
   + `game::saveUserData(用户挑的路径, ...)`；导入 = `game::isUserDataFile()` 先筛
@@ -2353,3 +2377,50 @@ ImGui 后端降级 + 去掉 `glBindSampler`），那是一块真活儿，而目�
 > **歌手 / 音源版本选择**（见「选曲界面」里的「切换歌手面板」——最后没走这条
 > `<id4>__<tag>` 文件名方案，而是直接吃官方 `music-vocals.json` 表 + 官方资源名
 > `se_/vs_/an_/cl_<id>_<n>.mp3`，见 CHARTS.md）。
+## 谱面坐标与时间轴（README 原来的「原理详解」搬过来的）
+
+完整的三层架构与逐模块说明见本文件开头；这里只留几张"改坐标/改时钟之前必须知道"的小表。
+
+### 时间：tick 是唯一真理，秒是算出来的
+
+谱面时间是 **tick**（`TICKS_PER_BEAT = 480`），不是秒 —— BPM 与 `#SPEED` 都会变，秒和 tick
+从来不是线性关系。核心维护三条互相换算的轴（都在 `core/native/src/mmw_preview.cpp`）：
+
+| 函数 | 输入 → 输出 | 用途 |
+|---|---|---|
+| `accumulateTicks` | 秒 → tick | 把播放器当前时间拉回谱面坐标系 |
+| `accumulateDuration` | tick → 秒 | 判定、音效、事件的真实时间 |
+| `accumulateScaledDuration` | tick → 视觉秒 | **受 hiSpeed 影响**，决定音符画在哪 |
+
+关键点：**判定用真实秒、下落位置用视觉秒**。所以改音符速度只让音符跑得更快，不会让歌对不上
+（`noteSpeed` 走的是 `setPreviewConfig` 的 hiSpeed 那条路）。
+
+### 空间：没有 3D，只有一个假透视
+
+轨道坐标 `x` 在高度 `y` 上被画到世界坐标 `(x·y, y)`：
+
+```cpp
+// core/native/src/mmw_preview.cpp
+QuadPoints perspectiveQuadvPos(float left, float right, float top, float bottom)
+{
+    return {{ {right*top, top}, {right*bottom, bottom}, {left*bottom, bottom}, {left*top, top} }};
+}
+```
+
+- `y = 1` 是判定线（最宽、最靠下），`y → 0` 是消失点（最窄、最靠上）
+- 12 轨的轨道坐标是 `lane - 6 + width/2`，即左半 −6…0，右半 0…6
+- 好处是判定只要一次除法就能把屏幕点还原成轨道坐标，不用射线求交：
+
+```
+窗口像素 → 裁剪空间 (clipX, clipY) → worldX / worldY
+         → lanePos = worldX / worldY      // 撤销假透视
+```
+
+`Renderer::clipToWorldX/Y` 就是这条逆变换（外加 letterbox 的宽高比修正），
+输入命中与悬停高亮全靠它 —— 改渲染模式 / 缩放 / 窗口比例之后"点不中音符"先查这里。
+
+### 音频开头的静音填充：具体参数
+
+`platform/Audio.cpp` 里那套自动检测（`sidecar` 的 `fillerSec` / `offset` 优先）：
+以 44100Hz **单声道**解码开头，`kBlockFrames = 1024` 一块找第一个峰值 > `kThreshold = 184`
+（≈ −45 dBFS）的采样；结果 < **0.3 秒**就当编码间隙，返回 0（不算填充）。

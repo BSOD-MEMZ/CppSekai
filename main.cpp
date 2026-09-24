@@ -1724,6 +1724,20 @@ int main(int argc, char** argv)
         std::fprintf(stderr, "SDL_CreateWindow failed: %s\n", SDL_GetError());
         return 1;
     }
+    // The title has to follow the active user: 设置 > 账户 can switch profile (and
+    // rename) at any time, and a title that stays on the boot-time name is the
+    // one thing about a profile switch that is visible outside the game. Only a
+    // 多人游玩 window carries a name - a solo window keeps the bare "CppSekai",
+    // which is what the single-instance "bring the running window to the front"
+    // finder matches on (see the instance policy above).
+    const auto syncWindowTitle = [&]() {
+        std::string title = "CppSekai";
+        if (!partyLabel.empty()) {
+            const std::string name = !partyName.empty() ? partyName : account.name;
+            title += " - " + (name.empty() ? partyLabel : name);
+        }
+        SDL_SetWindowTitle(window, title.c_str());
+    };
 
     // Window / taskbar icon, from icon.png next to the exe (or the repo root in
     // the dev layout). The *file* icon comes from the embedded resource
@@ -2944,6 +2958,7 @@ int main(int argc, char** argv)
         activeProfileId = id;
         game::saveProfiles(userDataDir, profiles, activeProfileId);
         syncProfileLabel(); // the combobox label follows the nickname
+        syncWindowTitle();  // ...and so does the window title
         if (party.active()) {
             party.setName(account.name.empty() ? partyLabel : account.name);
         }
@@ -3141,6 +3156,65 @@ int main(int argc, char** argv)
     // the 账户 page's feet (导入), so its text buffers re-read instead of typing
     // the previous user's nickname back into the new data on the next keystroke.
     int profileDataGeneration = 0;
+    // 「多人游玩已开启 —— 立即重启？」那张卡（见 drawRestartAskDialog）。
+    // 房间是**启动时**加入的，所以开了多人只有重开一个窗口才真的进房。
+    bool restartAsk = false;
+    bool restartAskAlive = false;
+    int restartPadChoice = -1;
+    // Restart this instance: hand the *current* command line to a fresh copy of
+    // this very exe, then leave through the ordinary shutdown (profile saved on
+    // the way out). The other way to make 多人游玩 take effect would be to move
+    // party.init() to the settings card, which is a much bigger change than the
+    // one line of user-visible behaviour it buys.
+    const auto restartSelf = [&]() {
+#ifdef _WIN32
+        persistUserData(); // 先把活镜像写回档案，新窗口读到的才是刚改的设置
+        // The two named mutexes have to go *before* the child starts: it takes
+        // the same names on boot, and while we still hold them it reads
+        // "another instance is already running", brings our window to the front
+        // and exits - a restart that leaves nothing running at all.
+        if (singleInstanceLock != nullptr) {
+            CloseHandle(singleInstanceLock);
+            singleInstanceLock = nullptr;
+        }
+        if (profileLock != nullptr) {
+            CloseHandle(profileLock);
+            profileLock = nullptr;
+        }
+        // The real exe path (a probe build may be called something else) and the
+        // real cwd - the log and the relative `charts` candidate live there.
+        wchar_t exePath[MAX_PATH * 2] = {};
+        if (GetModuleFileNameW(nullptr, exePath, static_cast<DWORD>(std::size(exePath))) == 0) {
+            std::printf("[restart] GetModuleFileNameW failed (%lu)\n",
+                static_cast<unsigned long>(GetLastError()));
+            std::fflush(stdout);
+            return;
+        }
+        wchar_t cwdBuf[MAX_PATH * 2] = {};
+        GetCurrentDirectoryW(static_cast<DWORD>(std::size(cwdBuf)), cwdBuf);
+        // The whole original command line, argv[0] included: every flag this run
+        // was started with (--party, --charts, ...) has to survive the restart.
+        std::wstring cmd = GetCommandLineW();
+        std::vector<wchar_t> cmdBuf(cmd.begin(), cmd.end());
+        cmdBuf.push_back(L'\0');
+        STARTUPINFOW si{};
+        si.cb = sizeof(si);
+        PROCESS_INFORMATION pi{};
+        if (CreateProcessW(exePath, cmdBuf.data(), nullptr, nullptr, FALSE, 0, nullptr, cwdBuf, &si, &pi)) {
+            CloseHandle(pi.hThread);
+            CloseHandle(pi.hProcess);
+            std::printf("[restart] relaunched, exiting this instance\n");
+            std::fflush(stdout);
+            running = false;
+        } else {
+            std::printf("[restart] CreateProcessW failed (%lu)\n",
+                static_cast<unsigned long>(GetLastError()));
+            std::fflush(stdout);
+        }
+#else
+        running = false;
+#endif
+    };
     // Touch drag-to-scroll. ImGui only scrolls on a wheel event and a touch panel
     // never sends one, so a tab taller than the settings card could only be
     // scrolled by grabbing the 4px scrollbar with a finger. The finger path
@@ -3893,6 +3967,11 @@ int main(int argc, char** argv)
                             std::printf("[settings] multiplayer %s\n", partyBox ? "on" : "off");
                             std::fflush(stdout);
                             persistUserData();
+                            // 刚打开：直接问一句要不要现在就重开（房间是启动时
+                            // 加入的，不重开的话这个窗口一直是单人）。
+                            if (partyBox) {
+                                restartAsk = true;
+                            }
                         }
                     }
                 }
@@ -4085,10 +4164,11 @@ int main(int argc, char** argv)
                         break;
                     }
                     if (party.active()) {
-                        // The room shows this name too (the window title only
-                        // changes on the next launch).
+                        // The room shows this name too, and so does the window
+                        // title (it is what tells two rooms' windows apart).
                         party.setName(account.name.empty() ? partyLabel : account.name);
                     }
+                    syncWindowTitle();
                     persistUserData();
                 }
                 contentLeft();
@@ -4355,6 +4435,8 @@ int main(int argc, char** argv)
             userSettings.instanceMode = 1;
             if (multiInstanceAskFromParty) {
                 userSettings.multiplayer = true;
+                // 用户点的是多人游玩：紧接着问一句要不要现在就重开进房。
+                restartAsk = true;
             }
             std::printf("[instance] multi-open accepted (fromParty=%d)\n",
                 multiInstanceAskFromParty ? 1 : 0);
@@ -4441,12 +4523,51 @@ int main(int argc, char** argv)
     };
 
     // ------------------------------------------------------------------
+    // 「多人游玩已开启 —— 立即重启？」
+    //
+    // 房间是启动时加入的（party.init() 在 main 开头），所以刚勾上多人游玩时
+    // 这个窗口其实还是单人。与其让人自己去关掉再开，不如问一句：立刻重启就
+    // 把当前命令行原样交给一个新进程（见 restartSelf）。
+    // ------------------------------------------------------------------
+    auto drawRestartAskDialog = [&]() {
+        if (restartAsk) {
+            restartAskAlive = true;
+        }
+        if (!restartAskAlive) {
+            return;
+        }
+        const int action = ui::eulaDialog(renderer, "##restartask", "多人游玩已开启",
+            {
+                "多人游玩的房间是启动时加入的，现在这个窗口还在单人模式里。",
+                "立即重启会关掉本窗口并用同样的参数重新打开一次（刚才的设置已经存好了）。",
+                "想稍后再开也行：手动关掉再启动，或下次启动时生效。",
+            },
+            nullptr, nullptr, {std::string("稍后"), std::string("立即重启")}, {false, true},
+            restartPadChoice);
+        restartPadChoice = -1; // one press is one pick
+        if (action == -2) {
+            restartAskAlive = false; // close animation over, drop the card
+            return;
+        }
+        if (action == 0) {
+            std::printf("[restart] declined\n");
+            std::fflush(stdout);
+            restartAsk = false;
+        } else if (action == 1) {
+            restartAsk = false;
+            restartSelf();
+        }
+    };
+
+    // ------------------------------------------------------------------
     // Pointer input: touch fingers and mouse buttons share one code path.
     // Mouse pointers get negative ids so they never collide with SDL fingers.
     // ------------------------------------------------------------------
     auto pointerIdForButton = [](Uint8 button) -> SDL_FingerID {
         return button == SDL_BUTTON_RIGHT ? -2 : -1;
     };
+
+
 
     // Window pixel -> 1920x1080 virtual HUD space (letterboxed, like the HUD).
     auto hudPoint = [&](int x, int y, float& outVx, float& outVy) {
@@ -6607,6 +6728,8 @@ int main(int argc, char** argv)
             drawMultiInstanceAskDialog();
             // 导入用户数据的覆盖确认框（同样是设置卡片里点出来的）。
             drawImportAskDialog();
+            // 多人游玩刚打开时问的那句「立即重启？」。
+            drawRestartAskDialog();
             // Who else is in the room (hidden while the settings card is up:
             // it draws on the foreground list, above the card). A room with a
             // single seat is just this window, so the badge and its hint - the
@@ -6904,19 +7027,35 @@ int main(int argc, char** argv)
                 // cleared. A full combo needs the run to count in the first
                 // place: hold breaks drain life without a MISS, so miss == 0
                 // alone can still end at 0 life.
-                // Fresh each run: an autoplay preview never banks exp, and the
+                // Fresh each run: a `--auto` preview never banks exp, and the
                 // result screen must not show the previous song's gain.
                 resultExpGain = 0;
                 resultRankUps = 0;
-                if (!autoPlay && !session.scoreRecorded && songTime >= trackDurationSec - 0.25) {
+                // 自动演出（设置里的「自动演出」）**照给经验**：官方 AUTO LIVE 是能拿
+                // 奖励的（代价是消耗 Live 加成，我们这套没有加成系统）。但它**不写谱面
+                // 成绩** —— AUTO 是全程 PERFECT，把 cleared / FullCombo / 最高分写进去
+                // 等于把记录本作废。命令行的 `--auto` 连经验也不给：那是给人看谱面用的
+                // 预览，跑几遍就把等级刷上去不是它的用途（和 `--flick-log` 那类
+                // "本次运行不写档案"的开关同一个规矩）。
+                const bool autoRun = autoPlay;
+                const bool banksRun = !autoRun || !autoplayGiven;
+                if (banksRun && !session.scoreRecorded && songTime >= trackDurationSec - 0.25) {
                     session.scoreRecorded = true;
                     const bool cleared = st.life > 0.0f;
                     const bool fullCombo = cleared && st.miss == 0;
                     const std::string key = game::scoreKey(session.entry);
                     // Keep the old best for the result screen's 最高得分 /
-                    // 新纪录! before the merge below overwrites it.
-                    resultPreviousBest = scores[key].bestScore;
-                    scores[key] = game::mergeScore(scores[key], cleared, fullCombo, st.score);
+                    // 新纪录! before the merge below overwrites it. Read with
+                    // find() rather than scores[key]: the subscript operator
+                    // *creates* an empty record, and an autoplay run has no
+                    // business leaving one behind in the save.
+                    const auto prevIt = scores.find(key);
+                    const game::ScoreRecord prevRecord =
+                        prevIt != scores.end() ? prevIt->second : game::ScoreRecord{};
+                    resultPreviousBest = prevRecord.bestScore;
+                    if (!autoRun) {
+                        scores[key] = game::mergeScore(prevRecord, cleared, fullCombo, st.score);
+                    }
                     // Player rank: an official live grants the score-rank
                     // multiplier (we have no live-bonus system, so it is not
                     // multiplied again). Same score-rank call the result screen
@@ -6926,7 +7065,9 @@ int main(int argc, char** argv)
                     resultRankUps = game::addPlayerExp(account, resultExpGain);
                     ++account.plays;
                     account.totalScore += st.score;
-                    game::applyScores(entries, scores);
+                    if (!autoRun) {
+                        game::applyScores(entries, scores);
+                    }
                     persistUserData();
                     std::printf("[score] %s %s%s (life=%.0f/%.0f) (%s)\n", key.c_str(),
                         cleared ? "cleared" : "failed", fullCombo ? " (full combo)" : "",
@@ -6940,6 +7081,11 @@ int main(int argc, char** argv)
                 }
                 resultData = buildResultData(session.intro, session.entry, st,
                     resultPreviousBest, judgement.chartRating(), account, resultExpGain, resultRankUps);
+                if (autoRun) {
+                    // 自动演出没写成绩，别让结算喊「新纪录!」（分数比旧记录高很正常：
+                    // 这局是自动打的）。
+                    resultData.newRecord = false;
+                }
                 audio.setHoldLoop(false, false, 0.0f);
                 audio.stopMusic();
                 touches.clear();
@@ -7249,6 +7395,8 @@ int main(int argc, char** argv)
             drawSettingsCard();
             drawMultiInstanceAskDialog();
             drawImportAskDialog();
+            // 多人游玩刚打开时问的那句「立即重启？」。
+            drawRestartAskDialog();
 
             // ----------------------------------------------------------
             // Pause dialog: 重试 / 放弃 / 继续演出.
