@@ -1,13 +1,26 @@
 # 借用清单（CREDITS.md）
 
+> ### ⚠️ 免责声明
+>
+> **本仓库是非官方、非营利的爱好者作品**，与 SEGA、Colorful Palette 及
+> 「プロジェクトセカイ カラフルステージ！ feat. 初音ミク」（Project SEKAI）官方
+> **没有任何隶属、赞助、授权或认可关系**，也**未获其许可**。
+> 下面列出的每一样东西，**权利都归它的原权利人**，本项目**不主张任何权利**；
+> 其中官方美术 / 音频 / 谱面 / 数据表**仅限本机个人游玩与学习**，
+> **禁止二次分发、公开发布与任何商业使用**。本项目按「现状」提供，不附带任何担保，
+> **使用后果由使用者自行承担**。完整风险矩阵见 [COPYRIGHT.md](COPYRIGHT.md)。
+
 > 这个文件回答一个问题：**CppSekai 里有哪些东西不是我自己写的，它们分别从哪来、什么许可、
 > 现在放在哪。**
 >
 > `COPYRIGHT.md` 讲的是**风险和发布纪律**（什么能发、什么不能发）；本文件是**来源台账**
 > （东西从哪来、归谁、什么证）。两份配合看。
 >
-> 审计时间：**2026-09-18**，方法是 `git ls-files` 实测，不是回忆。数字与当年那份
-> 2026-09-12 的审计**已不一致**（素材从 327 个涨到 772 个），以本文件为准。
+> 审计时间：**2026-09-24 复审计**（上一版 2026-09-18，再上一版 2026-09-12），
+> 方法一律是 `git ls-files` / `find` 实测，不是回忆。**2026-09-19 的「素材瘦身」删掉了
+> 一大批文件（`assets/mmw/effects/`、`assets/mmw/sound/`、`assets/mmw/font/`、
+> `overlay/ap.mp4`、`overlay/ap-native/`、部分曲绘/多图集），所以 9-18 那版的数字
+> 全都偏大** —— 以本文件为准。当前 `assets/` 实测 **255 个文件 / 9.6 MB**。
 
 ---
 
@@ -48,7 +61,7 @@ CppSekai (AGPL-3.0-only)  ← 本仓库        加平台层、判定引擎、UI�
 | miniaudio | MIT-0（等同公有领域） | 音频播放（BGM / 预览 / SE），可任意嵌入 | `third_party/miniaudio.h`（单头） |
 | stb_image | MIT / 公有领域（双授权） | 贴图解码（谱面素材、曲绘） | `third_party/mmw_preview/vendor/stb_image.h`、`third_party/stb_image_write.h` |
 | stb_image_write | 同上 | `--screenshot` 写 PNG | `third_party/stb_image_write.h` |
-| nlohmann/json | MIT | 读 `musics.json` / `music-vocals.json` / `userdata.json` | `third_party/nlohmann/json.hpp`、`core/native/vendor/nlohmann/json.hpp` |
+| nlohmann/json | MIT | 读 `musics.json` / `music-vocals.json` / `music-levels.json` / `music-aliases.json` / `userdata.json` | `third_party/nlohmann/json.hpp`（唯一实体）；`core/native/vendor/nlohmann/json.hpp` 只是**一行转发头**，转发到上面那份 |
 | DirectXMath | MIT（Microsoft） | 只用头文件，做矩阵/向量数学 | `third_party/DirectXMath/` |
 
 **MIT 的义务只有一条**：保留版权与许可声明。这些库的声明就在各自源文件头部，
@@ -84,18 +97,25 @@ CppSekai (AGPL-3.0-only)  ← 本仓库        加平台层、判定引擎、UI�
 ## 四、美术素材（全部属于 SEGA / Colorful Palette）
 
 **这一节是全部风险所在。** 这些是官方游戏解包出来的美术资源，不是自制。
+下表是 **2026-09-24 实测**（`git ls-files`），不是估的。
 
 | 路径 | 数量 | 内容 | 被 git 跟踪？ |
 |---|---|---|---|
-| `assets/mmw/overlay/**` + `overlay_opt/**` | 566 | HUD 全套精灵：分数 `score/**`、连击 `combo/**`、血量条 `life/**`、背景层 `bggen/**`、判定音效提示等 | **是** |
-| `assets/mmw/effects/**` | 75 | 音符特效图集（`effect.png` 等，含判定光效） | **是** |
-| `assets/mmw/*.png`（顶层 13 个） | 13 | `notes*.png`（音符）、`longNoteLine*.png`（长条）、`touchLine*.png`（触摸线）、`stage.png`、`background_overlay.png`、`default.png` | **是** |
-| `assets/select/**` | 12 | 选曲界面：`indicate_back_new.png`、`img_smartphone.png`、`musicsetting.png`、`refresh.png`、`search.png`（搜索框内的放大镜）、`shufflebutton.png`、`skip.png`、clear/FC 指示灯等 | **是** |
-| `assets/fx/**` | 4 | 打击特效：`tap_ring.png`、`tap_tri_0..2.png` | **是** |
-| `assets/mmw/ui/close.png` | 1 | 关闭按钮 | **是** |
-| `Drafts/**` | 64 | 素材暂存区：`icon/profile_icon_0001..0042.png`（官方头像）、`friend_invitation_campaign_*`（官方活动图）、clear/FC 指示灯草稿等 | **是** |
+| `assets/mmw/overlay/**` + `overlay_opt/**` | 206 | HUD 全套精灵：分数 `score/**`(42)、血量条 `life/**`(24)、连击 `combo/**`(22)、背景层 `bggen/**`(7)、判定提示 `judge/**`(6)，以及 2 个顶层文件 | **是** |
+| `assets/mmw/*.png`（顶层 6 个） | 6 | `notes_01.png`、`longNoteLine_01.png`、`touchLine_eff_01.png`（音符 / 长条 / 触摸线）、`stage.png`、`background_overlay.png`、`effect.png` | **是** |
+| `assets/select/**` | 15 | 选曲界面：`indicate_back_new.png`、`img_smartphone.png`、`musicsetting{,_large}.png`、`refresh.png`、`search.png`、`shufflebutton.png`、`singer{close}.png`、`store.png`、`guess.png`、`level.png`、`songlevel.png`、clear/FC 指示灯 | **是** |
+| `assets/fx/**` | 3 | 打击特效：`tap_ring.png`、`tap_tri_1..2.png` | **是** |
+| `assets/mmw/ui/**` | 2 | `close.png`、`skip.png` | **是** |
+| `Drafts/**` | 64 | 素材暂存区（**不在发布包里**）：`icon/profile_icon_0001..0042.png`（官方头像）、`friend_invitation_campaign_*`（官方活动图）、clear/FC 指示灯草稿等 | **是** |
 | `assets/splashscreen.png` | 1 | 启动闪屏 | **是** |
-| `docs/preview*.png` | 10 | README 截图。**截图内容含官方 UI 贴图**（严格说也是官方美术的再现） | **是** |
+| `docs/**.{png,jpg}` | 5 | README 截图（3 张 `preview*.png` + `playonseewo.jpg` + `preview_downloader.png`）。**截图内容含官方 UI 贴图**（严格说也是官方美术的再现） | **是** |
+
+> **2026-09-19 瘦身删掉的东西**（这一版审计已不再计入，列出来是免得有人以为还在）：
+> `assets/mmw/effects/**`（75 张图集）、`assets/mmw/sound/**`（11 个判定音拷贝）、
+> `assets/mmw/font/**`（三个字体文件，见第八节）、`assets/mmw/overlay/ap.mp4`（官方 MV）、
+> `assets/mmw/overlay/ap-native/all-perfect.m4a`、`assets/ost/キミだけの跳躍.mp3`。
+> **源码里已经没有任何一处引用它们**（2026-09-24 grep 复核过），删得干净。
+> 另：`assets/select/` 里原先多出来的一批未使用贴图也在同批清理中删掉了。
 
 `assets/se/**`、`charts/**`、`toolchain/` 等确实不在库里（gitignore 生效）。
 
@@ -109,24 +129,29 @@ CppSekai (AGPL-3.0-only)  ← 本仓库        加平台层、判定引擎、UI�
 
 | 路径 | 数量 | 内容 | 被跟踪？ |
 |---|---|---|---|
-| `assets/se/**` | 20 | UI / 游玩音效：`click`、`select`、`level_choose`、`window_open`、`window_close`、`start`（确定时的光效音）、`count_down`、`touch`、`LIVE_CLEAR`、`LIVE_FINISH`，以及判定音 `se_live_{tap,flick,long,trace,connect}{,_critical}` 全套 | **是** |
-| `assets/mmw/sound/**` | 11 | 判定音的另一份拷贝（与 `assets/se/` 的 `se_live_*` 重复） | **是** |
-| `assets/ost/**` | 2 | `BGM_LIVE_RESULT_2.mp3`（结算 BGM）与 `キミだけの跳躍.mp3` | **是** |
-| `assets/mmw/overlay/ap.mp4` | 1 | 官方 MV 视频（AUTO LIVE 背景） | **是** |
-| `assets/mmw/overlay/ap-native/all-perfect.m4a` | 1 | ALL PERFECT 语音 | **是** |
+| `assets/se/**` | 21 | UI / 游玩音效：`click`、`select`、`slide`、`level_choose`、`window_open`、`window_close`、`start`（确定时的光效音）、`count_down`、`touch`、`LIVE_CLEAR`、`LIVE_FINISH`，以及判定音 `se_live_{perfect,critical,flick,flick_critical,long,long_critical,trace,trace_critical,connect,connect_critical}` 全套 | **是** |
+| `assets/ost/**` | 1 | `BGM_LIVE_RESULT_2.mp3`（结算 BGM） | **是** |
+
+**2026-09-19 已删**：`assets/mmw/sound/**`（11 个判定音拷贝，和 `assets/se/` 的 `se_live_*` 完全重复）、
+`assets/mmw/overlay/ap.mp4`（官方 MV）、`assets/mmw/overlay/ap-native/all-perfect.m4a`（ALL PERFECT 语音）、
+`assets/ost/キミだけの跳躍.mp3`。当时的理由：占体积且都由界面音效 / 系统语音替代，
+删掉后源码里也没有残留引用（09-24 grep 复核）。**如果哪天想把 AUTO LIVE 的 MV 背景做回来，
+那是重新引入一份官方视频素材 —— 先回 COPYRIGHT.md 第四节过一遍风险。**
 
 ---
 
 ## 六、数据表（官方数据库的整表复制）
 
-| 文件 | 大小 | 内容 | 风险 |
+| 文件 | 大小（09-24 实测） | 内容 | 风险 |
 |---|---|---|---|
-| `musics.json` | ~392 KB | 曲库元数据（曲名、读音、曲绘名、演唱版本、BPM 等） | 事实数据，风险低，但属整表复制 |
-| `music-levels.json` | ~17 KB | 难度定数表（EASY..APPEND 的实际数值） | 同上 |
-| `music-vocals.json` | ~241 KB | 演唱版本表（哪位歌手唱哪版） | 同上 |
+| `musics.json` | 401 KB | 曲库元数据（曲名、读音、曲绘名、演唱版本、BPM 等） | 事实数据，风险低，但属整表复制 |
+| `music-vocals.json` | 244 KB | 演唱版本表（哪位歌手唱哪版） | 同上 |
+| `music-levels.json` | 17 KB | 难度定数表（EASY..APPEND 的实际数值） | 同上 |
+| `music-aliases.json` | 185 KB | **社区提交的曲目别名**（不是官方数据，见第三节），由 `fetch_music_aliases.py` 从 Haruki 只读接口导出 | 别名由社区撰写，风险最低；但仍属整表复制 |
 
-三个都在仓库根、**都被跟踪**。保留可接受（是事实数据，且 `setup.sh` 能按模板从公开
-接口重建），但**不要再往里加更多官方表的拷贝**。
+前三个是官方 master DB 的镜像、都在仓库根且**都被跟踪**。保留可接受（是事实数据，
+且 `.workbuddy/tools/update_music_db.py` / `setup.sh` 能按模板从公开接口重建），
+但**不要再往里加更多官方表的拷贝**。
 
 ---
 
@@ -150,7 +175,7 @@ CppSekai (AGPL-3.0-only)  ← 本仓库        加平台层、判定引擎、UI�
 
 | 东西 | 说明 |
 |---|---|
-| `assets/test.sus` | 冒烟测试谱面，标题 `CppSekai Smoke Test` / 作者 `test`，手写的 |
+| `charts/test.sus` | 冒烟测试谱面，标题 `CppSekai Smoke Test` / 作者 `test`，手写的。**在 `charts/` 里、被 gitignore**（不随仓库发），所以它不算「分发借来的东西」 |
 | `icon.ico` / `icon.png` | 自绘图标（**没有**用官方 logo —— 这是 `COPYRIGHT.md` 明令禁止的） |
 | `game/**`、`platform/**`、`downloader/**`、`main.cpp` | 本项目原创：判定引擎、渲染器封装、音频封装、SMTC、多人总线、全部 UI、谱面下载器 |
 | `build/winsend.c`、`.workbuddy/tools/**` | 自制开发/验证工具，不入发布包 |
@@ -177,4 +202,27 @@ CppSekai (AGPL-3.0-only)  ← 本仓库        加平台层、判定引擎、UI�
 
 ---
 
-*这是来源台账，不是法律意见。真实纠纷请找律师。风险与处置见 [COPYRIGHT.md](COPYRIGHT.md)。*
+## 十、免责声明（完整版）
+
+读到这里，请再确认一遍下面五条。它们不是客套话，是这个项目的实际边界。
+
+1. **非官方**：CppSekai 是个人自制的第三方工具，与 SEGA / Colorful Palette 及
+   Project SEKAI 官方**没有任何关系**；官方从未授权、赞助、认可或审核过本项目。
+   遇到任何问题**不要去找官方客服**。
+2. **素材权利**：上表里出现的曲名、角色、美术（`assets/**`、`Drafts/**`、`docs/**`）、
+   音频、官方数据表，**著作权 / 商标权全部归 SEGA / Colorful Palette 及各词曲版权方所有**。
+   本项目**不主张任何权利**，列出它们只是**如实交代来源**，不代表取得了许可，
+   也不代表可以合法再分发它们。
+3. **仅限本地个人使用**：这些素材**只允许在你自己的机器上玩**。
+   **不要**提交到公开仓库、**不要**打包分发、**不要**公开传播、**不要**用于任何商业用途。
+   要发布，只发源码（AGPL-3.0-only）或**剥掉全部官方素材**的裸二进制，
+   具体做法见 [COPYRIGHT.md](COPYRIGHT.md) 第四节。
+4. **无担保**：本程序按 **AS IS（现状）** 提供，不附带任何明示或暗示的担保，
+   包括但不限于适销性、特定用途适用性与不侵权。作者不承诺它能跑、不承诺它不崩、
+   不承诺存档不丢。
+5. **责任限制**：因下载、编译、运行、修改、分发本项目而产生的**任何直接或间接后果
+   （数据丢失、设备损坏、账号风险、法律纠纷等），全部由使用者自行承担**，
+   作者不承担任何责任。
+
+> 本文件是**来源台账与风险评估，不是法律意见**。这里给出的每一条判断都有可能被推翻，
+> 真实纠纷请咨询执业律师。风险矩阵与处置建议见 [COPYRIGHT.md](COPYRIGHT.md)。

@@ -176,7 +176,8 @@ bool checkBox(const char* label, bool* value, float rowWidth = 0.0f, bool enable
 
 // Row of radio buttons: one circle + label per option, the options spread
 // evenly across rowWidth so even three Chinese labels fit inside the card.
-// The picked circle fills pink (with the same tween the checkbox's tick uses).
+// Same disc as the song-select vocal-version picker: a white circle with a
+// soft shadow, mint dot inside when picked (tweened like the checkbox tick).
 // Clicks select; left / right on the pad walk the options like the stepper's
 // pick-one capsules do. `selected` is the chosen slot - anything out of range
 // reads as "nothing picked" (i.e. the value under it was customised). Returns

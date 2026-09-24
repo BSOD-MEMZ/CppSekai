@@ -1,5 +1,19 @@
 # AGENTS.md — 给 AI 助手的项目指南
 
+> ### ⚠️ 免责声明
+>
+> CppSekai 是**非官方、非营利的爱好者作品**，与 SEGA、Colorful Palette 及
+> 「プロジェクトセカイ カラフルステージ！ feat. 初音ミク」（Project SEKAI）官方
+> **没有任何隶属、赞助、授权或认可关系**，也**未获其许可**。仓库中的曲名、角色、
+> 美术、音频、谱面与数据表**权利全部归原权利人**，本项目不主张任何权利，
+> 这些内容**仅限本机个人游玩与学习**，**禁止二次分发、公开发布与任何商业使用**。
+> 按「现状」提供，不附带任何担保，使用后果由使用者自负。
+> 详见 [COPYRIGHT.md](COPYRIGHT.md) / [CREDITS.md](CREDITS.md)。
+>
+> **给 AI 的额外提醒**：下面每一处提到「从官方 CDN 拉素材」「官方 master DB」的地方，
+> 都是**使用者在自己机器上取数据**的说明，不是可以随代码一起分发的东西。
+> 生成发布脚本 / Release 说明时**不要**把 `assets/`、`Drafts/`、`docs/` 打进包里。
+
 CppSekai：Project SEKAI 风格 SUS 谱面 Windows 原生游玩器。
 上游是 [sekai-mmw-preview-web](https://github.com/watagashi-uni/sekai-mmw-preview-web)（AGPL-3.0），
 其谱面核心从 MikuMikuWorld（MIT）移植。**本仓库整体遵循 AGPL-3.0-only，改动必须保持开源。**
@@ -2424,3 +2438,19 @@ QuadPoints perspectiveQuadvPos(float left, float right, float top, float bottom)
 `platform/Audio.cpp` 里那套自动检测（`sidecar` 的 `fillerSec` / `offset` 优先）：
 以 44100Hz **单声道**解码开头，`kBlockFrames = 1024` 一块找第一个峰值 > `kThreshold = 184`
 （≈ −45 dBFS）的采样；结果 < **0.3 秒**就当编码间隙，返回 0（不算填充）。
+
+---
+
+## ⚠️ 免责声明（每次改完代码再看一眼）
+
+- **非官方**：本项目与 SEGA / Colorful Palette 及 Project SEKAI 官方**没有任何关系**，
+  未获授权、赞助或认可；用户遇到问题**别去找官方客服**。
+- **素材权利**：`assets/**`（255 个）、`Drafts/**`（64 个）、`docs/**`（5 张）与
+  `musics.json` / `music-vocals.json` / `music-levels.json` / `music-aliases.json`
+  里的内容**权利全部归原权利人**，本项目不主张任何权利。
+- **仅限本地个人使用**：**禁止**打包分发、公开传播与任何商业使用；要发布只发源码
+  （AGPL-3.0-only）或**剥掉全部官方素材**的裸二进制。改 `package.sh` 时这是硬约束。
+- **无担保 / 责任自负**：程序按 AS IS 提供，不附带任何担保；使用后果由使用者自行承担。
+- **联系即删**：权利人联系即移除相关内容。
+
+完整版见 [COPYRIGHT.md](COPYRIGHT.md) 第九节，来源台账见 [CREDITS.md](CREDITS.md)。

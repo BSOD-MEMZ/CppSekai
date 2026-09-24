@@ -1295,15 +1295,19 @@ bool radioRow(const char* id, const std::vector<std::string>& labels, int* selec
             se(SeClick);
         }
 
-        // Ring and dot travel with the same eased value, so switching options
-        // reads as one dot growing while the other shrinks.
+        // Same disc the song-select vocal-version picker uses: a white circle
+        // with a soft shadow under it, and a mint dot inside when picked. No
+        // outline and no pink - the fill alone says which option is on, which
+        // is also why the row reads as one family with the checkbox ticks.
+        // `t` drives the dot, so switching options reads as one dot growing
+        // while the other shrinks.
         const float t = animValue(key ^ 0x61u, picked ? 1.0f : 0.0f, 20.0f);
         const float hov = animToggle(key ^ 0x62u, hovered && !picked, 16.0f);
-        const ImU32 fill = mixColor(kWhiteBtn, IM_COL32(255, 235, 243, 255), hov);
-        dl->AddCircleFilled(circle, dotR, fill, 32);
-        dl->AddCircle(circle, dotR, mixColor(kDivider, kCheckPink, t), 32, 2.0f * s);
+        dl->AddCircleFilled(ImVec2(circle.x, circle.y + 2.0f * s), dotR * 1.02f,
+            IM_COL32(126, 126, 156, 70), 40); // shadow
+        dl->AddCircleFilled(circle, dotR, mixColor(kWhiteBtn, IM_COL32(234, 235, 246, 255), hov), 40);
         if (t > 0.02f) {
-            dl->AddCircleFilled(circle, dotR * 0.46f * t, withAlpha(kCheckPink, t), 24);
+            dl->AddCircleFilled(circle, dotR * 0.72f * t, withAlpha(kPrimary, t), 40);
         }
         dl->AddText(font, fontSize,
             ImVec2(circle.x + dotR + dotGap, pos.y + (rowH - textSize.y) * 0.5f),

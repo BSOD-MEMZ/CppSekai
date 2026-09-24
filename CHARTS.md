@@ -1,5 +1,15 @@
 # 下载谱面
 
+> ### ⚠️ 免责声明
+>
+> CppSekai 是**非官方、非营利的爱好者作品**，与 SEGA、Colorful Palette 及
+> 「プロジェクトセカイ カラフルステージ！ feat. 初音ミク」（Project SEKAI）官方
+> **没有任何隶属、赞助、授权或认可关系**，也**未获其许可**。
+> 下面写的下载地址都是**第三方镜像站 / 公开 CDN**，**不是官方渠道**，本项目不运营、
+> 不背书、也不代管它们。下到的东西**权利全部归原权利人**，**仅限本机个人游玩与学习**，
+> **禁止二次分发、公开发布与任何商业使用**。按「现状」提供，使用后果由使用者自负。
+> 详见 [COPYRIGHT.md](COPYRIGHT.md)。
+
 CppSekai 的谱面**不随仓库分发**（官方游戏数据，版权原因）。你需要自己从公开资源站
 [unipjsk](https://assets.unipjsk.com/) 拉下来，放到 `charts/` 目录里。
 
@@ -269,3 +279,18 @@ rm music-levels.json && bash setup.sh
 | 音画错位约 9 秒 | sidecar 加 `"fillerSec": 9.0`（或 `"offset": 9000`） |
 | 曲绘是紫色占位块 | `charts/<id4>.png` 没下到，或曲绘 URL 用错了位数（必须是 **3 位**） |
 | 难度数字变了 | `music-levels.json` 是按官方表生成的，会随游戏版本更新 |
+
+---
+
+## ⚠️ 免责声明
+
+- **非官方**：本项目与 SEGA / Colorful Palette 及 Project SEKAI 官方**没有任何关系**，
+  未获授权、赞助或认可。下载地址都是第三方镜像 / 公开 CDN，本项目不运营也不背书。
+- **素材权利**：谱面（SUS）、BGM、曲绘、以及 `musics.json` / `music-vocals.json` /
+  `music-levels.json` / `music-aliases.json` 的**权利全部归原权利人**，
+  本项目不主张任何权利。教学「如何获取」不等于「代为分发」，但也不代表你拿到了许可。
+- **仅限本地个人使用**：**禁止**把 `charts/` 提交到公开仓库、**禁止**打包分发、
+  **禁止**公开传播、**禁止**任何商业使用。用完请自行删除。
+- **无担保 / 责任自负**：工具按 AS IS 提供，下载源随时可能失效或变更，后果自负。
+
+完整版见 [COPYRIGHT.md](COPYRIGHT.md) 第九节，来源台账见 [CREDITS.md](CREDITS.md)。
