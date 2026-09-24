@@ -7119,9 +7119,17 @@ int main(int argc, char** argv)
 
             // Hold loop SE: loop while a hold is being tracked (anyActiveHold
             // goes false as soon as the hold ends or the lane is released).
+            // `state == Play` is not redundant: this block also runs on the very
+            // frame the result transition above flipped the state, and a hold the
+            // chart never ends - 11003（踏步、出发）红谱最后那条长条只有起点、没有
+            // 结束标记 - would otherwise be armed *right after* that transition
+            // stopped it, and then never stopped again (this whole branch is
+            // skipped once the state is Result). Symptom: 那条 hold 的循环音一直响
+            // 到结算画面甚至回到主界面。
             {
                 bool holdCritical = false;
-                const bool holding = !paused && judgement.anyActiveHold(&holdCritical);
+                const bool holding = state == AppState::Play && !paused
+                    && judgement.anyActiveHold(&holdCritical);
                 // 0.70: the upstream overlay player's hold-loop level.
                 audio.setHoldLoop(holding, holdCritical, seVolume * 0.70f);
             }
