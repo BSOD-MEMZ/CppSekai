@@ -41,10 +41,30 @@ bash build.sh
 # AVX-VNNI because zig defaulted to the *build machine's* CPU; players on older
 # CPUs died with 0xC000001D right after the splash screen). Setting
 # CPSEKAI_SKIP_ISA_CHECK=1 bypasses this deliberately.
-if [ -z "$CPSEKAI_SKIP_ISA_CHECK" ] && command -v python >/dev/null 2>&1; then
-    if ! python .workbuddy/tools/cpu_isa_scan.py build/cppsekai.exe build/chartdl.exe; then
-        echo "[package] 这个 exe 要新 CPU，拒绝打包（见上面那行）。" >&2
-        echo "[package] 确认要发的话：CPSEKAI_SKIP_ISA_CHECK=1 bash package.sh" >&2
+#
+# Git Bash does not always expose `python` (Windows ships `py` instead), so try
+# all three spellings - and say so loudly when none is found, because silently
+# skipping the gate is worse than not having one.
+PYTHON=""
+for cand in python python3; do
+    if command -v "$cand" >/dev/null 2>&1 && "$cand" -c 'import sys; raise SystemExit(sys.version_info[0] != 3)' >/dev/null 2>&1; then
+        PYTHON="$cand"
+        break
+    fi
+done
+if [ -z "$PYTHON" ] && command -v py >/dev/null 2>&1 && py -3 -c 'import sys' >/dev/null 2>&1; then
+    PYTHON="py -3"
+fi
+
+if [ -n "$CPSEKAI_SKIP_ISA_CHECK" ]; then
+    echo "[package] CPSEKAI_SKIP_ISA_CHECK 已设置，跳过 CPU 基线闸门（自己心里有数就行）"
+elif [ -z "$PYTHON" ]; then
+    echo "[package] ⚠ 找不到 Python 3，**跳过**了 CPU 基线闸门：这个包没验过能不能跑在老 CPU 上。" >&2
+    echo "[package]   装个 Python 3 再打包，或手动跑 python .workbuddy/tools/cpu_isa_scan.py build/cppsekai.exe" >&2
+else
+    if ! $PYTHON .workbuddy/tools/cpu_isa_scan.py build/cppsekai.exe build/chartdl.exe; then
+        echo "[package] ✗ 这个 exe 需要比 x86-64 基线更新的 CPU，拒绝打包（原因见上面）。" >&2
+        echo "[package]   确认要发的话：CPSEKAI_SKIP_ISA_CHECK=1 bash package.sh" >&2
         exit 1
     fi
 fi

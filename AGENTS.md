@@ -1192,6 +1192,10 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
 ## 系统要求
 
 - Windows 7 SP1 及以上（miniaudio / SDL2 兼容底线）。OpenGL 3.3 core（约 2008 年后的 GPU 均可）。
+  **CPU 要求 = x86-64 基线本身**（SSE2；2003 年 x86-64 出现之后的任何 64 位 CPU：Athlon 64 /
+  Pentium 4 EM64T / Core 2 / K8~K10 / Atom 都行），这是 `-mcpu=baseline` 刻意保住的，实测见
+  下节「CPU 基线」。注意**最容易卡住的不是 CPU，而是显卡驱动（GL 3.3）**，以及我们只发 x64
+  （32 位系统 / XP 免谈）。
 - SMTC（媒体浮层/任务栏媒体控件）与任务栏进度条：SMTC 走 `RoGetActivationFactory`，**实际只在
   Windows 10+ 生效**（Win7/8 上 combase 的激活会失败，代码里已容错，只是不显示）；任务栏进度条
   ITaskbarList3 在 Win7+ 均可用。
@@ -1247,10 +1251,21 @@ Haswell 都认不了。这类指令出自 `platform/Renderer.cpp`（它 define �
 真实 AVX 代码会把比例抬高一个数量级 —— 1% 就是安全的分界线。AVX-VNNI 那个 4 字节模式在 3MB
 里期望误报 ~0.4 个，所以 41 vs 0 是决定性的。**`.text` 顺带小了 119KB。**
 
+**这份 exe 能跑多老？** 闸门工具现在直接给结论行。baseline 版实测：`AVX 家族 0.36%`（= 噪音底）、
+`AVX-VNNI 0`、`popcnt 0`、`crc32 0`、`movbe 0`、`SSSE3~SSE4.x 0` → **只剩 SSE2**，而 SSE2 是
+x86-64 架构的强制组成部分，所以 **2003 年之后任何 64 位 CPU 都满足**（Athlon 64 / Pentium 4 EM64T /
+Core 2 / K8~K10 / 各种 Atom）。对照的 native 版同一套模式是 `3.80% / 41 / 4 / 41 / 365 / 0`，
+说明这些模式确实抓得住真指令（不是空转）。编译器侧独立佐证：`zig c++ -mcpu=baseline -### -c x.cpp`
+里 `sse3 ssse3 sse4.1 sse4.2 popcnt avx avx2 fma bmi bmi2 lzcnt movbe crc32 avxvnni aes sha gfni`
+**全部是 `-target-feature "-xxx"`（关闭）**，而 native 时它们全是 `+`。
+（`lzcnt 1`、`SSE3` 个位数这种是字节模式噪音：native 里同模式是 17 / 8，同量级。）
+
 **发布闸门**：`.workbuddy/tools/cpu_isa_scan.py`（纯 stdlib，按上面这套阈值判 OK/FAIL），
 `package.sh` 在 `bash build.sh` 之后自动跑，FAIL 就拒绝打包（`CPSEKAI_SKIP_ISA_CHECK=1` 可强行绕过）。
 `-mcpu=baseline` 会连带 zig 自带的 libc++ / libc / compiler-rt 一起降下来 —— 这点实测过：
 最小 hello 程序 native 是 6956 个 VEX 字节、baseline 只剩 617（噪音），说明不是"只有我们的 TU 降了"。
+`package.sh` 找 Python 的顺序是 `python` → `python3` → `py -3`（Git Bash 里 `python` 常常不在 PATH），
+**一个都没有就大声警告并跳过** —— 不要改回静默跳过：没有闸门的包正是这次事故的成因。
 
 想换性能档位就改 `-mcpu`（`x86_64_v2` = Nehalem 2008+，`x86_64_v3` = Haswell 2013+），**但别删**。
 
@@ -1611,6 +1626,9 @@ exe 是 Windows 子系统程序，崩了什么都不留（只有 Windows 错误�
 **这个项目没法把 RVA 反查成函数名**：zig 的 lld 生成的 exe 里**没有 COFF 符号表**
 （`ptrsym=0 nsyms=0`，`-g`、`--export-all-symbols` 都没用，`-Wl,-Map`/`/MAP` 一律被 zig 拒绝），
 所以"拿偏移查函数"这条路走不通，别浪费时间再试（`.workbuddy/tools/pe_symbols.py` 已删）。
+能用的是两样：`.workbuddy/tools/pe_rva_dump.py <exe> <rva>` 把那个地址上的字节/指令打出来
+（2026-09-25 的 `0xC000001D` 就是这么认出 `C4 E2 59 52` = VPDPWSSD 的），以及
+`cppsekai.log` 最后一行的 `[boot] ...` / 第一行的 `[settings] ...`（说清死在哪个启动阶段）。
 定位靠**崩溃日志里的状态 + 上面的步进日志 + 探针复现**。
 
 #### 复现用的探针
