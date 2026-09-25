@@ -304,6 +304,11 @@ bash build.sh          # 仅需 Git Bash；产物 build/cppsekai.exe + SDL2.dll 
 ```
 
 - 编译器是自带的 zig 0.14.1（`toolchain/`），**不要用 0.16**（其 c++ 驱动会吞 `-I`）。
+- ⚠ **`CXXFLAGS` 里的 `-mcpu=baseline` 不能删**（2026-09-25 加，详见「CPU 基线」一节）：zig 不给
+  `-mcpu` 时默认目标是 **native**＝构建这台机器的 CPU（这里是 Alder Lake），产物里会带 AVX2 /
+  FMA / **AVX-VNNI**，老 CPU 上第一条就 `0xC000001D`。发布前跑
+  `python .workbuddy/tools/cpu_isa_scan.py build/cppsekai.exe build/chartdl.exe`
+  （`package.sh` 里已经接了这道闸，判定失败直接拒绝打包）。
 - zig 编译缓存**必须放 C 盘**（build.sh 已设 `ZIG_GLOBAL_CACHE_DIR`）；D 盘文件系统不支持 zig 缓存所需的文件操作，会报 `CacheCheckFailed/AccessDenied`。
 - MinGW 的 gl.h 只有 GL 1.1：GL 3.3 的函数指针和常量在 `platform/Renderer.cpp` 顶部的 `namespace gl` 里手工声明，加新 GL 调用时去那里补。
 - SDL2 的 MinGW 导入库需要额外链接 imm32/setupapi/version/oleaut32，且要自己 stub 三个屏保符号（`ScreenSaverProc` 等，在 main.cpp 顶部）。
@@ -1201,6 +1206,53 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
   scores 按**谱面文件名**做 key（与绝对路径无关，所以重下同样的谱成绩能对上）。
   命令行参数 > userdata.json > 内置默认（`*Given` 标志记录哪些来自命令行）。
   **它被 .gitignore 忽略**（个人成绩，不是源码）。`--screenshot` 模式不会写这个文件。
+
+## CPU 基线：老机器上的 `0xC000001D`（2026-09-25 实测）
+
+**症状**：用户双击后**看到启动画面，接着进程静默消失**（Windows 子系统程序，没有控制台、
+没有错误框），`cppsekai-crash.log` 里只有：
+
+```
+--- crash: exception 0xC000001D
+  state=-1 glassMode=0 frameless=-1 frames=0
+  fault    cppsekai.exe+0x2113A1  (rva 0x2113A1)
+--- end
+```
+
+`0xC000001D` = `STATUS_ILLEGAL_INSTRUCTION`：CPU 不认识那条指令。`state=-1 / frames=0` 说明
+主循环一帧都没跑，死在启动阶段。
+
+**根因不在代码，在构建参数**：zig 不给 `-mcpu` 时默认目标是 **native**，也就是*构建这台机器*的
+CPU。实测 `zig c++ -O2 -### -c x.cpp` 里有 `"-target-cpu" "alderlake"`，于是 exe 里混进了
+AVX2 / FMA / BMI2 / **AVX-VNNI**。那条崩溃地址上的字节是：
+
+```
+rva 0x2113A1:  C4 E2 59 52 C5 F9 7F 45 10 ...   ->  VPDPWSSD（VEX.128.66.0F38.W0 52）
+```
+
+AVX-VNNI 的 128 位 int16 点积 —— **Intel 12 代（Alder Lake，2021）起才有**，连 AVX2 时代的
+Haswell 都认不了。这类指令出自 `platform/Renderer.cpp`（它 define 了 `STB_IMAGE_IMPLEMENTATION`），
+实测把该 TU 编成汇编数一下：`-mcpu=alderlake` 下 `vpdpwssd` 正好 **41 条**，与发布 exe 里
+扫出来的 41 个 AVX-VNNI 编码一一对应；**其它 TU 一条都没有**。所以是 stb_image 的像素解码循环
+被 LLVM 用点积指令向量化了，游戏自己的逻辑、上游 mmw、imgui 都干净。
+
+修法：`build.sh` 的 `CXXFLAGS` 里钉 `-mcpu=baseline`（x86-64 基线 / SSE2）。实测（同一份源码）：
+
+| 构建 | `.text` | VEX 前缀字节 | AVX-VNNI 编码 |
+|---|---|---|---|
+| 旧（native，09-13/09-19/09-24/09-25 四个发布版都是它） | 3 066 470 | 116 642（**3.80%**） | **41** |
+| 新（`-mcpu=baseline`） | 2 948 374 | 10 749（0.36%） | **0** |
+
+0.36% 是**噪音底**：`C4`/`C5` 本来就会作为立即数/数据出现，纯随机字节命中率约 0.78%，所以
+真实 AVX 代码会把比例抬高一个数量级 —— 1% 就是安全的分界线。AVX-VNNI 那个 4 字节模式在 3MB
+里期望误报 ~0.4 个，所以 41 vs 0 是决定性的。**`.text` 顺带小了 119KB。**
+
+**发布闸门**：`.workbuddy/tools/cpu_isa_scan.py`（纯 stdlib，按上面这套阈值判 OK/FAIL），
+`package.sh` 在 `bash build.sh` 之后自动跑，FAIL 就拒绝打包（`CPSEKAI_SKIP_ISA_CHECK=1` 可强行绕过）。
+`-mcpu=baseline` 会连带 zig 自带的 libc++ / libc / compiler-rt 一起降下来 —— 这点实测过：
+最小 hello 程序 native 是 6956 个 VEX 字节、baseline 只剩 617（噪音），说明不是"只有我们的 TU 降了"。
+
+想换性能档位就改 `-mcpu`（`x86_64_v2` = Nehalem 2008+，`x86_64_v3` = Haswell 2013+），**但别删**。
 
 ## Windows 7 兼容（2026-09-19 实测）
 

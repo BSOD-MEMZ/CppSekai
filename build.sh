@@ -16,6 +16,18 @@ SDL="toolchain/SDL2-2.32.10/x86_64-w64-mingw32"
 CXXFLAGS=(
     -std=c++20
     -O2
+    # ⚠ 必须钉住基线 CPU（2026-09-25 加）。不给 -mcpu 时 zig 的默认目标是 **native**，
+    # 也就是"构建这台机器的 CPU"（实测 -### 里是 -target-cpu alderlake），于是产物里
+    # 会出现 AVX2 / FMA / BMI2 / **AVX-VNNI** 这些只有 Intel 12 代（2021）之后才有的
+    # 指令。旧 CPU 上第一条这样的指令就 0xC000001D（STATUS_ILLEGAL_INSTRUCTION），
+    # 表现是"看到启动画面就静默消失"——Windows 子系统程序连控制台都没有。
+    # 线上实例：rva 0x2113A1 处是 `C4 E2 59 52` = VPDPWSSD（VEX 编码，AVX-VNNI），
+    # 一条 128 位 int16 点积；AVX2 时代的 Haswell 都认不了它。
+    # 本项目声称支持 Win7 SP1+，所以取 x86-64 基线（SSE2）：Core 2 / Athlon 64 都能跑。
+    # 想换性能档位就改这里（x86_64_v2 = Nehalem 2008+，x86_64_v3 = Haswell 2013+），
+    # 但别删掉这一行 —— 删了就是静默回到 native，只有老机器的用户会发现。
+    # 复查：python .workbuddy/tools/cpu_isa_scan.py build/cppsekai.exe（package.sh 也会跑）。
+    -mcpu=baseline
     -s
     # Windows-subsystem binary: no cmd window when the game is launched by
     # double click. main() still runs (the MinGW startup object calls it either
@@ -52,6 +64,13 @@ CXXFLAGS=(
     -Ithird_party/imgui
     -I"$SDL/include/SDL2"
 )
+
+# 这里原来有个 `CPSEKAI_DEBUG_SYMBOLS=1` 的「留符号表」开关，**2026-09-25 实测没用，已删**：
+# 这套 zig（lld / windows-gnu）的产物无论加不加 `-s` / `-g` 都**不写 COFF 符号表**
+# （实测 `PointerToSymbolTable = 0`）、也不生成 `.debug$*` 节，`-Wl,-Map=` 被 zig 直接拒掉
+# （unsupported linker arg），`--export-all-symbols` / `--print-map` 被静默吞掉。
+# 所以崩溃日志里的 RVA 只能靠 `.workbuddy/tools/pe_rva_dump.py`（看那个地址上是什么字节）
+# + `cppsekai.log` 最后一行的 `[boot] ...`（死在哪一步）。`-s` 已经写在 CXXFLAGS 里了。
 
 
 # 我们自己的代码 —— 只有这些文件开 -Wall。
@@ -164,4 +183,4 @@ cp -f icon.png build/ 2>/dev/null || true
 # Official song readings (song select "sort by name" + aiueo grouping)
 cp -f musics.json build/ 2>/dev/null || true
 
-echo "build OK -> build/cppsekai.exe"
+echo "build OK -> $GAME_OUT"

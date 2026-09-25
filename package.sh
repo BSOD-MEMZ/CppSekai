@@ -35,6 +35,20 @@ DIST="dist"
 OUT="${DIST}/${NAME}"
 
 bash build.sh
+
+# Release gate: refuse to package a build that needs CPU instructions older
+# machines lack (2026-09-25: the whole 09-13 ~ 09-25 line of releases carried
+# AVX-VNNI because zig defaulted to the *build machine's* CPU; players on older
+# CPUs died with 0xC000001D right after the splash screen). Setting
+# CPSEKAI_SKIP_ISA_CHECK=1 bypasses this deliberately.
+if [ -z "$CPSEKAI_SKIP_ISA_CHECK" ] && command -v python >/dev/null 2>&1; then
+    if ! python .workbuddy/tools/cpu_isa_scan.py build/cppsekai.exe build/chartdl.exe; then
+        echo "[package] 这个 exe 要新 CPU，拒绝打包（见上面那行）。" >&2
+        echo "[package] 确认要发的话：CPSEKAI_SKIP_ISA_CHECK=1 bash package.sh" >&2
+        exit 1
+    fi
+fi
+
 rm -rf "$OUT"
 mkdir -p "$OUT/charts"
 

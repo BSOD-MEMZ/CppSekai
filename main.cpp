@@ -792,10 +792,14 @@ namespace
 // ("异常偏移: 00000000001d7812"). This writes that same offset, the state that was
 // live, and a backtrace to cppsekai-crash.log next to the exe.
 //
-// Those offsets are RVAs (address minus module base) and resolve to a function
-// with .workbuddy/tools/pe_symbols.py - against a build that still has a symbol
-// table, i.e. one made with CPSEKAI_DEBUG_SYMBOLS=1. The symbol table does not
-// move code, so the offsets match the release exe.
+// Those offsets are RVAs (address minus module base). Note that this toolchain
+// gives us no way to turn an RVA back into a name: zig's lld emits no COFF
+// symbol table (with or without -s / -g), rejects -Wl,-Map and swallows
+// --export-all-symbols, and -g produces no .debug$ sections either. So what is
+// left is .workbuddy/tools/pe_rva_dump.py - dump the bytes at the RVA and read
+// the instruction (that is how the 2026-09-25 0xC000001D turned out to be an
+// AVX-VNNI `C4 E2 59 52` = vpdpwssd at rva 0x2113A1) - plus the last [boot]
+// line of cppsekai.log, which says which startup stage was live.
 //
 // This runs on a broken stack, so it stays tiny: no C++ strings, no allocation,
 // plain stdio. The globals below are the only module-level mutable state in the
