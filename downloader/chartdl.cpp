@@ -719,6 +719,13 @@ fs::path jacketPath(const fs::path& dir, const Song& song)
     return dir / (id4(song.id) + ".png");
 }
 
+// The sidecar. Named here rather than inline in writeSidecar so the two places
+// that have to agree on it - writing it and deleting it - cannot drift apart.
+fs::path sidecarPath(const fs::path& dir, int id)
+{
+    return dir / (id4(id) + ".json");
+}
+
 // ---------------------------------------------------------------------------
 // Where the files come from
 //
@@ -855,7 +862,7 @@ void writeSidecar(const fs::path& dir, const Song& song, const std::vector<Vocal
     if (song.fillerSec > 0.0) {
         doc["fillerSec"] = song.fillerSec;
     }
-    std::ofstream out(dir / (id4(song.id) + ".json"), std::ios::binary);
+    std::ofstream out(sidecarPath(dir, song.id), std::ios::binary);
     if (out) {
         out << doc.dump(2) << std::endl;
     }
@@ -1107,6 +1114,9 @@ void printUsage()
         "                                          (headless layout check)\n"
         "              [--select <row>]          select a song row first (headless\n"
         "                                          check for the right-hand panel)\n"
+        "              [--delete-selected]       press 删除文件 on that row, with no\n"
+        "                                          confirmation box (deletes for real,\n"
+        "                                          so point --out at a scratch dir)\n"
         "\n"
         "Source: assets.unipjsk.com for the Japanese songs; the CN-only ones\n"
         "        (id 11001+, e.g. Hype Dive) come from the sekai-cn-assets bucket\n"
@@ -1178,6 +1188,9 @@ namespace
     // The scroll container inside the 下载内容 group box (see
     // layoutDetailRows). 1019 leaves a gap for future controls.
     constexpr int kIdDetailBody = 1019;
+    // Deletes the selected song's local files. Lives in the top button row with
+    // the other song-selection actions (下载勾选的歌曲 / 全选 / 取消).
+    constexpr int kIdDelete = 1020;
     constexpr int kIdDiffBase = 1100;  // 1100..1104 = EASY..MASTER
     constexpr int kIdVocalBase = 1120; // 1120.. = one per vocal version
 
@@ -1202,6 +1215,7 @@ namespace
     HWND gOutDirEdit = nullptr;
     HWND gQueueButton = nullptr;
     HWND gCancelButton = nullptr;
+    HWND gDeleteButton = nullptr;
     HWND gProgress = nullptr;
     HWND gStatus = nullptr;
     HWND gLogList = nullptr;
@@ -1623,6 +1637,8 @@ namespace
     int detailFooterHeight();
     int detailMaxScroll();
     bool scrollDetail(int delta);
+    void updateDeleteButton();
+    void deleteSelectedSongFiles();
 
     // -----------------------------------------------------------------------
     // Local (already downloaded) state
@@ -1641,12 +1657,124 @@ namespace
         note("[scan] " + std::to_string(complete) + " complete, " + std::to_string(partial)
             + " partial, " + std::to_string(gFiles.size()) + " songs; dir="
             + pathText(fs::path(gOutDir)));
+        // Whether the selected song can be deleted changed with the scan (a run
+        // that just finished makes its 删除 button live).
+        updateDeleteButton();
     }
 
     bool songIsDone(int songIndex)
     {
         return songIndex >= 0 && songIndex < static_cast<int>(gFiles.size())
             && gFiles[static_cast<std::size_t>(songIndex)].complete;
+    }
+
+    // The 删除 button is only meaningful for a selected song that actually has
+    // something on disk; it is greyed out otherwise (before the first selection
+    // included, where there is nothing to delete at all).
+    void updateDeleteButton()
+    {
+        const bool haveFiles = gDetailSong >= 0
+            && gDetailSong < static_cast<int>(gFiles.size())
+            && gFiles[static_cast<std::size_t>(gDetailSong)].any;
+        EnableWindow(gDeleteButton, haveFiles ? TRUE : FALSE);
+    }
+
+    // Puts the selection back on a song after a rebuildList(), which drops it
+    // (the list is deleted and refilled from scratch). Without this the panel
+    // and the list disagree: the rows stay on screen, the list shows no
+    // selection at all.
+    void selectSongRow(int songIndex)
+    {
+        for (int row = 0; row < static_cast<int>(gRowSong.size()); ++row) {
+            if (gRowSong[static_cast<std::size_t>(row)] == songIndex) {
+                ListView_SetItemState(gList, row, LVIS_SELECTED | LVIS_FOCUSED,
+                    LVIS_SELECTED | LVIS_FOCUSED);
+                ListView_EnsureVisible(gList, row, FALSE);
+                return;
+            }
+        }
+    }
+
+    // Deletes everything the downloader wrote for the selected song: the five
+    // charts, one mp3 per vocal version, the jacket and the sidecar. The names
+    // come from the very helpers queueSong() builds its job paths with, so this
+    // cannot miss a file a download put there, and cannot take a file that
+    // belongs to another song (each name starts with the 4-digit id).
+    //
+    // Two vocal versions can share an asset - the second pass over the same
+    // path finds nothing and is skipped.
+    void deleteSelectedSongFiles()
+    {
+        if (gDetailSong < 0 || gDetailSong >= static_cast<int>(gSongs.size())) {
+            return;
+        }
+        const Song& song = gSongs[static_cast<std::size_t>(gDetailSong)];
+        const fs::path dir(gOutDir);
+        std::vector<fs::path> targets;
+        targets.reserve(7 + song.vocals.size());
+        for (int d = 0; d < 5; ++d) {
+            targets.push_back(chartPath(dir, song.id, kDiffNames[d]));
+        }
+        for (const VocalVersion& version : song.vocals) {
+            targets.push_back(audioPath(dir, version, song.id));
+        }
+        targets.push_back(jacketPath(dir, song));
+        targets.push_back(sidecarPath(dir, song.id));
+
+        std::size_t removed = 0;
+        long long freed = 0;
+        std::vector<std::string> failures;
+        for (const fs::path& path : targets) {
+            std::error_code ec;
+            if (!fs::is_regular_file(path, ec)) {
+                continue;
+            }
+            std::error_code sizeEc;
+            const std::uintmax_t size = fs::file_size(path, sizeEc);
+            std::error_code removeEc;
+            if (!fs::remove(path, removeEc)) {
+                failures.push_back(path.filename().string() + "  " + removeEc.message());
+                continue;
+            }
+            ++removed;
+            freed += sizeEc ? 0 : static_cast<long long>(size);
+        }
+        // A leftover ".part" from a run that was killed is invisible to the scan
+        // - the song already reads as "not downloaded" without it - but it is
+        // still this song's litter, so it goes too. A live job holds its .part
+        // open, and the remove() simply fails there rather than pulling a file
+        // out from under the worker.
+        std::size_t partial = 0;
+        for (const fs::path& path : targets) {
+            const fs::path part(path.native() + L".part");
+            std::error_code ec;
+            if (fs::is_regular_file(part, ec) && fs::remove(part, ec)) {
+                ++partial;
+            }
+        }
+
+        // Log + status line are the assertion hooks of the headless check
+        // (--delete-selected): both have to say the same number.
+        logLine("[delete] " + song.title + " (" + id4(song.id) + "): "
+            + std::to_string(removed) + " file(s) removed, " + std::to_string(partial)
+            + " partial, " + std::to_string(failures.size()) + " failed, " + humanBytes(freed));
+        for (const std::string& failure : failures) {
+            logLine("[delete]   failed: " + failure);
+        }
+        std::string summary = "已删除 " + std::to_string(removed) + " 个文件（"
+            + humanBytes(freed) + "）";
+        if (!failures.empty()) {
+            summary += "，失败 " + std::to_string(failures.size()) + " 个（可能被占用）";
+        }
+        setStatus(summary);
+
+        // Everything that shows "what is on disk" has to be recomputed: the
+        // 已下载 column, the per-row tick forcing, the detail panel's own rows.
+        refreshDownloadedState();
+        rebuildList(windowText(gSearch));
+        selectSongRow(gDetailSong);
+        updateDetailPanel(gDetailSong);
+        updateDeleteButton();
     }
 
     void clearAllTicks()
@@ -1857,8 +1985,12 @@ namespace
         place(gQueueButton, 330, 42, 150, 24);
         place(GetDlgItem(hwnd, kIdCheckAll), 488, 42, 120, 24);
         place(gCancelButton, 616, 42, 80, 24);
+        place(gDeleteButton, 704, 42, 80, 24);
         // The settings button rides on the right end of the second row, so the
-        // search/queue group stays put while the window grows.
+        // search/queue group stays put while the window grows. 删除 is the last
+        // fixed button of that group, which is what sets the window's minimum
+        // width (see WM_GETMINMAXINFO): it ends at dp(784) and 设置… needs its
+        // dp(110) from dp(792) on.
         SetWindowPos(gSettingsButton, nullptr, width - dp(120), dp(42), dp(110), dp(24), SWP_NOZORDER);
 
         const int progressY = topY + topHeight + band + dp(4);
@@ -2140,6 +2272,10 @@ namespace
                 gQueueButton = create(L"BUTTON", L"下载勾选的歌曲", BS_PUSHBUTTON | BS_DEFPUSHBUTTON, kIdQueue);
                 create(L"BUTTON", L"全选 / 全不选", BS_PUSHBUTTON, kIdCheckAll);
                 gCancelButton = create(L"BUTTON", L"取消", BS_PUSHBUTTON, kIdCancel);
+                // Deletes the selected song's files. Starts disabled: nothing is
+                // selected yet (see updateDeleteButton).
+                gDeleteButton = create(L"BUTTON", L"删除文件", BS_PUSHBUTTON, kIdDelete);
+                EnableWindow(gDeleteButton, FALSE);
                 gSettingsButton = create(L"BUTTON", L"设置…", BS_PUSHBUTTON, kIdSettings);
 
                 gList = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"",
@@ -2262,7 +2398,11 @@ namespace
             }
             case WM_GETMINMAXINFO: {
                 auto* info = reinterpret_cast<MINMAXINFO*>(lParam);
-                info->ptMinTrackSize = {dp(860), dp(560)};
+                // The second button row (搜索 / 下载勾选的歌曲 / 全选 / 取消 / 删除文件)
+                // ends at dp(784), and 设置… is anchored dp(120) from the right
+                // edge, so the client has to be dp(902) wide for them not to
+                // overlap - dp(930) of window, frame included.
+                info->ptMinTrackSize = {dp(930), dp(560)};
                 return 0;
             }
             case WM_SETCURSOR: {
@@ -2427,6 +2567,28 @@ namespace
                 if (id == kIdCancel) {
                     gCancel.store(true);
                     setStatus("正在取消…");
+                    return 0;
+                }
+                if (id == kIdDelete) {
+                    if (gDetailSong < 0 || gDetailSong >= static_cast<int>(gSongs.size())
+                        || gDetailSong >= static_cast<int>(gFiles.size())
+                        || !gFiles[static_cast<std::size_t>(gDetailSong)].any) {
+                        return 0; // disabled state, or the files went away
+                    }
+                    const Song& song = gSongs[static_cast<std::size_t>(gDetailSong)];
+                    // Never delete without asking: the files are on the user's
+                    // disk, and the panel next to it looks like a "download"
+                    // form, not like a delete form. Default answer is 否.
+                    const std::wstring question = L"删除《" + widen(song.title)
+                        + L"》在本地已下载的文件？\n\n"
+                          L"谱面 / 音频 / 曲绘 / 元数据都会删掉，游戏里这首歌会回到未下载状态。\n"
+                          L"目录：" + fs::path(gOutDir).native();
+                    if (MessageBoxW(hwnd, question.c_str(), L"CppSekai 谱面下载器",
+                            MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES) {
+                        setStatus("已取消删除");
+                        return 0;
+                    }
+                    deleteSelectedSongFiles();
                     return 0;
                 }
                 if (id == kIdQueue) {
@@ -2827,6 +2989,7 @@ namespace
         if (songIndex < 0 || songIndex >= static_cast<int>(gSongs.size())) {
             SetWindowTextW(gDetailTitle, L"（在左边选一首歌）");
             layoutDetailRows(-1, 0);
+            updateDeleteButton();
             return;
         }
         const Song& song = gSongs[static_cast<std::size_t>(songIndex)];
@@ -2847,6 +3010,7 @@ namespace
             GetClientRect(GetParent(gList), &client);
             layoutChildren(GetParent(gList), client.right, client.bottom);
         }
+        updateDeleteButton();
     }
 
     // Lays the detail rows out for one song at a given scroll offset. Split out
@@ -3097,7 +3261,8 @@ namespace
     }
 
     int runGui(fs::path outDir, const std::string& screenshotPath, double screenshotTime,
-        bool openSettingsAtStart = false, int selectRow = -1, int scrollNotches = 0)
+        bool openSettingsAtStart = false, int selectRow = -1, int scrollNotches = 0,
+        bool deleteSelection = false)
     {
         gOutDir = outDir.native();
         loadDlSettings(gDlSettings);
@@ -3204,6 +3369,14 @@ namespace
                 LVIS_SELECTED | LVIS_FOCUSED);
             ListView_EnsureVisible(gList, selectRow, FALSE);
         }
+        // Headless check hook: press 删除文件 on the selected song, skipping the
+        // confirmation box (which no headless run can answer). Point --out at a
+        // scratch folder - this really deletes.
+        if (deleteSelection) {
+            note("[delete] enabled=" + std::to_string(IsWindowEnabled(gDeleteButton) != FALSE)
+                + " song=" + std::to_string(gDetailSong));
+            deleteSelectedSongFiles();
+        }
         // Headless check hook: drive the detail panel's scroll, which is
         // otherwise only reachable by putting the wheel over the 下载内容 group
         // box. Positive = down. Reported in the log so a check can assert the
@@ -3308,6 +3481,7 @@ int main(int argc, char** argv)
     bool openSettingsAtStart = false;
     int selectRow = -1;
     int scrollNotches = 0;
+    bool deleteSelection = false;
     bool force = false;
     bool wantJacket = true;
     bool wantSidecar = true;
@@ -3357,6 +3531,11 @@ int main(int argc, char** argv)
             std::string value;
             next(value);
             scrollNotches = std::atoi(value.c_str());
+        } else if (arg == "--delete-selected") {
+            // Headless check: press 删除文件 on the --select row (no confirmation
+            // box, nothing to click). Pair it with --out pointing at a scratch
+            // folder - it deletes for real.
+            deleteSelection = true;
         } else if (arg == "--screenshot-time") {
             std::string value;
             next(value);
@@ -3469,5 +3648,6 @@ int main(int argc, char** argv)
         return runJobQueue(error);
     }
 
-    return runGui(outDir, screenshotPath, screenshotTime, openSettingsAtStart, selectRow, scrollNotches);
+    return runGui(outDir, screenshotPath, screenshotTime, openSettingsAtStart, selectRow,
+        scrollNotches, deleteSelection);
 }

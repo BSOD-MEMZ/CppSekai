@@ -295,6 +295,8 @@ cppsekai [--sus <file.sus>] [--bgm <audio>] [--charts <dir>] [--cover <image>]
 
 - 左边是官方曲目表（搜索：id / 曲名 / 读音），勾选多首 → **queue checked** 批量下
 - 右边是选中曲目的详情：5 个难度、**每个演唱版本**（点了就下那个版本的 BGM）、曲绘、sidecar 元数据
+- 顶栏 **删除文件**：选中一首本地已经有文件的曲子时启用，删掉它的谱面 / 音频 / 曲绘 / 元数据
+  （含残留的 `.part`），会先弹确认框。文件名用的是下载时那套 helper，所以不会误删别的曲子
 - 下载中显示总进度条 + 当前文件大小，日志在下面；已存在的文件默认跳过
 - 命令行也能用（方便脚本化）：
 
@@ -303,6 +305,10 @@ cppsekai [--sus <file.sus>] [--bgm <audio>] [--charts <dir>] [--cover <image>]
 ./build/chartdl.exe --download 374 --diffs all --vocals all
 ./build/chartdl.exe --download 75,127 --out ../charts --force
 ```
+
+无头自检开关（配 `--screenshot` 用，见 `.workbuddy/tools/chartdl_*_check.py`）：
+`--select <row>`、`--scroll-detail <n>`、`--open-settings`、`--dpi <96|120|144|192>`、
+`--delete-selected`（按下「删除文件」但不弹确认框，**真删**，务必把 `--out` 指到临时目录）。
 
 文件放到 `<out>/`（默认 `..\charts`），命名和游戏要求一致：谱面 `0374_master.sus`、
 BGM `<assetbundleName>.mp3`（`se_0374_01.mp3` / `an_0374_02.mp3` …）、曲绘 `0374.png`、元数据 `0374.json`。

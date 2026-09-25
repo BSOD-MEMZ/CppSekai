@@ -43,7 +43,8 @@
   `pngcrop.py`、`pe_imports.py`、`mem_sample.py`、`update_music_db.py`、`fetch_music_aliases.py`、
   `mp_verify.sh`、`asset_audit.py`、`shrink_assets.py`、`chartdl_detail_check.py`、
   `chartdl_wheel_check.py`（真发 WM_MOUSEWHEEL）、`chartdl_minimize_check.py`（真发
-  SC_MINIMIZE/SC_RESTORE，断言两栏宽度不变；**按 PID 找自己的窗口**，chartdl 允许多开）。
+  SC_MINIMIZE/SC_RESTORE，断言两栏宽度不变；**按 PID 找自己的窗口**，chartdl 允许多开）、
+  `chartdl_delete_check.py`（真点「删除文件」，验确认框两种回答 + 最小尺寸下按钮不重叠）。
 - **精灵图集不许缩**：`notes*` / `effect.png` / `longNoteLine*` / `touchLine*`（矩形像素坐标写死在
   `core/native/generated/generated_resources.h`）。`assets/se/**` 是白名单，不许删。
 - 字体只用系统字体（`assets/mmw/font` 已删，`--pjsk-font` 已去掉）；`CPSEKAI_FONT_FILE=<路径>` 可强制指定。
