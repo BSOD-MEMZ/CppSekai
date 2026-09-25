@@ -13,6 +13,10 @@
 - **验证卡住几分钟就先停手**，把「需要人工点哪里、期望什么」交代清楚交给他。
 
 ## 构建 / 运行硬性坑
+- **`CXXFLAGS` 里的 `-mcpu=baseline` 不能删**（09-25）：zig 不给 `-mcpu` 时默认目标是 **native**
+  （构建这台机器＝Alder Lake），产物带 AVX2/FMA/**AVX-VNNI**，老 CPU 上第一条就 `0xC000001D`
+  「看完启动画面静默消失」。发布前 `python .workbuddy/tools/cpu_isa_scan.py build/cppsekai.exe`
+  （`package.sh` 已接这道闸，FAIL 拒绝打包）。细节见 AGENTS.md「CPU 基线」。
 - `bash build.sh`（Git Bash）。zig **0.14.1**（`toolchain/` 不入库），别换 0.16（吞 `-I`）；
   zig 缓存必须在 C 盘。全量编译 35~45s。游戏链接行有 `-lcomdlg32`（账户页导入/导出）。
 - `main.cpp` 必须在 `#include <SDL.h>` 前 `#define SDL_MAIN_HANDLED`，否则"秒退无输出"。
