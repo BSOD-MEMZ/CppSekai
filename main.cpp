@@ -4300,7 +4300,7 @@ int main(int argc, char** argv)
                 };
                 aboutLine("CppSekai");
                 ImGui::PushFont(game::bodyFont(), 19.0f * s);
-                aboutLine("版本 1.0.0.0");
+                aboutLine("版本 1.0.0.3");
                 aboutLine("许可 AGPL-3.0-only");
                 aboutGap();
                 aboutLine("策划 / 开发");

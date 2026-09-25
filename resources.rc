@@ -23,11 +23,11 @@ BEGIN
         BEGIN
             VALUE "CompanyName",      "CppSekai"
             VALUE "FileDescription",  "CppSekai - Project SEKAI style SUS chart player"
-            VALUE "FileVersion",      "1.0.0.0"
+            VALUE "FileVersion",      "1.0.0.3"
             VALUE "InternalName",     "cppsekai"
             VALUE "OriginalFilename", "cppsekai.exe"
             VALUE "ProductName",      "CppSekai"
-            VALUE "ProductVersion",   "1.0.0.0"
+            VALUE "ProductVersion",   "1.0.0.3"
             VALUE "LegalCopyright",   "AGPL-3.0-only. Chart core from sekai-mmw-preview-web (AGPL-3.0), MikuMikuWorld port (MIT). No game assets are distributed."
         END
     END

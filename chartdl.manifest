@@ -22,7 +22,7 @@
   changes how fullscreen and the splash window are sized.
 -->
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
-  <assemblyIdentity type="win32" name="CppSekaiChartDl" version="1.0.0.0" processorArchitecture="*"/>
+  <assemblyIdentity type="win32" name="CppSekaiChartDl" version="1.0.0.3" processorArchitecture="*"/>
 
   <!-- Themed native controls (ListView, buttons, progress bar). -->
   <dependency>
