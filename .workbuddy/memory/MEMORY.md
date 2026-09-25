@@ -41,7 +41,9 @@
   `chartdl.json`。**新加的 `assets/` 子目录要 `git add -f`**。`.workbuddy/` 入库存工具。
 - 工具在 `.workbuddy/tools/`：`png_color_probe.js`（无 Pillow 时的 PNG 颜色探针）、`shot_probe.py`、
   `pngcrop.py`、`pe_imports.py`、`mem_sample.py`、`update_music_db.py`、`fetch_music_aliases.py`、
-  `mp_verify.sh`、`asset_audit.py`、`shrink_assets.py`、`chartdl_detail_check.py`。
+  `mp_verify.sh`、`asset_audit.py`、`shrink_assets.py`、`chartdl_detail_check.py`、
+  `chartdl_wheel_check.py`（真发 WM_MOUSEWHEEL）、`chartdl_minimize_check.py`（真发
+  SC_MINIMIZE/SC_RESTORE，断言两栏宽度不变；**按 PID 找自己的窗口**，chartdl 允许多开）。
 - **精灵图集不许缩**：`notes*` / `effect.png` / `longNoteLine*` / `touchLine*`（矩形像素坐标写死在
   `core/native/generated/generated_resources.h`）。`assets/se/**` 是白名单，不许删。
 - 字体只用系统字体（`assets/mmw/font` 已删，`--pjsk-font` 已去掉）；`CPSEKAI_FONT_FILE=<路径>` 可强制指定。

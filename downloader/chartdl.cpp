@@ -1756,6 +1756,18 @@ namespace
 
     void layoutChildren(HWND hwnd, int width, int height)
     {
+        // Minimizing sends WM_SIZE(SIZE_MINIMIZED) with a collapsed client, and
+        // the two dragged widths below are clamped against the *current* client
+        // size and written back into the same globals. So that one 0x0 pass
+        // pins them to their floors - a 200px song list and a 90px log strip -
+        // and they stay there when the window comes back: minimize, restore,
+        // and the two columns have "resized themselves". A real resize cannot
+        // do this (WM_GETMINMAXINFO keeps the window at 860x560 or more), so a
+        // collapsed client - or an iconic window, which is the same state by a
+        // more reliable test - means "don't touch the layout".
+        if (IsIconic(hwnd) || width <= 0 || height <= 0) {
+            return;
+        }
         // The numbers below are 96-DPI units; dp() turns them into real
         // pixels, and the widths that mix in the client size use SetWindowPos
         // directly (that size is not a design unit).
