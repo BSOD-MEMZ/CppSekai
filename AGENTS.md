@@ -1254,6 +1254,18 @@ Haswell 都认不了。这类指令出自 `platform/Renderer.cpp`（它 define �
 
 想换性能档位就改 `-mcpu`（`x86_64_v2` = Nehalem 2008+，`x86_64_v3` = Haswell 2013+），**但别删**。
 
+**拿一台陌生机器现场判**：`.workbuddy/tools/cpu_features.c` 编成 `build/cpuinfo.exe`
+（`zig cc -std=c11 -O2 -mcpu=baseline -Wall -Wextra`，**它自己也必须是 baseline 编的**，
+否则它正好在要诊断的机器上先崩）。双击报 CPU 型号 + AVX2 / AVX512-VNNI / AVX-VNNI 支持情况，
+并按"旧包要 AVX-VNNI、新包只要 SSE2"给出能不能跑的结论；把 exe 路径当参数传给它，它还会扫那个
+exe（VEX 占比 / AVX-VNNI 条数）再说一遍。2026-09-25 用它确认了构建机是 **i7-1260P（Model 154）**、
+i3-7100U（Kaby Lake）属于"没有 AVX-VNNI"的可复现机型。
+
+**注意 `AVX512-VNNI` ≠ `AVX-VNNI`**：前者 10/11 代 Intel 和 AMD Zen 4 都有，**但我们 exe 里用的是
+后者（VEX 编码），Intel 要 12 代（2021 Q4）、AMD 要 Zen 5（2024）**。所以"能装 Win11 的机器"
+（Intel 8 代起 / AMD Zen 2 起）里，**凡是 2021 年前的全都中招** —— 报"能装 Win11 所以不该太老"
+这个直觉在这里不成立。
+
 ## Windows 7 兼容（2026-09-19 实测）
 
 Win7 SP1 上启动直接弹 **「无法定位程序输入点 GetSystemTimePreciseAsFileTime 于动态链接库
