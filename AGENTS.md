@@ -1260,6 +1260,11 @@ Core 2 / K8~K10 / 各种 Atom）。对照的 native 版同一套模式是 `3.80%
 **全部是 `-target-feature "-xxx"`（关闭）**，而 native 时它们全是 `+`。
 （`lzcnt 1`、`SSE3` 个位数这种是字节模式噪音：native 里同模式是 17 / 8，同量级。）
 
+**代价：没有可测的性能损失**（2026-09-25 实测，同一份源码只换 `-mcpu`，交替跑 3 次取最小值）：
+启动到首帧 baseline **785.0 ms** vs native **784.7 ms**（+0.2 ms / 0.0%），中间各阶段 ±20 ms 双向跳动
+＝噪声。启动耗时里最大的一块其实不是解码而是字体（`fonts` 阶段占 ~700 ms）。所以别拿"性能"当理由
+把 `-mcpu` 抬回 native。
+
 **发布闸门**：`.workbuddy/tools/cpu_isa_scan.py`（纯 stdlib，按上面这套阈值判 OK/FAIL），
 `package.sh` 在 `bash build.sh` 之后自动跑，FAIL 就拒绝打包（`CPSEKAI_SKIP_ISA_CHECK=1` 可强行绕过）。
 `-mcpu=baseline` 会连带 zig 自带的 libc++ / libc / compiler-rt 一起降下来 —— 这点实测过：
