@@ -1860,10 +1860,14 @@ namespace
         // client space - by layoutDetailRows, not here. Re-running it is what
         // makes a splitter drag re-fit them (and re-clamp the scroll offset,
         // since a taller panel may no longer need to scroll at all).
-        if (gDetailSong >= 0 || gDetailWantedHeight > 0) {
-            gDetailScroll = std::min(gDetailScroll, detailMaxScroll());
-            layoutDetailRows(gDetailSong, gDetailScroll);
-        }
+        //
+        // Unconditionally, including before anything is selected: the empty
+        // state ("（在左边选一首歌）" plus the two pinned rows) is laid out here
+        // too, and that is the *only* pass it ever gets - nothing calls
+        // updateDetailPanel() at startup, so a guard on "a song is selected"
+        // left the panel blank instead of showing the prompt.
+        gDetailScroll = std::min(gDetailScroll, detailMaxScroll());
+        layoutDetailRows(gDetailSong, gDetailScroll);
     }
 
     // -----------------------------------------------------------------------
@@ -2152,6 +2156,30 @@ namespace
                 gDetailGroupOldProc = reinterpret_cast<WNDPROC>(
                     SetWindowLongPtrW(gDetailGroup, GWLP_WNDPROC,
                         reinterpret_cast<LONG_PTR>(detailGroupProc)));
+                // 曲绘 / 元数据 are pinned to the panel's bottom edge, so they
+                // are children of the group box rather than of the scroll
+                // container - a fixed row cannot be scrolled out of view. The
+                // song title is pinned the same way and for the same reason:
+                // rows scroll *underneath* it, and only the container's top edge
+                // clips them, so the title has to live outside that container.
+                //
+                // Everything below is created *hidden*, and shows up in the
+                // first layoutDetailRows() pass. A control created visible sits
+                // at its 0,0 / 10x10 creation rect until something moves it -
+                // here that is the group box's top-left corner, and those pixels
+                // stay painted in the window surface (nothing invalidates that
+                // region with an erase), leaving a ghost checkbox under the
+                // "下载内容" caption. Only controls that are positioned as they
+                // are created (the container itself) may start visible.
+                const auto createInBox = [&](const wchar_t* cls, const wchar_t* text, DWORD style,
+                                             int id) {
+                    HWND control = CreateWindowExW(0, cls, text,
+                        WS_CHILD | WS_CLIPSIBLINGS | style, 0, 0, 10, 10, gDetailGroup,
+                        reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), nullptr, nullptr);
+                    SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(gFont), TRUE);
+                    return control;
+                };
+                gDetailTitle = createInBox(L"STATIC", L"（在左边选一首歌）", SS_LEFT, kIdDetailTitle);
                 gDetailBody = CreateWindowExW(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE,
                     0, 0, 10, 10, gDetailGroup,
                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdDetailBody)), nullptr, nullptr);
@@ -2163,28 +2191,17 @@ namespace
                 const auto createInGroup = [&](const wchar_t* cls, const wchar_t* text, DWORD style,
                                                int id) {
                     HWND control = CreateWindowExW(0, cls, text,
-                        WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | style, 0, 0, 10, 10, detailBody,
+                        WS_CHILD | WS_CLIPSIBLINGS | style, 0, 0, 10, 10, detailBody,
                         reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), nullptr, nullptr);
                     SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(gFont), TRUE);
                     return control;
                 };
-                gDetailTitle = createInGroup(L"STATIC", L"（在左边选一首歌）", SS_LEFT, kIdDetailTitle);
                 for (int d = 0; d < 5; ++d) {
                     gDiffChecks[d] = createInGroup(L"BUTTON", widen(kDiffNames[d]).c_str(),
                         BS_AUTOCHECKBOX, kIdDiffBase + d);
                     SendMessageW(gDiffChecks[d], BM_SETCHECK, BST_CHECKED, 0);
                 }
-                // 曲绘 / 元数据 are pinned to the panel's bottom edge, so they
-                // are children of the group box rather than of the scroll
-                // container - a fixed row cannot be scrolled out of view.
-                const auto createInBox = [&](const wchar_t* cls, const wchar_t* text, DWORD style,
-                                             int id) {
-                    HWND control = CreateWindowExW(0, cls, text,
-                        WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | style, 0, 0, 10, 10, gDetailGroup,
-                        reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), nullptr, nullptr);
-                    SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(gFont), TRUE);
-                    return control;
-                };
+                // 曲绘 / 元数据: pinned rows, so group-box children (see above).
                 gJacketCheck = createInBox(L"BUTTON", L"曲绘", BS_AUTOCHECKBOX, kIdJacket);
                 gSidecarCheck = createInBox(L"BUTTON", L"元数据 (sidecar json)", BS_AUTOCHECKBOX,
                     kIdSidecar);
@@ -2872,11 +2889,18 @@ namespace
         const int bodyPad = dp(4);
         int y = bodyPad - scrollPx;
 
-        SetWindowPos(gDetailTitle, group, baseX, dp(18), contentWidth, dp(18), SWP_NOZORDER);
+        // Group-box coordinates, in the group box the title is a child of - it
+        // is not in the scroll container, so the offset stays fixed while rows
+        // slide under it.
+        SetWindowPos(gDetailTitle, nullptr, baseX, dp(18), contentWidth, dp(18),
+            SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
 
+        // Laying a row out is also what makes it visible: the detail controls
+        // are born hidden (see WM_CREATE), so nothing is ever painted at the
+        // 10x10 creation rect.
         const auto placeRow = [&](HWND control, int rowY) {
             SetWindowPos(control, nullptr, baseX, rowY, contentWidth, rowHeight,
-                SWP_NOZORDER | SWP_NOACTIVATE);
+                SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
         };
 
         // Pinned footer, positioned from the panel's bottom edge so it stays put
@@ -2892,6 +2916,13 @@ namespace
 
         if (!validSong) {
             // Nothing selected: no rows at all, just the prompt in the title.
+            // The difficulty boxes are hidden rather than left where the last
+            // song put them - and at startup, rather than left at the 10x10
+            // creation rect, where the (now correctly sized) body would show
+            // five ghost checkboxes stacked on top of each other.
+            for (HWND check : gDiffChecks) {
+                ShowWindow(check, SW_HIDE);
+            }
             gDetailWantedHeight = bodyTop + rowHeight + footerH;
             SetWindowTextW(gJacketCheck, L"曲绘");
             EnableWindow(gJacketCheck, FALSE);
@@ -3004,8 +3035,13 @@ namespace
         // Full repaint first: BitBlt off the window DC reads what is on screen, so
         // a child control that has been invalidated but not yet painted (the list
         // header after a sort, for one) would be captured stale - which is exactly
-        // what a screenshot check must not do.
-        RedrawWindow(hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+        // what a screenshot check must not do. RDW_ERASE matters as much as
+        // RDW_INVALIDATE: without it the window's own leftover pixels (a control
+        // that was painted at its creation rect before the first layout moved it)
+        // survive the repaint and show up in the PNG as ghosts that are not there
+        // when the window has just been drawn.
+        RedrawWindow(hwnd, nullptr, nullptr,
+            RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_ALLCHILDREN);
         RECT rect{};
         GetClientRect(hwnd, &rect);
         const int width = rect.right;
