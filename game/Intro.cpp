@@ -622,6 +622,39 @@ ImFont* condensedFont()
     return gCondFont;
 }
 
+bool fontCoversText(const std::string& utf8)
+{
+    ImFont* font = gBodyFont;
+    if (font == nullptr) {
+        return true; // no face yet: never drop content on a guess
+    }
+    const unsigned char* cursor = reinterpret_cast<const unsigned char*>(utf8.c_str());
+    const unsigned char* end = cursor + utf8.size();
+    while (cursor < end) {
+        const size_t length = std::min(utf8CodepointLength(*cursor),
+            static_cast<size_t>(end - cursor));
+        unsigned int codepoint = length == 1
+            ? *cursor
+            : static_cast<unsigned int>(*cursor & (0xFFu >> (length + 1)));
+        for (size_t i = 1; i < length; ++i) {
+            codepoint = (codepoint << 6) | static_cast<unsigned int>(cursor[i] & 0x3Fu);
+        }
+        cursor += length;
+        // Outside the BMP cannot be drawn at all (imconfig.h leaves
+        // IMGUI_USE_WCHAR32 off, so ImWchar is 16-bit) and would be truncated
+        // into some other character by the cast below.
+        if (codepoint > 0xFFFF) {
+            return false;
+        }
+        // IsGlyphInFont() is a cmap query on the font file: no rasterising, no
+        // atlas lock to trip over, and it honours the merged Chinese source.
+        if (!font->IsGlyphInFont(static_cast<ImWchar>(codepoint))) {
+            return false;
+        }
+    }
+    return true;
+}
+
 IntroInfo buildIntroInfo(const IntroMetadata& metadata, bool hasCover)
 {
     IntroInfo intro;

@@ -526,6 +526,14 @@ bool guessAliasIsUsable(const std::string& alias, int musicId)
             [](unsigned char c) { return std::isdigit(c) != 0; })) {
         return false;
     }
+    // The alias *is* the question, so it has to be readable: a character the
+    // font cannot draw (Hangul, Thai, ...) comes out as '?' and turns the
+    // question into a guess at what the boxes were. Plenty of the table is
+    // Korean / rare-kanji nicknames ("텔유월", "霾儿歌"), and there are ~12k
+    // aliases, so dropping them costs nothing.
+    if (!fontCoversText(alias)) {
+        return false;
+    }
     const std::string title = toLower(titleFor(musicId));
     if (title.empty() || title == alias) {
         return false;
@@ -546,6 +554,7 @@ void buildGuessPool()
 {
     gGuessPool.clear();
     gGuessPoolBuilt = true;
+    std::vector<std::string> unreadable;
     for (const auto& entry : gAliasIndex) {
         if (entry.second.size() != 1) {
             continue;
@@ -553,9 +562,21 @@ void buildGuessPool()
         const int musicId = entry.second.front();
         if (guessAliasIsUsable(entry.first, musicId)) {
             gGuessPool.emplace_back(entry.first, musicId);
+        } else if (!fontCoversText(entry.first)) {
+            unreadable.push_back(entry.first);
         }
     }
-    std::printf("[guess] %zu usable alias(es) of %zu\n", gGuessPool.size(), gAliasIndex.size());
+    std::printf("[guess] %zu usable alias(es) of %zu (%zu of them dropped: the font cannot "
+                "draw part of the alias)\n",
+        gGuessPool.size(), gAliasIndex.size(), unreadable.size());
+    // A few examples, so "the pool shrank" can be told apart from "the font
+    // broke": each line names the alias and the character that has no glyph.
+    for (std::size_t i = 0; i < unreadable.size() && i < 3; ++i) {
+        std::printf("[guess]   unreadable: %s\n", unreadable[i].c_str());
+    }
+    if (!unreadable.empty() && !gGuessPool.empty()) {
+        std::printf("[guess]   example kept: %s\n", gGuessPool.front().first.c_str());
+    }
     std::fflush(stdout);
 }
 

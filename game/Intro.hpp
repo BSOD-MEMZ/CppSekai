@@ -75,6 +75,19 @@ ImFont* condensedFont();
 // so the outline matches the glyphs the UI draws.
 const std::string& bodyFontPath();
 
+// True when the body face can draw every character of `utf8`, i.e. when ImGui
+// will not substitute '?' for part of it (ImFont::FallbackChar).
+//
+// The face - not the glyph ranges - is what decides this: in ImGui 1.92 the
+// ranges are legacy (imconfig.h leaves IMGUI_USE_WCHAR32 off, and glyphs are
+// loaded on demand from the font file), so Latin/Kana/Kanji work because
+// Microsoft YaHei has them, while Hangul, Thai, Greek and emoji come out as '?'.
+//
+// Callers use it to keep unreadable text out of places where the text *is* the
+// question (see the 猜歌 alias filter). It answers true when no face is loaded
+// yet, so an early call can never silently wipe a pool of content.
+bool fontCoversText(const std::string& utf8);
+
 // Builds the card content. Mirrors buildIntroCardState() upstream, including
 // the 0..6 difficulty codes and the file-name fallback.
 IntroInfo buildIntroInfo(const IntroMetadata& metadata, bool hasCover);
