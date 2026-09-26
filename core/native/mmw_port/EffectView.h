@@ -116,7 +116,8 @@ namespace MikuMikuWorld::Effect
 			return controller;
 		}
 
-		void setup(EffectType type, int count);
+		// `simple` 剪掉子发射器（只留根那一层），见 EffectView::setSimpleEffect。
+		void setup(EffectType type, int count, bool simple);
 		inline int getCount() const { return count; }
 		inline int getNextIndex() const { return next; }
 
@@ -125,7 +126,7 @@ namespace MikuMikuWorld::Effect
 		int count{};
 		int next{};
 
-		EmitterInstance createEmitterFromParticle(int particleId);
+		EmitterInstance createEmitterFromParticle(int particleId, bool simple);
 	};
 
 	class EffectView
@@ -146,12 +147,21 @@ namespace MikuMikuWorld::Effect
 		void init();
 		inline bool isInitialized() const { return initialized; }
 
-		// CppSekai: 弱化打击特效（设置 → 画面 → 弱化打击特效）。开启后不再 spawn
-		// 铺在音符下层的轨道光效 / 光环，以及长条持续燃烧的粒子层，只留判定命中的
-		// 主体特效（*_gen）和 flick 闪光（*_flash）。视觉上就是 pjsk 原版演出效果的
-		// 轻量档，代价是 overdraw 少一大截。只影响之后 spawn 什么，已经播出去的
-		// 粒子会自然播完。
-		void setSimpleEffect(bool simple) { simpleEffect = simple; }
+		// CppSekai: 弱化打击特效（设置 → 画面）。两层一起收：
+		//   1. 粒子树只建根发射器 —— 一个 note 特效原本是「根 + Ripple + 几组飞散
+		//      粒子 + 方形碎片」拼起来的，砍掉 children 就只剩那一层基础贴图；
+		//   2. spawn 时再跳过整层的光效（见 isSuppressed）。
+		// 粒子树是按开关在 init() 里建好的，所以改值必须重建，这里自己调 init()。
+		void setSimpleEffect(bool simple)
+		{
+			if (simpleEffect == simple) {
+				return;
+			}
+			simpleEffect = simple;
+			if (initialized) {
+				init();
+			}
+		}
 		bool isSimpleEffect() const { return simpleEffect; }
 
 		inline bool isNoteEffectPlayed(int noteId) const

@@ -410,6 +410,11 @@ namespace mmw_preview
         bool simultaneousLine{true};
         int effectProfile{};
         int noteSkin{};
+        // CppSekai: 弱化打击特效. Lives here, not only in EffectView, because
+        // initializeEffects() does `effectView = {}` - and that runs on every
+        // chart load. Keeping the flag next to the other config is what makes it
+        // survive a song start.
+        bool simpleEffect{false};
         float noteSpeed{10.5f};
         float holdAlpha{1.0f};
         float guideAlpha{0.8f};
@@ -1028,8 +1033,15 @@ namespace mmw_preview
     void initializeEffects()
     {
         mmw::ResourceManager::loadEmbeddedEffects(gRuntime.config.effectProfile);
+        // `= {}` wipes the EffectView's own 弱化打击特效 flag as well, and this
+        // function runs on every chart load - so the setting has to be restored
+        // from the config right here, or a player who turned it on would silently
+        // get the full effect stack back the moment a song started.
         gRuntime.effectView = {};
+        gRuntime.effectView.setSimpleEffect(gRuntime.config.simpleEffect);
         gRuntime.effectView.init();
+        std::printf("[core] effects ready (simple=%d)\n", gRuntime.config.simpleEffect ? 1 : 0);
+        std::fflush(stdout);
         gRuntime.effectCamera.setFov(50.0f);
         gRuntime.effectCamera.setRotation(-90.0f, 27.1f);
         gRuntime.effectCamera.setPosition(DirectX::XMVectorSet(0.0f, 5.32f, -5.86f, 0.0f));
@@ -3109,13 +3121,24 @@ extern "C"
         mmw_preview::gRuntime.effectsAutoplay = enabled != 0;
     }
 
-    // CppSekai addition (no upstream equivalent): 弱化打击特效。开启后 EffectView
-    // 不再 spawn 轨道光效 / 光环 / 长条持续燃烧的粒子，只留判定命中的主体特效
-    // (*_gen) 和 flick 闪光 (*_flash) —— 也就是一次判定里最基础的那一层
-    // （设置 → 画面 → 弱化打击特效）。随时可切；已播出去的粒子会自然播完。
+    // CppSekai addition (no upstream equivalent): 弱化打击特效。开启后每个 note 特效的
+    // 粒子树会被剪到只剩根发射器（那一层基础贴图），并额外跳过轨道光效 / 光环 /
+    // 长条持续粒子（见 EffectView::isSuppressed）—— 设置 → 画面 → 弱化打击特效。
+    // 真值存在 config 里（effectView 每次加载谱面都会被 `= {}` 重建），随时可切。
     EMSCRIPTEN_KEEPALIVE void setSimpleEffect(int enabled)
     {
-        mmw_preview::gRuntime.effectView.setSimpleEffect(enabled != 0);
+        const bool simple = enabled != 0;
+        if (mmw_preview::gRuntime.config.simpleEffect == simple) {
+            return;
+        }
+        mmw_preview::gRuntime.config.simpleEffect = simple;
+        mmw_preview::gRuntime.effectView.setSimpleEffect(simple);
+        // 粒子树是在 EffectView::init() 里按当时的开关建好（并剪过）的，所以运行中
+        // 切换必须重建；rebuildEffectScore() 跟着一起，理由同 setPreviewConfig()。
+        if (mmw_preview::gRuntime.loaded) {
+            mmw_preview::initializeEffects();
+            mmw_preview::rebuildEffectScore();
+        }
     }
 
     // CppSekai addition (no upstream equivalent): tells the renderer which long

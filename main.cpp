@@ -366,6 +366,34 @@ namespace
         return {};
     }
 
+    // ImGui feeds the IME data sink on *every* frame a text field is active, and
+    // the SDL2 backend answers each call with SDL_SetTextInputRect() - which on
+    // Windows ends in ImmSetCompositionWindow. Re-setting an identical rectangle
+    // 60 times a second makes the candidate window redraw, which shows up as a
+    // flicker while typing. This wrapper only forwards an actual move; main()
+    // installs it over the backend's own sink.
+    void setImeRectOnChange(ImGuiContext*, ImGuiViewport*, ImGuiPlatformImeData* data)
+    {
+        if (!data->WantVisible) {
+            return;
+        }
+        static float lastX = 0.0f;
+        static float lastY = 0.0f;
+        static float lastH = 0.0f;
+        if (data->InputPos.x == lastX && data->InputPos.y == lastY && data->InputLineHeight == lastH) {
+            return;
+        }
+        lastX = data->InputPos.x;
+        lastY = data->InputPos.y;
+        lastH = data->InputLineHeight;
+        SDL_Rect rect{};
+        rect.x = static_cast<int>(data->InputPos.x);
+        rect.y = static_cast<int>(data->InputPos.y);
+        rect.w = 1;
+        rect.h = static_cast<int>(data->InputLineHeight);
+        SDL_SetTextInputRect(&rect);
+    }
+
     // Hides (or restores) the Windows touch visual feedback - the ripple /
     // circle the system draws around a touch contact - for OUR window only
     // (SetWindowFeedbackSetting, Win8+). Because it is a per-window setting,
@@ -1742,6 +1770,17 @@ int main(int argc, char** argv)
             const std::string name = !partyName.empty() ? partyName : account.name;
             title += " - " + (name.empty() ? partyLabel : name);
         }
+        // Only set it when it actually changed. SDL_SetWindowTitle goes straight to
+        // SetWindowTextW, and this is called on *every keystroke* in the account
+        // card's text fields - on a frameless / DWM-extended window each of those
+        // makes Windows re-evaluate the frame, which reads as a full-screen flash
+        // per character. (Windowed mode hides it; that is why it took a while to
+        // show up - and with 多人游玩 off the title never even changes.)
+        static std::string currentTitle;
+        if (title == currentTitle) {
+            return;
+        }
+        currentTitle = title;
         SDL_SetWindowTitle(window, title.c_str());
     };
 
@@ -1860,6 +1899,9 @@ int main(int argc, char** argv)
     ImGui::CreateContext();
     ImGui::StyleColorsDark();
     ImGui_ImplSDL2_InitForOpenGL(window, glContext);
+    // Over the backend's IME sink: it would reset the candidate window's position
+    // on every frame (see setImeRectOnChange above).
+    ImGui::GetPlatformIO().Platform_SetImeDataFn = setImeRectOnChange;
     ImGui_ImplOpenGL3_Init("#version 330 core");
     bootLog("imgui");
     // Splash frames are few and each one only costs a GPU submission - but

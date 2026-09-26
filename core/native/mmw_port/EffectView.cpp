@@ -125,7 +125,7 @@ namespace MikuMikuWorld::Effect
 		effectRoot.stop(true);
 	}
 
-	void EffectPool::setup(EffectType type, int count)
+	void EffectPool::setup(EffectType type, int count, bool simple)
 	{
 		this->count = count;
 		this->type = type;
@@ -138,19 +138,26 @@ namespace MikuMikuWorld::Effect
 		const Transform transform{};
 		for (auto& instance : pool)
 		{
-			instance.effectRoot = createEmitterFromParticle(particleId);
+			instance.effectRoot = createEmitterFromParticle(particleId, simple);
 			instance.effectRoot.init(ref, transform);
 		}
 	}
 
-	EmitterInstance EffectPool::createEmitterFromParticle(int particleId)
+	EmitterInstance EffectPool::createEmitterFromParticle(int particleId, bool simple)
 	{
 		const Effect::Particle& p = ResourceManager::getParticleEffect(particleId);
 
 		EmitterInstance emitter{};
+		// 弱化打击特效：到此为止，不再往下建。一个 note 特效是一棵树 —— 根发一张
+		// 基础贴图，底下挂着 Ripple（大涟漪）、几组飞散粒子、方形碎片；留着整棵树
+		// 就是那团"雪碧图拼起来"的夸张效果，砍掉 children 就只剩基础那一层。
+		if (simple)
+		{
+			return emitter;
+		}
 		for (const int child : p.children)
 		{
-			emitter.children.emplace_back(createEmitterFromParticle(child));
+			emitter.children.emplace_back(createEmitterFromParticle(child, false));
 		}
 
 		return emitter;
@@ -199,7 +206,7 @@ namespace MikuMikuWorld::Effect
 			if (poolSizeIt != effectPoolSizes.end())
 				size = poolSizeIt->second;
 
-			effPool.setup(type, size);
+			effPool.setup(type, size, simpleEffect);
 		}
 
 		int texId = ResourceManager::getTexture("tex_note_common_all_v2");
