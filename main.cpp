@@ -6012,7 +6012,9 @@ int main(int argc, char** argv)
 
         // 长按到点了：往 ImGui 的输入队列里注入一次右键点击。放在事件循环之后是因为
         // ImGui 要等到下一帧 NewFrame 才消费这些事件 —— 弹出来的菜单正好落在手指位置。
-        if (longPress.active && SDL_GetTicks() - longPress.startMs >= kLongPressMs) {
+        // 设置卡片打开时不触发：那里全是按钮和滑杆，而长按的收尾（松手）本身就是一次
+        // 合成左键点击，很容易顺手把某个开关拨了。
+        if (longPress.active && !showDebug && SDL_GetTicks() - longPress.startMs >= kLongPressMs) {
             longPress.active = false;
             ImGuiIO& longPressIo = ImGui::GetIO();
             longPressIo.AddMousePosEvent(longPress.x, longPress.y);
@@ -6524,7 +6526,11 @@ int main(int argc, char** argv)
                 // second), and the armed phase is one fuse long (0.8s), so a
                 // counter would be a flicker rather than information.
                 if (mpConfirmed && mpSnap.phase == platform::PartyCharging) {
-                    mpStatus = mpSnap.startCounter != 0 ? "即将开始" : "谱面加载中…";
+                    // 单人房间里别用多人话术：「即将开始」听着像在等别人，实际只是
+                    // 加载 ~0.5s + 0.8s 引信，反而让人以为卡住了。
+                    const bool armed = mpSnap.startCounter != 0;
+                    mpStatus = partySolo ? (armed ? "准备中…" : "谱面加载中…")
+                                         : (armed ? "即将开始" : "谱面加载中…");
                 }
             }
 
