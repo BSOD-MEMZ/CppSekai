@@ -1188,6 +1188,17 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
   2026-09-21 已改成右上角的圆形跳过键，见「开场卡片的跳过键」一节）。
   新增可点元素时，要么放进 ImGui（合成鼠标事件能到 ImGui），要么在 `SDL_FINGERDOWN` 里补一份
   同样的 hit-test（`game::introSkipHitTest` / `isPauseButton` 就是这个模式）。
+- **Windows 输入法候选框要自己 `SDL_StartTextInput()`**（2026-09-26 修，症状是"全屏下打字没反应"）：
+  从第一天起全仓就没有这一句，而 `SDL_HINT_IME_SHOW_UI=1`（`main.cpp` 顶部，SDL_CreateWindow
+  **之前**设的）单独不起作用 —— SDL 只在「文本输入处于激活状态」时才处理 `WM_IME_SETCONTEXT`
+  并把组合窗交给系统，`SDL_SetTextInputRect()` 在 `SDL_IsTextInputActive()` 为假时更是空操作。
+  更坑的是 **ImGui 的 SDL2 后端自己也不调了**：`imgui_impl_sdl2.cpp`（1.92.5）的变更日志里
+  2023-04-06 那行写着 "Avoid calling SDL_StartTextInput()/SDL_StopTextInput()"，现在它只在
+  `ImGui_ImplSDL2_PlatformSetImeData()` 里喂一个 `SDL_SetTextInputRect()`。两头都不调，候选框就
+  永远拿不到位置 —— 全屏下窗口左上角即屏幕角，组合窗落到屏幕外，看起来像"打字没反应"。
+  修法：主循环 `ImGui::NewFrame()` 之后按 `io.WantTextInput` 的边沿 Start / Stop（rect 仍由
+  ImGui 在 `Render()` 里交给后端），切换时打一行 `[ime] text input on`。
+  **候选框本身只能真人用输入法验证**（无头会话里那个框不会出现）。
 
 ## 系统要求
 
@@ -2157,7 +2168,38 @@ ImGui 后端降级 + 去掉 `glBindSampler`），那是一块真活儿，而目�
 
 实测（`0001_master`：17 个 flick，其中 9 个是 hold 尾；把 `--test-hits` 的 flick 分支
 临时改成 `tap()` 模拟"只会点不会滑"）：关 = perfect 597 / miss 25 / tails 41；
-开 = perfect 615 / miss 7 / tails 51。差额正好是那 17 个 flick（尾巴 +10 走的是新分支）。
+  开 = perfect 615 / miss 7 / tails 51。差额正好是那 17 个 flick（尾巴 +10 走的是新分支）。
+
+## 弱化打击特效（2026-09-26，`settings > 画面`，`EffectView`）
+
+pjsk 原版就有这一档（演出效果的轻量版）：**只留一次判定里最基础的那一层** —— 判定命中的
+主体特效（`*_gen`）和 flick 闪光（`*_flash`）—— 其余整层不 spawn。默认关。给核显机器省
+填充率（`Renderer` 是 `glDisable(GL_DEPTH_TEST)` + 全局 `glEnable(GL_BLEND)`，也就是纯
+overdraw，填充率是弱 GPU 撞的第一道墙）。
+
+实现落在 **core 的 `EffectView::isSuppressed()`**，不在渲染层过滤 —— packed quad（25 float）
+里没有 EffectType 信息，到了 `Renderer` 已经分不出哪层是哪层。被弱化时跳过三组：
+1. `fx_lane_*`（3 种）—— 轨道光效，铺满整条轨道，最宽的一片 overdraw；
+2. 所有 `*_aura`（`normal` / `flick` / `trace` / `hold` / `via` / `long`）—— 正好是
+   `drawUnderNoteEffects()` 列的那 9 种铺在音符下层的氛围层；
+3. `fx_note_long_hold_gen` 与 `fx_note_critical_long_hold_gen` —— 长条按住期间持续燃烧的
+   粒子，视觉上最"夸张"的火焰就是它们。
+
+早退挂在 `addEffect` / `addAuraEffect` / `addLaneEffect` 三个入口，**不是** `addNoteEffects`：
+这样 autoplay 的 timeline 路径和玩家命中的 `triggerNoteEffect()` 路径一起覆盖（后者在
+`mmw_preview.cpp` 里最后也是调 `addNoteEffects()`）。对外是 `core_api::setSimpleEffect(bool)`，
+`main.cpp` 在启动和切 profile 时各推一次，启动打一行 `[settings] simple effects on|off`。
+
+实测（`11004_master`，t=30s，同一时刻两拍，`--test-hits`）：全开 = 判定线上密布菱形粒子
++ 中央一团放射状火焰光球；弱化 = 粒子只剩零散几个、火焰光球消失，判定线上那层基础光带
+保留。两次判定统计完全一致（perfect=278 / score=224034）→ 只动画面，不动判定。
+
+**这类 A/B 截图的流程**（要再验别的视觉开关可以直接抄）：备份 `profiles/default.json`
+→ python 改 `settings.<键>` → `./cppsekai.exe --sus <谱面> --test-hits --no-party
+--screenshot D:/tmp/x.png --screenshot-time 30`（Git Bash 里必须 `( exe & wait )`）
+→ 对比完把备份拷回去。两个坑：① `--test-hits` 只在 `!autoPlay` 时生效，而本机 profile 里
+`autoplay` 一直是 true，得先把它改成 false 才走"玩家命中"那条路；② `--screenshot` 模式不写
+`userdata.json`（见「平台 / 输入相关的坑」最后几条），所以不用担心它把测试值留档。
 
 ## 多人游玩（`platform/Party.*` + `game/PartyScreen.*`）
 
