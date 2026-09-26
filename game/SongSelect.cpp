@@ -710,6 +710,17 @@ void applyScores(std::vector<ChartEntry>& entries, const std::map<std::string, S
     }
 }
 
+// 收藏是按 musicId 记的（同一首曲子的四个难度共享），所以这里按 id 匹配而不是按
+// 文件名 —— 换一个难度重新下载谱面也不会掉收藏。
+void applyFavorites(std::vector<ChartEntry>& entries, const std::vector<int>& favoriteMusicIds)
+{
+    for (ChartEntry& e : entries) {
+        e.favorite = e.musicId > 0
+            && std::find(favoriteMusicIds.begin(), favoriteMusicIds.end(), e.musicId)
+                != favoriteMusicIds.end();
+    }
+}
+
 std::string userDataPath(const std::string& exeDir)
 {
     std::error_code ec;
@@ -1014,6 +1025,9 @@ void loadUserData(const std::string& path, UserSettings& settings,
             settings.showProgressBar = s.value("showProgressBar", settings.showProgressBar);
             settings.hideTouchFeedback = s.value("hideTouchFeedback", settings.hideTouchFeedback);
             settings.simpleEffects = s.value("simpleEffects", settings.simpleEffects);
+            settings.showFps = s.value("showFps", settings.showFps);
+            settings.laneKeys = s.value("laneKeys", settings.laneKeys);
+            settings.favoriteMusicIds = s.value("favoriteMusicIds", settings.favoriteMusicIds);
             settings.perfectMs = s.value("perfectMs", settings.perfectMs);
             settings.greatMs = s.value("greatMs", settings.greatMs);
             settings.goodMs = s.value("goodMs", settings.goodMs);
@@ -1102,7 +1116,7 @@ void loadUserData(const std::string& path, UserSettings& settings,
     // roughly +-50% the screen starts running out of window.
     settings.uiScale = std::clamp(settings.uiScale, 0.7f, 1.5f);
     settings.sortMode = std::clamp(settings.sortMode, 0, 1);
-    settings.groupMode = std::clamp(settings.groupMode, 0, 3);
+    settings.groupMode = std::clamp(settings.groupMode, 0, kSelectGroupCount - 1);
 
     // Account: a rank past the cap (a hand-edited file) would make
     // expToNextRank() return 0 and freeze the bar, so clamp it. Exp is left
@@ -1156,6 +1170,9 @@ void saveUserData(const std::string& path, const UserSettings& settings,
         {"showProgressBar", settings.showProgressBar},
         {"hideTouchFeedback", settings.hideTouchFeedback},
         {"simpleEffects", settings.simpleEffects},
+        {"showFps", settings.showFps},
+        {"laneKeys", settings.laneKeys},
+        {"favoriteMusicIds", settings.favoriteMusicIds},
         {"perfectMs", settings.perfectMs},
         {"greatMs", settings.greatMs},
         {"goodMs", settings.goodMs},
@@ -1702,17 +1719,40 @@ namespace
     constexpr int kGroupDifficulty = 1;
     constexpr int kGroupReading = 2; // one section per aiueo row (letters: one per letter)
     constexpr int kGroupInitial = 3; // one section per first character
-    constexpr int kGroupCount = 4;
+    constexpr int kGroupFavorite = 4; // 收藏 / 其他（右键曲目切换）
+    // 上限与公开常量同源（SongSelect.hpp）—— loadUserData 的 clamp 也用它。
+    constexpr int kGroupCount = kSelectGroupCount;
 
     // Sort + optionally group the filtered songs into display rows. Rows are
     // what the (cyclic) scroll model walks: a header takes a slot like a song,
     // and the selection always lands on a song rather than a header.
+    // 这个曲目在不在收藏夹里。收藏按 musicId 记，一个 group 的四个难度共享同一个
+    // 值，所以取第一个存在的难度问一句就够。
+    bool groupFavorite(const SongGroup& group, const std::vector<ChartEntry>& entries)
+    {
+        for (int d = 0; d < kDiffCount; ++d) {
+            const int index = group.idx[d];
+            if (index >= 0 && index < static_cast<int>(entries.size())) {
+                return entries[static_cast<size_t>(index)].favorite;
+            }
+        }
+        return false;
+    }
+
     std::vector<ListRow> buildRows(const std::vector<SongGroup>& groups, const std::vector<int>& visible,
         const std::vector<ChartEntry>& entries, int diffIndex, int order, int groupMode)
     {
         std::vector<int> ordered = visible;
         const auto levelOf = [&](int gi) { return levelForDifficulty(groups[static_cast<size_t>(gi)], entries, diffIndex); };
         std::stable_sort(ordered.begin(), ordered.end(), [&](int a, int b) {
+            if (groupMode == kGroupFavorite) {
+                // 「收藏 / 其他」两段：收藏的那一段整体排前面，段内还是按下面那套。
+                const bool fa = groupFavorite(groups[static_cast<size_t>(a)], entries);
+                const bool fb = groupFavorite(groups[static_cast<size_t>(b)], entries);
+                if (fa != fb) {
+                    return fa;
+                }
+            }
             if (order == kOrderByDifficulty) {
                 const int la = levelOf(a);
                 const int lb = levelOf(b);
@@ -1744,7 +1784,9 @@ namespace
                     ? levelBandLabel(levelOf(gi))
                     : groupMode == kGroupInitial
                         ? initialLabel(sortKeyOf(groups[static_cast<size_t>(gi)]))
-                        : kanaRowLabel(sortKeyOf(groups[static_cast<size_t>(gi)]));
+                        : groupMode == kGroupFavorite
+                            ? (groupFavorite(groups[static_cast<size_t>(gi)], entries) ? "收藏" : "其他")
+                            : kanaRowLabel(sortKeyOf(groups[static_cast<size_t>(gi)]));
                 if (!haveLabel || label != lastLabel) {
                     ListRow header;
                     header.header = true;
@@ -2522,7 +2564,7 @@ bool guessOptionPill(const char* label, const ImVec2& size, ImU32 fill, float s,
 int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& entries, int& selected,
     int windowW, int windowH, float timeSec, int& sortMode, int& groupMode, int& vocalIndex,
     float uiScale, ImVec2* confirmCenter, const AccountData* account, const SelectPartyInfo* party,
-    SelectPartyResult* partyOut)
+    SelectPartyResult* partyOut, int* favoriteToggle)
 {
     int action = SelectNone;
     // 多人游玩: the room owns the song. The host keeps a normal, fully
@@ -2807,11 +2849,82 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     // one lifted row instead of "one field with a shadow, two without".
     ui::dropShadow(dl, ImVec2(listX, headerRowY), ImVec2(listX + searchW, headerRowY + searchH),
         searchH * 0.5f, k);
+    // 搜索框的右键菜单（复制 / 剪切 / 粘贴 / 清空）。ImGui 不公开 InputTextState，
+    // 所以用一个 CallbackAlways 把选区两端抄出来 —— 剪切和复制要知道选了哪一段。
+    struct SearchEditSnapshot
+    {
+        int selStart = 0;
+        int selEnd = 0;
+        bool valid = false;
+    };
+    static SearchEditSnapshot searchSel;
+    const auto searchEditCallback = [](ImGuiInputTextCallbackData* data) -> int {
+        SearchEditSnapshot* snap = static_cast<SearchEditSnapshot*>(data->UserData);
+        snap->selStart = data->SelectionStart;
+        snap->selEnd = data->SelectionEnd;
+        snap->valid = true;
+        return 0;
+    };
     ImGui::SetNextItemWidth(searchW);
-    ImGui::InputTextWithHint("##search", "根据歌曲名·作者名查找", searchBuf, sizeof(searchBuf));
+    ImGui::InputTextWithHint("##search", "根据歌曲名·作者名查找", searchBuf, sizeof(searchBuf),
+        ImGuiInputTextFlags_CallbackAlways, searchEditCallback, &searchSel);
+    const bool searchRightClicked = ImGui::IsItemClicked(ImGuiMouseButton_Right);
     ImGui::PopFont();
     ImGui::PopStyleVar(2);
     ImGui::PopStyleColor(4);
+    if (searchRightClicked) {
+        ImGui::OpenPopup("##searchedit");
+    }
+    {
+        ImGui::PushStyleColor(ImGuiCol_PopupBg, IM_COL32(250, 250, 253, 252));
+        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(70, 70, 90, 255));
+        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, IM_COL32(226, 236, 246, 255));
+        ImGui::PushStyleColor(ImGuiCol_HeaderActive, IM_COL32(210, 224, 240, 255));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 10.0f * k);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10.0f * k, 8.0f * k));
+        ImGui::PushFont(body, 17.0f * k);
+        if (ImGui::BeginPopup("##searchedit")) {
+            const int selA = std::min(searchSel.selStart, searchSel.selEnd);
+            const int selB = std::max(searchSel.selStart, searchSel.selEnd);
+            const size_t bufLen = std::strlen(searchBuf);
+            const bool hasSel = searchSel.valid && selB > selA
+                && selB <= static_cast<int>(bufLen);
+            char picked[128] = {};
+            if (hasSel) {
+                const size_t count = std::min(static_cast<size_t>(selB - selA), sizeof(picked) - 1);
+                std::memcpy(picked, searchBuf + selA, count);
+                picked[count] = '\0';
+            }
+            if (ImGui::MenuItem("剪切", nullptr, false, hasSel)) {
+                ImGui::SetClipboardText(picked);
+                // 连同结尾的 '\0' 一起往前挪。
+                std::memmove(searchBuf + selA, searchBuf + selB, bufLen - static_cast<size_t>(selB) + 1);
+            }
+            if (ImGui::MenuItem("复制", nullptr, false, hasSel)) {
+                ImGui::SetClipboardText(picked);
+            }
+            if (ImGui::MenuItem("粘贴")) {
+                const char* clip = ImGui::GetClipboardText();
+                if (clip != nullptr && clip[0] != '\0') {
+                    const size_t clipLen = std::strlen(clip);
+                    const size_t head = hasSel ? static_cast<size_t>(selA) : bufLen;
+                    const size_t tail = hasSel ? static_cast<size_t>(selB) : bufLen;
+                    // 留一个字节给结尾的 '\0'；放不下就整个不贴（比截一半好）。
+                    if (bufLen - (tail - head) + clipLen < sizeof(searchBuf)) {
+                        std::memmove(searchBuf + head + clipLen, searchBuf + tail, bufLen - tail + 1);
+                        std::memcpy(searchBuf + head, clip, clipLen);
+                    }
+                }
+            }
+            if (ImGui::MenuItem("清空", nullptr, false, searchBuf[0] != '\0')) {
+                searchBuf[0] = '\0';
+            }
+            ImGui::EndPopup();
+        }
+        ImGui::PopFont();
+        ImGui::PopStyleVar(2);
+        ImGui::PopStyleColor(4);
+    }
     {
         const GLuint searchIcon = selectTex(renderer, "search");
         if (searchIcon != 0) {
@@ -2838,7 +2951,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     const float comboGap = 12.0f * k;
     {
         const char* kSortLabels[2] = {"按名称", "按难度"};
-        const char* kGroupLabels[kGroupCount] = {"关闭", "按难度段", "按读音", "按首字"};
+        const char* kGroupLabels[kGroupCount] = {"关闭", "按难度段", "按读音", "按首字", "按收藏"};
         const std::string sortPreview = std::string("排序：") + kSortLabels[sortMode];
         const std::string groupPreview = std::string("分组：") + kGroupLabels[groupMode];
         // No colours here any more: ui::combo brings the pjsk look itself (white
@@ -3270,6 +3383,41 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
                 ui::se(ui::SeClick);
                 action = g.idx[diffIndex];
             }
+        }
+        // 右键一行 → 收藏夹菜单（触摸屏上是长按，main.cpp 会把长按合成成这个右键）。
+        // 做成菜单而不是直接切换：长按的误触概率比鼠标高，多一步确认更稳。
+        static int menuGroup = -1;
+        if (listHovered && hoverRow >= 0 && !rows[static_cast<size_t>(hoverRow)].header
+            && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+            menuGroup = rows[static_cast<size_t>(hoverRow)].group;
+            ImGui::OpenPopup("##songmenu");
+        }
+        if (menuGroup >= 0 && menuGroup < static_cast<int>(groups.size())) {
+            // 与 ui::combo 一样的白底弹层（这版 ImGui 的默认弹层是深色的）。
+            ImGui::PushStyleColor(ImGuiCol_PopupBg, IM_COL32(250, 250, 253, 252));
+            ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(70, 70, 90, 255));
+            ImGui::PushStyleColor(ImGuiCol_HeaderHovered, IM_COL32(226, 236, 246, 255));
+            ImGui::PushStyleColor(ImGuiCol_HeaderActive, IM_COL32(210, 224, 240, 255));
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 10.0f * k);
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10.0f * k, 8.0f * k));
+            ImGui::PushFont(body, 17.0f * k);
+            if (ImGui::BeginPopup("##songmenu")) {
+                const SongGroup& g = groups[static_cast<size_t>(menuGroup)];
+                if (ImGui::MenuItem(groupFavorite(g, entries) ? "取消收藏" : "加入收藏夹")) {
+                    if (favoriteToggle != nullptr) {
+                        for (int d = 0; d < kDiffCount; ++d) {
+                            if (g.idx[d] >= 0) {
+                                *favoriteToggle = g.idx[d];
+                                break;
+                            }
+                        }
+                    }
+                }
+                ImGui::EndPopup();
+            }
+            ImGui::PopFont();
+            ImGui::PopStyleVar(2);
+            ImGui::PopStyleColor(4);
         }
         // Press starts a drag. The row is only committed on release, and only
         // when the gesture did not travel - dragging never selects.

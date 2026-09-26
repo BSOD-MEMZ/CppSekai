@@ -96,7 +96,7 @@ ScoreRank scoreRankAndBar(double score, float rating)
 }
 
 void drawHud(platform::Renderer& renderer, const HudState& state, float songTimeSec, int windowW, int windowH,
-    float leadInSec, bool dumpJudgeSheet)
+    float leadInSec, bool dumpJudgeSheet, float fps)
 {
     // Background list: above the GL frame, but below pjsk dialog cards so
     // pause dialogs / panels can dim and cover the HUD.
@@ -492,6 +492,15 @@ void drawHud(platform::Renderer& renderer, const HudState& state, float songTime
             const float autoAlpha = std::max(0.0f, std::sin(blinkPhase * 3.14159265359f));
             img("auto_badge", 1566.0f, 988.0f, 330.0f, 74.0f, autoAlpha);
         }
+    }
+
+    // 左下角帧率（设置 → 画面 → 显示帧率）。位置挑在底边距那一条上：多人游玩的
+    // 队友分数条是从 y = 1080-24 往上堆的，底下这 24px 正好空着，两边不会打架。
+    if (fps > 0.0f) {
+        char fpsText[32];
+        std::snprintf(fpsText, sizeof(fpsText), "%.1f fps", static_cast<double>(fps));
+        drawList->AddText(ImGui::GetFont(), ps(18.0f), ImVec2(px(24.0f), py(1080.0f - 26.0f)),
+            IM_COL32(235, 238, 245, 200), fpsText);
     }
 }
 

@@ -42,8 +42,10 @@ struct HudState
     bool autoJudge = false;
 };
 
+// `fps` > 0 draws the smoothed frame rate in the bottom-left corner (设置 →
+// 画面 → 显示帧率); 0 leaves it out.
 void drawHud(platform::Renderer& renderer, const HudState& state, float songTimeSec, int windowW, int windowH,
-    float leadInSec = 3.5f, bool dumpJudgeSheet = false);
+    float leadInSec = 3.5f, bool dumpJudgeSheet = false, float fps = 0.0f);
 
 // Rank letter + score-bar fill for the score panel. 1:1 port of the upstream
 // overlay player's scoreRankAndBar(); `rating` is the chart level (the

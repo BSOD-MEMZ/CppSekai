@@ -43,6 +43,9 @@ struct ChartEntry
     // Best result for this chart, loaded from userdata.json next to the exe.
     bool cleared = false;
     bool fullCombo = false;
+    // 在收藏夹里（settings.favoriteMusicIds，按 musicId 记；见 applyFavorites）。
+    // 列表右键 / 长按可以切换，分组可以按它分「收藏 / 其他」。
+    bool favorite = false;
     // Highest score reached on this chart, 0 when it was never cleared. The
     // song select turns it into the score-rank badge next to the song info.
     double bestScore = 0.0;
@@ -170,6 +173,14 @@ struct UserSettings
     // what a weak integrated GPU notices first. Default off (full effects).
     // Implementation: core/native/mmw_port/EffectView.cpp (isSuppressed).
     bool simpleEffects = false;
+    // 左下角显示当前帧率 (smoothed). Off by default; the play screen only.
+    bool showFps = false;
+    // 每 lane 一个键位，存 SDL_Keycode 的数值（见 main.cpp 的 kLaneKeys 作默认）。
+    // 空数组 = 用默认的 z s x d c v g b h n j m；长度为 12 时逐 lane 生效。
+    std::vector<int> laneKeys;
+    // 收藏夹里的曲目，按 musicId 记（0 表示这个谱面文件没有编号，不收）。
+    // 列表分组可以按它分「收藏 / 其他」，右键曲目即可切换。
+    std::vector<int> favoriteMusicIds;
     // Judgement windows, in ms. These defaults are the 宽松 preset (the official
     // set opened up by 30 ms on every window); 设置 > 判定 > 判定预设 offers
     // 标准 (the bare official set) and 严格 (30 ms tighter) next to it.
@@ -378,6 +389,10 @@ std::string scoreKey(const ChartEntry& entry);
 // Copies cleared / fullCombo from the map into the entries.
 void applyScores(std::vector<ChartEntry>& entries, const std::map<std::string, ScoreRecord>& scores);
 
+// 收藏夹：把 settings.favoriteMusicIds（musicId 列表）填进 entries[i].favorite。
+// 收藏是按曲目记的（不是按难度），所以一个 group 的四个难度一起亮。
+void applyFavorites(std::vector<ChartEntry>& entries, const std::vector<int>& favoriteMusicIds);
+
 // Assets root (the directory that contains the "select" subfolder, i.e.
 // <exeDir>\assets). The select UI PNGs (shuffle / settings buttons, the phone
 // frame and the clear indicators) load from <dir>\select\<name>.png.
@@ -436,6 +451,11 @@ std::string inferDifficulty(const std::string& name);
 // Fills in the sidecar paths (bgm / jacket), difficulty and display name for
 // a chart we already know about (e.g. one passed on the command line).
 void resolveSidecars(ChartEntry& entry);
+
+// 选曲列表的分组方式（settings.groupMode，见 ui 里的「分组」下拉）：
+// 0 关闭 / 1 按难度段 / 2 按读音 / 3 按首字 / 4 按收藏。
+// 存档读回来时要按这个上限 clamp —— 以前那里写死 3，加了「按收藏」之后会把 4 咬掉。
+constexpr int kSelectGroupCount = 5;
 
 enum SelectAction
 {
@@ -500,7 +520,8 @@ struct SelectPartyResult
 int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& entries, int& selected,
     int windowW, int windowH, float timeSec, int& sortMode, int& groupMode, int& vocalIndex,
     float uiScale = 1.0f, ImVec2* confirmCenter = nullptr, const AccountData* account = nullptr,
-    const SelectPartyInfo* party = nullptr, SelectPartyResult* partyOut = nullptr);
+    const SelectPartyInfo* party = nullptr, SelectPartyResult* partyOut = nullptr,
+    int* favoriteToggle = nullptr);
 
 // Debug (`--profile`): force the profile card open. It normally only appears
 // when the level chip is clicked, which a --screenshot run cannot do.

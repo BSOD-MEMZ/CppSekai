@@ -1062,6 +1062,7 @@ int main(int argc, char** argv)
     bool showProgressBar = true; // subtle top-edge playback bar (settings toggle)
     bool hideTouchFeedback = true; // hide the system touch ripple over our window
     bool simpleEffects = false;    // 弱化打击特效: basic hit layer only (see EffectView)
+    bool showFps = false;          // 左下角显示帧率（只在演奏画面）
 
     // Settings that also live in userdata.json (loaded below). Flags present on
     // the command line win over the saved values; these record which were given.
@@ -1612,6 +1613,7 @@ int main(int argc, char** argv)
     showProgressBar = userSettings.showProgressBar;
     hideTouchFeedback = userSettings.hideTouchFeedback;
     simpleEffects = userSettings.simpleEffects;
+    showFps = userSettings.showFps;
     // Flick debug log (settings > 判定 > Flick 调试日志). Truncates the file at
     // boot when it is on, so every run starts with a clean log.
     gFlickLog.setEnabled(userSettings.debugLog || gForceFlickLog);
@@ -2392,7 +2394,14 @@ int main(int argc, char** argv)
             std::printf("[select]   %s\n", candidate.c_str());
         }
     }
-    game::applyScores(entries, scores);
+    // 谱面列表的每曲状态（成绩 + 收藏）重新贴一遍。entries 在多条路径上会被重建
+    // （首次扫描 / F5 重扫 / 换 profile），收藏跟着一起刷，免得哪条路径漏掉 ——
+    // 漏掉的表现就是"收藏过一会儿自己没了"。
+    const auto refreshEntryFlags = [&]() {
+        game::applyScores(entries, scores);
+        game::applyFavorites(entries, userSettings.favoriteMusicIds);
+    };
+    refreshEntryFlags();
     int selected = entries.empty() ? -1 : 0;
     if (selectMusicId > 0) {
         // --select-id <id>: park the list on that song (used by screenshots and
@@ -2501,6 +2510,11 @@ int main(int argc, char** argv)
     std::array<float, LANE_COUNT> lanePress{};
     std::array<float, LANE_COUNT> laneHover{};
     double lastFrameDeltaSec = 0.0;
+    // 左下角帧率显示（设置 → 画面 → 显示帧率）用的采样值：每 0.25 s 采一次瞬时帧率。
+    // 逐帧刷新数字跳得读不出来，固定间隔采样比指数平滑简单，也不会像平滑那样在启动
+    // 首帧（delta 是"从 perfCounter 初始化到首帧"的整段时间）上留一个假值。
+    double fpsDisplay = 0.0;
+    double fpsNextSampleSec = 0.0;
     Uint64 lastFrameCounter = SDL_GetPerformanceCounter();
     SDL_Event event;
 
@@ -2763,6 +2777,51 @@ int main(int argc, char** argv)
         return audio.hasMusic() ? audio.songTime() : wallSongTime();
     };
 
+    // 判定用的歌曲时间：按 **SDL 事件时间戳**回推，而不是"主循环轮到这一帧的时刻"。
+    // 按键 / 触摸先被排进 SDL 的事件队列，下一次 PollEvent 才被看见 —— 低帧率下这一等
+    // 就是十几到几十毫秒，那正是"键盘不跟手"的来源。事件时间戳是它进队列的时刻，与
+    // SDL_GetTicks() 同一个基准，所以拿"现在"当锚点、减掉排队时长就能还原按下那一刻。
+    // 上限钳到 250 ms：时钟回绕之类的异常值不至于把一次判定甩到天边。
+    const auto songTimeAtEvent = [&](Uint32 eventMs) -> double {
+        const double lagSec = static_cast<double>(SDL_GetTicks() - eventMs) / 1000.0;
+        return songClock() - std::clamp(lagSec, 0.0, 0.25);
+    };
+
+    // 12 键 → 12 lane。默认就是 kLaneKeys（z s x d c v g b h n j m），设置 → 演奏 →
+    // 按键映射 改过的键位覆盖它（SDL_Keycode 存成 int，0 = 这条 lane 不绑键盘）。
+    SDL_Keycode laneKeys[12] = {};
+    const auto applyLaneKeys = [&]() {
+        for (int i = 0; i < 12; ++i) {
+            laneKeys[i] = kLaneKeys[i];
+        }
+        if (userSettings.laneKeys.size() == 12) {
+            for (int i = 0; i < 12; ++i) {
+                const int code = userSettings.laneKeys[static_cast<size_t>(i)];
+                if (code > 0) {
+                    laneKeys[i] = static_cast<SDL_Keycode>(code);
+                }
+            }
+        }
+    };
+    applyLaneKeys();
+    // 设置 → 演奏 → 按键映射 正在等一个新键的 lane（-1 = 没在等）。放在 main() 作用域里
+    // 是因为下面 KEYDOWN 那段要用它把这按键吞掉 —— 改键位时不能顺手打出一个 note。
+    int rebindLane = -1;
+
+    // 触摸屏上的"右键"：SDL 不会替我们合成，所以自己计时 —— 按住 550 ms 且手指基本
+    // 没移动，就往 ImGui 的输入队列里注入一次右键点击（曲目行弹收藏菜单、搜索框弹
+    // 编辑菜单）。手指一滑就取消，免得跟列表的拖动滚动打架。
+    struct LongPressState
+    {
+        bool active = false;
+        float x = 0.0f;
+        float y = 0.0f;
+        Uint32 startMs = 0;
+    };
+    LongPressState longPress;
+    constexpr Uint32 kLongPressMs = 550;
+    constexpr float kLongPressSlopPx = 14.0f;
+
     // File name of a chart path: the room identifies a song by it, because the
     // host's "0374_master.sus" is the same file in every window.
     auto chartFileName = [](const std::string& path) {
@@ -2877,6 +2936,7 @@ int main(int argc, char** argv)
         userSettings.showProgressBar = showProgressBar;
         userSettings.hideTouchFeedback = hideTouchFeedback;
         userSettings.simpleEffects = simpleEffects;
+        userSettings.showFps = showFps;
         // (userSettings.multiplayer is a launch-time switch: the room is joined
         // at startup, so --party never writes it back into the profile.)
         const game::JudgementWindows& w = judgement.windows();
@@ -3062,6 +3122,8 @@ int main(int argc, char** argv)
         showProgressBar = userSettings.showProgressBar;
         hideTouchFeedback = userSettings.hideTouchFeedback;
         simpleEffects = userSettings.simpleEffects;
+        showFps = userSettings.showFps;
+        applyLaneKeys();
         core_api::setSimpleEffect(simpleEffects);
         gFlickLog.setEnabled(userSettings.debugLog || gForceFlickLog); // the new profile's own setting
 #ifdef _WIN32
@@ -3085,7 +3147,7 @@ int main(int argc, char** argv)
         refreshSelectBackdrop();
         applyRenderMode();
         systemMedia.setReporting(userSettings.reportSmtc);
-        game::applyScores(entries, scores);
+        refreshEntryFlags();
     };
 
     if (!activateProfileArg.empty()) {
@@ -3513,6 +3575,39 @@ int main(int argc, char** argv)
                     userSettings.autoplay = autoPlayBox;
                     persistUserData();
                 }
+                // 按键映射: 12 个 lane 各自的键。默认 z s x d c v g b h n j m（kLaneKeys），
+                // 点一格再按一个键就改；新键已被别的 lane 占用时两条 lane 直接对调，省得
+                // 先清空。ESC 取消。存 profile（settings.laneKeys）。
+                contentLeft();
+                ImGui::Text("按键映射");
+                {
+                    const float gap = 6.0f * s;
+                    const float cellW = (interior - gap * 2.0f) / 3.0f;
+                    for (int lane = 0; lane < 12; ++lane) {
+                        if (lane % 3 == 0) {
+                            contentLeft();
+                        } else {
+                            ImGui::SameLine(0.0f, gap);
+                        }
+                        char keyLabel[64];
+                        if (rebindLane == lane) {
+                            std::snprintf(keyLabel, sizeof(keyLabel), "%d 按新键…", lane + 1);
+                        } else {
+                            std::snprintf(keyLabel, sizeof(keyLabel), "%d  %s", lane + 1,
+                                SDL_GetKeyName(laneKeys[lane]));
+                        }
+                        if (ui::capsuleButton(keyLabel, ImVec2(cellW, 40.0f * s), rebindLane == lane)) {
+                            rebindLane = rebindLane == lane ? -1 : lane;
+                        }
+                    }
+                }
+                contentLeft();
+                if (ui::capsuleButton("恢复默认键位", ImVec2(interior * 0.55f, 40.0f * s), false)) {
+                    userSettings.laneKeys.clear(); // 空数组 = 回落到 kLaneKeys
+                    applyLaneKeys();
+                    rebindLane = -1;
+                    persistUserData();
+                }
             } else if (tab == 1) {
                 // 画面: resolution + window mode + frame rate.
                 // UI zoom for the two screens that are laid out on a virtual
@@ -3747,6 +3842,14 @@ int main(int argc, char** argv)
                 // also the single biggest cut in per-frame overdraw, which is
                 // what a weak integrated GPU feels first. Takes effect on the
                 // next spawned particle; ones already flying finish their life.
+                contentLeft();
+                bool showFpsBox = showFps;
+                ui::checkBox("显示帧率", &showFpsBox, interior);
+                if (showFpsBox != showFps) {
+                    showFps = showFpsBox;
+                    persistUserData();
+                }
+                contentLeft();
                 bool simpleFxBox = simpleEffects;
                 ui::checkBox("弱化打击特效", &simpleFxBox, interior);
                 if (simpleFxBox != simpleEffects) {
@@ -4772,7 +4875,7 @@ int main(int argc, char** argv)
         track.lastMoveTimeMs = eventMs;
         touches.push_back(track);
         lanePress[static_cast<size_t>(track.laneIndex)] = 1.0f;
-        const double songTime = songClock();
+        const double songTime = songTimeAtEvent(eventMs);
         const game::Judge result = judgement.tap(track.lanePos, static_cast<float>(songTime), false, 0.8f);
         if (gFlickLog.enabled) {
             gFlickLog.write("[touch] down finger=%u touch=%d screen=(%d,%d) lane=%.3f laneIndex=%d "
@@ -4878,7 +4981,7 @@ int main(int argc, char** argv)
                     static_cast<double>(track.travelSide), flickDirName(dir), static_cast<double>(lanePos));
             }
             if (dir != game::FlickNone && now - track.lastFlickFireTimeSec >= kFlickRefireSec) {
-                const double songTime = songClock();
+                const double songTime = songTimeAtEvent(eventMs);
                 const game::Judge result = flickJudge(track, songTime, dir);
                 logFlickOutcome(track, songTime, dir, result, "fire/move");
                 if (result != game::Judge::None) {
@@ -5174,6 +5277,10 @@ int main(int argc, char** argv)
         const Uint64 nowCounter = SDL_GetPerformanceCounter();
         lastFrameDeltaSec = static_cast<double>(nowCounter - lastFrameCounter) / static_cast<double>(perfFreq);
         lastFrameCounter = nowCounter;
+        if (uiClock >= fpsNextSampleSec) {
+            fpsNextSampleSec = uiClock + 0.25;
+            fpsDisplay = 1.0 / std::clamp(lastFrameDeltaSec, 1.0 / 1000.0, 1.0);
+        }
         const float frameDelta = static_cast<float>(lastFrameDeltaSec);
         uiClock += lastFrameDeltaSec;
 #ifdef _WIN32
@@ -5521,6 +5628,32 @@ int main(int argc, char** argv)
                     if (event.key.repeat != 0) {
                         break;
                     }
+                    // 设置 → 演奏 → 按键映射 在等新键位：这一下只用来绑定 —— 新键要是
+                    // 已经被别的 lane 占了就直接跟它对调（不用先清空），ESC 取消，
+                    // 之后一律 break 掉：改键位时不该顺手打出一个 note。
+                    if (rebindLane >= 0) {
+                        const SDL_Keycode picked = event.key.keysym.sym;
+                        if (picked != SDLK_ESCAPE) {
+                            for (int i = 0; i < 12; ++i) {
+                                if (i != rebindLane && laneKeys[i] == picked) {
+                                    laneKeys[i] = laneKeys[rebindLane];
+                                    break;
+                                }
+                            }
+                            laneKeys[rebindLane] = picked;
+                            userSettings.laneKeys.assign(12, 0);
+                            for (int i = 0; i < 12; ++i) {
+                                userSettings.laneKeys[static_cast<size_t>(i)] =
+                                    static_cast<int>(laneKeys[i]);
+                            }
+                            persistUserData();
+                            std::printf("[keys] lane %d -> %s\n", rebindLane + 1,
+                                SDL_GetKeyName(picked));
+                            std::fflush(stdout);
+                        }
+                        rebindLane = -1;
+                        break;
+                    }
                     // A focused ImGui text field (the song-search box) owns the
                     // keyboard: typing "f" used to toggle fullscreen in the
                     // middle of a search ("h" the debug panel). WantTextInput is
@@ -5556,9 +5689,11 @@ int main(int argc, char** argv)
                         // previews included).
                         requestPause();
                     } else if (state == AppState::Play && !autoPlay && !paused) {
-                        const double songTime = songClock();
+                        // 按事件时间戳回推判定时刻（见 songTimeAtEvent）：低帧率下
+                        // 事件在队列里等的那一帧，本来会被算成"你按晚了"。
+                        const double songTime = songTimeAtEvent(event.key.timestamp);
                         for (int lane = 0; lane < 12; ++lane) {
-                            if (event.key.keysym.sym == kLaneKeys[lane]) {
+                            if (event.key.keysym.sym == laneKeys[lane]) {
                                 keyHeld[lane] = true;
                                 lanePress[static_cast<size_t>(lane)] = 1.0f;
                                 const game::Judge result =
@@ -5582,7 +5717,7 @@ int main(int argc, char** argv)
                 case SDL_KEYUP:
                     if (!autoPlay) {
                         for (int lane = 0; lane < 12; ++lane) {
-                            if (event.key.keysym.sym == kLaneKeys[lane]) {
+                            if (event.key.keysym.sym == laneKeys[lane]) {
                                 keyHeld[lane] = false;
                             }
                         }
@@ -5590,6 +5725,12 @@ int main(int argc, char** argv)
                     break;
                 case SDL_FINGERDOWN: {
                     if (state != AppState::Play) {
+                        // 长按 = 右键（见 longPress）：这里只记起点和时间，够点长按
+                        // 阈值时在主循环里注入一次右键。
+                        longPress.active = true;
+                        longPress.x = event.tfinger.x * static_cast<float>(windowW);
+                        longPress.y = event.tfinger.y * static_cast<float>(windowH);
+                        longPress.startMs = SDL_GetTicks();
                         // Drag-to-scroll bookkeeping (see uiTouchScrollPx): the
                         // gesture starts here and only the first finger counts -
                         // a second contact is a stray one on a settings card.
@@ -5662,6 +5803,13 @@ int main(int argc, char** argv)
                     break;
                 }
                 case SDL_FINGERMOTION: {
+                    if (longPress.active) {
+                        const float dx = event.tfinger.x * static_cast<float>(windowW) - longPress.x;
+                        const float dy = event.tfinger.y * static_cast<float>(windowH) - longPress.y;
+                        if (dx * dx + dy * dy > kLongPressSlopPx * kLongPressSlopPx) {
+                            longPress.active = false; // 这是滑动，不是长按
+                        }
+                    }
                     if (uiTouchScrollFingerDown && event.tfinger.fingerId == uiTouchScrollId) {
                         const float x = event.tfinger.x * static_cast<float>(windowW);
                         const float y = event.tfinger.y * static_cast<float>(windowH);
@@ -5695,6 +5843,7 @@ int main(int argc, char** argv)
                     break;
                 }
                 case SDL_FINGERUP: {
+                    longPress.active = false;
                     if (event.tfinger.fingerId == uiTouchScrollId) {
                         // Only the finger state goes; whatever was banked stays
                         // for the card to apply this frame. A quick flick hands
@@ -5859,6 +6008,16 @@ int main(int argc, char** argv)
                 default:
                     break;
             }
+        }
+
+        // 长按到点了：往 ImGui 的输入队列里注入一次右键点击。放在事件循环之后是因为
+        // ImGui 要等到下一帧 NewFrame 才消费这些事件 —— 弹出来的菜单正好落在手指位置。
+        if (longPress.active && SDL_GetTicks() - longPress.startMs >= kLongPressMs) {
+            longPress.active = false;
+            ImGuiIO& longPressIo = ImGui::GetIO();
+            longPressIo.AddMousePosEvent(longPress.x, longPress.y);
+            longPressIo.AddMouseButtonEvent(ImGuiMouseButton_Right, true);
+            longPressIo.AddMouseButtonEvent(ImGuiMouseButton_Right, false);
         }
 
         if (escapePressed) {
@@ -6390,10 +6549,32 @@ int main(int argc, char** argv)
 
             const int prevSortMode = userSettings.sortMode;
             const int prevGroupMode = userSettings.groupMode;
+            int favoriteToggle = -1;
             int action = game::drawSongSelect(renderer, entries, selected, windowW, windowH,
                 static_cast<float>(uiClock), userSettings.sortMode, userSettings.groupMode,
                 selectedVocal, userSettings.uiScale, &selectConfirmCenter, &account,
-                party.active() ? &selParty : nullptr, party.active() ? &selPartyOut : nullptr);
+                party.active() ? &selParty : nullptr, party.active() ? &selPartyOut : nullptr,
+                &favoriteToggle);
+            // 右键 / 长按曲目 → 收藏夹切换。按 musicId 记（同一首曲子的四个难度共享），
+            // 存进 profile，再重贴一遍 flag 让列表（和「按收藏」分组）立刻跟着变。
+            if (favoriteToggle >= 0 && favoriteToggle < static_cast<int>(entries.size())) {
+                const int musicId = entries[static_cast<size_t>(favoriteToggle)].musicId;
+                if (musicId > 0) {
+                    std::vector<int>& favorites = userSettings.favoriteMusicIds;
+                    const auto hit = std::find(favorites.begin(), favorites.end(), musicId);
+                    const bool added = hit == favorites.end();
+                    if (added) {
+                        favorites.push_back(musicId);
+                    } else {
+                        favorites.erase(hit);
+                    }
+                    refreshEntryFlags();
+                    persistUserData();
+                    std::printf("[favorite] %s musicId=%d (%d total)\n", added ? "added" : "removed",
+                        musicId, static_cast<int>(favorites.size()));
+                    std::fflush(stdout);
+                }
+            }
             // Debug (--party-auto): the host's 确定, without a mouse. Waits for
             // the list to settle so the chart it picks is the one the list
             // starts on, not whatever a startup animation left selected; in a
@@ -6483,7 +6664,7 @@ int main(int argc, char** argv)
             } else if (wantRescan) {
                 entries = scanAllChartDirs();
                 selected = entries.empty() ? -1 : 0;
-                game::applyScores(entries, scores);
+                refreshEntryFlags();
                 loadedCoverPath.clear();
                 std::printf("[select] %d chart(s)\n", static_cast<int>(entries.size()));
             }
@@ -7158,7 +7339,7 @@ int main(int argc, char** argv)
                     ++account.plays;
                     account.totalScore += st.score;
                     if (!autoRun) {
-                        game::applyScores(entries, scores);
+                        refreshEntryFlags();
                     }
                     persistUserData();
                     std::printf("[score] %s %s%s (life=%.0f/%.0f) (%s)\n", key.c_str(),
@@ -7450,7 +7631,8 @@ int main(int argc, char** argv)
 
             if (visibility > 0.0f) {
                 game::drawHud(renderer, hudState, static_cast<float>(songTime), windowW, windowH,
-                    static_cast<float>(leadInSec), dumpJudgeSheet);
+                    static_cast<float>(leadInSec), dumpJudgeSheet,
+                    showFps ? static_cast<float>(fpsDisplay) : 0.0f);
             }
             game::drawIntro(renderer, session.intro,
                 introPreviewSec >= 0.0 ? static_cast<float>(introPreviewSec) : outputTime,
@@ -7981,6 +8163,11 @@ int main(int argc, char** argv)
                 std::printf("[stats] perfect=%d great=%d good=%d bad=%d miss=%d combo=%d maxCombo=%d tails=%d breaks=%d score=%.0f life=%.0f (%.1f%%)\n",
                     st.perfect, st.great, st.good, st.bad, st.miss, st.combo, st.maxCombo, st.holdTails, st.holdBreaks,
                     st.score, st.life, 100.0f * judgement.lifeRatio());
+            }
+            if (showFps) {
+                // 左下角那一行显示的就是这个数（截图自检时不用靠眼睛读图 —— 10 px 的
+                // "60.0" 和 "0.0" 在图上根本分不出来）。
+                std::printf("[fps] %.1f (frame %.1f ms)\n", fpsDisplay, lastFrameDeltaSec * 1000.0);
             }
             saveScreenshot();
             running = false;
