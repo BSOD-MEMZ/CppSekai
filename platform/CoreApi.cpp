@@ -20,6 +20,7 @@ extern "C"
     const float* getHitEventBufferPointer(void);
     int getHitEventCount(void);
     void setEffectAutoplay(int);
+    void setSimpleEffect(int);
     void setDimmedHolds(const float*, int);
     void markNoteHit(int);
     void clearHitNotes(void);
@@ -110,6 +111,11 @@ int getHitEventCount()
 void setEffectAutoplay(bool enabled)
 {
     ::setEffectAutoplay(enabled ? 1 : 0);
+}
+
+void setSimpleEffect(bool enabled)
+{
+    ::setSimpleEffect(enabled ? 1 : 0);
 }
 
 void setDimmedHolds(const std::vector<float>& keys)

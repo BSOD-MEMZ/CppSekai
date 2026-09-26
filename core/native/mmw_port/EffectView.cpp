@@ -217,6 +217,40 @@ namespace MikuMikuWorld::Effect
 		playedEffectsNoteIds.clear();
 	}
 
+	// 弱化打击特效（setSimpleEffect）时整层跳过的类型，分三类：
+	//   1. fx_lane_*    轨道光效——铺满整条轨道，是最宽的一片 overdraw；
+	//   2. 所有 *_aura  铺在音符下层的光环 / 氛围层（drawUnderNoteEffects 里那 9 种）；
+	//   3. 长条按住期间持续燃烧的粒子（long_hold_gen / long_hold_via_aura / hold_aura
+	//      等）——视觉上最夸张的"火焰"就是它们。
+	// 保留的是判定命中的主体特效 *_gen 和 flick 闪光 *_flash，也就是一次判定里
+	// 最基础的那一层。
+	bool EffectView::isSuppressed(EffectType effect) const
+	{
+		switch (effect)
+		{
+		case fx_lane_critical:
+		case fx_lane_critical_flick:
+		case fx_lane_default:
+		case fx_note_normal_aura:
+		case fx_note_critical_normal_aura:
+		case fx_note_flick_aura:
+		case fx_note_critical_flick_aura:
+		case fx_note_long_aura:
+		case fx_note_critical_long_aura:
+		case fx_note_long_hold_gen:
+		case fx_note_critical_long_hold_gen:
+		case fx_note_long_hold_via_aura:
+		case fx_note_critical_long_hold_via_aura:
+		case fx_note_trace_aura:
+		case fx_note_critical_trace_aura:
+		case fx_note_hold_aura:
+		case fx_note_critical_long_hold_gen_aura:
+			return true;
+		default:
+			return false;
+		}
+	}
+
 	void EffectView::addNoteEffects(const Note& note, const ScoreContext& context, float time)
 	{
 		if (note.friction)
@@ -319,6 +353,9 @@ namespace MikuMikuWorld::Effect
 
 	void EffectView::addEffect(EffectType effect, const Note& note, const ScoreContext& context, float time)
 	{
+		if (simpleEffect && isSuppressed(effect))
+			return;
+
 		EffectPool& pool = effectPools[effect];
 		ParticleController& controller = pool.getNext();
 
@@ -374,6 +411,9 @@ namespace MikuMikuWorld::Effect
 
 	void EffectView::addAuraEffect(EffectType effect, const Note& note, const ScoreContext& context, float time)
 	{
+		if (simpleEffect && isSuppressed(effect))
+			return;
+
 		if (effect == fx_note_hold_aura || effect == fx_note_critical_long_hold_gen_aura)
 		{
 			const HoldNote& holdNote = context.score.holdNotes.at(note.ID);
@@ -403,6 +443,9 @@ namespace MikuMikuWorld::Effect
 
 	void EffectView::addLaneEffect(EffectType effect, const Note& note, const ScoreContext& context, float time)
 	{
+		if (simpleEffect && isSuppressed(effect))
+			return;
+
 		EffectPool& pool = effectPools[effect];
 		for (int i = note.lane; i < note.lane + note.width; i++)
 		{

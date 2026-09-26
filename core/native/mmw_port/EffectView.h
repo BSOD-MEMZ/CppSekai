@@ -146,6 +146,14 @@ namespace MikuMikuWorld::Effect
 		void init();
 		inline bool isInitialized() const { return initialized; }
 
+		// CppSekai: 弱化打击特效（设置 → 画面 → 弱化打击特效）。开启后不再 spawn
+		// 铺在音符下层的轨道光效 / 光环，以及长条持续燃烧的粒子层，只留判定命中的
+		// 主体特效（*_gen）和 flick 闪光（*_flash）。视觉上就是 pjsk 原版演出效果的
+		// 轻量档，代价是 overdraw 少一大截。只影响之后 spawn 什么，已经播出去的
+		// 粒子会自然播完。
+		void setSimpleEffect(bool simple) { simpleEffect = simple; }
+		bool isSimpleEffect() const { return simpleEffect; }
+
 		inline bool isNoteEffectPlayed(int noteId) const
 		{
 			return playedEffectsNoteIds.find(noteId) != playedEffectsNoteIds.end();
@@ -154,8 +162,12 @@ namespace MikuMikuWorld::Effect
 	private:
 		Texture* effectsTex{ nullptr };
 		bool initialized{ false };
+		bool simpleEffect{ false };
 		std::map<EffectType, EffectPool> effectPools;
 		std::set<int> playedEffectsNoteIds;
+
+		// 弱化特效时被整层跳过的类型（见 setSimpleEffect）。
+		bool isSuppressed(EffectType effect) const;
 
 		void drawEffectsInternal(EmitterInstance& emitter, Renderer* renderer, float time);
 		void drawUnderNoteEffectsInternal(EmitterInstance& emitter, Renderer* renderer, float time);

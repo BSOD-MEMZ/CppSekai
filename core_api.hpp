@@ -46,6 +46,12 @@ int getQuadCount();
 // Player mode turns that off and calls triggerNoteEffect() per judged hit.
 void setEffectAutoplay(bool enabled);
 
+// CppSekai addition: 弱化打击特效。只留一次判定里最基础的那一层——判定命中的
+// 主体特效（*_gen）和 flick 闪光（*_flash）；不再播放轨道光效、铺在音符下层的
+// 光环、以及长条持续燃烧的粒子。给核显机器省填充率，视觉上对应 pjsk 原版演出
+// 效果的轻量档。随时可切。
+void setSimpleEffect(bool enabled);
+
 // CppSekai addition: long notes the player let go of early are drawn
 // translucent until the lane is held again (pjsk behaviour). Republish the
 // whole list every frame; an empty list clears it. Keys are flat

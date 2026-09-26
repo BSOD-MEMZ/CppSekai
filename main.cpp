@@ -1033,6 +1033,7 @@ int main(int argc, char** argv)
     int fpsLimit = 60;  // extra frame cap on top of vsync; 0 = vsync only
     bool showProgressBar = true; // subtle top-edge playback bar (settings toggle)
     bool hideTouchFeedback = true; // hide the system touch ripple over our window
+    bool simpleEffects = false;    // 弱化打击特效: basic hit layer only (see EffectView)
 
     // Settings that also live in userdata.json (loaded below). Flags present on
     // the command line win over the saved values; these record which were given.
@@ -1582,6 +1583,7 @@ int main(int argc, char** argv)
     }
     showProgressBar = userSettings.showProgressBar;
     hideTouchFeedback = userSettings.hideTouchFeedback;
+    simpleEffects = userSettings.simpleEffects;
     // Flick debug log (settings > 判定 > Flick 调试日志). Truncates the file at
     // boot when it is on, so every run starts with a clean log.
     gFlickLog.setEnabled(userSettings.debugLog || gForceFlickLog);
@@ -2048,6 +2050,9 @@ int main(int argc, char** argv)
     // Player mode drives the core's hit effects from the judgement engine
     // instead of letting the chart timeline fire them (autoplay).
     core_api::setEffectAutoplay(autoPlay);
+    // 弱化打击特效 (settings > 画面): only the basic hit layer is spawned.
+    core_api::setSimpleEffect(simpleEffects);
+    std::printf("[settings] simple effects %s\n", simpleEffects ? "on" : "off");
     bootLog("chart core");
     drawSplash(0.85f, "preparing");
 
@@ -2829,6 +2834,7 @@ int main(int argc, char** argv)
         }
         userSettings.showProgressBar = showProgressBar;
         userSettings.hideTouchFeedback = hideTouchFeedback;
+        userSettings.simpleEffects = simpleEffects;
         // (userSettings.multiplayer is a launch-time switch: the room is joined
         // at startup, so --party never writes it back into the profile.)
         const game::JudgementWindows& w = judgement.windows();
@@ -3013,6 +3019,8 @@ int main(int argc, char** argv)
         autoPlay = userSettings.autoplay;
         showProgressBar = userSettings.showProgressBar;
         hideTouchFeedback = userSettings.hideTouchFeedback;
+        simpleEffects = userSettings.simpleEffects;
+        core_api::setSimpleEffect(simpleEffects);
         gFlickLog.setEnabled(userSettings.debugLog || gForceFlickLog); // the new profile's own setting
 #ifdef _WIN32
         applyTouchFeedback(window, hideTouchFeedback);
@@ -3688,6 +3696,21 @@ int main(int argc, char** argv)
                         game::setSelectBackdrop(backdropTex, backdropW, backdropH, bgDimV);
                         persistUserData();
                     }
+                }
+                contentLeft();
+                // 弱化打击特效: pjsk's light effect profile. Only the basic layer
+                // of a hit burst survives - the judgement spark and a flick's
+                // flash - so the lane lights, the auras drawn under the notes and
+                // the particles a long note burns while held all go away. It is
+                // also the single biggest cut in per-frame overdraw, which is
+                // what a weak integrated GPU feels first. Takes effect on the
+                // next spawned particle; ones already flying finish their life.
+                bool simpleFxBox = simpleEffects;
+                ui::checkBox("弱化打击特效", &simpleFxBox, interior);
+                if (simpleFxBox != simpleEffects) {
+                    simpleEffects = simpleFxBox;
+                    core_api::setSimpleEffect(simpleEffects);
+                    persistUserData();
                 }
                 contentLeft();
                 bool hideTouchBox = hideTouchFeedback;
@@ -6076,6 +6099,34 @@ int main(int argc, char** argv)
             ImGui::GetIO().DisplayFramebufferScale = ImVec2(1.0f, 1.0f);
         }
         ImGui::NewFrame();
+
+        // Windows IME: SDL only hands the composition / candidate window to the
+        // app while a text input is *active*, and ImGui's SDL2 backend stopped
+        // calling SDL_StartTextInput() back in 2023 (imgui_impl_sdl2.cpp,
+        // changelog 2023-04-06) - it now only feeds SDL_SetTextInputRect(),
+        // which SDL ignores while SDL_IsTextInputActive() is false. Result: the
+        // candidate list had no position to show at, and fullscreen (where the
+        // window's top-left corner is the screen's) it ended up off screen, so
+        // typing a song name looked like it did nothing. Toggle on the edge of
+        // WantTextInput; the rect itself is handed over by ImGui during
+        // Render() via ImGui_ImplSDL2_PlatformSetImeData().
+        {
+            static bool textInputActive = false;
+            const bool wantTextInput = ImGui::GetIO().WantTextInput;
+            if (wantTextInput != textInputActive) {
+                textInputActive = wantTextInput;
+                if (wantTextInput) {
+                    SDL_StartTextInput();
+                    // One line per focus change: this is the only thing that can
+                    // be checked from a log (whether the candidate list shows up
+                    // is for the player's eyes - it needs a real IME).
+                    std::printf("[ime] text input on (candidate list enabled)\n");
+                    std::fflush(stdout);
+                } else {
+                    SDL_StopTextInput();
+                }
+            }
+        }
 
         if (state == AppState::Select) {
             // ----------------------------------------------------------

@@ -3109,6 +3109,15 @@ extern "C"
         mmw_preview::gRuntime.effectsAutoplay = enabled != 0;
     }
 
+    // CppSekai addition (no upstream equivalent): 弱化打击特效。开启后 EffectView
+    // 不再 spawn 轨道光效 / 光环 / 长条持续燃烧的粒子，只留判定命中的主体特效
+    // (*_gen) 和 flick 闪光 (*_flash) —— 也就是一次判定里最基础的那一层
+    // （设置 → 画面 → 弱化打击特效）。随时可切；已播出去的粒子会自然播完。
+    EMSCRIPTEN_KEEPALIVE void setSimpleEffect(int enabled)
+    {
+        mmw_preview::gRuntime.effectView.setSimpleEffect(enabled != 0);
+    }
+
     // CppSekai addition (no upstream equivalent): tells the renderer which long
     // notes the player let go of early, so their remaining body is drawn
     // translucent like pjsk does. `keys` is a flat array of (lane center, hold

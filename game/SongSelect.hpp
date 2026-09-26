@@ -162,6 +162,14 @@ struct UserSettings
     bool showProgressBar = true;
     // Hide the Windows touch ripple over our window (per-window setting).
     bool hideTouchFeedback = true;
+    // 弱化打击特效 (weaken hit effects): keep only the most basic layer of a hit
+    // burst - the judgement spark (*_gen) and a flick's flash (*_flash) - and
+    // skip the lane lights, the auras drawn under the notes, and the particles
+    // a long note burns while it is held. Same idea as pjsk's light effect
+    // profile, and it drops a large slice of the per-frame overdraw, which is
+    // what a weak integrated GPU notices first. Default off (full effects).
+    // Implementation: core/native/mmw_port/EffectView.cpp (isSuppressed).
+    bool simpleEffects = false;
     // Judgement windows, in ms. These defaults are the 宽松 preset (the official
     // set opened up by 30 ms on every window); 设置 > 判定 > 判定预设 offers
     // 标准 (the bare official set) and 严格 (30 ms tighter) next to it.

@@ -1013,6 +1013,7 @@ void loadUserData(const std::string& path, UserSettings& settings,
             settings.multiplayer = s.value("multiplayer", settings.multiplayer);
             settings.showProgressBar = s.value("showProgressBar", settings.showProgressBar);
             settings.hideTouchFeedback = s.value("hideTouchFeedback", settings.hideTouchFeedback);
+            settings.simpleEffects = s.value("simpleEffects", settings.simpleEffects);
             settings.perfectMs = s.value("perfectMs", settings.perfectMs);
             settings.greatMs = s.value("greatMs", settings.greatMs);
             settings.goodMs = s.value("goodMs", settings.goodMs);
@@ -1154,6 +1155,7 @@ void saveUserData(const std::string& path, const UserSettings& settings,
         {"multiplayer", settings.multiplayer},
         {"showProgressBar", settings.showProgressBar},
         {"hideTouchFeedback", settings.hideTouchFeedback},
+        {"simpleEffects", settings.simpleEffects},
         {"perfectMs", settings.perfectMs},
         {"greatMs", settings.greatMs},
         {"goodMs", settings.goodMs},
