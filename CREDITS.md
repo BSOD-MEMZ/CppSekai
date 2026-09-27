@@ -46,7 +46,7 @@ CppSekai (AGPL-3.0-only)  ← 本仓库        加平台层、判定引擎、UI�
 **AGPL 传给整个仓库**：本仓库整体是 AGPL-3.0-only，改动必须继续开源。这不是选择，
 是上游许可的强制要求。
 
-> ⚠️ **已知的合规小缺口**：`core/native/src/mmw_preview.cpp` 与 `mmw_port/**`
+> **已知的合规小缺口**：`core/native/src/mmw_preview.cpp` 与 `mmw_port/**`
 > 本身**没有文件头许可声明**。仓库根的 `LICENSE` + `COPYRIGHT.md` 覆盖了整仓，
 > 法律上够用，但上游文件自带的版权行在移植时被删掉了。若要严格合规，应该在这两处
 > 补一段「本文件派生自 XXX（年份，作者），依据 XXX 许可」的头注释。
