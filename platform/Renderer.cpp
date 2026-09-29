@@ -311,6 +311,8 @@ bool Renderer::init(int width, int height, std::string& outError)
     mHeight = std::max(1, height);
     mWindowW = mWidth;
     mWindowH = mHeight;
+    mCanvasW = mWidth;
+    mCanvasH = mHeight;
 
     if (!createPrograms(outError)) {
         return false;
@@ -364,8 +366,23 @@ void Renderer::resize(int width, int height)
     mWindowW = std::max(1, width);
     mWindowH = std::max(1, height);
     if (!mOffscreen) {
-        mWidth = mWindowW;
-        mHeight = mWindowH;
+        // Straight into the window: the picture is composed at the *logical*
+        // size and the viewport stretches it over the pixel size. Same picture as
+        // a 100% display, only sampled at the display's real resolution instead
+        // of being bitmap stretched by Windows.
+        mWidth = mCanvasW;
+        mHeight = mCanvasH;
+        buildStaticVertices();
+    }
+}
+
+void Renderer::setCanvasSize(int width, int height)
+{
+    mCanvasW = std::max(1, width);
+    mCanvasH = std::max(1, height);
+    if (!mOffscreen && (mWidth != mCanvasW || mHeight != mCanvasH)) {
+        mWidth = mCanvasW;
+        mHeight = mCanvasH;
         buildStaticVertices();
     }
 }
@@ -384,8 +401,8 @@ void Renderer::setRenderTargetSize(int width, int height)
             }
             mOffscreen = false;
         }
-        mWidth = mWindowW;
-        mHeight = mWindowH;
+        mWidth = mCanvasW;
+        mHeight = mCanvasH;
         buildStaticVertices();
         return;
     }
@@ -425,8 +442,8 @@ void Renderer::setRenderTargetSize(int width, int height)
         mFbo = 0;
         mFboTexture = 0;
         mOffscreen = false;
-        mWidth = mWindowW;
-        mHeight = mWindowH;
+        mWidth = mCanvasW;
+        mHeight = mCanvasH;
         buildStaticVertices();
         return;
     }
@@ -438,22 +455,32 @@ void Renderer::setRenderTargetSize(int width, int height)
     buildStaticVertices();
 }
 
-float Renderer::outputScale() const
+float Renderer::outputScaleIn(int windowW, int windowH) const
 {
     if (!mOffscreen || mWidth <= 0 || mHeight <= 0) {
         return 1.0f;
     }
-    return std::min(static_cast<float>(mWindowW) / static_cast<float>(mWidth),
-        static_cast<float>(mWindowH) / static_cast<float>(mHeight));
+    return std::min(static_cast<float>(windowW) / static_cast<float>(mWidth),
+        static_cast<float>(windowH) / static_cast<float>(mHeight));
+}
+
+float Renderer::outputScale() const
+{
+    return outputScaleIn(mCanvasW, mCanvasH);
+}
+
+void Renderer::outputRectIn(int windowW, int windowH, int& x, int& y, int& w, int& h) const
+{
+    const float scale = outputScaleIn(windowW, windowH);
+    w = std::max(1, static_cast<int>(mWidth * scale));
+    h = std::max(1, static_cast<int>(mHeight * scale));
+    x = (windowW - w) / 2;
+    y = (windowH - h) / 2;
 }
 
 void Renderer::outputRect(int& x, int& y, int& w, int& h) const
 {
-    const float scale = outputScale();
-    w = std::max(1, static_cast<int>(mWidth * scale));
-    h = std::max(1, static_cast<int>(mHeight * scale));
-    x = (mWindowW - w) / 2;
-    y = (mWindowH - h) / 2;
+    outputRectIn(mCanvasW, mCanvasH, x, y, w, h);
 }
 
 void Renderer::presentFrame()
@@ -474,7 +501,11 @@ void Renderer::presentFrame()
     int y = 0;
     int w = 0;
     int h = 0;
-    outputRect(x, y, w, h);
+    // The letterbox rect is worked out in the real pixel size: that is the
+    // framebuffer this blit goes into, and the render target keeps its own
+    // aspect ratio, so the bars are correct at any DPI scale. (outputRect() is
+    // the same thing in logical points, for pointer mapping.)
+    outputRectIn(mWindowW, mWindowH, x, y, w, h);
     // Window pixels -> clip space. The offscreen buffer has the same
     // orientation as the window (origin bottom-left), so uv (0,0) is its
     // bottom-left corner and nothing has to be flipped.
@@ -1281,7 +1312,16 @@ void Renderer::renderFrame(const float* packedQuads, int quadCount, float backgr
     // scene draws afterwards brings its own alpha back to 1.
     glClearColor(0.03f, 0.03f, 0.05f, mTransparentBackground ? 0.0f : 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
-    glViewport(0, 0, mWidth, mHeight);
+    // Offscreen: the target *is* the render size. Straight to the window: the
+    // viewport is the window's pixel size while the composition is laid out in
+    // logical points, i.e. the picture is rendered at the display's real
+    // resolution instead of being stretched by the OS (same aspect ratio, so
+    // only the sampling rate changes).
+    if (mOffscreen) {
+        glViewport(0, 0, mWidth, mHeight);
+    } else {
+        glViewport(0, 0, mWindowW, mWindowH);
+    }
 
     drawStaticScene(backgroundBrightness, visibility);
     if (visibility <= 0.001f) {

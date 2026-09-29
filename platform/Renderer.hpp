@@ -21,8 +21,19 @@ class Renderer
     Renderer();
     ~Renderer();
 
+    // `width`/`height` are the *logical* window size (SDL_GetWindowSize - DPI
+    // scaled points, see setCanvasSize). resize() then reports the real pixel
+    // size of the same window.
     bool init(int width, int height, std::string& outError);
+    // The real window changed. `width`/`height` are the window's *pixel* size
+    // (SDL_GL_GetDrawableSize), which is not SDL_GetWindowSize on a display with
+    // a DPI scale factor: there a 1280x720 window is 1920x1080 pixels at 150%.
     void resize(int width, int height);
+    // Logical window size (SDL_GetWindowSize). Layout, SDL events, ImGui and the
+    // letterbox math all live in these units; only the GL viewport and the
+    // screenshot use the pixels, so that the picture is *sampled* at the
+    // display's real resolution instead of being bitmap-stretched by Windows.
+    void setCanvasSize(int width, int height);
 
     // -----------------------------------------------------------------------
     // Output size (the "render mode" setting).
@@ -35,15 +46,15 @@ class Renderer
     // change what the game draws. Pass (0, 0) to go back to window-sized.
     //
     // While offscreen, width()/height() keep reporting the *render* size, which
-    // is what the playfield projection and the UI layout must use; the real
-    // window size is windowWidth()/windowHeight().
+    // is what the playfield projection and the UI layout must use.
     // -----------------------------------------------------------------------
     void setRenderTargetSize(int width, int height);
     [[nodiscard]] bool offscreen() const { return mOffscreen; }
-    [[nodiscard]] int windowWidth() const { return mWindowW; }
-    [[nodiscard]] int windowHeight() const { return mWindowH; }
-    // Uniform scale from render pixels to window pixels (1.0 when not
-    // offscreen) and the letterbox rect in window pixels, top-left based.
+    [[nodiscard]] int windowWidth() const { return mCanvasW; }
+    [[nodiscard]] int windowHeight() const { return mCanvasH; }
+    // Uniform scale from render pixels to window *points* (1.0 when not
+    // offscreen) and the letterbox rect in window points, top-left based. Used
+    // to map pointer positions, so these stay in the logical space.
     [[nodiscard]] float outputScale() const;
     void outputRect(int& x, int& y, int& w, int& h) const;
     // Presents the offscreen buffer (no-op when drawing straight to the
@@ -172,12 +183,23 @@ class Renderer
 
     std::array<float, 2> worldToClip(float worldX, float worldY) const;
 
+    // The same two, for an explicit target size: the public ones are in logical
+    // window points, presentFrame() letterboxes into the real pixel size.
+    float outputScaleIn(int windowW, int windowH) const;
+    void outputRectIn(int windowW, int windowH, int& x, int& y, int& w, int& h) const;
+
     int mWidth = 1;
     int mHeight = 1;
-    // Real drawable size of the window. Equal to mWidth/mHeight unless an
-    // offscreen render target is installed.
+    // Real drawable size of the window in pixels (SDL_GL_GetDrawableSize). On a
+    // display with a DPI scale factor this is bigger than mCanvasW/H, and it is
+    // what the GL viewport uses.
     int mWindowW = 1;
     int mWindowH = 1;
+    // Logical window size in DPI scaled points (SDL_GetWindowSize). Equal to
+    // mWindowW/H at 100% scaling. The composition is laid out in these units,
+    // and so are pointer positions, so the letterbox math uses them too.
+    int mCanvasW = 1;
+    int mCanvasH = 1;
     bool mOffscreen = false;
     GLuint mFbo = 0;
     GLuint mFboTexture = 0;

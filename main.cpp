@@ -933,6 +933,40 @@ bool aeroGlassAvailable()
 #endif
 }
 
+// Shrinks a *window* size until it fits on the primary display, in SDL
+// coordinates - which are DPI scaled points, so on a 4K panel at 300% the whole
+// desktop is only 1280x720 ("能调的上限居然超过了我的电脑分辨率上限"). A window
+// bigger than that cannot be read or moved in one piece, and the size can come
+// from a profile written on a bigger machine.
+//
+// Only a window that exceeds the display is touched: a window the size of the
+// screen (1920x1080 windowed on a 1080p desktop, the documented headless setup)
+// is left exactly as it is. When it does have to shrink, `margin` keeps the
+// title bar on screen. `usableArea` limits to the area the taskbar leaves free,
+// which is what the fullscreen splash needs; a normal window is only bounded by
+// the screen itself. Returns true when the size changed.
+bool fitWindowToDesktop(int& w, int& h, int margin, bool usableArea)
+{
+    SDL_Rect limit{};
+    const bool queried = usableArea
+        ? (SDL_GetDisplayUsableBounds(0, &limit) == 0 && limit.w > 0 && limit.h > 0)
+        : (SDL_GetDisplayBounds(0, &limit) == 0 && limit.w > 0 && limit.h > 0);
+    if (!queried) {
+        return false;
+    }
+    if (w <= limit.w && h <= limit.h) {
+        return false;
+    }
+    const int fitW = std::max(320, limit.w - margin);
+    const int fitH = std::max(240, limit.h - margin);
+    std::printf("[window] %dx%d does not fit the %dx%d desktop, using %dx%d\n", w, h, limit.w,
+        limit.h, std::min(w, fitW), std::min(h, fitH));
+    std::fflush(stdout);
+    w = std::min(w, fitW);
+    h = std::min(h, fitH);
+    return true;
+}
+
 int main(int argc, char** argv)
 {
 #ifdef _WIN32
@@ -1312,6 +1346,55 @@ int main(int argc, char** argv)
         std::printf("[boot] %-22s %7.1f ms\n", stage, bootMs());
     };
 
+    // ------------------------------------------------------------------
+    // DPI
+    // ------------------------------------------------------------------
+    // SDL does not declare the process DPI aware unless it is asked to (the
+    // default of SDL_HINT_WINDOWS_DPI_AWARENESS is "unaware"), and an unaware
+    // process is *bitmap stretched* by Windows on a display with a scale factor:
+    // the game renders 1280x720 and the OS blows that up to 3840x2160 on a 4K
+    // panel at 300%. That is the "4K 下极糊" report, and it also explains the
+    // other half of it - on such a display the *virtual* desktop is only
+    // 1280x720 (3840/300%), so a windowed 1280x720 window covers the whole
+    // screen no matter what, and anything bigger cannot be shown in one piece.
+    // Nothing inside the game can fix either one, because the scaling happens
+    // after our last pixel is handed over.
+    //
+    // SDL_HINT_WINDOWS_DPI_SCALING=1 is the documented fix: it declares
+    // per-monitor-v2 DPI awareness *and* switches SDL's coordinates to DPI
+    // scaled points, which keeps the meaning of a "1280x720 window" the same as
+    // on a 100% display. SDL_GetWindowSize then reports 1280x720 for a client
+    // area of 1920x1080 real pixels at 150%, SDL_GL_GetDrawableSize reports the
+    // 1920x1080. Everything the game lays out (and every SDL event, and ImGui)
+    // stays in the points; the GL viewport, the screenshot and ImGui's font
+    // rasterisation use the pixels - see the canvas/drawable split in
+    // platform/Renderer.hpp, and the DisplayFramebufferScale note in the main
+    // loop. Result: the same picture as before, sampled at the display's real
+    // resolution.
+    //
+    // Gated on SetProcessDpiAwarenessContext, i.e. Windows 10 1607+. On Windows
+    // 7/8.x the hint would fall back to plain system DPI awareness and no
+    // scaling math, which on a scaled Win7 desktop would silently shrink the UI
+    // by the scale factor - a change on a platform this project still ships to
+    // but cannot test, for no gain (the reports are all Win10/11). There it
+    // stays exactly as it was. CPSEKAI_DPI_OFF=1 forces it off, which is also
+    // how to A/B the fix on one machine.
+    bool dpiScaling = false;
+#ifdef _WIN32
+    {
+        const HMODULE user32 = GetModuleHandleA("user32.dll");
+        const bool perMonitorV2 = user32 != nullptr
+            && GetProcAddress(user32, "SetProcessDpiAwarenessContext") != nullptr;
+        dpiScaling = perMonitorV2 && std::getenv("CPSEKAI_DPI_OFF") == nullptr;
+        std::printf("[dpi] scaling %s (%s)\n", dpiScaling ? "on" : "off",
+            dpiScaling ? "per-monitor v2, SDL uses DPI scaled points"
+                       : (perMonitorV2 ? "CPSEKAI_DPI_OFF" : "needs SetProcessDpiAwarenessContext (Win10 1607+)"));
+    }
+#endif
+    if (dpiScaling) {
+        SDL_SetHint(SDL_HINT_WINDOWS_DPI_SCALING, "1");
+    }
+
     SDL_SetMainReady();
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER) != 0) {
         std::fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
@@ -1655,11 +1738,19 @@ int main(int argc, char** argv)
     // native size), so shrinking it by a few pixels is invisible, and it goes
     // fullscreen at the end of the boot sequence anyway.
     if (windowMode == 2 && (splashStyle == 0 || glassBackground)) {
-        SDL_Rect usable{};
-        if (SDL_GetDisplayUsableBounds(0, &usable) == 0 && usable.w > 0 && usable.h > 0) {
-            windowW = std::min(windowW, std::max(320, usable.w - 16));
-            windowH = std::min(windowH, std::max(240, usable.h - 16));
-        }
+        fitWindowToDesktop(windowW, windowH, 16, true);
+    } else if (windowMode != 2 && !widthGiven && !heightGiven) {
+        // A windowed window that does not fit on the desktop cannot be read or
+        // moved in one piece - and the saved size can easily be bigger than the
+        // screen: a profile carried over from a bigger machine, a preset up to
+        // 2560x1440, or any of them on a display with a DPI scale factor (at
+        // 300% scaling 1280x720 *is* the whole desktop, which is what the forum
+        // reports were about). Only the *window* is clamped: resW/resH is the
+        // render size of the fixed render mode and keeps the chosen value (a
+        // supersampling target is allowed to be bigger than the window).
+        // An explicit --width/--height is left alone: the headless recipes
+        // deliberately ask for windows wider than the screen (`--width 2600`).
+        fitWindowToDesktop(windowW, windowH, 48, false);
     }
     Uint32 windowFlags = SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI;
     // windowed keeps the frame; borderless/fullscreen hide it anyway. The
@@ -2002,10 +2093,17 @@ int main(int argc, char** argv)
         chartCandidates.push_back(std::string("charts"));
     }
 
+    // Real pixel size of the client area, which is *not* windowW/windowH on a
+    // display with a DPI scale factor (see the DPI block before SDL_Init). The
+    // game composes in points, the GL viewport and the screenshot use pixels.
+    int drawableW = windowW;
+    int drawableH = windowH;
+    SDL_GL_GetDrawableSize(window, &drawableW, &drawableH);
     if (!renderer.init(windowW, windowH, error)) {
         std::fprintf(stderr, "renderer init failed: %s\n", error.c_str());
         return 1;
     }
+    renderer.resize(drawableW, drawableH);
     bootLog("renderer init");
     // Load just the stage first and show it: from here on the window shows
     // the pjsk background instead of a black rectangle while the rest of the
@@ -2074,9 +2172,13 @@ int main(int argc, char** argv)
     // layout, input) works in `windowW x windowH`; in the fixed-resolution
     // render mode that is the configured resolution and the picture is scaled
     // into the real window, letterboxed. `winPixelW/H` always hold the real
-    // window, which is what SDL events and the GL viewport are in.
-    int winPixelW = windowW;
-    int winPixelH = windowH;
+    // window *pixels* (the GL viewport and the screenshot), while the layout is
+    // in DPI scaled points (`windowW x windowH`) - the two are equal at 100%
+    // display scaling and differ by the scale factor above that.
+    int winPixelW = drawableW;
+    int winPixelH = drawableH;
+    int winCanvasW = windowW;
+    int winCanvasH = windowH;
     auto applyRenderMode = [&]() {
         if (userSettings.renderScale == 1) {
             renderer.setRenderTargetSize(std::max(320, resW), std::max(240, resH));
@@ -2085,9 +2187,13 @@ int main(int argc, char** argv)
         }
         windowW = renderer.width();
         windowH = renderer.height();
+        winCanvasW = renderer.windowWidth();
+        winCanvasH = renderer.windowHeight();
         core_api::resize(windowW, windowH, 1.0f);
-        std::printf("[window] window=%dx%d render=%dx%d scaleMode=%s\n", winPixelW, winPixelH,
-            windowW, windowH, userSettings.renderScale == 1 ? "fixed" : "window");
+        std::printf("[window] window=%dx%d points=%dx%d render=%dx%d scaleMode=%s dpi=%.2f\n",
+            winPixelW, winPixelH, winCanvasW, winCanvasH, windowW, windowH,
+            userSettings.renderScale == 1 ? "fixed" : "window",
+            winCanvasW > 0 ? static_cast<float>(winPixelW) / static_cast<float>(winCanvasW) : 1.0f);
         std::fflush(stdout);
     };
     applyRenderMode();
@@ -3640,7 +3746,14 @@ int main(int argc, char** argv)
                     userSettings.windowWidth = resW;
                     userSettings.windowHeight = resH;
                     if (windowMode != 2) {
-                        SDL_SetWindowSize(window, resW, resH);
+                        // The window is clamped to the desktop (same rule as at
+                        // boot); resW/resH - the render size - keeps the chosen
+                        // value, so choosing e.g. 2560x1440 for the fixed render
+                        // mode still works on a smaller screen.
+                        int winW = resW;
+                        int winH = resH;
+                        fitWindowToDesktop(winW, winH, 48, false);
+                        SDL_SetWindowSize(window, winW, winH);
                         SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
                     }
                     applyRenderMode();
@@ -5574,9 +5687,18 @@ int main(int argc, char** argv)
                     } else if (event.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
                         // The real window changed; the render size only follows
                         // it when the render mode is "window sized".
-                        winPixelW = event.window.data1;
-                        winPixelH = event.window.data2;
+                        // The payload is in DPI scaled points, and SDL also sends
+                        // this event when only the DPI changed (dragging the
+                        // window to a monitor with another scale factor, or
+                        // changing the display scaling while the game runs): then
+                        // the point size stays and the *pixel* size moves. Query
+                        // both instead of trusting the payload for either.
+                        int pointsW = 0;
+                        int pointsH = 0;
+                        SDL_GetWindowSize(window, &pointsW, &pointsH);
+                        SDL_GL_GetDrawableSize(window, &winPixelW, &winPixelH);
                         renderer.resize(winPixelW, winPixelH);
+                        renderer.setCanvasSize(pointsW, pointsH);
                         applyRenderMode();
                     } else if (event.window.event == SDL_WINDOWEVENT_FOCUS_LOST
                         || event.window.event == SDL_WINDOWEVENT_LEAVE) {
