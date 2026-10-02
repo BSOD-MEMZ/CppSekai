@@ -37,10 +37,6 @@ imgui.ini
 # Local backups of pre-shrink assets (the originals also live in git history).
 .workbuddy/backup/
 
-# 宣传片（PV）工作区：原始帧序列 / 中间片 / 成片 / 抽取帧，都是几十 GB 的临时产物。
-# 交付物（成片 mp4 与分镜脚本）在这儿就地放着，需要长期保留时再单独挑出来。
-_pv/
-
 # Python bytecode from the .workbuddy/tools helpers
 __pycache__/
 *.pyc

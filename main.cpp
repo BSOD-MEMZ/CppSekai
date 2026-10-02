@@ -1038,30 +1038,6 @@ int main(int argc, char** argv)
     std::string screenshotPath; // if set: dump a frame and exit (headless check)
     double screenshotTimeSec = 4.0;
     bool screenshotTimeGiven = false; // --screenshot-time was passed explicitly
-
-    // ------------------------------------------------------------------
-    // Promo capture (--capture). Same headless spirit as --screenshot, but it
-    // dumps a *sequence* of frames instead of one, and it drives the whole game
-    // off a fixed-step virtual clock.
-    //
-    // Why a virtual clock: --screenshot renders a single frame at a chart time
-    // that the audio device clock has to reach in real time, so a 30 s clip
-    // costs 30 s of wall clock and the frame times are whatever the OS scheduler
-    // felt like. A promo needs neither - it needs every frame 1/60 s after the
-    // last one, forever. So in capture mode the wall clock is replaced:
-    //   * wallSongTime()/songClock() read the virtual clock
-    //   * ImGui's DeltaTime is forced to the same step (every ui::anim, every
-    //     card entrance, every hover growth is driven by it)
-    //   * the audio device is never started (BGM is added at edit time)
-    // The output is raw bottom-up RGBA, one file per run; ffmpeg turns it into
-    // video (`-vf vflip` puts it right side up).
-    // ------------------------------------------------------------------
-    std::string captureDir;          // --capture <dir>
-    double captureFps = 60.0;        // --capture-fps
-    double captureStartSec = 0.0;    // --capture-start <sec> (virtual clock)
-    double captureEndSec = 1e9;      // --capture-end <sec>
-    std::string captureScriptPath;   // --script <file>: scripted input
-
     double leadIn = 6.0; // intro card (4s) + playfield fade-in, then the music
     bool dumpJudgeSheet = false;
     bool testHits = false; // debug: fire hit effects without player input
@@ -1235,19 +1211,6 @@ int main(int argc, char** argv)
         } else if (arg == "--screenshot-time" && i + 1 < utf8Argc) {
             screenshotTimeSec = std::atof(utf8Argv[++i]);
             screenshotTimeGiven = true;
-        } else if (arg == "--capture" && i + 1 < utf8Argc) {
-            captureDir = utf8Argv[++i];
-        } else if (arg == "--capture-fps" && i + 1 < utf8Argc) {
-            captureFps = std::atof(utf8Argv[++i]);
-            if (captureFps < 1.0) {
-                captureFps = 60.0;
-            }
-        } else if (arg == "--capture-start" && i + 1 < utf8Argc) {
-            captureStartSec = std::atof(utf8Argv[++i]);
-        } else if (arg == "--capture-end" && i + 1 < utf8Argc) {
-            captureEndSec = std::atof(utf8Argv[++i]);
-        } else if (arg == "--script" && i + 1 < utf8Argc) {
-            captureScriptPath = utf8Argv[++i];
         } else if (arg == "--lead-in" && i + 1 < utf8Argc) {
             leadIn = std::atof(utf8Argv[++i]);
             leadInGiven = true;
@@ -1358,7 +1321,7 @@ int main(int argc, char** argv)
 
     // GUI-subsystem binaries have no console; when running headless checks
     // route stdout/stderr into a log file next to the screenshot.
-    if (!screenshotPath.empty() || !captureDir.empty()) {
+    if (!screenshotPath.empty()) {
         std::FILE* logFile = std::fopen("cppsekai.log", "w");
         if (logFile != nullptr) {
             std::fclose(logFile);
@@ -2636,17 +2599,7 @@ int main(int argc, char** argv)
     // Clock without BGM (auto mode / missing audio): wall clock. In 多人游玩
     // this is also the follower's raw clock: armed on the instant the host
     // published, then steered onto the host's audio clock (see songClock()).
-    //
-    // In capture mode the same formula reads a fixed-step virtual clock instead,
-    // so the picture advances exactly 1/fps per rendered frame no matter how
-    // long the frame took to render (a raw-frame dump is far slower than 16 ms).
-    const bool captureMode = !captureDir.empty();
-    const double captureDt = 1.0 / captureFps;
-    double captureClockSec = 0.0;
     auto wallSongTime = [&]() {
-        if (captureMode) {
-            return -leadInSec + captureClockSec;
-        }
         return -leadInSec + static_cast<double>(SDL_GetPerformanceCounter() - perfStart) / static_cast<double>(perfFreq);
     };
     // `at` (a QPC value, 0 = right now) arms the clock on an absolute instant
@@ -2654,12 +2607,7 @@ int main(int argc, char** argv)
     // chart time 0 together.
     auto beginSessionClockAt = [&](Uint64 at) {
         perfStart = at != 0 ? at : SDL_GetPerformanceCounter();
-        // Capture mode: never start the BGM device. The music is laid on at edit
-        // time, and a running device would drag the chart clock back onto real
-        // time - precisely what the virtual clock exists to avoid.
-        if (!captureMode) {
-            audio.start(leadInSec);
-        }
+        audio.start(leadInSec);
     };
     auto beginSessionClock = [&]() { beginSessionClockAt(0); };
 
@@ -2856,7 +2804,7 @@ int main(int argc, char** argv)
             // 暂停 stop the picture *and* the published clock - without it the
             // host kept publishing an advancing instant while its own window sat
             // still, and every member's chart clock was dragged along with it.
-            frameSongTime = (captureMode || !audio.hasMusic()) ? local : audio.songTime();
+            frameSongTime = audio.hasMusic() ? audio.songTime() : local;
             if (paused && !audio.hasMusic()) {
                 if (!mpHostFreezeValid) {
                     mpHostFreezeTime = frameSongTime;
@@ -2931,9 +2879,6 @@ int main(int argc, char** argv)
     auto songClock = [&]() -> double {
         if (mpFollowing) {
             return frameSongTime;
-        }
-        if (captureMode) {
-            return wallSongTime(); // virtual clock; there is no audio device
         }
         return audio.hasMusic() ? audio.songTime() : wallSongTime();
     };
@@ -5420,247 +5365,6 @@ int main(int argc, char** argv)
         std::fflush(stdout);
     };
 
-    // ------------------------------------------------------------------
-    // --script <file>: scripted input for --capture runs.
-    //
-    // The UI in this game is ImGui, and ImGui only reacts to events that come
-    // through the SDL queue - an external PostMessage never reaches it (measured
-    // 2026-09-19: clicking the song-select combo / the settings gear through
-    // winmsg did nothing, only SDL-level hot zones answered). Pushing the events
-    // in ourselves is the way in, and because the whole run rides a virtual
-    // clock the result is repeatable frame for frame.
-    //
-    // Grammar (one per line, `#` starts a comment, times are virtual seconds):
-    //     <t> move  <x> <y>                     pointer jump
-    //     <t> glide <x0> <y0> <x1> <y1> <dur>   pointer travel, sampled per frame
-    //     <t> click <x> <y> [button]            move, press, release 0.07 s later
-    //     <t> dbl   <x> <y> [button]            two clicks 0.12 s apart
-    //     <t> down  <x> <y> [button]            press and hold
-    //     <t> up    <x> <y> [button]            release
-    //     <t> wheel <x> <y> <dy>                point the mouse somewhere, scroll
-    //     <t> key   <name>                      press, release 0.07 s later
-    //     <t> keydown <name> / keyup <name>     the halves, for held keys
-    // Key names: letters, digits, up/down/left/right, enter, esc, space, tab, f5.
-    // ------------------------------------------------------------------
-    struct CapInput {
-        double t = 0.0;
-        SDL_Event ev{};
-    };
-    // ImGui's SDL2 backend resolves the target viewport from the event's
-    // windowID and *drops* anything it cannot match - a zero here is why the
-    // first version of this injected clicks into the void.
-    const Uint32 capWindowId = window != nullptr ? SDL_GetWindowID(window) : 0u;
-    std::vector<CapInput> capInputs;
-    if (!captureScriptPath.empty()) {
-        std::FILE* scriptFile = std::fopen(captureScriptPath.c_str(), "rb");
-        if (scriptFile == nullptr) {
-            std::fprintf(stderr, "cannot open --script %s\n", captureScriptPath.c_str());
-        } else {
-            auto keyOf = [](const std::string& name, SDL_Scancode& sc, SDL_Keycode& kc) -> bool {
-                struct Entry {
-                    const char* n;
-                    SDL_Scancode sc;
-                    SDL_Keycode kc;
-                };
-                static const Entry table[] = {
-                    { "enter", SDL_SCANCODE_RETURN, SDLK_RETURN },
-                    { "esc", SDL_SCANCODE_ESCAPE, SDLK_ESCAPE },
-                    { "escape", SDL_SCANCODE_ESCAPE, SDLK_ESCAPE },
-                    { "space", SDL_SCANCODE_SPACE, SDLK_SPACE },
-                    { "tab", SDL_SCANCODE_TAB, SDLK_TAB },
-                    { "up", SDL_SCANCODE_UP, SDLK_UP },
-                    { "down", SDL_SCANCODE_DOWN, SDLK_DOWN },
-                    { "left", SDL_SCANCODE_LEFT, SDLK_LEFT },
-                    { "right", SDL_SCANCODE_RIGHT, SDLK_RIGHT },
-                    { "f5", SDL_SCANCODE_F5, SDLK_F5 },
-                    { "backspace", SDL_SCANCODE_BACKSPACE, SDLK_BACKSPACE },
-                    { "shift", SDL_SCANCODE_LSHIFT, SDLK_LSHIFT },
-                    { "ctrl", SDL_SCANCODE_LCTRL, SDLK_LCTRL },
-                };
-                for (const Entry& e : table) {
-                    if (name == e.n) {
-                        sc = e.sc;
-                        kc = e.kc;
-                        return true;
-                    }
-                }
-                if (name.size() == 1 && name[0] >= 'a' && name[0] <= 'z') {
-                    sc = static_cast<SDL_Scancode>(SDL_SCANCODE_A + (name[0] - 'a'));
-                    kc = SDLK_a + (name[0] - 'a');
-                    return true;
-                }
-                if (name.size() == 1 && name[0] >= '0' && name[0] <= '9') {
-                    sc = static_cast<SDL_Scancode>(SDL_SCANCODE_0 + (name[0] - '0'));
-                    kc = SDLK_0 + (name[0] - '0');
-                    return true;
-                }
-                return false;
-            };
-            auto addMotion = [&](double t, float x, float y) {
-                CapInput in;
-                in.t = t;
-                in.ev.type = SDL_MOUSEMOTION;
-                in.ev.motion.type = SDL_MOUSEMOTION;
-                in.ev.motion.timestamp = static_cast<Uint32>(t * 1000.0);
-                in.ev.motion.windowID = capWindowId;
-                in.ev.motion.which = 0;
-                in.ev.motion.state = 0;
-                in.ev.motion.x = static_cast<Sint32>(x);
-                in.ev.motion.y = static_cast<Sint32>(y);
-                in.ev.motion.xrel = 0;
-                in.ev.motion.yrel = 0;
-                capInputs.push_back(in);
-            };
-            auto addButton = [&](double t, float x, float y, int button, bool down) {
-                CapInput in;
-                in.t = t;
-                in.ev.type = down ? SDL_MOUSEBUTTONDOWN : SDL_MOUSEBUTTONUP;
-                in.ev.button.type = in.ev.type;
-                in.ev.button.timestamp = static_cast<Uint32>(t * 1000.0);
-                in.ev.button.windowID = capWindowId;
-                in.ev.button.which = 0;
-                in.ev.button.button = static_cast<Uint8>(button);
-                in.ev.button.state = down ? SDL_PRESSED : SDL_RELEASED;
-                in.ev.button.clicks = 1;
-                in.ev.button.x = static_cast<Sint32>(x);
-                in.ev.button.y = static_cast<Sint32>(y);
-                capInputs.push_back(in);
-            };
-            auto addKey = [&](double t, SDL_Scancode sc, SDL_Keycode kc, bool down) {
-                CapInput in;
-                in.t = t;
-                in.ev.type = down ? SDL_KEYDOWN : SDL_KEYUP;
-                in.ev.key.type = in.ev.type;
-                in.ev.key.timestamp = static_cast<Uint32>(t * 1000.0);
-                in.ev.key.windowID = capWindowId;
-                in.ev.key.state = down ? SDL_PRESSED : SDL_RELEASED;
-                in.ev.key.repeat = 0;
-                in.ev.key.keysym.scancode = sc;
-                in.ev.key.keysym.sym = kc;
-                in.ev.key.keysym.mod = KMOD_NONE;
-                capInputs.push_back(in);
-            };
-            auto addWheel = [&](double t, float x, float y, int dy) {
-                CapInput in;
-                in.t = t;
-                in.ev.type = SDL_MOUSEWHEEL;
-                in.ev.wheel.type = SDL_MOUSEWHEEL;
-                in.ev.wheel.timestamp = static_cast<Uint32>(t * 1000.0);
-                in.ev.wheel.windowID = capWindowId;
-                in.ev.wheel.which = 0;
-                in.ev.wheel.x = 0;
-                in.ev.wheel.y = dy;
-                in.ev.wheel.direction = SDL_MOUSEWHEEL_NORMAL;
-                in.ev.wheel.preciseX = 0.0f;
-                in.ev.wheel.preciseY = static_cast<float>(dy);
-                capInputs.push_back(in);
-            };
-
-            char lineBuf[1024];
-            int lineNo = 0;
-            int badLines = 0;
-            auto noteBadLine = [&](const std::string& what) {
-                ++badLines;
-                std::fprintf(stderr, "[capture] script line %d ignored (%s)\n", lineNo, what.c_str());
-            };
-            while (std::fgets(lineBuf, sizeof(lineBuf), scriptFile) != nullptr) {
-                ++lineNo;
-                std::string line(lineBuf);
-                const size_t hash = line.find('#');
-                if (hash != std::string::npos) {
-                    line = line.substr(0, hash);
-                }
-                std::istringstream ls(line);
-                double t = 0.0;
-                std::string cmd;
-                if (!(ls >> t >> cmd)) {
-                    continue; // blank or comment-only
-                }
-                const double kHold = 0.07; // press duration for click / key
-                if (cmd == "move") {
-                    float x = 0.0f;
-                    float y = 0.0f;
-                    if (ls >> x >> y) {
-                        addMotion(t, x, y);
-                    }
-                } else if (cmd == "glide") {
-                    float x0 = 0.0f;
-                    float y0 = 0.0f;
-                    float x1 = 0.0f;
-                    float y1 = 0.0f;
-                    double dur = 0.0;
-                    if (ls >> x0 >> y0 >> x1 >> y1 >> dur && dur > 0.0) {
-                        const int steps = std::max(2, static_cast<int>(dur * captureFps));
-                        for (int s = 0; s <= steps; ++s) {
-                            const float u = static_cast<float>(s) / static_cast<float>(steps);
-                            addMotion(t + dur * u, x0 + (x1 - x0) * u, y0 + (y1 - y0) * u);
-                        }
-                    }
-                } else if (cmd == "click" || cmd == "dbl") {
-                    float x = 0.0f;
-                    float y = 0.0f;
-                    int button = 1;
-                    if (ls >> x >> y) {
-                        if (!(ls >> button)) {
-                            button = 1;
-                        }
-                        addMotion(t - 0.001, x, y);
-                        addButton(t, x, y, button, true);
-                        addButton(t + kHold, x, y, button, false);
-                        if (cmd == "dbl") {
-                            addButton(t + 0.12, x, y, button, true);
-                            addButton(t + 0.12 + kHold, x, y, button, false);
-                        }
-                    }
-                } else if (cmd == "down" || cmd == "up") {
-                    float x = 0.0f;
-                    float y = 0.0f;
-                    int button = 1;
-                    if (ls >> x >> y) {
-                        if (!(ls >> button)) {
-                            button = 1;
-                        }
-                        addMotion(t - 0.001, x, y);
-                        addButton(t, x, y, button, cmd == "down");
-                    }
-                } else if (cmd == "wheel") {
-                    float x = 0.0f;
-                    float y = 0.0f;
-                    int dy = 0;
-                    if (ls >> x >> y >> dy) {
-                        addMotion(t - 0.001, x, y);
-                        addWheel(t, x, y, dy);
-                    }
-                } else if (cmd == "key" || cmd == "keydown" || cmd == "keyup") {
-                    std::string name;
-                    SDL_Scancode sc = SDL_SCANCODE_UNKNOWN;
-                    SDL_Keycode kc = SDLK_UNKNOWN;
-                    if ((ls >> name) && keyOf(name, sc, kc)) {
-                        if (cmd == "key") {
-                            addKey(t, sc, kc, true);
-                            addKey(t + kHold, sc, kc, false);
-                        } else {
-                            addKey(t, sc, kc, cmd == "keydown");
-                        }
-                    } else {
-                        noteBadLine("unknown key '" + name + "'");
-                    }
-                } else {
-                    noteBadLine("unknown command '" + cmd + "'");
-                }
-            }
-            std::fclose(scriptFile);
-            std::stable_sort(capInputs.begin(), capInputs.end(),
-                [](const CapInput& a, const CapInput& b) { return a.t < b.t; });
-            std::printf("[capture] script %s: %zu input event(s), %d unrecognised line(s)\n",
-                captureScriptPath.c_str(), capInputs.size(), badLines);
-            std::fflush(stdout);
-        }
-    }
-    size_t capInputIdx = 0;
-    std::FILE* captureFile = nullptr;
-    long long captureFrames = 0;
-
     bool dragFramePacing = false; // true while the window subclass is feeding frames
     // ------------------------------------------------------------------
     // One frame of the main loop, wrapped so it can also be served from inside
@@ -5684,12 +5388,7 @@ int main(int argc, char** argv)
     auto runFrame = [&]() {
     for (bool once = true; once; once = false) {
         const Uint64 nowCounter = SDL_GetPerformanceCounter();
-        // Capture mode: the step is the step, whatever the frame cost. Reading
-        // 8 MB back and writing it out is far slower than 16 ms, so a wall clock
-        // here would turn every clip into a slideshow.
-        lastFrameDeltaSec = captureMode
-            ? captureDt
-            : static_cast<double>(nowCounter - lastFrameCounter) / static_cast<double>(perfFreq);
+        lastFrameDeltaSec = static_cast<double>(nowCounter - lastFrameCounter) / static_cast<double>(perfFreq);
         lastFrameCounter = nowCounter;
         if (uiClock >= fpsNextSampleSec) {
             fpsNextSampleSec = uiClock + 0.25;
@@ -5697,27 +5396,6 @@ int main(int argc, char** argv)
         }
         const float frameDelta = static_cast<float>(lastFrameDeltaSec);
         uiClock += lastFrameDeltaSec;
-        if (captureMode) {
-            captureClockSec += captureDt;
-            // Feed this frame's scripted input in *before* the pump below drains
-            // the queue, so an event lands on the frame its time names.
-            while (capInputIdx < capInputs.size() && capInputs[capInputIdx].t <= captureClockSec) {
-                SDL_Event& ce = capInputs[capInputIdx].ev;
-                if (ce.type == SDL_MOUSEMOTION || ce.type == SDL_MOUSEBUTTONDOWN
-                    || ce.type == SDL_MOUSEBUTTONUP) {
-                    // ImGui's SDL2 backend falls back to SDL_GetGlobalMouseState()
-                    // when the window holds keyboard focus but not mouse focus,
-                    // and that would overwrite the position just injected. Keeping
-                    // the real pointer where the script says makes both paths
-                    // agree regardless of which one the backend takes.
-                    const Sint32 wx = ce.type == SDL_MOUSEMOTION ? ce.motion.x : ce.button.x;
-                    const Sint32 wy = ce.type == SDL_MOUSEMOTION ? ce.motion.y : ce.button.y;
-                    SDL_WarpMouseInWindow(window, wx, wy);
-                }
-                SDL_PushEvent(&ce);
-                ++capInputIdx;
-            }
-        }
 #ifdef _WIN32
         if (glassReapplyWanted) {
             glassReapplyWanted = false;
@@ -6734,11 +6412,6 @@ int main(int argc, char** argv)
 
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplSDL2_NewFrame();
-        // Capture mode: every ui::anim / card entrance / hover growth reads this,
-        // so it has to be the same fixed step the rest of the game uses.
-        if (captureMode) {
-            ImGui::GetIO().DeltaTime = static_cast<float>(captureDt);
-        }
         // Fixed render mode: ImGui has to lay out in the *render* size (it draws
         // into the same offscreen buffer as the scene) instead of the window's.
         // FramebufferScale 1.0 also means the atlas is rasterised at that size
@@ -8628,45 +8301,12 @@ int main(int argc, char** argv)
             running = false;
         }
 
-        // Raw frame dump for --capture. No flip: ffmpeg's `vflip` is cheaper
-        // than a per-frame memcpy here, and the file stays a straight RGBA blob
-        // (`-f rawvideo -pix_fmt rgba -s <w>x<h>`).
-        if (captureMode && captureClockSec >= captureStartSec && captureClockSec < captureEndSec) {
-            const int shotW = winPixelW;
-            const int shotH = winPixelH;
-            if (captureFile == nullptr) {
-                const std::string outPath = captureDir + "/frames.rgba";
-                captureFile = std::fopen(outPath.c_str(), "wb");
-                std::printf("[capture] size=%dx%d fps=%.4f dt=%.6f out=%s\n", shotW, shotH,
-                    captureFps, captureDt, outPath.c_str());
-                std::fflush(stdout);
-            }
-            if (captureFile != nullptr) {
-                std::vector<unsigned char> px(static_cast<size_t>(shotW) * static_cast<size_t>(shotH) * 4);
-                glPixelStorei(GL_PACK_ALIGNMENT, 1);
-                glReadPixels(0, 0, shotW, shotH, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
-                std::fwrite(px.data(), 1, px.size(), captureFile);
-                ++captureFrames;
-            }
-        }
-        if (captureMode && captureClockSec >= captureEndSec) {
-            if (captureFile != nullptr) {
-                std::fclose(captureFile);
-                captureFile = nullptr;
-            }
-            std::printf("[capture] done: %lld frame(s) at %.4f fps (%.3f s wall clock %.3f)\n",
-                captureFrames, captureFps, static_cast<double>(captureFrames) / captureFps,
-                captureClockSec);
-            std::fflush(stdout);
-            running = false;
-        }
-
         // Frame pacing: vsync quantizes presentation to refresh intervals, so
         // on a 60 Hz panel any cap above 60 is physically impossible and the
         // limiter's sleep just jitters around the vblank (fps "乱跳"). Past
         // the refresh rate we drop vsync and pace purely with the limiter.
         const bool wantVsync =
-            !captureMode && !dragFramePacing && !(fpsLimitLive > 0 && fpsLimitLive > displayRefreshHz);
+            !dragFramePacing && !(fpsLimitLive > 0 && fpsLimitLive > displayRefreshHz);
         if (wantVsync != vsyncActive) {
             SDL_GL_SetSwapInterval(wantVsync ? 1 : 0);
             vsyncActive = wantVsync;
@@ -8676,7 +8316,7 @@ int main(int argc, char** argv)
         // Optional frame cap on top of vsync: sleep in coarse chunks, then
         // busy-wait the last millisecond for accuracy. Keeps the GPU idle
         // between frames (less power/heat) when the monitor is 120 Hz+.
-        if (fpsLimitLive > 0 && !captureMode) {
+        if (fpsLimitLive > 0) {
             const double minFrameSec = 1.0 / static_cast<double>(fpsLimitLive);
             const double elapsed = static_cast<double>(SDL_GetPerformanceCounter() - lastFrameCounter) / perfFreqD;
             double remaining = minFrameSec - elapsed;
@@ -8955,8 +8595,8 @@ int main(int argc, char** argv)
         runFrame();
     }
 
-    // Headless checks (--screenshot / --capture) must not touch the player's data file.
-    if (screenshotPath.empty() && captureDir.empty()) {
+    // Headless checks (--screenshot) must not touch the player's data file.
+    if (screenshotPath.empty()) {
         persistUserData();
     }
 
