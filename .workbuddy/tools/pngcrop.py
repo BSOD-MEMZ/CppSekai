@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Crop + nearest-neighbour zoom a PNG (RGBA8, non-interlaced).
+"""Crop + nearest-neighbour zoom a PNG (8-bit gray/RGB/RGBA, non-interlaced).
 
 The toolchain has no Pillow / ImageMagick, but the headless screenshot checks
 (``--screenshot``) produce 1920x1080 RGBA PNGs and a magnified crop is often
@@ -25,13 +25,17 @@ def read_png(path):
         pos += 12 + length
         if ctype == b"IHDR":
             width, height, depth, color, _, _, interlace = struct.unpack(">IIBBBBB", data)
-            assert depth == 8 and color == 6 and interlace == 0, "only RGBA8 non-interlaced"
+            # 0 = gray, 2 = RGB, 6 = RGBA. Chrome's --screenshot writes plain RGB,
+            # so accepting it here is what lets a headless browser shot be cropped
+            # and zoomed like the game's RGBA screenshots.
+            assert depth == 8 and color in (0, 2, 6) and interlace == 0, "only 8-bit gray/RGB/RGBA"
         elif ctype == b"IDAT":
             idat += data
         elif ctype == b"IEND":
             break
     buf = zlib.decompress(idat)
-    stride = width * 4
+    bpp = 1 if color == 0 else (3 if color == 2 else 4)
+    stride = width * bpp
     out = bytearray(height * stride)
     prev = bytearray(stride)
     p = 0
@@ -41,26 +45,37 @@ def read_png(path):
         line = bytearray(buf[p : p + stride])
         p += stride
         if ft == 1:
-            for i in range(4, stride):
-                line[i] = (line[i] + line[i - 4]) & 0xFF
+            for i in range(bpp, stride):
+                line[i] = (line[i] + line[i - bpp]) & 0xFF
         elif ft == 2:
             for i in range(stride):
                 line[i] = (line[i] + prev[i]) & 0xFF
         elif ft == 3:
             for i in range(stride):
-                left = line[i - 4] if i >= 4 else 0
+                left = line[i - bpp] if i >= bpp else 0
                 line[i] = (line[i] + ((left + prev[i]) >> 1)) & 0xFF
         elif ft == 4:
             for i in range(stride):
-                a = line[i - 4] if i >= 4 else 0
+                a = line[i - bpp] if i >= bpp else 0
                 b = prev[i]
-                c = prev[i - 4] if i >= 4 else 0
+                c = prev[i - bpp] if i >= bpp else 0
                 pa, pb, pc = abs(b - c), abs(a - c), abs(a + b - 2 * c)
                 pr = a if (pa <= pb and pa <= pc) else (b if pb <= pc else c)
                 line[i] = (line[i] + pr) & 0xFF
         out[y * stride : (y + 1) * stride] = line
         prev = line
-    return width, height, out
+    if bpp == 4:
+        return width, height, out
+    # Expand to RGBA once, so main() can keep slicing 4 bytes per pixel.
+    rgba = bytearray(width * height * 4)
+    for i in range(width * height):
+        if bpp == 1:
+            g = out[i]
+            rgba[i * 4] = rgba[i * 4 + 1] = rgba[i * 4 + 2] = g
+        else:
+            rgba[i * 4 : i * 4 + 3] = out[i * 3 : i * 3 + 3]
+        rgba[i * 4 + 3] = 255
+    return width, height, rgba
 
 
 def write_png(path, width, height, pixels):
