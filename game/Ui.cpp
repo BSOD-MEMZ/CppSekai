@@ -19,8 +19,9 @@ namespace ui
 {
 // Teal of the player level chip's exp fill / the standalone exp bar. Sampled off
 // the official top bar (the green block there is the level progress, not an
-// icon plate).
-constexpr ImU32 kLevelExp = IM_COL32(0, 199, 181, 255);
+// icon plate); re-checked against the reference's `#00ccbb` teal text, which is
+// the same value the official bar uses.
+constexpr ImU32 kLevelExp = IM_COL32(0, 204, 187, 255);
 
 // ----------------------------------------------------------------------
 // UI sound requests (see SeKind in Ui.hpp). One flag per sound; flushSe()
@@ -92,6 +93,11 @@ namespace
     }
 
     // Card geometry in "design pixels" (860p reference), scaled by scale().
+    // kCardRadius is NOT the reference's 20px copied literally. Its card radius
+    // is 20 against a 60px control, and this build's capsule is ~41*s, so the
+    // equivalent here is ~14*s - the current value is already the same
+    // radius-to-control ratio (0.34 against 0.333). Pasting "20" in would have
+    // made our corners proportionally half again as round as theirs.
     constexpr float kCardRadius = 14.0f;
     constexpr float kCapsuleH = 66.0f;
     constexpr float kCloseDraw = 26.0f; // drawn X size
@@ -185,26 +191,31 @@ namespace
             ca.z + (cb.z - ca.z) * k, ca.w + (cb.w - ca.w) * k));
     }
 
-    // Soft drop shadow under a rounded box: three stacked rects, drawn back to
-    // front, each one wider and fainter than the last, so only the fringe
-    // outside the box ends up visible. Call it *before* whatever draws the box
-    // itself. This ImGui (1.92.5) has no shadow primitive - no AddShadowRect,
-    // no ImGuiCol_WindowShadow - and pjsk's panels all carry one, so this is the
-    // shared stand-in for "just a little raised off the page".
+    // Soft halo shadow under a rounded box. The reference's rule is exactly
+    // `box-shadow: 0 0 8px rgba(68, 68, 102, 0.5)` on every floating control:
+    // zero offset, 8px of blur, and the shadow colour IS the text colour. Two
+    // consequences this has to reproduce - it is a halo, not a drop (nothing is
+    // shifted down), and it is strong: half-alpha navy right at the box edge.
+    //
+    // ImGui has no blur, and this build has no AddShadowRect / ImGuiCol_WindowShadow,
+    // so the blur is approximated by stacking concentric rounded rects: the box
+    // outline is drawn `layers` times, each grown 1 step further out and each at
+    // a low alpha. Drawn far-to-near, so the innermost (darkest) ring lands on
+    // top and the fringe fades outward - which is what a real blur looks like.
+    // The alphas accumulate, so the edge ends up around a third of the way to
+    // the rule's 0.5 rather than at 0.085.
+    //
     // Public entry point: ui::dropShadow() below.
     void shadowLayers(ImDrawList* dl, const ImVec2& lo, const ImVec2& hi, float rounding, float s,
-        float strength)
+        float strength, int layers)
     {
-        // 58,58,96 rather than pure black: the shadow reads as the same navy the
-        // UI text uses, so it does not go muddy on the purple backdrop.
-        constexpr ImU32 kShadow = IM_COL32(58, 58, 96, 255);
-        for (int layer = 3; layer >= 1; --layer) {
-            const float grow = static_cast<float>(layer) * 1.6f * s;
-            const float drop = (1.4f + 0.6f * static_cast<float>(layer)) * s;
-            const float alpha = (layer == 3 ? 0.06f : (layer == 2 ? 0.09f : 0.13f)) * strength;
-            dl->AddRectFilled(ImVec2(lo.x - grow, lo.y - grow + drop),
-                ImVec2(hi.x + grow, hi.y + grow + drop),
-                withAlpha(kShadow, alpha), rounding + grow);
+        constexpr ImU32 kShadow = IM_COL32(68, 68, 102, 255);
+        constexpr float kStep = 1.6f;  // px of spread per layer, in design units
+        constexpr float kAlpha = 0.085f;
+        for (int layer = layers; layer >= 1; --layer) {
+            const float grow = static_cast<float>(layer) * kStep * s;
+            dl->AddRectFilled(ImVec2(lo.x - grow, lo.y - grow), ImVec2(hi.x + grow, hi.y + grow),
+                withAlpha(kShadow, kAlpha * strength), rounding + grow);
         }
     }
     // True when this card was *not* submitted on the previous frame, i.e. its caller
@@ -387,9 +398,9 @@ namespace
 } // namespace
 
 void dropShadow(ImDrawList* dl, const ImVec2& lo, const ImVec2& hi, float rounding, float s,
-    float strength)
+    float strength, int layers)
 {
-    shadowLayers(dl, lo, hi, rounding, s, strength);
+    shadowLayers(dl, lo, hi, rounding, s, strength, layers);
 }
 
 float scale()
@@ -515,9 +526,10 @@ bool beginCard(const char* id, ImVec2* center, ImVec2* size, bool showClose, boo
     // itself instead - see below - which is how the settings card leaves the
     // playfield clickable.)
     (void)dimBackdrop;
-    // Card + a faint drop shadow like the real dialog.
-    dl->AddRectFilled(ImVec2(lo.x + 6.0f * s, lo.y + 10.0f * s), ImVec2(hi.x + 6.0f * s, hi.y + 10.0f * s),
-        IM_COL32(40, 40, 60, 40), kCardRadius * s);
+    // Card body only. There is deliberately NO shadow under it: the reference's
+    // `.window` has no box-shadow either (unlike its controls, which all carry
+    // one), so the card reads as a flat panel on the backdrop while the pills and
+    // fields on top of it float. The old +6/+10 navy smear was ours.
     dl->AddRectFilled(lo, hi, kCardBg, kCardRadius * s);
 
     // Close X: submitted BEFORE the header drag strip, and the strip below
@@ -701,8 +713,8 @@ bool slider(const char* id, float* value, float minV, float maxV, float step, co
     const float fontSize = 23.0f * s;
     const float btnSize = 31.0f * s;
     const float btnRadius = 8.0f * s;
-    const float trackH = 6.0f * s;
-    const float thumbR = 11.0f * s;
+    const float trackH = 5.0f * s;
+    const float thumbR = 10.0f * s;
     const float rowH = 62.0f * s; // value text + track row (was 96/80/72/64)
 
     const ImVec2 pos = ImGui::GetCursorScreenPos();
@@ -752,11 +764,16 @@ bool slider(const char* id, float* value, float minV, float maxV, float step, co
         ImVec2(pos.x + (rowW - ts.x) * 0.5f, trackY - thumbR - ts.y - 8.0f * s),
         enabled ? kNotePink : kDisabledText, valueText);
 
-    // Track + thumb.
+    // Track + thumb. 5px of solid mint under a 20px white thumb, both the
+    // reference's numbers - its track is one flat mint line with no "played"
+    // portion, which is what this is.
     const float frac = std::clamp((*value - minV) / std::max(1e-6f, maxV - minV), 0.0f, 1.0f);
     const float thumbX = trackX0 + (trackX1 - trackX0) * frac;
+    // Disabled is `opacity: .5` in the reference, not a different colour: the
+    // whole range control (track and thumb alike) fades to half. Its disabled
+    // track colour, rgba(20,159,138,.333), is that same idea of a drained mint.
     dl->AddRectFilled(ImVec2(trackX0, trackY - trackH * 0.5f), ImVec2(trackX1, trackY + trackH * 0.5f),
-        enabled ? kPrimary : kDisabledFill, trackH * 0.5f);
+        enabled ? kPrimary : withAlpha(kPrimary, 0.5f), trackH * 0.5f);
 
     // Drag the thumb. The thumb itself is drawn further down, after the buttons,
     // so its hover growth is already known by the time it is painted.
@@ -819,12 +836,15 @@ bool slider(const char* id, float* value, float minV, float maxV, float step, co
         changed = true;
     }
 
-    // Thumb last: it swells a little while the row is hovered or dragged.
+    // Thumb last: it swells a little while the row is hovered or dragged. Its
+    // collar is the same navy the halo shadows use, so the thumb reads as one
+    // more thing floating on the card.
     const float hot = enabled ? animToggle(ImGui::GetID("##thumb"), trackHot, 16.0f) : 0.0f;
     const float thumbScale = 1.0f + 0.16f * hot;
     dl->AddCircleFilled(ImVec2(thumbX, trackY), (thumbR + 2.0f * s) * thumbScale,
-        IM_COL32(150, 150, 170, static_cast<int>(60.0f + 60.0f * hot)));
-    dl->AddCircleFilled(ImVec2(thumbX, trackY), thumbR * thumbScale, enabled ? kWhiteBtn : kDisabledFill);
+        IM_COL32(68, 68, 102, static_cast<int>(60.0f + 60.0f * hot)));
+    dl->AddCircleFilled(ImVec2(thumbX, trackY), thumbR * thumbScale,
+        enabled ? kWhiteBtn : withAlpha(kWhiteBtn, 0.5f));
     if (!enabled) {
         ImGui::EndDisabled();
     }
@@ -890,9 +910,14 @@ bool capsuleButton(const char* label, const ImVec2& sizeIn, bool primary)
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImGuiID btnKey = ImGui::GetItemID();
     const float hov = animToggle(btnKey ^ 0x11u, hovered, 16.0f);
-    const float press = animToggle(btnKey ^ 0x12u, held || pad.pressed, 28.0f);
-    // The capsule grows a hair on hover and gives a little while pressed.
-    const float grow = 1.0f + 0.02f * hov - 0.03f * press;
+    // Both rates are in the reference's ballpark: everything over there is under
+    // a global `transition: all 0.2s`, and 1-exp(-14 * 0.2) is 0.94 - so the
+    // press blend lands where its 0.2s ease would.
+    const float press = animToggle(btnKey ^ 0x12u, held || pad.pressed, 14.0f);
+    // Hover grows the capsule a hair. Press does NOT shrink it any more: the
+    // reference changes colour only (`:active` leaves transform at none, opacity
+    // at 1), and the old -0.03 push made the two feel like different gestures.
+    const float grow = 1.0f + 0.02f * hov;
     if (grow != 1.0f) {
         const ImVec2 mid((lo.x + hi.x) * 0.5f, (lo.y + hi.y) * 0.5f);
         const float hw = (hi.x - lo.x) * 0.5f * grow;
@@ -903,16 +928,23 @@ bool capsuleButton(const char* label, const ImVec2& sizeIn, bool primary)
     const float radius = (hi.y - lo.y) * 0.5f;
     ImU32 fill = primary ? kPrimary : kWhiteBtn;
     fill = mixColor(fill, primary ? kPrimaryHover : kWhiteHover, hov);
+    // Pressing *inverts* the capsule rather than darkening it (see kPrimaryPress
+    // in the header): the mint one turns pale with mint text, the white one turns
+    // mint with white text. Applied after the hover blend, so a held hovered
+    // button still ends up exactly on the pressed colour.
     fill = mixColor(fill, primary ? kPrimaryPress : kWhitePress, press);
-    dl->AddRectFilled(ImVec2(lo.x, lo.y + 3.0f * s), ImVec2(hi.x, hi.y + 3.0f * s), IM_COL32(150, 150, 170, 60),
-        radius); // soft shadow
+    // The reference's halo, not a drop: `0 0 8px rgba(68,68,102,.5)`, so centred
+    // on the capsule and as strong as the one under its native controls.
+    dropShadow(dl, lo, hi, radius, s);
     dl->AddRectFilled(lo, hi, fill, radius);
 
     ImFont* font = game::bodyFont();
     const float fontSize = std::min(27.0f * s, size.y * 0.48f);
+    // The label follows the press: mint-on-pale / white-on-mint, as above.
+    const ImU32 labelColor = mixColor(kBtnText, primary ? kPrimaryPressText : kWhitePressText, press);
     const ImVec2 textSize = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, label);
     dl->AddText(font, fontSize,
-        ImVec2((lo.x + hi.x - textSize.x) * 0.5f, (lo.y + hi.y - textSize.y) * 0.5f), kBtnText, label);
+        ImVec2((lo.x + hi.x - textSize.x) * 0.5f, (lo.y + hi.y - textSize.y) * 0.5f), labelColor, label);
     return clicked || pad.pressed;
 }
 
@@ -956,12 +988,21 @@ bool combo(const char* id, const char* preview, const std::vector<std::string>& 
     // background inside Begin() - which BeginCombo calls - and whether the list
     // opens at all is only known after that call returns, so there is no way to
     // style it retroactively.
-    const ImGuiStyle& st = ImGui::GetStyle();
+    //
+    // The rounded shape is forced HERE rather than taken from the caller's
+    // FrameRounding (the song-select screen sets 12*k, the settings card 12*s).
+    // The reference makes its <select> a full pill - `border-radius: 30px` on a
+    // 60px control, i.e. exactly half the height - while its text inputs stay
+    // 10px-rounded rectangles. Leaving this to the caller is what let the two
+    // controls drift into looking alike.
     const float boxW = width > 0.0f ? width : ImGui::CalcItemWidth();
     const float boxH = ImGui::GetFrameHeight();
+    const float pillRound = boxH * 0.5f;
     const ImVec2 boxLo = ImGui::GetCursorScreenPos();
-    dropShadow(dl, boxLo, ImVec2(boxLo.x + boxW, boxLo.y + boxH), st.FrameRounding, s);
-    constexpr ImU32 kComboBg = IM_COL32(255, 255, 255, 244);
+    dropShadow(dl, boxLo, ImVec2(boxLo.x + boxW, boxLo.y + boxH), pillRound, s);
+    // Opaque white, not the 244-alpha white this used to be: the reference's
+    // select is plain #ffffff like its other controls.
+    constexpr ImU32 kComboBg = IM_COL32(255, 255, 255, 255);
     constexpr ImU32 kComboText = IM_COL32(60, 60, 82, 255);
     constexpr ImU32 kComboPopupBg = IM_COL32(255, 255, 255, 232); // translucent
     ImGui::PushStyleColor(ImGuiCol_FrameBg, kComboBg);
@@ -973,6 +1014,7 @@ bool combo(const char* id, const char* preview, const std::vector<std::string>& 
     ImGui::PushStyleColor(ImGuiCol_HeaderHovered, IM_COL32(243, 240, 250, 255)); // hovered row
     ImGui::PushStyleColor(ImGuiCol_HeaderActive, IM_COL32(224, 219, 238, 255));
     const float popupRound = 14.0f * s;
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, pillRound);
     ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, popupRound);
     ImGui::PushStyleVar(ImGuiStyleVar_PopupBorderSize, 0.0f);
     // No WindowPadding push here: BeginComboPopup() already pins the popup's
@@ -1012,11 +1054,8 @@ bool combo(const char* id, const char* preview, const std::vector<std::string>& 
         }
         ImGui::EndCombo();
     }
-    ImGui::PopStyleVar(2);
+    ImGui::PopStyleVar(3);
     ImGui::PopStyleColor(8);
-    // Own chevron: the built-in one is painted inside the widget and cannot be
-    // animated, so it is suppressed above and drawn here instead - it rotates as
-    // the list opens and back when it closes.
     const ImVec2 lo = ImGui::GetItemRectMin();
     const ImVec2 hi = ImGui::GetItemRectMax();
     // Pad: the row is a focus band like any other widget, and left / right
@@ -1033,18 +1072,27 @@ bool combo(const char* id, const char* preview, const std::vector<std::string>& 
             se(SeClick);
         }
     }
-    const ImVec2 mid(hi.x - 13.0f * s, (lo.y + hi.y) * 0.5f);
-    const float r = 5.5f * s;
-    const float ang = t * 3.14159265f; // 0 = pointing down, pi = pointing up
-    const float ca = std::cos(ang);
-    const float sa = std::sin(ang);
-    auto rot = [&](float x, float y) {
-        return ImVec2(mid.x + x * ca - y * sa, mid.y + x * sa + y * ca);
-    };
-    const ImVec2 a = rot(-r, -r * 0.45f);
-    const ImVec2 b = rot(r, -r * 0.45f);
-    const ImVec2 c = rot(0.0f, r * 0.62f);
-    dl->AddTriangleFilled(a, b, c, mixColor(IM_COL32(120, 120, 140, 255), kTitleText, t));
+    // Own caret: ImGui's built-in arrow is painted inside the widget and cannot
+    // be styled, so it is suppressed above (NoArrowButton) and drawn here.
+    //
+    // It is a STATIC filled triangle pointing down. The reference's <select>
+    // draws an inline SVG `M7 9l5 8 5-8z` in a 25x25 viewBox, rendered 50px wide
+    // and right-aligned - a 10x8 triangle centred in a square band at the right
+    // end. It never rotates and does not react to the list being open, so the way
+    // to match it is to stop animating: this used to spin 180 degrees with the
+    // popup, which was ours, not theirs.
+    //
+    // Proportions are the reference's, measured against the control height: the
+    // triangle is 0.333 h wide and 0.267 h tall, and the band it sits in is
+    // 0.833 h wide, so its centre is 0.417 h in from the right edge. The colour
+    // is plain black - the one thing over there that is not #444466, because the
+    // reference's SVG asks for `fill='black'`.
+    const float triW = boxH * 0.333f;
+    const float triH = boxH * 0.267f;
+    const ImVec2 triMid(hi.x - boxH * 0.417f, (lo.y + hi.y) * 0.5f);
+    dl->AddTriangleFilled(ImVec2(triMid.x - triW * 0.5f, triMid.y - triH * 0.5f),
+        ImVec2(triMid.x + triW * 0.5f, triMid.y - triH * 0.5f),
+        ImVec2(triMid.x, triMid.y + triH * 0.5f), IM_COL32(0, 0, 0, 255));
     ImGui::PopID();
     return changed;
 }
@@ -1156,9 +1204,10 @@ void cardTitle(const char* text, float interiorWidth, float sizePx)
     const ImVec2 pos = ImGui::GetCursorScreenPos();
     const ImVec2 textSize = font->CalcTextSizeA(sizePx * s, FLT_MAX, 0.0f, text);
     dl->AddText(font, sizePx * s, pos, kTitleText, text);
-    // Thin rule spanning the interior, a little below the baseline.
+    // Thin rule spanning the interior, a little below the baseline. 3px, the
+    // reference's divider weight (`border-bottom: 3px solid #d1d1d1`).
     const float ruleY = pos.y + textSize.y + 8.0f * s;
-    dl->AddRectFilled(ImVec2(pos.x, ruleY), ImVec2(pos.x + interiorWidth, ruleY + 2.0f * s), kDivider, 1.0f * s);
+    dl->AddRectFilled(ImVec2(pos.x, ruleY), ImVec2(pos.x + interiorWidth, ruleY + 3.0f * s), kDivider, 1.5f * s);
     ImGui::SetCursorScreenPos(ImVec2(pos.x, ruleY + 12.0f * s));
 }
 
@@ -1210,34 +1259,47 @@ bool checkBox(const char* label, bool* value, float rowWidth, bool enabled)
     const ImGuiID boxKey = ImGui::GetItemID();
     const float tick = animValue(boxKey ^ 0x21u, checked ? 1.0f : 0.0f, 20.0f);
     const float hov = animToggle(boxKey ^ 0x22u, hovered && !checked, 16.0f);
+    // The box stays WHITE - checked or not. The reference's `input[type=checkbox]`
+    // is always #ffffff and its `:checked` rule only swaps in a pink check-mark
+    // image, so a checked box is a white square with a #ff77ac tick, not a
+    // pink-filled square. Only our hover pre-tint (a barely-there pink wash) and
+    // the disabled drain touch the fill.
     ImU32 fill = mixColor(kWhiteBtn, IM_COL32(255, 235, 243, 255), hov);
-    fill = mixColor(fill, kCheckPink, tick);
+    ImU32 tickColor = kCheckPink;
     if (!enabled) {
-        // Greyed out: same shapes, just drained of colour, so a disabled row
-        // still reads as "this is a setting" instead of disappearing.
-        fill = mixColor(fill, IM_COL32(226, 226, 232, 255), 0.65f);
+        // Greyed out. The box drains to a flat grey and the tick loses its pink
+        // outright: the reference has no disabled checkbox to copy, and leaving
+        // the tick at partial pink (what this did while the box itself was pink)
+        // now reads as a rendering fault rather than as "not available".
+        fill = mixColor(fill, kDisabledFill, 0.7f);
+        tickColor = kDisabledText;
     }
     // Radius follows the box: the old 10px corner was tuned for a 32px box and
     // looked round-shouldered once the box shrank to 24.
     const float radius = boxSize * 0.26f;
-    dl->AddRectFilled(ImVec2(boxLo.x, boxLo.y + 2.0f * s), ImVec2(boxHi.x, boxHi.y + 2.0f * s),
-        IM_COL32(150, 150, 170, 50), radius); // shadow
+    // 3 layers, not the usual 5: the reference gives its checkbox a 4px blur
+    // where every other control gets 8px.
+    dropShadow(dl, boxLo, boxHi, radius, s, 1.0f, 3);
     dl->AddRectFilled(boxLo, boxHi, fill, radius);
+    // No border. The reference's box has an *inset white* ring (`inset 0 0 0 1px
+    // #ffffff`), which on a white box draws nothing at all - its edge is defined
+    // purely by the halo. The old kDivider outline was ours and made the box look
+    // more buttoned-down than the reference's.
     if (tick > 0.02f) {
-        // White check: two thick segments, growing out of the middle of the box
-        // as the state flips (and fading with it).
+        // Pink tick, growing out of the middle of the box as the state flips (and
+        // fading with it). The three points are the reference's SVG check
+        // (viewBox 30x24, drawn at 70% of the box and centred) converted to
+        // box-relative fractions, and the stroke is its `stroke-width: 8`
+        // expressed the same way - which is thicker than the 4.0*s this used.
         const float grow = 0.5f + 0.5f * tick;
         const ImVec2 mid((boxLo.x + boxHi.x) * 0.5f, (boxLo.y + boxHi.y) * 0.5f);
         auto scaled = [&](float x, float y) {
             return ImVec2(mid.x + (x - mid.x) * grow, mid.y + (y - mid.y) * grow);
         };
-        const ImVec2 pts[3] = {scaled(boxLo.x + boxSize * 0.22f, boxLo.y + boxSize * 0.52f),
-            scaled(boxLo.x + boxSize * 0.44f, boxLo.y + boxSize * 0.74f),
-            scaled(boxLo.x + boxSize * 0.80f, boxLo.y + boxSize * 0.28f)};
-        dl->AddPolyline(pts, 3, withAlpha(IM_COL32(255, 255, 255, 255), tick), 0, 4.0f * s);
-    }
-    if (tick < 0.99f) {
-        dl->AddRect(boxLo, boxHi, withAlpha(kDivider, 1.0f - tick), radius, 0, 2.0f * s);
+        const ImVec2 pts[3] = {scaled(boxLo.x + boxSize * 0.216f, boxLo.y + boxSize * 0.434f),
+            scaled(boxLo.x + boxSize * 0.496f, boxLo.y + boxSize * 0.714f),
+            scaled(boxLo.x + boxSize * 0.784f, boxLo.y + boxSize * 0.294f)};
+        dl->AddPolyline(pts, 3, withAlpha(tickColor, tick), 0, boxSize * 0.187f);
     }
     dl->AddText(font, fontSize, ImVec2(boxHi.x + gap, boxLo.y + (boxSize - textSize.y) * 0.5f),
         enabled ? kBodyText : withAlpha(kBodyText, 0.45f), label);
@@ -1304,7 +1366,7 @@ bool radioRow(const char* id, const std::vector<std::string>& labels, int* selec
         const float t = animValue(key ^ 0x61u, picked ? 1.0f : 0.0f, 20.0f);
         const float hov = animToggle(key ^ 0x62u, hovered && !picked, 16.0f);
         dl->AddCircleFilled(ImVec2(circle.x, circle.y + 2.0f * s), dotR * 1.02f,
-            IM_COL32(126, 126, 156, 70), 40); // shadow
+            IM_COL32(68, 68, 102, 70), 40); // shadow
         dl->AddCircleFilled(circle, dotR, mixColor(kWhiteBtn, IM_COL32(234, 235, 246, 255), hov), 40);
         if (t > 0.02f) {
             dl->AddCircleFilled(circle, dotR * 0.72f * t, withAlpha(kPrimary, t), 40);
@@ -1377,7 +1439,11 @@ bool stepper(const char* id, float* value, const std::vector<float>& deltas, con
     }
 
     bool changed = false;
-    auto drawCapsule = [&](const char* label, float cx, float w, ImU32 fill, ImU32 textColor) {
+    // `primary` only says which of the two pressed colours to invert into - the
+    // same mint/white pair ui::capsuleButton uses, so a stepper capsule and a
+    // dialog capsule react to a click identically.
+    auto drawCapsule = [&](const char* label, float cx, float w, ImU32 fill, ImU32 textColor,
+                           bool primary) {
         const ImVec2 lo(cx, y);
         const ImVec2 hi(cx + w, y + btnH);
         ImGui::SetCursorScreenPos(lo);
@@ -1389,14 +1455,15 @@ bool stepper(const char* id, float* value, const std::vector<float>& deltas, con
         if (clicked) {
             se(SeClick);
         }
-        ImU32 f = mixColor(fill, IM_COL32(240, 240, 247, 255), animToggle(key ^ 0x41u, hovered, 16.0f));
-        f = mixColor(f, IM_COL32(214, 214, 228, 255), animToggle(key ^ 0x42u, held, 28.0f));
-        dl->AddRectFilled(ImVec2(lo.x, lo.y + 2.0f * s), ImVec2(hi.x, hi.y + 2.0f * s),
-            IM_COL32(150, 150, 170, 50), btnH * 0.5f); // shadow
+        ImU32 f = mixColor(fill, primary ? kPrimaryHover : kWhiteHover, animToggle(key ^ 0x41u, hovered, 16.0f));
+        const float press = animToggle(key ^ 0x42u, held, 14.0f);
+        f = mixColor(f, primary ? kPrimaryPress : kWhitePress, press);
+        const ImU32 labelColor = mixColor(textColor, primary ? kPrimaryPressText : kWhitePressText, press);
+        dropShadow(dl, lo, hi, btnH * 0.5f, s);
         dl->AddRectFilled(lo, hi, f, btnH * 0.5f);
         const ImVec2 ts = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, label);
-        dl->AddText(font, fontSize, ImVec2((lo.x + hi.x - ts.x) * 0.5f, (lo.y + hi.y - ts.y) * 0.5f), textColor,
-            label);
+        dl->AddText(font, fontSize, ImVec2((lo.x + hi.x - ts.x) * 0.5f, (lo.y + hi.y - ts.y) * 0.5f),
+            labelColor, label);
         return clicked;
     };
 
@@ -1488,7 +1555,7 @@ bool stepper(const char* id, float* value, const std::vector<float>& deltas, con
         const int mySlot = slot++;
         const bool selected = pickOne && pickIdx == mySlot;
         if (drawCapsule(pickOne ? presets[mySlot].c_str() : label, cx, btnW,
-                selected ? kPrimary : kWhiteBtn, kBtnText)) {
+                selected ? kPrimary : kWhiteBtn, kBtnText, selected)) {
             changed |= press(d, mySlot, nullptr);
         }
         cx += btnW + gap;
@@ -1496,8 +1563,7 @@ bool stepper(const char* id, float* value, const std::vector<float>& deltas, con
     {
         const ImVec2 lo(cx, y);
         const ImVec2 hi(cx + pillW, y + btnH);
-        dl->AddRectFilled(ImVec2(lo.x, lo.y + 2.0f * s), ImVec2(hi.x, hi.y + 2.0f * s),
-            IM_COL32(150, 150, 170, 50), btnH * 0.5f);
+        dropShadow(dl, lo, hi, btnH * 0.5f, s);
         dl->AddRectFilled(lo, hi, kPillBg, btnH * 0.5f);
         char valueText[32];
         if (pickOne) {
@@ -1522,7 +1588,7 @@ bool stepper(const char* id, float* value, const std::vector<float>& deltas, con
         const int mySlot = slot++;
         const bool selected = pickOne && pickIdx == mySlot;
         if (drawCapsule(pickOne ? presets[mySlot].c_str() : label, cx, btnW,
-                selected ? kPrimary : kWhiteBtn, kBtnText)) {
+                selected ? kPrimary : kWhiteBtn, kBtnText, selected)) {
             changed |= press(d, mySlot, nullptr);
         }
         cx += btnW + gap;

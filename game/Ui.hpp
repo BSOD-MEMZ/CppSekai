@@ -7,7 +7,7 @@
 //   infoRows                - gray box of label | pink value rows
 //   capsuleButton           - pjsk capsule (pill) button, white or mint
 //   cardTitle / caption     - left title with rule / centered text
-//   checkBox                - pink rounded checkbox
+//   checkBox                - white checkbox with a pink tick
 //   stepper                 - -1/-0.1/-0.01 value +0.01/+0.1/+1 capsule row
 //   messageDialog           - one-shot dialog with in/out animation
 // Everything is immediate-mode on top of ImGui and safe to call every frame.
@@ -70,19 +70,40 @@ void flushSe();
 // themselves. Removed 2026-09-19 - the card is enough, and the frozen playfield
 // stays readable without a film over it. The modal window that blocked the
 // clicks behind it is still there, see beginCard's dimBackdrop.)
-constexpr ImU32 kCardBg = IM_COL32(242, 242, 247, 252);     // light gray card
-constexpr ImU32 kTitleText = IM_COL32(96, 96, 112, 255);    // gray title
-constexpr ImU32 kBodyText = IM_COL32(70, 70, 88, 255);      // dark body text
-constexpr ImU32 kBtnText = IM_COL32(58, 58, 78, 255);       // capsule label
-constexpr ImU32 kPrimary = IM_COL32(106, 232, 208, 255);    // mint capsule
-constexpr ImU32 kPrimaryHover = IM_COL32(128, 240, 219, 255);
-constexpr ImU32 kPrimaryPress = IM_COL32(92, 214, 192, 255);
+// Palette sampled off sekai-stories.pages.dev (2026-10-03). That site is a plain
+// CSS app whose whole stylesheet is readable, so these are its literal values:
+//   * ONE text colour, #444466, for everything it draws (h1-h3 / p / label /
+//     button / select / icons). It separates a title from its body by size and
+//     weight only - which is why the three text roles below are now the same
+//     value instead of three greys.
+//   * every floating control carries `box-shadow: 0 0 8px rgba(68,68,102,.5)` -
+//     a zero-offset halo in that same navy, see ui::dropShadow.
+constexpr ImU32 kText = IM_COL32(68, 68, 102, 255);         // #444466, the one text colour
+constexpr ImU32 kTitleText = kText;                         // gray title
+constexpr ImU32 kBodyText = kText;                          // dark body text
+constexpr ImU32 kBtnText = kText;                           // capsule label
+constexpr ImU32 kCardBg = IM_COL32(235, 235, 242, 255);     // #ebebf2 card / window fill
+constexpr ImU32 kPrimary = IM_COL32(119, 238, 221, 255);    // #77eedd mint capsule
+// Hover is OURS, not the reference's: the reference styles :active only and
+// leaves :hover completely alone (verified - getComputedStyle on a hovered
+// button still reports rgb(119,238,221)). Kept because this build is played
+// with a mouse, where a pointer that gives no feedback at all reads as broken.
+constexpr ImU32 kPrimaryHover = IM_COL32(139, 243, 229, 255);
+// Press IS the reference's, and it inverts rather than darkens:
+//   .btn-blue:active  -> background #e3fcf8, color #77eddd   (pale, mint text)
+constexpr ImU32 kPrimaryPress = IM_COL32(227, 252, 248, 255); // #e3fcf8
 constexpr ImU32 kWhiteBtn = IM_COL32(255, 255, 255, 255);   // white capsule
 constexpr ImU32 kWhiteHover = IM_COL32(243, 243, 249, 255);
-constexpr ImU32 kWhitePress = IM_COL32(232, 232, 240, 255);
-constexpr ImU32 kDivider = IM_COL32(206, 206, 218, 255);    // thin rule under titles
-constexpr ImU32 kNotePink = IM_COL32(255, 82, 141, 255);    // pink hint / value text
-constexpr ImU32 kCheckPink = IM_COL32(255, 102, 158, 255);  // pink checkbox fill
+//   .btn-white:active -> background #a1f4ec, color #ffffff    (mint, white text)
+constexpr ImU32 kWhitePress = IM_COL32(161, 244, 236, 255);   // #a1f4ec
+// What a pressed capsule's *label* turns into (see capsuleButton): the mint one
+// goes mint-on-pale, the white one goes white-on-mint. Constant while pressed.
+constexpr ImU32 kPrimaryPressText = IM_COL32(119, 238, 221, 255); // #77eedd
+constexpr ImU32 kWhitePressText = IM_COL32(255, 255, 255, 255);
+constexpr ImU32 kDivider = IM_COL32(209, 209, 209, 255);    // #d1d1d1 rule under titles
+constexpr ImU32 kNotePink = IM_COL32(255, 85, 153, 255);    // #ff5599 pink hint / value text
+constexpr ImU32 kCheckPink = IM_COL32(255, 119, 172, 255);  // #ff77ac - the CHECK MARK's
+                                                            // colour, not a box fill
 constexpr ImU32 kPillBg = IM_COL32(199, 199, 212, 255);     // gray value pill (stepper)
 constexpr ImU32 kTabIdle = IM_COL32(203, 204, 222, 255);    // inactive tab fill
 constexpr ImU32 kDarkBtn = IM_COL32(96, 96, 110, 255);      // dark -/+ slider buttons
@@ -157,6 +178,11 @@ bool slider(const char* id, float* value, float minV, float maxV, float step, co
 void infoRows(const std::vector<std::pair<std::string, std::string>>& rows, float rowWidth = 0.0f);
 
 // Pill button drawn at the current cursor position. primary = mint.
+// Rest and press follow the reference: pressing INVERTS the capsule (mint goes
+// pale #e3fcf8 with mint text, white goes #a1f4ec with white text) and moves
+// nothing. Hover is our addition - the reference has no :hover rule at all, but
+// this build is played with a mouse, so a capsule under the pointer lightens and
+// grows 2%.
 bool capsuleButton(const char* label, const ImVec2& size, bool primary);
 
 // Centered one-line text advanced by one row. rowWidth <= 0 uses the
@@ -168,8 +194,13 @@ void caption(const char* text, float sizePx = 0.0f, ImU32 color = kTitleText, fl
 // pjsk dialog header). interiorWidth is the usable card width for centering.
 void cardTitle(const char* text, float interiorWidth, float sizePx = 24.0f);
 
-// Pink rounded checkbox with a white check + label, the whole group centered
+// White rounded checkbox with a PINK tick + label, the whole group centered
 // in rowWidth. Toggles *value on click; returns the new value.
+//
+// The box never changes colour - it stays white and only the fill of the mark
+// changes, which is the reference's behaviour (`input[type=checkbox]` is always
+// #ffffff; the `:checked` rule only swaps in a pink check-mark image). It reads
+// as the opposite of "tick the pink box", so it is worth stating plainly.
 // `enabled = false` draws it greyed out and swallows the click - for settings
 // that only make sense under another one (多人游玩 needs 允许多开).
 bool checkBox(const char* label, bool* value, float rowWidth = 0.0f, bool enabled = true);
@@ -200,11 +231,12 @@ bool stepper(const char* id, float* value, const std::vector<float>& deltas,
     const char* fmt = "%.2f", float rowWidth = 0.0f,
     const std::vector<std::string>& presets = {});
 
-// Themed combo box: ImGui's popup plus an eased fade-in and a chevron that
-// rotates while the list is open. `index` is read and written; returns true
-// when the selection changed. `scaleHint` > 0 replaces the module scale, for
-// callers that lay out in their own px-per-unit space (the song-select screen
-// uses its own `k`).
+// Themed combo box: ImGui's popup plus an eased fade-in, in a white full pill
+// (the radius is forced here - see combo() in Ui.cpp) with a static black
+// triangle for the caret, matching the reference's <select>. `index` is read and
+// written; returns true when the selection changed. `scaleHint` > 0 replaces the
+// module scale, for callers that lay out in their own px-per-unit space (the
+// song-select screen uses its own `k`).
 bool combo(const char* id, const char* preview, const std::vector<std::string>& items, int* index,
     float width, ImGuiComboFlags flags = ImGuiComboFlags_HeightSmall, float scaleHint = 0.0f);
 
@@ -216,15 +248,21 @@ bool combo(const char* id, const char* preview, const std::vector<std::string>& 
 // as `0x4a552000u + index` work fine as keys.
 float anim(ImGuiID id, bool target, float rate = 18.0f);
 
-// Soft drop shadow under a rounded box, for the parts of a screen that draw
+// Soft halo shadow under a rounded box, for the parts of a screen that draw
 // themselves (the song-select search pill, any panel that should sit "just a
 // little raised"). Call it *before* the box itself, on the same draw list:
-// three stacked rounded rects, each wider and fainter than the last, so only
-// the fringe outside the box shows. `s` is the px-per-unit scale of the caller,
-// `rounding` the box's corner radius. ui::combo() draws its own. This ImGui has
+// rounded rects concentric with the box, each one grown a little further out and
+// drawn before the last, so only the fringe outside the box shows.
+//
+// The shape is the reference's, `0 0 8px rgba(68,68,102,.5)`: centred on the
+// box, NOT dropped downwards, in the same navy the UI text uses. `s` is the
+// px-per-unit scale of the caller, `rounding` the box's corner radius.
+// `layers` sets the spread: the default 5 reaches ~8*s, which is what a 60px
+// control wants, while a small one (ui::checkBox) passes 3 - the reference gives
+// that a 4px blur rather than 8px. ui::combo() draws its own. This ImGui has
 // no shadow primitive (no AddShadowRect / ImGuiCol_WindowShadow).
 void dropShadow(ImDrawList* dl, const ImVec2& lo, const ImVec2& hi, float rounding, float s,
-    float strength = 1.0f);
+    float strength = 1.0f, int layers = 5);
 
 // ---- Game controller focus ---------------------------------------------
 // A pad has no pointer, so everything that is clicked rather than typed -

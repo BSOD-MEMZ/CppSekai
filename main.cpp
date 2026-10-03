@@ -3529,6 +3529,19 @@ int main(int argc, char** argv)
             ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(224, 224, 235, 255));
             ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, IM_COL32(214, 214, 228, 255));
             ImGui::PushStyleColor(ImGuiCol_FrameBgActive, IM_COL32(205, 205, 222, 255));
+            // The arrow strip of a native ImGui::Combo is a Button, and nothing
+            // else here pushes ImGuiCol_Button - so all seven combos in this card
+            // were drawing ImGui's default BLUE square to the right of their
+            // frame. SongSelect already solved this for its own combos (see the
+            // PushStyleColor(ImGuiCol_Button, ...) over there); the card never
+            // got the same treatment. Pinned to the frame's own greys, so the
+            // combo reads as one solid pill with a dark caret, like the
+            // reference's <select>. Safe to push card-wide: there is not a
+            // single native ImGui::Button in this card, so a Button colour can
+            // only ever reach those arrow strips.
+            ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(224, 224, 235, 255));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(214, 214, 228, 255));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(205, 205, 222, 255));
             ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 12.0f * s);
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10.0f * s, 6.0f * s));
             ImGui::PushFont(game::bodyFont(), 23.0f * s);
@@ -4653,7 +4666,7 @@ int main(int argc, char** argv)
             ImGui::PopStyleColor(4);
             ImGui::PopFont();
             ImGui::PopStyleVar(2);
-            ImGui::PopStyleColor(5);
+            ImGui::PopStyleColor(8);
             ImGui::SetCursorScreenPos(ImVec2(cardCenter.x - cardSize.x * 0.5f + padX,
                 cardCenter.y + cardSize.y * 0.5f - 68.0f * s));
             if (ui::capsuleButton("关闭", ImVec2(132.0f * s, 46.0f * s), false)) {

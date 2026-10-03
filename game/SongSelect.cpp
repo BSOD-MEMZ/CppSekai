@@ -2531,7 +2531,7 @@ void loadMusicVocals(const std::string& path)
     }
 }
 
-// One 猜歌 option: the same capsule as ui::capsuleButton (soft drop shadow,
+// One 猜歌 option: the same capsule as ui::capsuleButton (halo shadow,
 // half-height rounding, body font sized to the button), but with the fill
 // handed in - the quiz needs a mint "right answer" and a red "you picked this",
 // which capsuleButton's mint-or-white cannot express. `clickable` is false once
@@ -2550,8 +2550,9 @@ bool guessOptionPill(const char* label, const ImVec2& size, ImU32 fill, float s,
     if (clickable && ImGui::IsItemHovered()) {
         fill = ui::mix(fill, ui::kWhiteHover, 0.35f);
     }
-    dl->AddRectFilled(ImVec2(lo.x, lo.y + 3.0f * s), ImVec2(hi.x, hi.y + 3.0f * s),
-        IM_COL32(150, 150, 170, 60), radius);
+    // Same halo as every other floating control (ui::dropShadow), not the old
+    // +3px navy smear.
+    ui::dropShadow(dl, lo, hi, radius, s);
     dl->AddRectFilled(lo, hi, fill, radius);
     ImFont* font = game::bodyFont();
     const float fontSize = std::min(22.0f * s, size.y * 0.42f);
@@ -4593,7 +4594,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             const float vpCy = (c0.y + c1.y) * 0.5f;
             const ImVec2 vpRc(c0.x + 34.0f * k, vpCy);
             const float vpRr = 17.0f * k;
-            dl->AddCircleFilled(ImVec2(vpRc.x, vpRc.y + 2.0f * k), vpRr * 1.02f, IM_COL32(126, 126, 156, 70), 40);
+            dl->AddCircleFilled(ImVec2(vpRc.x, vpRc.y + 2.0f * k), vpRr * 1.02f, IM_COL32(68, 68, 102, 70), 40);
             dl->AddCircleFilled(vpRc, vpRr, IM_COL32(255, 255, 255, 255), 40);
             if (vpPicked) {
                 dl->AddCircleFilled(vpRc, vpRr * 0.72f, ui::kPrimary, 40);
