@@ -99,6 +99,11 @@ namespace
     // radius-to-control ratio (0.34 against 0.333). Pasting "20" in would have
     // made our corners proportionally half again as round as theirs.
     constexpr float kCardRadius = 14.0f;
+    // How far a halo shadow reaches outward, in design pixels (x scale()). The
+    // reference's `0 0 8px` was measured to die by ~10px on a 60px control, which
+    // is 8.8px at 1080p - so this is the measured reach, rounded down a touch so
+    // it reads as an edge rather than a glow. See shadowLayers().
+    constexpr float kShadowReach = 7.0f;
     constexpr float kCapsuleH = 66.0f;
     constexpr float kCloseDraw = 26.0f; // drawn X size
     constexpr float kCloseHit = 38.0f;  // hitbox (bigger than the drawing)
@@ -191,31 +196,46 @@ namespace
             ca.z + (cb.z - ca.z) * k, ca.w + (cb.w - ca.w) * k));
     }
 
-    // Soft halo shadow under a rounded box. The reference's rule is exactly
+    // Soft halo shadow under a rounded box. The reference's rule is
     // `box-shadow: 0 0 8px rgba(68, 68, 102, 0.5)` on every floating control:
-    // zero offset, 8px of blur, and the shadow colour IS the text colour. Two
-    // consequences this has to reproduce - it is a halo, not a drop (nothing is
-    // shifted down), and it is strong: half-alpha navy right at the box edge.
+    // zero offset, and the shadow colour IS the text colour. So it is a halo, not
+    // a drop - nothing is shifted down.
     //
-    // ImGui has no blur, and this build has no AddShadowRect / ImGuiCol_WindowShadow,
-    // so the blur is approximated by stacking concentric rounded rects: the box
-    // outline is drawn `layers` times, each grown 1 step further out and each at
-    // a low alpha. Drawn far-to-near, so the innermost (darkest) ring lands on
-    // top and the fringe fades outward - which is what a real blur looks like.
-    // The alphas accumulate, so the edge ends up around a third of the way to
-    // the rule's 0.5 rather than at 0.085.
+    // What that declaration actually resolves to was MEASURED off the reference's
+    // own render (scanning outwards from a mint button's edge on its #ebebf2
+    // card):
+    //    1px out  -31/255 (a=0.19)     4px  -13 (0.078)     7px  -4 (0.024)
+    //    2px out  -23    (a=0.14)      5px   -9 (0.054)     9px  -2 (0.012)
+    //    3px out  -18    (a=0.11)      6px   -6 (0.036)    11px   0
+    // i.e. it reaches ~10px and the alpha roughly halves every 2.5px. A blur is
+    // far gentler than "0.5" suggests: only 0.19 survives at the edge.
+    //
+    // ImGui has no blur and this build has no AddShadowRect / ImGuiCol_WindowShadow,
+    // so the curve is built from concentric rounded rects drawn far-to-near, each
+    // one doubling in alpha inward. That lands ~0.15 right at the box edge and
+    // ~0.04 at 4px - the measured curve, not a guess.
+    //
+    // This replaces five EQUAL 0.085 steps, which still carried 0.24 at 6px out
+    // (six times the reference) and made every control sit in a grey smear.
     //
     // Public entry point: ui::dropShadow() below.
     void shadowLayers(ImDrawList* dl, const ImVec2& lo, const ImVec2& hi, float rounding, float s,
-        float strength, int layers)
+        float strength, float spreadScale)
     {
         constexpr ImU32 kShadow = IM_COL32(68, 68, 102, 255);
-        constexpr float kStep = 1.6f;  // px of spread per layer, in design units
-        constexpr float kAlpha = 0.085f;
-        for (int layer = layers; layer >= 1; --layer) {
-            const float grow = static_cast<float>(layer) * kStep * s;
+        constexpr int kRings = 5;
+        // Alpha of the innermost ring, which is what the box edge ends up at.
+        // Measured back: this lands the edge at -28/255 against the reference's
+        // -31 (the first pass, at 0.082, was -23 and read as too faint once the
+        // smear was gone).
+        constexpr float kInnermost = 0.100f;
+        const float reach = kShadowReach * std::max(spreadScale, 0.05f) * s;
+        float alpha = kInnermost / static_cast<float>(1 << (kRings - 1));
+        for (int ring = kRings; ring >= 1; --ring) {
+            const float grow = reach * static_cast<float>(ring) / static_cast<float>(kRings);
             dl->AddRectFilled(ImVec2(lo.x - grow, lo.y - grow), ImVec2(hi.x + grow, hi.y + grow),
-                withAlpha(kShadow, kAlpha * strength), rounding + grow);
+                withAlpha(kShadow, alpha * strength), rounding + grow);
+            alpha *= 2.0f;
         }
     }
     // True when this card was *not* submitted on the previous frame, i.e. its caller
@@ -398,9 +418,9 @@ namespace
 } // namespace
 
 void dropShadow(ImDrawList* dl, const ImVec2& lo, const ImVec2& hi, float rounding, float s,
-    float strength, int layers)
+    float strength, float spreadScale)
 {
-    shadowLayers(dl, lo, hi, rounding, s, strength, layers);
+    shadowLayers(dl, lo, hi, rounding, s, strength, spreadScale);
 }
 
 float scale()
@@ -1277,9 +1297,9 @@ bool checkBox(const char* label, bool* value, float rowWidth, bool enabled)
     // Radius follows the box: the old 10px corner was tuned for a 32px box and
     // looked round-shouldered once the box shrank to 24.
     const float radius = boxSize * 0.26f;
-    // 3 layers, not the usual 5: the reference gives its checkbox a 4px blur
-    // where every other control gets 8px.
-    dropShadow(dl, boxLo, boxHi, radius, s, 1.0f, 3);
+    // Half the usual spread: the reference gives its checkbox a 4px blur where
+    // every other control gets 8px.
+    dropShadow(dl, boxLo, boxHi, radius, s, 1.0f, 0.5f);
     dl->AddRectFilled(boxLo, boxHi, fill, radius);
     // No border. The reference's box has an *inset white* ring (`inset 0 0 0 1px
     // #ffffff`), which on a white box draws nothing at all - its edge is defined

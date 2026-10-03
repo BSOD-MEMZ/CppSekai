@@ -251,18 +251,20 @@ float anim(ImGuiID id, bool target, float rate = 18.0f);
 // Soft halo shadow under a rounded box, for the parts of a screen that draw
 // themselves (the song-select search pill, any panel that should sit "just a
 // little raised"). Call it *before* the box itself, on the same draw list:
-// rounded rects concentric with the box, each one grown a little further out and
-// drawn before the last, so only the fringe outside the box shows.
+// rounded rects concentric with the box, each one grown further out and drawn
+// before the last, so only the fringe outside the box shows.
 //
-// The shape is the reference's, `0 0 8px rgba(68,68,102,.5)`: centred on the
-// box, NOT dropped downwards, in the same navy the UI text uses. `s` is the
-// px-per-unit scale of the caller, `rounding` the box's corner radius.
-// `layers` sets the spread: the default 5 reaches ~8*s, which is what a 60px
-// control wants, while a small one (ui::checkBox) passes 3 - the reference gives
-// that a 4px blur rather than 8px. ui::combo() draws its own. This ImGui has
-// no shadow primitive (no AddShadowRect / ImGuiCol_WindowShadow).
+// The curve is the reference's, `0 0 8px rgba(68,68,102,.5)`, measured off its
+// own render: centred on the box (NOT dropped downwards), in the same navy the
+// UI text uses, and much gentler than the 0.5 in the rule suggests - the alpha
+// halves roughly every 2.5px and is gone by ~10px. `s` is the px-per-unit scale
+// of the caller and `rounding` the box's corner radius.
+// `spreadScale` multiplies how far it reaches: 1.0 is the ~8px a normal control
+// wants, 0.5 is what ui::checkBox passes (the reference halves the blur on its
+// checkbox - 4px there against 8px everywhere else). ui::combo() draws its own.
+// This ImGui has no shadow primitive (no AddShadowRect / ImGuiCol_WindowShadow).
 void dropShadow(ImDrawList* dl, const ImVec2& lo, const ImVec2& hi, float rounding, float s,
-    float strength = 1.0f, int layers = 5);
+    float strength = 1.0f, float spreadScale = 1.0f);
 
 // ---- Game controller focus ---------------------------------------------
 // A pad has no pointer, so everything that is clicked rather than typed -
