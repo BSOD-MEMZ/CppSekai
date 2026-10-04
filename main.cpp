@@ -3473,6 +3473,12 @@ int main(int argc, char** argv)
         importAsk = true;
     }
 #endif
+    // Is there a game controller at all? The settings card has to know, and it is
+    // a lambda defined right here - long before `pad` itself exists (the SDL
+    // controller setup is further down), so it cannot look at that pointer and a
+    // later declaration would not be in scope for it. runFrame() refreshes this
+    // once a frame from the one place that owns `pad`; see the pad poll there.
+    bool padConnected = false;
     auto drawSettingsCard = [&]() {
         static bool settingsAlive = false;
         if (showDebug) {
@@ -3642,45 +3648,54 @@ int main(int argc, char** argv)
                     ui::bindSe(&audio, 0.8f * seVolume);
                     persistUserData();
                 }
-                contentLeft();
-                ImGui::Text("手柄震动");
-                // Scales the song-start buzz and the result screen's score roll
-                // (see the `rumble` lambda). 0 turns both off; a pad without
-                // motors ignores it either way.
-                float rumblePct = userSettings.padRumble * 100.0f;
-                contentLeft();
-                if (ui::slider("padrumble", &rumblePct, 0.0f, 100.0f, 5.0f, "%.0f%%", interior)) {
-                    userSettings.padRumble = std::clamp(rumblePct / 100.0f, 0.0f, 1.0f);
-                    persistUserData();
-                }
-                // 震动: which hits are worth a kick. The strength / master switch
-                // is the slider right above; these pick the moments. Each one is
-                // a short buzz, so it rides on top of the long song-start /
-                // result-roll vibrations instead of replacing them. (Moved here
-                // from 判定 - all of them are "how the run plays", not "how the
-                // notes are judged".)
-                contentLeft();
-                ImGui::Text("震动");
-                contentLeft();
-                bool rumbleFlickBox = userSettings.rumbleFlick;
-                ui::checkBox("命中 Flick 时震动", &rumbleFlickBox, interior);
-                if (rumbleFlickBox != userSettings.rumbleFlick) {
-                    userSettings.rumbleFlick = rumbleFlickBox;
-                    persistUserData();
-                }
-                contentLeft();
-                bool rumbleCriticalBox = userSettings.rumbleCritical;
-                ui::checkBox("命中绝赞（黄键）时震动", &rumbleCriticalBox, interior);
-                if (rumbleCriticalBox != userSettings.rumbleCritical) {
-                    userSettings.rumbleCritical = rumbleCriticalBox;
-                    persistUserData();
-                }
-                contentLeft();
-                bool rumbleMissBox = userSettings.rumbleMiss;
-                ui::checkBox("MISS 时震动", &rumbleMissBox, interior);
-                if (rumbleMissBox != userSettings.rumbleMiss) {
-                    userSettings.rumbleMiss = rumbleMissBox;
-                    persistUserData();
+                // 手柄震动 + 震动: everything under here needs a pad with motors to
+                // mean anything, so the whole run of rows is hidden outright when
+                // none is plugged in (padConnected, refreshed in runFrame). Not
+                // greyed out like 多人演出 - there is no pad to enable them on,
+                // and a settings page full of dead switches is worse than a short
+                // one. The values keep living in the profile, so plugging a pad in
+                // brings them back exactly as they were left.
+                if (padConnected) {
+                    contentLeft();
+                    ImGui::Text("手柄震动");
+                    // Scales the song-start buzz and the result screen's score roll
+                    // (see the `rumble` lambda). 0 turns both off; a pad without
+                    // motors ignores it either way.
+                    float rumblePct = userSettings.padRumble * 100.0f;
+                    contentLeft();
+                    if (ui::slider("padrumble", &rumblePct, 0.0f, 100.0f, 5.0f, "%.0f%%", interior)) {
+                        userSettings.padRumble = std::clamp(rumblePct / 100.0f, 0.0f, 1.0f);
+                        persistUserData();
+                    }
+                    // 震动: which hits are worth a kick. The strength / master switch
+                    // is the slider right above; these pick the moments. Each one is
+                    // a short buzz, so it rides on top of the long song-start /
+                    // result-roll vibrations instead of replacing them. (Moved here
+                    // from 判定 - all of them are "how the run plays", not "how the
+                    // notes are judged".)
+                    contentLeft();
+                    ImGui::Text("震动");
+                    contentLeft();
+                    bool rumbleFlickBox = userSettings.rumbleFlick;
+                    ui::checkBox("命中 Flick 时震动", &rumbleFlickBox, interior);
+                    if (rumbleFlickBox != userSettings.rumbleFlick) {
+                        userSettings.rumbleFlick = rumbleFlickBox;
+                        persistUserData();
+                    }
+                    contentLeft();
+                    bool rumbleCriticalBox = userSettings.rumbleCritical;
+                    ui::checkBox("命中绝赞（黄键）时震动", &rumbleCriticalBox, interior);
+                    if (rumbleCriticalBox != userSettings.rumbleCritical) {
+                        userSettings.rumbleCritical = rumbleCriticalBox;
+                        persistUserData();
+                    }
+                    contentLeft();
+                    bool rumbleMissBox = userSettings.rumbleMiss;
+                    ui::checkBox("MISS 时震动", &rumbleMissBox, interior);
+                    if (rumbleMissBox != userSettings.rumbleMiss) {
+                        userSettings.rumbleMiss = rumbleMissBox;
+                        persistUserData();
+                    }
                 }
                 // 自动演出 (moved here from 画面): it is a play-mode switch, not a
                 // display one.
@@ -6225,6 +6240,14 @@ int main(int argc, char** argv)
             }
             padReleaseQueue.clear();
         }
+        // Refreshed here, once a frame, rather than at the two places `pad`
+        // changes. Hot-plug already handles opening and closing, but the removal
+        // event only closes the pointer - it would leave the last "true"
+        // standing, and the settings card would keep showing rows for a pad that
+        // is no longer there. Every frame passes through here, so this cannot go
+        // stale. --fake-pad counts as connected on purpose: that switch exists to
+        // exercise the very rows this gates.
+        padConnected = pad != nullptr || !fakePad.empty();
         if (pad != nullptr || !fakePad.empty()) {
             SDL_GameControllerUpdate();
             // --fake-pad cycles the button (held ~half a second, then released
