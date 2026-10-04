@@ -103,6 +103,23 @@ void AudioEngine::setBgmVolume(float volume)
     }
 }
 
+void AudioEngine::setMuted(bool muted)
+{
+    mMuted = muted;
+    if (!mEngineInitialized) {
+        return;
+    }
+    // Engine level, so one call covers everything: the chart track, the
+    // song-select preview, the result BGM and every SE voice (hit sounds and
+    // UI clicks included). The per-voice gains above are left untouched - this
+    // is a multiplier on top of them - so unmuting restores exactly the mix
+    // that was playing, rather than whatever the caller would have to rebuild.
+    ma_engine_set_volume(&mEngine, muted ? 0.0f : 1.0f);
+    // One line, so a headless run can tell the mute actually fired (窗口最小化静音).
+    std::printf("[audio] master %s\n", muted ? "muted" : "unmuted");
+    std::fflush(stdout);
+}
+
 bool AudioEngine::loadSe(const std::string& dir, std::string& outError)
 {
     static const char* kFiles[10] = {

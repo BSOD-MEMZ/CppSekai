@@ -665,6 +665,11 @@ void debugOpenGuessDialog(bool open)
     }
 }
 
+bool guessDialogOpen()
+{
+    return gGuess.open;
+}
+
 // Blurred desktop wallpaper used as the screen backdrop (0 = draw the built-in
 // gradient instead). Owned by the host - see setSelectBackdrop().
 GLuint gSelectBackdropTex = 0;
@@ -1054,6 +1059,8 @@ void loadUserData(const std::string& path, UserSettings& settings,
             settings.autoplay = s.value("autoplay", settings.autoplay);
             settings.autoPauseOnBlur = s.value("autoPauseOnBlur", settings.autoPauseOnBlur);
             settings.reportSmtc = s.value("reportSmtc", settings.reportSmtc);
+            settings.muteWhenMinimized = s.value("muteWhenMinimized", settings.muteWhenMinimized);
+            settings.switchImeOnStart = s.value("switchImeOnStart", settings.switchImeOnStart);
             settings.splashStyle = s.value("splashStyle", settings.splashStyle);
             settings.bgStyle = s.value("bgStyle", settings.bgStyle);
             settings.glassMode = s.value("glassMode", settings.glassMode);
@@ -1188,6 +1195,8 @@ void saveUserData(const std::string& path, const UserSettings& settings,
         {"autoplay", settings.autoplay},
         {"autoPauseOnBlur", settings.autoPauseOnBlur},
         {"reportSmtc", settings.reportSmtc},
+        {"muteWhenMinimized", settings.muteWhenMinimized},
+        {"switchImeOnStart", settings.switchImeOnStart},
         {"splashStyle", settings.splashStyle},
         {"bgStyle", settings.bgStyle},
         {"glassMode", settings.glassMode},
@@ -4788,7 +4797,26 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             // Four options in a 2x2 grid. The fill carries the verdict after a
             // pick (mint = right, red = the one you took) - capsuleButton only
             // knows mint-or-white, hence the local pill.
-            const bool answered = gGuess.picked >= 0;
+            // One answer, two ways in (the pointer and the keyboard). Both have
+            // to land in exactly the same place - the tally and the streak are
+            // the whole point of the mode - so they share this instead of
+            // duplicating the bookkeeping.
+            auto pickOption = [&](int i) {
+                if (gGuess.picked >= 0 || i < 0 || i >= 4) {
+                    return;
+                }
+                gGuess.picked = i;
+                ++gGuess.asked;
+                if (i == gGuess.answer) {
+                    ++gGuess.correct;
+                    ++gGuess.streak;
+                    gGuess.bestStreak = std::max(gGuess.bestStreak, gGuess.streak);
+                } else {
+                    gGuess.streak = 0;
+                }
+            };
+
+            bool answered = gGuess.picked >= 0;
             const float optW = (interior - 14.0f * s) * 0.5f;
             const float optH = 52.0f * s;
             for (int i = 0; i < 4; ++i) {
@@ -4804,16 +4832,40 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
                     fill = IM_COL32(255, 138, 150, 255);
                 }
                 if (guessOptionPill(label.c_str(), ImVec2(optW, optH), fill, s, !answered)) {
-                    gGuess.picked = i;
-                    ++gGuess.asked;
-                    if (i == gGuess.answer) {
-                        ++gGuess.correct;
-                        ++gGuess.streak;
-                        gGuess.bestStreak = std::max(gGuess.bestStreak, gGuess.streak);
-                    } else {
-                        gGuess.streak = 0;
+                    pickOption(i);
+                }
+            }
+
+            // ---- Keyboard: 1/2/3/4 选, 回车下一题, Esc 关闭 ------------------
+            // ImGui's key state is global - IsKeyPressed does not care which
+            // window holds focus - so these work wherever the pointer is. The
+            // `false` is "on the press, not on auto-repeat": holding 1 must not
+            // answer this question and the next one with it.
+            //
+            // ESC is also handled by the main loop, which runs *before* this
+            // function in a frame; it asks game::guessDialogOpen() first and
+            // stands down while the card is up, so the close lands here.
+            {
+                static const ImGuiKey kOptionKeys[4] = {
+                    ImGuiKey_1, ImGuiKey_2, ImGuiKey_3, ImGuiKey_4};
+                for (int i = 0; i < 4; ++i) {
+                    if (ImGui::IsKeyPressed(kOptionKeys[i], false)) {
+                        pickOption(i);
                     }
                 }
+                // Enter does the job of the button under the grid: 下一题 once
+                // answered, 跳过 before that.
+                if (ImGui::IsKeyPressed(ImGuiKey_Enter, false)
+                    || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false)) {
+                    newGuessQuestion();
+                }
+                if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+                    gGuess.open = false;
+                }
+                // A keyboard answer landed in this very frame, above the
+                // drawing already done - re-read so the verdict line and the
+                // button label show it now instead of blinking a frame later.
+                answered = gGuess.picked >= 0;
             }
 
             // Verdict + tally.

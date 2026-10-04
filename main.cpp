@@ -37,6 +37,7 @@
 #ifdef _WIN32
 #include <windows.h>
 #include <shellapi.h>
+#include <imm.h> // ImmSetConversionStatus: 开始游戏时切换到英文输入法
 // 账户 > 导入 / 导出用户数据 uses the classic comdlg32 pickers (GetOpenFileNameW
 // / GetSaveFileNameW). The downloader has linked comdlg32 since it existed for
 // its folder browser; the game only needs it now, and build.sh's link line has
@@ -417,6 +418,37 @@ namespace
         // 7 = FEEDBACK_TOUCH_TAP.
         fn(info.info.win.window, 1, 0, sizeof(BOOL), &value);
         fn(info.info.win.window, 7, 0, sizeof(BOOL), &value);
+    }
+
+    // 设置 > 演奏 > 开始游戏时切换到英文输入法.
+    //
+    // Asks the *active IME* for its alphanumeric mode rather than loading a
+    // different keyboard layout: a player on 微软拼音 keeps their IME and their
+    // layout, but the 12 lane keys stop disappearing into a pinyin composition
+    // window. Nothing to undo when the run ends, and someone who was already on
+    // an English layout sees no change at all. An English-only machine (no IME
+    // attached to the window) is a plain no-op.
+    //
+    // Called from beginSessionClockAt, i.e. at every point a live actually
+    // starts (song select, a room round, a retry) and nowhere else - the card
+    // previews and the song list do not touch it.
+    void switchImeToAscii(SDL_Window* window)
+    {
+        SDL_SysWMinfo info{};
+        SDL_VERSION(&info.version);
+        if (!SDL_GetWindowWMInfo(window, &info) || info.subsystem != SDL_SYSWM_WINDOWS) {
+            return;
+        }
+        HWND hwnd = info.info.win.window;
+        if (hwnd == nullptr) {
+            return;
+        }
+        HIMC himc = ImmGetContext(hwnd);
+        if (himc == nullptr) {
+            return; // no IME on this window at all
+        }
+        ImmSetConversionStatus(himc, IME_CMODE_ALPHANUMERIC, 0);
+        ImmReleaseContext(hwnd, himc);
     }
 
     // Text of every CppSekai window's title, minus the optional 多人游玩 label
@@ -2619,6 +2651,13 @@ int main(int argc, char** argv)
     auto beginSessionClockAt = [&](Uint64 at) {
         perfStart = at != 0 ? at : SDL_GetPerformanceCounter();
         audio.start(leadInSec);
+        // 设置 > 演奏 > 开始游戏时切换到英文输入法. Hooked here rather than at
+        // each caller because this is the single place that means "a live is
+        // starting" - the song list, a room round and a retry all reach it, and
+        // none of the previews do.
+        if (userSettings.switchImeOnStart) {
+            switchImeToAscii(window);
+        }
     };
     auto beginSessionClock = [&]() { beginSessionClockAt(0); };
 
@@ -3738,6 +3777,16 @@ int main(int argc, char** argv)
                     userSettings.autoplay = autoPlayBox;
                     persistUserData();
                 }
+                // 开始游戏时切到英文输入法：只把当前输入法切到英文（半角）模式，
+                // 不换键盘布局——中文输入法就不会把 12 个 lane 键吃进候选框。
+                // 实现在 main.cpp 的 switchImeToAscii()，由 beginSessionClockAt 调。
+                contentLeft();
+                bool imeBox = userSettings.switchImeOnStart;
+                ui::checkBox("开始游戏时切到英文输入法", &imeBox, interior);
+                if (imeBox != userSettings.switchImeOnStart) {
+                    userSettings.switchImeOnStart = imeBox;
+                    persistUserData();
+                }
                 // 按键映射: 12 个 lane 各自的键。默认 z s x d c v g b h n j m（kLaneKeys），
                 // 点一格再按一个键就改；新键已被别的 lane 占用时两条 lane 直接对调，省得
                 // 先清空。ESC 取消。存 profile（settings.laneKeys）。
@@ -4236,6 +4285,16 @@ int main(int argc, char** argv)
                 ui::checkBox("失焦时自动暂停", &autoPauseBox, interior);
                 if (autoPauseBox != userSettings.autoPauseOnBlur) {
                     userSettings.autoPauseOnBlur = autoPauseBox;
+                    persistUserData();
+                }
+                contentLeft();
+                bool muteMinBox = userSettings.muteWhenMinimized;
+                ui::checkBox("最小化窗口静音", &muteMinBox, interior);
+                if (muteMinBox != userSettings.muteWhenMinimized) {
+                    userSettings.muteWhenMinimized = muteMinBox;
+                    // 真正切换由帧内那段轮询做（它每帧看一次 SDL_WINDOW_MINIMIZED），
+                    // 所以这里只落盘：勾选时窗口必然不是最小化的，下一次最小化
+                    // 就会按新设置静音；取消勾选时窗口是还原的，轮询也会把静音摘掉。
                     persistUserData();
                 }
                 contentLeft();
@@ -6201,12 +6260,53 @@ int main(int argc, char** argv)
             longPressIo.AddMouseButtonEvent(ImGuiMouseButton_Right, false);
         }
 
-        if (escapePressed) {
+        // 窗口最小化静音 (设置 > 系统). Engine-wide, so one flag covers the
+        // chart track, the select preview, the result BGM and the SE pool -
+        // "minimised means quiet" has to hold on the list too, where a live is
+        // not even running.
+        //
+        // Polled every frame rather than driven off SDL_WINDOWEVENT_MINIMIZED:
+        // that way ticking the box *while* the window is already minimised
+        // takes effect immediately, and so does unticking it, without having to
+        // replay an event that has already gone by.
+        {
+            const bool minimized = (SDL_GetWindowFlags(window) & SDL_WINDOW_MINIMIZED) != 0;
+            const bool wantMute = userSettings.muteWhenMinimized && minimized;
+            if (wantMute != audio.muted()) {
+                audio.setMuted(wantMute);
+            }
+        }
+
+        if (escapePressed && !game::guessDialogOpen()) {
             countdownActive = false; // leaving / continuing cancels any countdown
             if (pauseDialogOpen) {
                 beginResumeCountdown();
             } else if (state == AppState::Result || (state == AppState::Play && susPath.empty())) {
                 // back to the song list
+                //
+                // 多人游玩: leaving a live this way is a *give-up*, so the room
+                // has to be told - exactly like the pause dialog's 放弃 (see the
+                // block there). Without it the block stays on 已确定/已点引信
+                // with phase still PartyCharging, and every later 确定 hits
+                // "the round is already on": the window sits on the song list
+                // for ever showing 准备中…. `susPath.empty()` is true for every
+                // live started from the list (it only holds the --sus argument),
+                // so this is the ordinary path out of a run, not a rare one.
+                if (party.active()) {
+                    party.setHostPaused(false);
+                    party.setSeat(platform::PartySeatLobby);
+                    party.setReady(false);
+                    mpConfirmed = false;
+                    if (party.isHost()) {
+                        party.releaseSong();
+                    }
+                    // Nobody is following anybody outside a live. The next
+                    // charge re-arms both (see the room block in the select
+                    // state).
+                    mpFollowing = false;
+                    mpHostPaused = false;
+                    mpStatus.clear();
+                }
                 audio.stopMusic();
                 audio.stopResultBgm();
                 audio.setHoldLoop(false, false, 0.0f);
@@ -7181,6 +7281,17 @@ int main(int argc, char** argv)
                     // is then what the members steer onto, see resolveSongClock).
                     beginSessionClockAt(mpSnap.startCounter);
                     party.setSeat(platform::PartySeatPlaying);
+                    if (host) {
+                        // The room is live, not loading any more. Every reader
+                        // already treats Charging and Running alike (roundOn,
+                        // songLocked, the host-song publish), so this is only
+                        // about the room telling the truth: Charging is what the
+                        // song list keys 准备中… off, and it is also the phase
+                        // in which update() suspends the heartbeat reaper (so a
+                        // window that dies mid-run now loses its seat instead of
+                        // holding it). See Party.hpp.
+                        party.setPhase(platform::PartyRunning);
+                    }
                     state = AppState::Play;
                     std::printf("[party] go (lead-in %.1fs, start counter %llu)\n", leadInSec,
                         static_cast<unsigned long long>(mpSnap.startCounter));

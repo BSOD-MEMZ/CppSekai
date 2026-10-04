@@ -124,6 +124,16 @@ class AudioEngine
     void setBgmVolume(float volume);
     float bgmVolume() const { return mBgmVolume; }
 
+    // ---- Master mute (窗口最小化静音) ------------------------------------
+    // Engine-wide, not per voice: it silences the chart track, the preview, the
+    // result BGM and the SE pool together, which is what "minimised means
+    // quiet" has to mean (the select screen plays a preview and the list clicks
+    // do not stop just because a live is not running). Implemented as the
+    // engine's own volume multiplier, so it stacks on top of the per-voice
+    // gains setBgmVolume manages and lifts cleanly.
+    void setMuted(bool muted);
+    bool muted() const { return mMuted; }
+
     // One-shot countdown beep (assets/se/count_down.mp3), played by the
     // resume countdown. A missing file just disables it.
     void playCountdownSe(float volume);
@@ -196,6 +206,7 @@ class AudioEngine
     bool mStarted = false;
     bool mMusicStarted = false;
     bool mPaused = false;
+    bool mMuted = false;      // engine-wide mute (窗口最小化静音)
     float mBgmVolume = 1.0f; // master volume for every music voice
     double mLeadInSec = 0.0;
     double mMusicStartPosSec = 0.0; // music file position that is chart time 0

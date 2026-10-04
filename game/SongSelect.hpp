@@ -221,6 +221,18 @@ struct UserSettings
     // Pause the run when the window loses keyboard focus (alt-tab, a popup
     // stealing focus). Off = the song keeps running in the background.
     bool autoPauseOnBlur = true;
+    // 最小化窗口时静音 (settings > 系统). Global: it silences the *engine*, so
+    // the song-select preview and the result BGM go quiet too, not just the
+    // chart track. Restoring the window lifts it again. Independent of
+    // autoPauseOnBlur: that one only exists on the play screen, this one is for
+    // "I alt-tabbed away and do not want the game talking to the room".
+    bool muteWhenMinimized = false;
+    // 开始游戏时切换到英文输入法 (settings > 演奏). On starting a live, ask the
+    // active IME for its alphanumeric mode, so the 12 lane keys reach the game
+    // instead of being swallowed by a pinyin composition window. Only touches
+    // the *mode* of whatever IME is already selected - it never changes the
+    // player's keyboard layout. See switchImeToAscii() in main.cpp.
+    bool switchImeOnStart = false;
     // Report the current song to Windows (SMTC: the volume flyout / taskbar
     // media widget). Off = nothing is announced, so a media widget showing
     // something else is left alone.
@@ -530,6 +542,13 @@ void debugOpenProfileCard(bool open);
 // Debug (`--guess`): open the 猜歌 quiz (the header button's card) at boot, for
 // the same reason. Also usable to close it again.
 void debugOpenGuessDialog(bool open);
+
+// True while the 猜歌 card is up. The main loop checks this before acting on
+// ESC: with the card open, ESC belongs to the card (it closes it) and must not
+// reach the "leave the live / quit the game" branch. That branch runs *before*
+// drawSongSelect in a frame, so it reads the previous frame's state - which is
+// exactly what makes it work: the frame ESC is pressed, the card is still open.
+bool guessDialogOpen();
 
 // Debug (`--singer-panel`): open the 切换歌手 panel (the phone panel's singer
 // button) at boot, same reason. It only appears on a song that has a vocal
