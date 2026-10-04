@@ -93,6 +93,8 @@
 - 无交互会话下 PostMessage 到不了多数 ImGui 界面（实测 `winmsg/winsend click` 点选曲 combo /
   设置齿轮 / 刷新全无反应，只有 SDL 层自绘热区能到）→ 在代码里加自动按的调试开关
   （`--fake-pad`、`--chartdl-test`），或临时加 env 探针 `OpenPopup`，**只开一次**，验完删干净。
+  **`--fake-pad <不存在的键名>`（如 `NONE`）= 伪造"插了一个不会按的手柄"**：状态类分支
+  （如设置页按 `padConnected` 显示手柄行）能用它验，而且不会乱点界面。
 - **残留实例会同时骗你两次**：`tasklist | grep cppsekai` 才看得到（`Get-Process` 看不到），
   既占着 exe 让链接报 Permission denied，又用单实例 mutex 挡掉无头跑。清理：
   `MSYS_NO_PATHCONV=1 taskkill /PID <pid> /F`。
