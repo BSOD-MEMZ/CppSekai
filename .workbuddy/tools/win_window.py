@@ -73,10 +73,58 @@ def windows_of(pids):
     return found
 
 
+DWMWA_EXTENDED_FRAME_BOUNDS = 9
+DWMWA_BORDER_COLOR = 34
+
+u32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+u32.GetClientRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+u32.ClientToScreen.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.POINT)]
+
+
+def rect_info(hwnd):
+    """The three rectangles that explain "why is there a transparent strip".
+
+    * GetWindowRect        - the window box: what most capture tools use.
+    * GetClientRect(+map)  - where the game actually draws.
+    * DWM extended frame   - what DWM considers the visible frame.
+
+    A window whose non-client area has been turned into DWM glass (see
+    DwmExtendFrameIntoClientArea, which this game calls with -1 margins) keeps
+    the first rectangle but has *no pixels* in the strip between it and the
+    client area - which reads as "a bit of transparent space" in a capture.
+    """
+    win = wintypes.RECT()
+    u32.GetWindowRect(hwnd, ctypes.byref(win))
+    cli = wintypes.RECT()
+    u32.GetClientRect(hwnd, ctypes.byref(cli))
+    origin = wintypes.POINT(0, 0)
+    u32.ClientToScreen(hwnd, ctypes.byref(origin))
+
+    dwm = ctypes.WinDLL("dwmapi", use_last_error=True)
+    efb = wintypes.RECT()
+    hr = dwm.DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS,
+                                   ctypes.byref(efb), ctypes.sizeof(efb))
+
+    print("window rect      : (%d,%d)-(%d,%d)  %dx%d" % (
+        win.left, win.top, win.right, win.bottom, win.right - win.left, win.bottom - win.top))
+    print("client rect      : screen (%d,%d)-(%d,%d)  %dx%d" % (
+        origin.x, origin.y, origin.x + cli.right, origin.y + cli.bottom,
+        cli.right, cli.bottom))
+    print("  -> border L/R/T/B = %d / %d / %d / %d px" % (
+        origin.x - win.left, win.right - (origin.x + cli.right),
+        origin.y - win.top, win.bottom - (origin.y + cli.bottom)))
+    if hr == 0:
+        print("dwm ext frame    : (%d,%d)-(%d,%d)  %dx%d" % (
+            efb.left, efb.top, efb.right, efb.bottom,
+            efb.right - efb.left, efb.bottom - efb.top))
+    else:
+        print("dwm ext frame    : unavailable (hr=0x%08X)" % (hr & 0xFFFFFFFF))
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("action", choices=["minimize", "restore", "status"])
+    ap.add_argument("action", choices=["minimize", "restore", "status", "rect"])
     ap.add_argument("--image", default="cppsekai.exe",
                     help="process image name to look for (default cppsekai.exe)")
     args = ap.parse_args()
@@ -95,6 +143,9 @@ def main():
         print("note: %d windows found, using the first" % len(wins))
     print("pid=%s hwnd=%s title=%r" % (pids, hwnd, title))
 
+    if args.action == "rect":
+        rect_info(hwnd)
+        return 0
     if args.action == "minimize":
         u32.ShowWindow(hwnd, SW_MINIMIZE)
     elif args.action == "restore":
