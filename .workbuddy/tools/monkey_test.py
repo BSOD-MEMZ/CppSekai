@@ -71,15 +71,12 @@ def log(msg, progress=None):
 def setup(root, force=False):
     sb = os.path.join(root, 'sb')
     pristine = os.path.join(root, 'pristine')
-    if force or not os.path.isdir(sb):
+    fresh = force or not os.path.isdir(sb)
+    if fresh:
         if os.path.isdir(root):
             shutil.rmtree(root, ignore_errors=True)
         os.makedirs(sb)
-        for name in ['cppsekai.exe', 'SDL2.dll', 'icon.png']:
-            src = os.path.join(BUILD, name)
-            if os.path.isfile(src):
-                shutil.copy2(src, os.path.join(sb, name))
-        if not os.path.isfile(os.path.join(sb, 'cppsekai.exe')):
+        if not os.path.isfile(os.path.join(BUILD, 'cppsekai.exe')):
             raise SystemExit('no cppsekai.exe in %s - run build.sh first' % BUILD)
         shutil.copytree(os.path.join(BUILD, 'assets'), os.path.join(sb, 'assets'))
         os.makedirs(os.path.join(sb, 'charts'))
@@ -95,8 +92,16 @@ def setup(root, force=False):
         for name in TABLE_FILES:
             src = os.path.join(sb, name)
             if os.path.isfile(src):
-                shutil.copy2(src, os.path.join(pristine, name))
+                shutil.copy2(src, os.path.join(sb, name))
         shutil.copytree(os.path.join(sb, 'charts'), os.path.join(pristine, 'charts'))
+    # The binaries are refreshed on EVERY run, not only when the sandbox is first
+    # created. Reusing an existing sandbox silently tested the previous build -
+    # which is exactly how a freshly fixed failure path can look like it still
+    # does nothing.
+    for name in ['cppsekai.exe', 'SDL2.dll', 'icon.png']:
+        src = os.path.join(BUILD, name)
+        if os.path.isfile(src):
+            shutil.copy2(src, os.path.join(sb, name))
     return sb, pristine
 
 

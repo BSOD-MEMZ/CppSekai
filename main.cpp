@@ -708,6 +708,17 @@ namespace
 
         const float* events = core_api::getHitEventBuffer();
         const int count = core_api::getHitEventCount();
+        // A file that parses without complaint but yields no notes is the most
+        // confusing failure this program has: the stage loads, the lead-in runs,
+        // the combo counter sits at 0 and nothing ever falls. From the player's
+        // side that is indistinguishable from "I pressed the wrong thing", and it
+        // is what every non-SUS file does - a PNG sitting next to the chart, a
+        // truncated download, a stray binary. Confirm with `--dump-events 1`,
+        // which prints this count.
+        if (count == 0) {
+            error = "chart has no notes (corrupt, or not a SUS file): " + entry.susPath;
+            return false;
+        }
         judgement.load(events, count);
 
         // Debug (--dump-events <n>): print the first n packed HitEvents. Each
@@ -3101,6 +3112,24 @@ int main(int argc, char** argv)
     bool confirmFlashShotFired = false;
     game::ChartEntry confirmPendingEntry;
     ImVec2 selectConfirmCenter{0.0f, 0.0f}; // filled by drawSongSelect each frame
+    // Transient line shown on top of whatever is on screen when a chart refuses
+    // to load. It exists because the old behaviour was a print to stderr and
+    // nothing else: the confirm burst faded, the song list came back, and from
+    // the player's side the press had simply done nothing at all. Counted down in
+    // frames, the same way the settings card's 导入/导出 result line is.
+    std::string loadFailStatus;
+    int loadFailStatusFrames = 0;
+    // Says it out loud when a chart refuses to load. Every startSession() caller
+    // a player can reach goes through this, so the feedback reads the same whether
+    // the chart was picked from the list, retried from the pause dialog, or
+    // restarted mid-run. `failedEntry` has to be passed in rather than read off
+    // `session`: startSession() only copies into session.entry after its checks
+    // pass, so on a failure that field still holds the *previous* chart.
+    auto reportLoadFailure = [&](const game::ChartEntry& failedEntry) {
+        loadFailStatus = "谱面加载失败，文件可能损坏或不是 SUS 谱面："
+            + chartFileName(failedEntry.susPath);
+        loadFailStatusFrames = 300;
+    };
     // Song end: as the track runs out the screen goes black, and the result screen
     // fades that black back off. One value drives both halves.
     constexpr float kSongEndFadeSec = 1.2f;
@@ -7286,6 +7315,7 @@ int main(int argc, char** argv)
                     std::fflush(stdout);
                 } else {
                     std::fprintf(stderr, "[restart] failed: %s\n", error.c_str());
+                    reportLoadFailure(entries[static_cast<size_t>(next)]);
                     error.clear();
                 }
             }
@@ -7891,6 +7921,7 @@ int main(int argc, char** argv)
                         beginSessionClock();
                     } else {
                         std::fprintf(stderr, "%s\n", error.c_str());
+                        reportLoadFailure(session.entry);
                         error.clear();
                     }
                 } else if (action == 1) {
@@ -8154,6 +8185,10 @@ int main(int argc, char** argv)
                     beginSessionClock();
                 } else {
                     std::fprintf(stderr, "%s\n", error.c_str());
+                    // Tell the player, not only the log. Nothing else on screen
+                    // changes when this fails - the burst fades and the list is
+                    // back - so without this line the press looks swallowed.
+                    reportLoadFailure(confirmPendingEntry);
                     error.clear();
                     // Nothing to reveal - but cut to the fade rather than
                     // dropping the white on this frame: a hard cut back to the
@@ -8306,6 +8341,38 @@ int main(int argc, char** argv)
                     }
                 }
             }
+        }
+
+        // Chart-load failure line. Drawn last, so it sits on top of the confirm
+        // burst, and in every state on purpose: the same file can fail to load
+        // from the song list, from 重试 in the pause dialog, or from a restart.
+        // A navy band with white text - the shape the reference site uses for its
+        // own status messages - so it reads over both the light song list and the
+        // dark playfield.
+        if (loadFailStatusFrames > 0) {
+            --loadFailStatusFrames;
+            const float s = ui::scale();
+            const float w = static_cast<float>(windowW);
+            const float h = static_cast<float>(windowH);
+            ImDrawList* fg = ImGui::GetForegroundDrawList();
+            ImFont* font = game::bodyFont();
+            const float sizePx = 22.0f * s;
+            const ImVec2 ts = font->CalcTextSizeA(sizePx, FLT_MAX, 0.0f, loadFailStatus.c_str());
+            const float padX = 24.0f * s;
+            const float padY = 13.0f * s;
+            const float bw = ts.x + padX * 2.0f;
+            const float bh = ts.y + padY * 2.0f;
+            // Fades over the last half second so it leaves instead of blinking
+            // out on a frame boundary.
+            const float fade = std::clamp(static_cast<float>(loadFailStatusFrames) / 30.0f, 0.0f, 1.0f);
+            const auto fadeA = [&](int alpha) {
+                return static_cast<int>(static_cast<float>(alpha) * fade);
+            };
+            const ImVec2 lo((w - bw) * 0.5f, h * 0.84f - bh * 0.5f);
+            const ImVec2 hi(lo.x + bw, lo.y + bh);
+            fg->AddRectFilled(lo, hi, IM_COL32(68, 68, 102, fadeA(238)), bh * 0.5f);
+            fg->AddText(font, sizePx, ImVec2(lo.x + padX, lo.y + padY),
+                IM_COL32(255, 255, 255, fadeA(255)), loadFailStatus.c_str());
         }
 
         // One sound per frame: the widgets queued their requests while the
