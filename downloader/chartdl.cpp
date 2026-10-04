@@ -2661,7 +2661,7 @@ namespace
                     if (queued == 0) {
                         MessageBoxW(hwnd, skippedDone > 0
                                 ? L"勾选的歌曲都已经下载过了，没有需要下载的文件。"
-                                : L"左边没有勾选任何歌曲。",
+                                : L"没有勾选任何歌曲。",
                             L"CppSekai 谱面下载器", MB_OK | MB_ICONINFORMATION);
                         return 0;
                     }
