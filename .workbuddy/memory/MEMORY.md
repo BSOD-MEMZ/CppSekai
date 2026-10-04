@@ -92,6 +92,21 @@
   卡片圆角保持 `14*s`（与原作 20px 对 60px 控件等价，照抄 20 会圆过头）；
   **按钮按下是「反白」不是变深**（薄荷→#E3FCF8 底+薄荷字，白→#A1F4EC 底+白字）。
 
+## 窗口外观（Win32 / DWM）
+- **主窗口就是标准的带边框窗口，没有自绘边框**：创建时因为静态启动图临时
+  `SDL_WINDOW_BORDERLESS`，`splashShown` 之后 `SDL_SetWindowBordered(TRUE)` 装回来。
+- **看不到 Win10 那条 1px 黑边**，是因为 `DwmExtendFrameIntoClientArea(-1,-1,-1,-1)`
+  （`applyWindowTransparency`；只要 `splashStyle == 0` 就开着，与用不用玻璃背景无关）：
+  整个窗口矩形被当成"扩展 frame"，默认装饰连同那条线一起被客户区的 alpha 合成接管。
+  **这是副作用不是特意去边**——代码里没有 `DWMWA_BORDER_COLOR`；
+  `DWMWA_NCRENDERING_POLICY` 试过，Win7 会掉回 Basic 边框所以否了（注释就在那个 lambda 里）。
+- **代价**：NC 区域布局上仍在（`WM_NCCALCSIZE` 没接管，日志 `frameless 0`）。
+  实测窗口 1382x808 / 客户区 1366x768 → **左右下各 8px（`SM_CXSIZEFRAME 4 + SM_CXPADDEDBORDER 4`）、
+  上 32px**，那圈**没有游戏像素**，所以截图会露出一条透明；
+  `DWMWA_EXTENDED_FRAME_BOUNDS` **等于** `GetWindowRect`，用哪个矩形都躲不掉。
+  要"客户区铺满窗口"只有 `glassMode 2`（自绘无框：`WM_NCCALCSIZE→0` + `WM_NCHITTEST` 自管拖动）。
+- 量这些用 `.workbuddy/tools/win_window.py rect`（三个矩形一次打出来）。
+
 ## 验证手法（精选）
 - **截图能直接看**（Read 一张 PNG）。**先看 PNG 尺寸**：窗口多大截图就多大，别按 1920x1080 算裁剪框。
   `--party-auto` 会在结算 2s 后自动按「继续」，拍结算别加它。开场卡片要 `--intro-preview`。
