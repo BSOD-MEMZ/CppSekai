@@ -22,8 +22,13 @@
 - `main.cpp` 必须在 `#include <SDL.h>` 前 `#define SDL_MAIN_HANDLED`，否则"秒退无输出"。
 - exe 是 Windows 子系统；日志去 **cwd 的 `cppsekai.log`**；`--screenshot` 参数是**文件路径**
   （给目录静默失败），父目录必须已存在。
-- **无头跑看日志别重定向 stdout**：`( exe >/dev/null 2>&1 & )` 会让 `cppsekai.log` 不生成。
-  要 `( exe & )` / `( exe & wait )`，或加 `--screenshot` 让它自己退。
+- **`cppsekai.log` 只在"没附加到控制台"时才写**（`main.cpp` 启动那段：先试
+  `AttachConsole(ATTACH_PARENT_PROCESS)`，成了就写 CONOUT$，否则才 `freopen` 到文件）。
+  所以：前台跑 / `( exe & )` → 有 `cppsekai.log`；**`run_in_background` 会让它附加到
+  控制台，日志跑去任务输出、文件根本不建**。要看文件就别用后台任务。
+- **`( exe & )` 必须和"中途的操作"写在同一条命令里**：`( ./exe & ); sleep 6; <操作>;
+  sleep 3; <读日志>; taskkill ...`。跨调用会丢——父 shell 一退子进程跟着走（实测日志
+  停在中断处）。要长期跑又不想丢，用 `run_in_background`，但那样没有日志文件。
 - **Win7 补丁在 build.sh 顶部**（09-19）：强制 libc++ chrono 走运行时探测，否则 Win7 报
   "无法定位程序输入点"。**toolchain 重解压会自动重打，别删**（`grep -c CPPSEKAI-WIN7 = 2` 断言）。
   复查用 `.workbuddy/tools/pe_imports.py`（别用 strings|grep）。Win7 还缺 UCRT，待拍板。
@@ -68,6 +73,12 @@
   虚拟单位必须自己乘 scale。数值/文字优先用游戏自带精灵（`score/digit/*`、`combo/p*`）。
 - 自绘控件（`ui::slider` / `checkBox` / `radioRow` / `stepper` / `capsuleButton`）**键盘焦点够不着** ——
   手柄靠焦点环（`ui::PadScope` + `padNav`）；**新增原生 `ImGui::Combo` 要接一句 `ui::padComboNudge`**。
+- **模态卡片要和 ESC 抢优先级**（10-04）：主循环的 `escapePressed` 分支跑在
+  `drawSongSelect` **之前**，看到的是**上一帧**的卡片状态。猜歌的做法是把
+  `!game::guessDialogOpen()` 加进分支条件（于是 ESC 归卡片）。**新加卡片照办**——
+  不然 Select 状态下按 ESC 会掉进 `running = false` 直接退出游戏。
+- 卡片里的键盘操作用 `ImGui::IsKeyPressed(key, **false**)`（默认 true 带 auto-repeat，
+  长按会连触发），它读的是全局键盘状态、**不依赖焦点**，所以不用抢 `SetWindowFocus`。
 - 设置卡片 **380x800**（设计像素，`ui::scale()` = 视高/860 封顶 2.0）；页签内容放裁剪 child 里，
   **余量很小**（演奏 515 / 账户 488）。加行先跑 `CPSEKAI_UI_TRACE=1` 看 `used`。
 - **观感基准 = sekai-stories.pages.dev（非官方站点）**，规格与实测对照见 `2026-10-03.md`。
