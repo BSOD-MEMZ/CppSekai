@@ -2,7 +2,7 @@
 
 
 在班上垃圾希沃使用 Windows 原生触摸享受和同学打烤的快乐。上课放 PPT，下课打 PJSK。
-
+[访问官方网站（测试中）](https://xxtsoft.top/support/cppsekai/)
 
 ![shitakara4banme](docs/playonseewo.jpg)
 
