@@ -57,8 +57,13 @@
 - **SDL 会把 `WM_CLOSE` 交给 `DefWindowProc`、窗口当场销毁** → 想"先问一句"必须在窗口过程里吞掉，
   用 `SDL_RegisterEvents` 自定义事件通知主循环。手写 COM vtable **按位置寻址**，要用第 N 个方法
   就得把前面全声明出来；GUID 对着 `toolchain/.../any-windows-any` 头文件核，别凭记忆写。
-- 菜单/缩略图命令共用一条挂起通道（`WM_COMMAND` → 主循环帧内消费）。**「灰掉」只是 UI，
-  处理端要另挡一道**。跳转列表要尊重 `BeginList` 的 removed 数组，`CommitList` 失败要 `AbortList`。
+- 命令共用一条挂起通道（`WM_COMMAND` → 主循环帧内消费），**每消费一条要补 `EndMenu()`**
+  （不然菜单模式的模态循环不会退）。**「灰掉」只是 UI，处理端要另挡一道**。
+  跳转列表要尊重 `BeginList` 的 removed 数组，`CommitList` 失败要 `AbortList`。
+- **菜单的 Alt / 访问键要把 `WM_SYSKEY*` / `WM_SYSCHAR` / `WM_MENU*` **和
+  `WM_SYSCOMMAND` 里的 `SC_KEYMENU`** 转给 `DefWindowProcW`** —— SDL 把这一族全吃了
+  （2026-10-06 用户报的"Alt 没反应"就是这个）。测这个只能用 winsend 的
+  `real` / `realalt`（SendInput 真键盘）；合成消息进不了菜单模式。
 
 ## ⚠ 版权口径（2026-09-24 更新，别再引旧文档）
 - 官方 2026-04-27 公告：SNS 上被确认使用「外部非公式应用」→ **禁参加官方大会/活动（资格罚）**。
@@ -67,5 +72,7 @@
 
 ## 最近工作
 - 10-06：原生菜单栏 + 「与 Windows 融合」四批（防休眠/拖放/媒体键、窗口位置/标题/关窗确认、
-  缩略图按钮、.sus 关联/Jump List）。10-04：模态卡片 ESC 优先级。10-03：观感对齐 sekai-stories。
+  ~~缩略图按钮~~**当天撤掉**、.sus 关联/Jump List）；第二批修好**菜单 Alt 访问键**
+  （SDL 吞 `SC_KEYMENU`）+ 打开谱面/编辑菜单/排序分组子菜单/演出能量。
+  10-04：模态卡片 ESC 优先级。10-03：观感对齐 sekai-stories。
 - 09-24：设置卡片一批。09-20：chartdl 数据源 + 猜歌 + 手柄焦点环。09-19：多人、结算改版、Win7 三连修。
