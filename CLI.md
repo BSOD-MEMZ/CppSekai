@@ -211,9 +211,13 @@ cppsekai [--sus <file.sus>] [--bgm <audio>] [--charts <dir>] [--cover <image>]
   所以有个 `CPSEKAI_CARD_T=<0..1>`——把**所有卡片的动画冻结在这个进度**上再抓图，
   `0.3` 左右最能看出内容是不是跟着框一起缩放/淡入。
 - `--flick-as-tap`：本次运行把 flick 音符按 tap 判（等价于设置里的「Flick 视作 Tap」，**不写档案**）。
-- `CPSEKAI_DELETEASK=1`：开局就把「删除谱面文件？」那张确认卡举到列表第一首上（截图 / 无头
+- `CPSEKAI_DELETEASK=1`：开局就把「删除这首歌？」那张确认卡举到列表第一首上（截图 / 无头
   驱动用）。注意 `PrintWindow`（即 `.workbuddy/tools/shoot_win.py`）抓不到 GL 画面，
   要看卡片只能用游戏自己的 `--screenshot`。
+  删除的清单在提出请求时就定好并打进日志（`[delete] will remove N file(s) …` + 逐条），
+  删的时候逐条 `removed` / `FAILED`、最后 `N/M file(s) gone` —— 无头验证直接 grep 这几行。
+  删的是**一整首歌**（同 `musicId` 的全部难度 + 曲绘 + 所有歌手的 mp3 + sidecar），
+  别的谱面还认得的共用文件不会被连带删掉。
 - **失血阴影**（掉血时四边变暗）：`CPSEKAI_VIGNETTE=0.85` 把阴影冻结在这个强度上，用来截无头对比图——
   掉血需要真人漏接，`--screenshot` 造不出来。`0` = 关（当对照图用）。
 - **某个键"按了没反应"**：`CPSEKAI_KEY_LOG=1` 会把每一笔按键打一行

@@ -3816,23 +3816,17 @@ int main(int argc, char** argv)
     // 删的是**本地磁盘上的 .sus**，删掉就没了 —— 这是整个程序里唯一一个会毁掉
     // 用户数据的动作，所以必须问一句，而且要说清楚删的是哪个文件。
     bool deleteAsk = false;
-    int deleteAskIndex = -1;   // entries 里的下标（删完把光标挪到附近那首）
-    std::string deleteAskPath; // 要删的文件（卡片上显示名字）
+    int deleteAskIndex = -1;                 // entries 里的下标（删完把光标挪到附近那首）
+    std::string deleteAskLabel;              // 曲名（卡片上显示）
+    std::string deleteAskDir;                // 文件所在目录（卡片上显示）
+    std::string deleteAskSummary;            // "将删除 N 个文件：…"
+    std::vector<std::string> deleteAskFiles; // 真的会删的文件列表，**提出请求时就定下来**
 #ifdef _WIN32
     // Headless check (CPSEKAI_MULTIASK=1): raise the card at startup. Clicking the
     // combo is the only other way to get here, and a posted click does not reach an
     // ImGui button, so this is how the entrance animation gets looked at.
     if (std::getenv("CPSEKAI_MULTIASK") != nullptr) {
         multiInstanceAsk = true;
-    }
-    // Same for 删除谱面文件: CPSEKAI_DELETEASK=1 raises it for the first chart in
-    // the list, so a --screenshot run can look at the card (and so a script can
-    // find the buttons: PrintWindow does not capture the GL surface, only the
-    // game's own --screenshot does).
-    if (std::getenv("CPSEKAI_DELETEASK") != nullptr && !entries.empty()) {
-        deleteAsk = true;
-        deleteAskIndex = 0;
-        deleteAskPath = entries.front().susPath;
     }
     // Same for 导入: CPSEKAI_IMPORTASK=1 raises the confirmation card over the
     // active profile's own file, which is the one thing about it that cannot be
@@ -5254,6 +5248,158 @@ int main(int argc, char** argv)
     // 正好反过来，那张的默认是"继续演出"。
     // 同名的音频 / 曲绘**不跟着删**：它们可能被好几首共用，也可能是用户自己配的。
     // ------------------------------------------------------------------
+    // ------------------------------------------------------------------
+    // 「删除谱面文件」到底要删哪些东西。
+    //
+    // 删的是**一首歌**，不是一个文件：同一个 musicId 的全部难度谱面 + 曲绘 +
+    // 各个歌手的 mp3（music-vocals.json 里那些 asset，就躺在谱面旁边）。列表里看到的
+    // 本来也是"一首歌"（一个分组），用户要的就是"删干净"。
+    //
+    // **共用的文件不能连带删**：一张曲绘、一个 mp3 常常被同一首歌的几个难度同时用着。
+    // 所以最后拿"没被删的那些谱面还认得哪些文件"过一遍筛子 —— 这样"删掉最后一个
+    // 难度"和"只删其中一个难度"都自动落到对的行为上，不用分情况写。
+    //
+    // 认不出 musicId 的（文件名开头没编号）就只删它自己一个，绝不猜。
+    // ------------------------------------------------------------------
+    struct DeleteTargets
+    {
+        std::string label;   // 曲名
+        std::string dir;     // 文件所在目录
+        std::string summary; // 卡片上那句"将删除 …"
+        std::vector<std::string> files;
+    };
+    auto collectDeleteTargets = [&](int index) -> DeleteTargets {
+        DeleteTargets out;
+        if (index < 0 || index >= static_cast<int>(entries.size())) {
+            return out;
+        }
+        const game::ChartEntry& target = entries[static_cast<size_t>(index)];
+        out.label = target.displayName.empty() ? target.susPath : target.displayName;
+        const std::filesystem::path chartDir = path_utf8::toPath(target.susPath).parent_path();
+        out.dir = path_utf8::fromPath(chartDir);
+        const int musicId = target.musicId;
+
+        // 这一歌要删的条目：同一 musicId 的所有难度；认不出 id 时只有它自己。
+        std::vector<bool> doomed(entries.size(), false);
+        for (size_t i = 0; i < entries.size(); ++i) {
+            doomed[i] = (i == static_cast<size_t>(index))
+                || (musicId > 0 && entries[i].musicId == musicId);
+        }
+        // 没被删的谱面还认得的文件（谱面自己 / 曲绘 / 音频 / sidecar）。
+        std::set<std::string> keep;
+        for (size_t i = 0; i < entries.size(); ++i) {
+            if (doomed[i]) {
+                continue;
+            }
+            const std::filesystem::path chartPath = path_utf8::toPath(entries[i].susPath);
+            keep.insert(entries[i].susPath);
+            if (!entries[i].coverPath.empty()) {
+                keep.insert(entries[i].coverPath);
+            }
+            if (!entries[i].bgmPath.empty()) {
+                keep.insert(entries[i].bgmPath);
+            }
+            std::filesystem::path jsonPath = chartPath;
+            keep.insert(path_utf8::fromPath(jsonPath.replace_extension(".json")));
+            if (entries[i].musicId > 0) {
+                const std::filesystem::path otherDir = chartPath.parent_path();
+                for (const game::VocalVersion& v : game::musicVocals(entries[i].musicId)) {
+                    keep.insert(path_utf8::fromPath(otherDir / (v.asset + ".mp3")));
+                }
+                char idName[16];
+                std::snprintf(idName, sizeof(idName), "%04d.json", entries[i].musicId);
+                keep.insert(path_utf8::fromPath(otherDir / idName));
+            }
+        }
+
+        std::set<std::string> seen;
+        int nCharts = 0;
+        int nCovers = 0;
+        int nAudios = 0;
+        int nMeta = 0;
+        auto addFile = [&](const std::string& file, int& counter) {
+            if (file.empty() || keep.count(file) != 0 || seen.count(file) != 0) {
+                return;
+            }
+            std::error_code ec;
+            if (ec || !std::filesystem::is_regular_file(path_utf8::toPath(file), ec)) {
+                return; // 只删真的躺在磁盘上的
+            }
+            seen.insert(file);
+            out.files.push_back(file);
+            ++counter;
+        };
+
+        for (size_t i = 0; i < entries.size(); ++i) {
+            if (!doomed[i]) {
+                continue;
+            }
+            std::filesystem::path chartPath = path_utf8::toPath(entries[i].susPath);
+            addFile(entries[i].susPath, nCharts);
+            if (!entries[i].coverPath.empty()) {
+                addFile(entries[i].coverPath, nCovers);
+            }
+            // 谱面自己那份 sidecar（<stem>.json）跟着谱面一起走。
+            addFile(path_utf8::fromPath(chartPath.replace_extension(".json")), nMeta);
+        }
+        if (musicId > 0) {
+            // 同一首歌共用的 <id4>.json，以及所有歌手的 mp3。
+            char idName[16];
+            std::snprintf(idName, sizeof(idName), "%04d.json", musicId);
+            addFile(path_utf8::fromPath(chartDir / idName), nMeta);
+            for (const game::VocalVersion& v : game::musicVocals(musicId)) {
+                addFile(path_utf8::fromPath(chartDir / (v.asset + ".mp3")), nAudios);
+            }
+        }
+        // 谱面自带的那一个 BGM（没有 music-vocals 表的老数据也有声）。
+        for (size_t i = 0; i < entries.size(); ++i) {
+            if (doomed[i] && !entries[i].bgmPath.empty()) {
+                addFile(entries[i].bgmPath, nAudios);
+            }
+        }
+
+        out.summary = "将删除 " + std::to_string(out.files.size()) + " 个文件："
+            + std::to_string(nCharts) + " 个谱面 + " + std::to_string(nCovers) + " 张曲绘 + "
+            + std::to_string(nAudios) + " 个音频";
+        if (nMeta > 0) {
+            out.summary += " + " + std::to_string(nMeta) + " 个元数据";
+        }
+        return out;
+    };
+
+    // 提出删除请求的唯一入口：文件清单**当场**定下来，卡片只负责显示和确认。
+    // 菜单 编辑 > 删除、曲目右键 > 删除、CPSEKAI_DELETEASK 都走这里。
+    auto requestDelete = [&](int index) {
+        const DeleteTargets targets = collectDeleteTargets(index);
+        if (targets.files.empty()) {
+            std::printf("[delete] nothing to delete (index=%d)\n", index);
+            std::fflush(stdout);
+            return;
+        }
+        // 清单先打出来：用户"删了什么"、脚本验证"该删的删没删"都看这几行。
+        std::printf("[delete] will remove %d file(s) for '%s':\n",
+            static_cast<int>(targets.files.size()), targets.label.c_str());
+        for (const std::string& file : targets.files) {
+            std::printf("[delete]   %s\n", file.c_str());
+        }
+        std::fflush(stdout);
+        deleteAsk = true;
+        deleteAskIndex = index;
+        deleteAskLabel = targets.label;
+        deleteAskDir = targets.dir;
+        deleteAskSummary = targets.summary;
+        deleteAskFiles = targets.files;
+    };
+
+#ifdef _WIN32
+    // Debug: CPSEKAI_DELETEASK=1 开局把删除卡举到列表第一首上（截图 / 无头驱动用）。
+    // 放在这里而不是主函数开头那几个 env 开关旁边：它要用上面那个收集器。
+    // PrintWindow 抓不到 GL 画面，要看卡片只能靠游戏自己的 --screenshot（见 CLI.md）。
+    if (std::getenv("CPSEKAI_DELETEASK") != nullptr && !entries.empty()) {
+        requestDelete(0);
+    }
+#endif
+
     auto drawDeleteAskDialog = [&]() {
         if (deleteAsk) {
             deleteAskAlive = true;
@@ -5261,15 +5407,12 @@ int main(int argc, char** argv)
         if (!deleteAskAlive) {
             return;
         }
-        const std::string label = deleteAskPath.empty()
-            ? std::string("(没有文件)")
-            : path_utf8::fromPath(path_utf8::toPath(deleteAskPath).filename());
-        const int action = ui::eulaDialog(renderer, "##deleteask", "删除谱面文件？",
+        const int action = ui::eulaDialog(renderer, "##deleteask", "删除这首歌？",
             {
-                "文件：" + label,
-                deleteAskPath,
-                "会把这个 .sus 从磁盘上删掉，无法恢复。",
-                "同名的音频 / 曲绘不会被删。",
+                "歌曲：" + deleteAskLabel,
+                deleteAskSummary,
+                "位置：" + deleteAskDir,
+                "删掉无法恢复；这个目录里别的歌不受影响。",
             },
             nullptr, nullptr, {std::string("取消"), std::string("删除")}, {true, false},
             deleteAskPadChoice);
@@ -5283,15 +5426,25 @@ int main(int argc, char** argv)
             std::fflush(stdout);
             deleteAsk = false;
         } else if (action == 1) {
-            bool ok = false;
+            // 一张一张删，逐条打日志 —— 哪个没删掉要能一眼看出来。
+            int removed = 0;
+            for (const std::string& file : deleteAskFiles) {
+                bool ok = false;
 #ifdef _WIN32
-            ok = DeleteFileW(path_utf8::widen(deleteAskPath).c_str()) != 0;
+                ok = DeleteFileW(path_utf8::widen(file).c_str()) != 0;
 #else
-            ok = std::remove(deleteAskPath.c_str()) == 0;
+                ok = std::remove(file.c_str()) == 0;
 #endif
-            std::printf("[delete] %s %s\n", ok ? "removed" : "FAILED", deleteAskPath.c_str());
+                if (ok) {
+                    ++removed;
+                }
+                std::printf("[delete] %s %s\n", ok ? "removed" : "FAILED", file.c_str());
+            }
+            std::printf("[delete] %d/%d file(s) gone\n", removed,
+                static_cast<int>(deleteAskFiles.size()));
             std::fflush(stdout);
             deleteAsk = false;
+            deleteAskFiles.clear();
             // 重新扫一遍列表，光标尽量停在原来的位置（删的是最后一条就往前挪一格）。
             // 不走 rescanRequested：那条路会把光标打回第 0 首，删完一首就被甩到列表
             // 开头，连删几首会很难受。
@@ -7046,9 +7199,7 @@ int main(int argc, char** argv)
                         std::fflush(stdout);
                     }
                 } else {
-                    deleteAsk = true;
-                    deleteAskIndex = selected;
-                    deleteAskPath = cur.susPath;
+                    requestDelete(selected);
                 }
                 break;
             }
@@ -7129,14 +7280,18 @@ int main(int argc, char** argv)
             default:
                 break;
             }
-        }
-        // 命令是从**信箱**来的，不是菜单自己发的 —— 所以菜单的模态循环不会因为它而
-        // 退出：按 Alt 把菜单栏拉高（菜单模式，泵停在 DefWindowProc 里）之后再来一条
-        // 命令（PostMessage 驱动、以后真要加的键盘加速键也一样），窗口会一直卡在菜单
-        // 模式里（`running = false` 也没用，主循环根本没在跑）。
-        // `EndMenu()` 结束**本线程**的活动菜单；没有菜单在跑时它只是返回 FALSE，无害。
-        if (menuIsOpen) {
-            EndMenu();
+            // 命令是从**信箱**来的，不是菜单自己发的 —— 所以菜单的模态循环不会因为它
+            // 而退出：按 Alt 把菜单栏拉高（菜单模式，泵停在 DefWindowProc 里）之后再来
+            // 一条命令，窗口会一直卡在菜单模式里（`running = false` 都没用，主循环根本
+            // 没在跑）。`EndMenu()` 结束**本线程**的活动菜单；没有菜单在跑时只是返回
+            // FALSE，无害。
+            //
+            // ⚠ 这一句**只能放在这个分支里**（即"确实消费了一条命令"）。放到分支外
+            // 就是每帧一次 —— 菜单一打开，下一帧就被自己关掉，表现成"鼠标点一下菜单栏
+            // 闪一下就没了"（2026-10-06 真踩到过）。
+            if (menuIsOpen) {
+                EndMenu();
+            }
         }
         if (menuPauseWanted) {
             menuPauseWanted = false;
@@ -7830,9 +7985,7 @@ int main(int argc, char** argv)
             }
             // 曲目右键 > 删除谱面文件…：举确认卡，动作在 drawDeleteAskDialog 里。
             if (deleteRequest >= 0 && deleteRequest < static_cast<int>(entries.size())) {
-                deleteAsk = true;
-                deleteAskIndex = deleteRequest;
-                deleteAskPath = entries[static_cast<size_t>(deleteRequest)].susPath;
+                requestDelete(deleteRequest);
             }
             // Debug (--party-auto): the host's 确定, without a mouse. Waits for
             // the list to settle so the chart it picks is the one the list
