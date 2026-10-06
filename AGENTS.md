@@ -1201,6 +1201,20 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
   修法：主循环 `ImGui::NewFrame()` 之后按 `io.WantTextInput` 的边沿 Start / Stop（rect 仍由
   ImGui 在 `Render()` 里交给后端），切换时打一行 `[ime] text input on`。
   **候选框本身只能真人用输入法验证**（无头会话里那个框不会出现）。
+- **`pulse()` / `pressed()` 定义在 `if (pad != nullptr || !fakePad.empty())` 里面**（2026-10-06）：
+  想借"合成一次按键"这条路的代码（媒体键、任何新的快捷键）**别放进那个块** ——
+  没插手柄时整块不执行，表现是"键明明到了、标志也置上了、就是没人消费"（第一次做媒体键
+  就栽在这：`CPSEKAI_KEY_LOG=1` 已经打出 `AudioNext` 了，`[media]` 一行都没有）。
+  `pulse` 现在提到那个 if **外面**了，抬起走 `padReleaseQueue` 延迟一帧 —— 同一帧里
+  down+up 会让 ImGui 的 `DownDuration` 归零，`IsKeyPressed` 直接看不到。
+- **按键级诊断：`CPSEKAI_KEY_LOG=1`**（2026-10-06 加）：每笔按键打一行
+  `[key] sym=0x… (名字) scancode=… mod=… repeat=…`，比 `CPSEKAI_MSG_LOG`（窗口消息级）低一层。
+  查"某个键没反应"从它开始：能立刻分清是"事件没进来"还是"进来了但 keysym 不对"。
+- **`winsend.exe key <vk>` 的 lParam 必须带扫描码**（2026-10-06 修）：SDL2 从 lParam 的
+  16..23 位取扫描码（`scancodes_windows` 表按扫描码索引），wParam 里的虚拟键码只是参考。
+  以前传 0 → SDL 翻成 `SDL_SCANCODE_UNKNOWN`、事件被丢掉：窗口过程确实收到 `WM_KEYDOWN`
+  （`CPSEKAI_MSG_LOG` 看得见），游戏里一点反应没有（拿 F5 试出来的）。媒体键（0xB0..0xB7）
+  还要置**扩展键位**（bit24），不然扫描码会撞上普通键（0x22 是 G）。
 
 ## 系统要求
 

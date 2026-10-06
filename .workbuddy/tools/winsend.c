@@ -145,9 +145,26 @@ int main(int argc, char** argv)
         // is also the more robust of the two ways in: a key carries no
         // coordinates, so nothing can be measured wrong.
         activate(g_found);
-        PostMessage(g_found, WM_KEYDOWN, vk, 0);
+        // lParam 必须是真的：**SDL 从 lParam 的 16..23 位取扫描码**（SDL2 的
+        // scancodes_windows 表按扫描码索引，扩展键再加 0x80 那一位），wParam 里那个
+        // 虚拟键码它只当参考。以前这里 PostMessage(..., 0) —— 扫描码是 0，SDL 就把它
+        // 翻成 SDL_SCANCODE_UNKNOWN / SDLK_UNKNOWN，**事件被整个丢掉**：窗口过程确实
+        // 收到了 WM_KEYDOWN（CPSEKAI_MSG_LOG=1 看得见），可游戏里一个反应都没有
+        // （2026-10-06 拿 F5 试出来的：日志里 F5 到了，[select] 那条重扫却一次没出）。
+        //   bit0      = 1（repeat count）
+        //   bit16..23 = 扫描码（MapVirtualKey 现算）
+        //   bit24     = 扩展键；0xB0..0xB7 那几个媒体键都是 E0 前缀的，不给这一位
+        //               就会撞上同扫描码的普通键（0x22 是 G）
+        //   bit30     = 按下前的状态（0 = 之前是抬起的）
+        const UINT scan = MapVirtualKey((UINT)vk, MAPVK_VK_TO_VSC);
+        LPARAM keyLParam = (LPARAM)(1 | (scan << 16));
+        if (vk >= 0xB0 && vk <= 0xB7) {
+            keyLParam |= (LPARAM)(1 << 24); // 媒体键：扩展键标志
+        }
+        // 键抬起那一笔：bit30 要置上（"之前是按下状态"），bit31 表示正在切换。
+        PostMessage(g_found, WM_KEYDOWN, vk, keyLParam);
         Sleep(60);
-        PostMessage(g_found, WM_KEYUP, vk, 0);
+        PostMessage(g_found, WM_KEYUP, vk, keyLParam | (LPARAM)(1u << 30) | (LPARAM)(1u << 31));
     } else {
         fprintf(stderr, "winsend: unknown action\n");
         return 2;

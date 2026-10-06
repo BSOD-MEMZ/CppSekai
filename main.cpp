@@ -1131,6 +1131,10 @@ int main(int argc, char** argv)
     // an interactive session to be driven by PostMessage), so the launch path
     // gets its own switch.
     double chartDlTestAtSec = -1.0;
+    // --drop-test <path> [sec]: 合成一个 SDL_DROPFILE（真实拖放没法从脚本驱动，
+    // WM_DROPFILES 里的 HDROP 属于"放"的那个进程）。用法见 CLI.md。
+    std::string dropTestPath;
+    double dropTestAtSec = 1.0;
     int winWidth = 1366;
     int winHeight = 768;
     float uiScaleArg = 1.0f;      // --ui-scale: song-select / result zoom
@@ -1284,6 +1288,16 @@ int main(int argc, char** argv)
             // Headless check: open the settings card right away, so a
             // --screenshot run can look at it (a key press can't be sent).
             showSettingsShot = true;
+        } else if (arg == "--drop-test" && i + 1 < utf8Argc) {
+            // Headless check for 拖放谱面进窗口. A real drag from Explorer cannot be
+            // driven from a script (WM_DROPFILES carries an HDROP that belongs to
+            // the *dropping* process), so this pushes the very SDL_DROPFILE event
+            // SDL would have made from it - same dispatch, same .sus filter, same
+            // startDroppedChart. Path is UTF-8, like a real drop.
+            dropTestPath = utf8Argv[++i];
+            if (i + 1 < utf8Argc && utf8Argv[i + 1][0] != '-') {
+                dropTestAtSec = std::atof(utf8Argv[++i]);
+            }
         } else if (arg == "--settings-tab" && i + 1 < utf8Argc) {
             settingsTabShot = std::atoi(utf8Argv[++i]);
         } else if (arg == "--profile") {
@@ -2731,6 +2745,7 @@ int main(int argc, char** argv)
     double partyAutoMemberAt = 0.0;
     bool partyAutoContinued = false; // --party-auto: 继续 on the result screen
     bool chartDlTestFired = false;   // --chartdl-test: the auto-press ran once
+    bool dropTestFired = false;      // --drop-test: the synthetic drop ran once
 
     auto partyUsable = [&]() { return party.active() && party.playerCount() >= 2; };
     // ---- chartdl (the standalone chart downloader) --------------------------
@@ -5504,6 +5519,41 @@ int main(int argc, char** argv)
     // 就定死了，写在下面（subclass 那块）它会看不见。
     int menuCommand = -1;
     bool menuPauseWanted = false;
+    // 拖进窗口的谱面（SDL_DROPFILE）。声明在 runFrame 前面，因为事件循环里要用它，
+    // 而 lambda 的捕获在定义处就定死了 —— 跟 dragFramePacing 一个理由。
+    //
+    // 只认 .sus，而且只在**选曲界面**生效：演奏 / 结算中间换曲会把这一局的收尾
+    // 流程（结算记录、多人房间的状态、任务栏进度）绕过去，那两个状态漏掉的收尾
+    // 比"拖了没反应"麻烦得多。
+    auto startDroppedChart = [&](const std::string& path) -> bool {
+        game::ChartEntry entry;
+        entry.susPath = path;
+        game::resolveSidecars(entry); // 旁边的同名 mp3 / 曲绘自己认
+        if (!startSession(session, entry, renderer, audio, judgement, noteSpeed, error)) {
+            std::fprintf(stderr, "%s\n", error.c_str());
+            reportLoadFailure(entry);
+            error.clear();
+            std::printf("[drop] load failed: %s\n", path.c_str());
+            std::fflush(stdout);
+            return false;
+        }
+        // 跟选曲界面按「确定」走的是同一套收尾（见 confirmStartPending 那段）。
+        loadedCoverPath = session.entry.coverPath;
+        announceTrack();
+        touches.clear();
+        std::fill(std::begin(keyHeld), std::end(keyHeld), false);
+        lanePress.fill(0.0f);
+        paused = false;
+        pauseDialogOpen = false;
+        resultScheduled = false;
+        resultData = game::ResultData{};
+        songEndBlackout = 0.0f;
+        state = AppState::Play;
+        beginSessionClock();
+        std::printf("[drop] playing %s\n", path.c_str());
+        std::fflush(stdout);
+        return true;
+    };
 #ifdef _WIN32
     // 主窗口的 HWND。跟上面两个一样必须声明在 runFrame 之前：菜单命令里有几项
     // （结束所有实例的确认框）要用它，而 lambda 的捕获在定义处就定死了。
@@ -5788,6 +5838,11 @@ int main(int argc, char** argv)
 
     bool escapePressed = false;
     bool rescanRequested = false; // F5 in the song list: re-read charts/
+    // 媒体键的上一首 / 下一首 / 确定。事件循环里只记下来，等帧内 pulse() 可用时再发
+    // —— pulse 定义在事件循环**后面**，跟手柄那条路共用同一个出口（见下面的 D-pad）。
+    bool mediaNextRequested = false;
+    bool mediaPrevRequested = false;
+    bool mediaConfirmRequested = false;
         while (SDL_PollEvent(&event) != 0) {
             mapPointerEvent(event);
             ImGui_ImplSDL2_ProcessEvent(&event);
@@ -5890,7 +5945,46 @@ int main(int argc, char** argv)
                         }
                     }
                     break;
+                case SDL_DROPFILE: {
+                    // 把 .sus 拖进窗口直接开打 —— 不用先扔进 charts/ 再按 F5。
+                    // SDL 给的是 UTF-8 路径，readFile / stb 那条路本来就是 UTF-8。
+                    const std::string dropped =
+                        event.drop.file != nullptr ? std::string(event.drop.file) : std::string();
+                    SDL_free(event.drop.file); // SDL 分配的，必须还回去
+                    const auto endsWithSus = [](const std::string& s) {
+                        if (s.size() < 4) {
+                            return false;
+                        }
+                        const char* t = s.c_str() + s.size() - 4;
+                        return t[0] == '.' && (t[1] == 's' || t[1] == 'S')
+                            && (t[2] == 'u' || t[2] == 'U') && (t[3] == 's' || t[3] == 'S');
+                    };
+                    if (!endsWithSus(dropped)) {
+                        std::printf("[drop] ignored (not a .sus): %s\n", dropped.c_str());
+                        std::fflush(stdout);
+                    } else if (state != AppState::Select) {
+                        std::printf("[drop] ignored (only the song list takes a drop): %s\n",
+                            dropped.c_str());
+                        std::fflush(stdout);
+                    } else {
+                        startDroppedChart(dropped);
+                    }
+                    break;
+                }
                 case SDL_KEYDOWN: {
+                    // CPSEKAI_KEY_LOG=1: 每一笔按键都打一行（sym / scancode / 修饰键）。
+                    // 对标 CPSEKAI_MSG_LOG —— 收到"某个键没反应"的报告时，先用它确认这
+                    // 一笔到底有没有变成 SDL_KEYDOWN、变成的是哪个 keysym：2026-10-06
+                    // 就是靠它看出媒体键走进来的是 SDLK_UNKNOWN（winsend 的 lParam 是 0，
+                    // SDL 拿不到扫描码）。
+                    if (std::getenv("CPSEKAI_KEY_LOG") != nullptr) {
+                        std::printf("[key] sym=0x%X (%s) scancode=%d mod=0x%X repeat=%d\n",
+                            static_cast<unsigned>(event.key.keysym.sym),
+                            SDL_GetKeyName(event.key.keysym.sym),
+                            static_cast<int>(event.key.keysym.scancode),
+                            static_cast<unsigned>(event.key.keysym.mod), event.key.repeat);
+                        std::fflush(stdout);
+                    }
                     if (event.key.repeat != 0) {
                         break;
                     }
@@ -5918,6 +6012,46 @@ int main(int argc, char** argv)
                             std::fflush(stdout);
                         }
                         rebindLane = -1;
+                        break;
+                    }
+                    // 键盘上的媒体键（多媒体键盘 / 笔记本功能键）。
+                    // SMTC 一直在往系统报曲目，这些键不响应的话这套汇报就是断的。
+                    //   演奏中：播放/暂停 = 开/关暂停卡片；停止 = 回选曲（跟 ESC 同一条路）
+                    //   选曲界面：播放 = 回车（确定当前曲目），上一首/下一首 = 上下方向键
+                    // 参数用的是脉冲那条路（pulse 在下面），所以列表那套滚动 / 分组逻辑
+                    // 一行都不用另写。放到改键位之后：改键位时这一下该被吃掉。
+                    //
+                    // SDL2 只给 AUDIONEXT / AUDIOPREV / AUDIOSTOP / AUDIOPLAY / AUDIOMUTE /
+                    // MEDIASELECT —— **没有** AUDIOPAUSE 或 TOGGLEPLAYPAUSE（那是 SDL3 / WinRT
+                    // 那套 API 的名字），键盘上的"播放/暂停"合键落到 AUDIOPLAY，所以这里
+                    // 就按"切换"处理。AUDIOMUTE 没接：游戏里没有对应的可切换静音状态
+                    // （最小化静音是另一回事），硬接会和系统静音打架。
+                    switch (event.key.keysym.sym) {
+                    case SDLK_AUDIOPLAY:
+                        if (state == AppState::Play) {
+                            if (pauseDialogOpen) {
+                                // 跟暂停卡片上按「继续演出」是同一个动作（帧内会消费它）。
+                                pauseDialogChoice = 2;
+                            } else if (!paused) {
+                                requestPause();
+                            }
+                        } else if (state == AppState::Select) {
+                            mediaConfirmRequested = true;
+                        }
+                        break;
+                    case SDLK_AUDIONEXT:
+                        mediaNextRequested = true;
+                        break;
+                    case SDLK_AUDIOPREV:
+                        mediaPrevRequested = true;
+                        break;
+                    case SDLK_AUDIOSTOP:
+                        if (state == AppState::Play) {
+                            // ESC 那条路：正常一局回选曲、--sus 起的直接退出。
+                            escapePressed = true;
+                        }
+                        break;
+                    default:
                         break;
                     }
                     // A focused ImGui text field (the song-search box) owns the
@@ -6305,6 +6439,42 @@ int main(int argc, char** argv)
             }
         }
 
+        // ------------------------------------------------------------------
+        // 防屏保 / 防休眠。
+        //
+        // 只要游戏窗口还在（没最小化）就别让 Windows 关屏、睡眠、跳屏保：AUTO 挂着
+        // 热身、或者在选曲界面磨蹭十分钟，黑屏下来这一局就废了。这是音游最容易被骂
+        // 的小事，而 SetThreadExecutionState 是 Win2000 就有的 API，不需要运行时加载。
+        //
+        // 不看焦点：多人游玩和副屏常驻的时候窗口常常不在前台，但屏幕上有东西在动。
+        // 最小化之后放行（"我挂机去干别的"，那时候就该让屏幕睡）。
+        // 状态变了才调 —— 这个 API 会重排系统计时器，不该每帧戳一次；
+        // ES_CONTINUOUS 让它一直有效，单独一个 ES_CONTINUOUS 就是把三档全清掉。
+        // ------------------------------------------------------------------
+        {
+            const bool minimized = (SDL_GetWindowFlags(window) & SDL_WINDOW_MINIMIZED) != 0;
+            static bool inhibitActive = false;
+            const bool wantInhibit = !minimized;
+            if (wantInhibit != inhibitActive) {
+                inhibitActive = wantInhibit;
+#ifdef _WIN32
+                const EXECUTION_STATE requested = wantInhibit
+                    ? static_cast<EXECUTION_STATE>(ES_CONTINUOUS | ES_DISPLAY_REQUIRED | ES_SYSTEM_REQUIRED)
+                    : static_cast<EXECUTION_STATE>(ES_CONTINUOUS);
+                if (SetThreadExecutionState(requested) == 0) {
+                    std::printf("[power] SetThreadExecutionState(0x%lX) failed\n",
+                        static_cast<unsigned long>(requested));
+                } else {
+                    std::printf("[power] %s screen saver / display sleep / system sleep\n",
+                        wantInhibit ? "blocking" : "allowing");
+                }
+                std::fflush(stdout);
+#else
+                (void)wantInhibit;
+#endif
+            }
+        }
+
         if (escapePressed && !game::guessDialogOpen()) {
             countdownActive = false; // leaving / continuing cancels any countdown
             if (pauseDialogOpen) {
@@ -6518,6 +6688,67 @@ int main(int argc, char** argv)
         // stale. --fake-pad counts as connected on purpose: that switch exists to
         // exercise the very rows this gates.
         padConnected = pad != nullptr || !fakePad.empty();
+        // 合成一次按键（按下，抬起走 padReleaseQueue 延迟发）。**放在手柄那个 if
+        // 外面**：它干的事是"造一个 SDL_KEYDOWN"，跟插没插手柄没关系 —— 手柄方向键
+        // 和媒体键都用它。（第一版把媒体键的消费点写在那个 if 里面，没插手柄时永远
+        // 不执行：键到了、标志也置上了，就是没人消费。）
+        // 抬起必须延迟一帧：同一帧里 down+up 会让 ImGui 的 DownDuration 直接归零，
+        // IsKeyPressed 就什么都看不到了；方向键要的也正是"按住"语义。
+        auto pulse = [&](SDL_Scancode sc) {
+            SDL_Event down{};
+            down.type = SDL_KEYDOWN;
+            down.key.type = SDL_KEYDOWN;
+            down.key.state = SDL_PRESSED;
+            down.key.repeat = 0;
+            down.key.keysym.scancode = sc;
+            down.key.keysym.sym = SDL_GetKeyFromScancode(sc);
+            down.key.windowID = padWindowId;
+            SDL_PushEvent(&down);
+            padReleaseQueue.push_back(sc);
+        };
+
+        // 媒体键的上一首 / 下一首 / 确定（flag 在事件循环的 SDL_KEYDOWN 里置，见那边
+        // 的说明）。出口跟手柄 D-pad 完全一样，所以列表那套滚动 / 分组 / 焦点一行都
+        // 不用另写。
+        if (mediaNextRequested || mediaPrevRequested || mediaConfirmRequested) {
+            if (state == AppState::Select) {
+                if (mediaPrevRequested) {
+                    pulse(SDL_SCANCODE_UP);
+                }
+                if (mediaNextRequested) {
+                    pulse(SDL_SCANCODE_DOWN);
+                }
+                if (mediaConfirmRequested) {
+                    pulse(SDL_SCANCODE_RETURN);
+                }
+                std::printf("[media] select: prev=%d next=%d play=%d\n", mediaPrevRequested ? 1 : 0,
+                    mediaNextRequested ? 1 : 0, mediaConfirmRequested ? 1 : 0);
+                std::fflush(stdout);
+            }
+            mediaNextRequested = false;
+            mediaPrevRequested = false;
+            mediaConfirmRequested = false;
+        }
+
+        // --drop-test <path> [sec]: 合成一次 SDL_DROPFILE，走的是和真实拖放完全相同的
+        // 那条路（事件类型、UTF-8 路径、SDL_free 的归属）。真实的拖放没法从脚本驱动
+        // —— WM_DROPFILES 里的 HDROP 属于"放"的那个进程。同样放在手柄 if 外面。
+        if (!dropTestPath.empty() && !dropTestFired && uiClock >= dropTestAtSec) {
+            dropTestFired = true;
+            SDL_Event dropEvent{};
+            dropEvent.type = SDL_DROPFILE;
+            dropEvent.drop.timestamp = SDL_GetTicks();
+            dropEvent.drop.windowID = SDL_GetWindowID(window);
+            const size_t dropLen = dropTestPath.size() + 1;
+            char* dropBuf = static_cast<char*>(SDL_malloc(dropLen));
+            if (dropBuf != nullptr) {
+                std::memcpy(dropBuf, dropTestPath.c_str(), dropLen);
+                dropEvent.drop.file = dropBuf; // 收的一方负责 SDL_free
+                SDL_PushEvent(&dropEvent);
+                std::printf("[drop] --drop-test pushed %s\n", dropTestPath.c_str());
+                std::fflush(stdout);
+            }
+        }
         if (pad != nullptr || !fakePad.empty()) {
             SDL_GameControllerUpdate();
             // --fake-pad cycles the button (held ~half a second, then released
@@ -6532,19 +6763,8 @@ int main(int argc, char** argv)
                 std::printf("[pad] fake cycle %d\n", fakePadFrames / 30);
                 std::fflush(stdout);
             }
-            auto pulse = [&](SDL_Scancode sc) {
-                SDL_Event down{};
-                down.type = SDL_KEYDOWN;
-                down.key.type = SDL_KEYDOWN;
-                down.key.state = SDL_PRESSED;
-                down.key.repeat = 0;
-                down.key.keysym.scancode = sc;
-                down.key.keysym.sym = SDL_GetKeyFromScancode(sc);
-                down.key.windowID = padWindowId;
-                SDL_PushEvent(&down);
-                padReleaseQueue.push_back(sc);
-            };
             auto pressed = [&](SDL_GameControllerButton button, bool& prev) {
+
                 const bool down = padDown(button);
                 const bool edge = down && !prev;
                 prev = down;

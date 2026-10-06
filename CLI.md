@@ -151,6 +151,7 @@ cppsekai [--sus <file.sus>] [--bgm <audio>] [--charts <dir>] [--cover <image>]
 | `--party` | 本次运行加入**多人游玩**房间（同机多窗口一起打，第一个窗口是房主，BGM 只房主放；等价于设置里的「多人游玩」，但不写档案，并且会顺带允许多开） |
 | `--party-name <name>` | 房间里显示的名字（默认取账户昵称），同时进窗口标题：`CppSekai - <name>`，多个窗口才分得清 / 脚本才点得准 |
 | `--party-auto [<难度 0-6>]` | 无头跑一整轮多人：房主自动在当前这首按「确定」，每个窗口自动选该难度并准备。配合 `CPSEKAI_MP_TRACE=1`（每秒一行 `[sync] qpc/t/offset` + 队友分数）就能断言时钟同步。回归脚本见 `.workbuddy/tools/mp_verify.sh` |
+| `--drop-test <路径> [秒=1.0]` | 合成一次**拖放谱面**（`SDL_DROPFILE`，默认 1.0s 时发）。真实拖放没法从脚本驱动——`WM_DROPFILES` 里的 `HDROP` 属于"放"的那个进程——但这条合成事件走的是完全相同的路：同样的 `.sus` 后缀过滤、同样的「只在选曲界面生效」、同样的起奏收尾。日志 `[drop] playing <路径>` = 成功了 |
 | `--help` / `-h` | 打印用法并退出 |
 
 ---
@@ -203,6 +204,16 @@ cppsekai [--sus <file.sus>] [--bgm <audio>] [--charts <dir>] [--cover <image>]
 - `--flick-as-tap`：本次运行把 flick 音符按 tap 判（等价于设置里的「Flick 视作 Tap」，**不写档案**）。
 - **失血阴影**（掉血时四边变暗）：`CPSEKAI_VIGNETTE=0.85` 把阴影冻结在这个强度上，用来截无头对比图——
   掉血需要真人漏接，`--screenshot` 造不出来。`0` = 关（当对照图用）。
+- **某个键"按了没反应"**：`CPSEKAI_KEY_LOG=1` 会把每一笔按键打一行
+  （`[key] sym=0x… (名字) scancode=… mod=… repeat=…`）。先用它确认这一笔到底有没有变成
+  `SDL_KEYDOWN`、变成的是哪个 keysym——媒体键、手柄、输入法相关的怪问题都该从这一行开始查。
+  窗口消息级的那一份是 `CPSEKAI_MSG_LOG=1`（`[msg] 0x… wparam=… lparam=…`，只认 subclass 收到的）。
+  两者都只在窗口过程 / 事件循环里打，不写文件（跟别的日志一个出口）。
+- **驱动一个正在跑的窗口**（无交互会话里测按键 / 点击）：
+  `build/winsend.exe <标题子串> key <虚拟键码>` / `click <客户区x> <y>`。
+  注意 `key` 的 lParam 必须带**扫描码**（`MapVirtualKey`）——SDL 是从 lParam 的 16..23 位读扫描码的，
+  以前这里传 0，事件会被 SDL 丢掉：窗口过程明明收到了 `WM_KEYDOWN`，游戏里毫无反应（2026-10-06 修的）。
+  媒体键（0xB0..0xB7）还要置扩展键位（bit24），否则扫描码会撞上普通键（0x22 是 G）。
 
 ---
 
