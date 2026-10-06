@@ -2543,6 +2543,9 @@ int main(int argc, char** argv)
     // ------------------------------------------------------------------
     platform::SystemMedia systemMedia;
     systemMedia.init(window);
+    // 任务栏缩略图上的三个小按钮（暂停 / 静音 / 返回选曲）。点了会以 WM_COMMAND
+    // （HIWORD = THBN_CLICKED）回到窗口过程，再走跟菜单栏同一条"挂起命令"通道。
+    systemMedia.addThumbButtons(window);
     if (!userSettings.reportSmtc) {
         // Turned off in the settings: never become the active media session,
         // so Windows keeps showing whatever it showed before.
@@ -5670,6 +5673,9 @@ int main(int argc, char** argv)
 #endif
     int menuCommand = -1;
     bool menuPauseWanted = false;
+    // 任务栏缩略图那颗静音按钮的状态（本次运行有效，不落盘）。跟"最小化静音"是
+    // 两个来源，见帧内那个轮询：两边任何一个成立就静音。
+    bool userMuted = false;
     // 窗口被要求关闭（X / Alt+F4 / 别的窗口让我们关）时的唯一决策点。
     //
     // 演奏中先问一句，其余情况直接退。放在这里（runFrame 之前）是因为窗口过程那条路
@@ -6604,7 +6610,8 @@ int main(int argc, char** argv)
         // replay an event that has already gone by.
         {
             const bool minimized = (SDL_GetWindowFlags(window) & SDL_WINDOW_MINIMIZED) != 0;
-            const bool wantMute = userSettings.muteWhenMinimized && minimized;
+            // userMuted = 缩略图那颗静音按钮（本次运行有效，不落盘）。
+            const bool wantMute = (userSettings.muteWhenMinimized && minimized) || userMuted;
             if (wantMute != audio.muted()) {
                 audio.setMuted(wantMute);
             }
@@ -6650,62 +6657,6 @@ int main(int argc, char** argv)
             }
         }
 
-        if (escapePressed && !game::guessDialogOpen()) {
-            countdownActive = false; // leaving / continuing cancels any countdown
-            if (closeAskAlive) {
-                // 「要退出吗」开着的时候 ESC = 继续演出（那个问题显然答"不退"）。
-                //
-                // 注意不能只是把 closeAsk 置回 false：卡片是**按钮驱动的**，光收回标志
-                // 它下一帧照样画（出场动画是它自己的内部状态，见 game/Ui.cpp 的
-                // st.open）。所以这里走 forcedChoice 那条路，等于替用户按了第一颗。
-                std::printf("[close] ESC -> 继续演出\n");
-                std::fflush(stdout);
-                closeAskPadChoice = 0;
-            } else if (pauseDialogOpen) {
-                beginResumeCountdown();
-            } else if (state == AppState::Result || (state == AppState::Play && susPath.empty())) {
-                // back to the song list
-                //
-                // 多人游玩: leaving a live this way is a *give-up*, so the room
-                // has to be told - exactly like the pause dialog's 放弃 (see the
-                // block there). Without it the block stays on 已确定/已点引信
-                // with phase still PartyCharging, and every later 确定 hits
-                // "the round is already on": the window sits on the song list
-                // for ever showing 准备中…. `susPath.empty()` is true for every
-                // live started from the list (it only holds the --sus argument),
-                // so this is the ordinary path out of a run, not a rare one.
-                if (party.active()) {
-                    party.setHostPaused(false);
-                    party.setSeat(platform::PartySeatLobby);
-                    party.setReady(false);
-                    mpConfirmed = false;
-                    if (party.isHost()) {
-                        party.releaseSong();
-                    }
-                    // Nobody is following anybody outside a live. The next
-                    // charge re-arms both (see the room block in the select
-                    // state).
-                    mpFollowing = false;
-                    mpHostPaused = false;
-                    mpStatus.clear();
-                }
-                audio.stopMusic();
-                audio.stopResultBgm();
-                audio.setHoldLoop(false, false, 0.0f);
-                touches.clear();
-                std::fill(std::begin(keyHeld), std::end(keyHeld), false);
-                lanePress.fill(0.0f);
-                paused = false;
-                session.active = false;
-                resultScheduled = false;
-                resultData = game::ResultData{};
-                state = AppState::Select;
-                systemMedia.setTaskbarProgress(-1.0, false);
-            } else {
-                running = false;
-            }
-        }
-
 #ifdef _WIN32
         // ------------------------------------------------------------------
         // 原生菜单栏（设置 > 系统）的命令。
@@ -6719,6 +6670,34 @@ int main(int argc, char** argv)
             const int cmd = menuCommand;
             menuCommand = -1;
             switch (cmd) {
+            // ---- 任务栏缩略图按钮（systemMedia.addThumbButtons）----
+            // 跟菜单命令共用这一个开关：id 区间不重叠（缩略图 1..3，菜单 101 起）。
+            case platform::ThumbPause:
+                // 灰着的时候点不出来，但"灰"只是 UI 上的事 —— 这里也要挡一道，
+                // 不然在选曲界面按下去会把暂停卡片盖到选曲界面上。
+                if (state != AppState::Play) {
+                    break;
+                }
+                if (pauseDialogOpen) {
+                    pauseDialogChoice = 2; // 「继续演出」，跟媒体键同一个动作
+                } else if (!paused) {
+                    requestPause();
+                }
+                break;
+            case platform::ThumbMute:
+                userMuted = !userMuted;
+                std::printf("[audio] %s (taskbar thumb button)\n",
+                    userMuted ? "muted" : "unmuted");
+                std::fflush(stdout);
+                break;
+            case platform::ThumbBack:
+                // 跟 ESC 完全同一条路（回选曲 / --sus 起的直接退出）：这里置上
+                // escapePressed，上面那个分支**同一帧**就会消费它 —— 消费块被特意
+                // 挪到了 ESC 分支之前，就是为了这个。
+                if (state == AppState::Play) {
+                    escapePressed = true;
+                }
+                break;
             case platform::menu::CmdSettings:
                 showDebug = true; // 同一张卡片，选曲和演奏界面都画它
                 break;
@@ -6818,6 +6797,62 @@ int main(int argc, char** argv)
             }
         }
 #endif
+
+        if (escapePressed && !game::guessDialogOpen()) {
+            countdownActive = false; // leaving / continuing cancels any countdown
+            if (closeAskAlive) {
+                // 「要退出吗」开着的时候 ESC = 继续演出（那个问题显然答"不退"）。
+                //
+                // 注意不能只是把 closeAsk 置回 false：卡片是**按钮驱动的**，光收回标志
+                // 它下一帧照样画（出场动画是它自己的内部状态，见 game/Ui.cpp 的
+                // st.open）。所以这里走 forcedChoice 那条路，等于替用户按了第一颗。
+                std::printf("[close] ESC -> 继续演出\n");
+                std::fflush(stdout);
+                closeAskPadChoice = 0;
+            } else if (pauseDialogOpen) {
+                beginResumeCountdown();
+            } else if (state == AppState::Result || (state == AppState::Play && susPath.empty())) {
+                // back to the song list
+                //
+                // 多人游玩: leaving a live this way is a *give-up*, so the room
+                // has to be told - exactly like the pause dialog's 放弃 (see the
+                // block there). Without it the block stays on 已确定/已点引信
+                // with phase still PartyCharging, and every later 确定 hits
+                // "the round is already on": the window sits on the song list
+                // for ever showing 准备中…. `susPath.empty()` is true for every
+                // live started from the list (it only holds the --sus argument),
+                // so this is the ordinary path out of a run, not a rare one.
+                if (party.active()) {
+                    party.setHostPaused(false);
+                    party.setSeat(platform::PartySeatLobby);
+                    party.setReady(false);
+                    mpConfirmed = false;
+                    if (party.isHost()) {
+                        party.releaseSong();
+                    }
+                    // Nobody is following anybody outside a live. The next
+                    // charge re-arms both (see the room block in the select
+                    // state).
+                    mpFollowing = false;
+                    mpHostPaused = false;
+                    mpStatus.clear();
+                }
+                audio.stopMusic();
+                audio.stopResultBgm();
+                audio.setHoldLoop(false, false, 0.0f);
+                touches.clear();
+                std::fill(std::begin(keyHeld), std::end(keyHeld), false);
+                lanePress.fill(0.0f);
+                paused = false;
+                session.active = false;
+                resultScheduled = false;
+                resultData = game::ResultData{};
+                state = AppState::Select;
+                systemMedia.setTaskbarProgress(-1.0, false);
+            } else {
+                running = false;
+            }
+        }
 
         // ------------------------------------------------------------------
         // Game controller: turn the pad into key presses (see the note above
@@ -9240,6 +9275,15 @@ int main(int argc, char** argv)
                         }
                         return CallWindowProcW(st->chain, hwnd, message, wParam, lParam);
                     }
+                    // 任务栏缩略图按钮（暂停 / 静音 / 返回选曲）：WM_COMMAND 的 HIWORD
+                    // 是 THBN_CLICKED(0x1800)，LOWORD 是按钮 id（platform::ThumbButtonId，
+                    // 1..3）。跟菜单命令共用同一个信箱 —— 两套 id 区间不重叠。
+                    if (message == WM_COMMAND && HIWORD(wParam) == platform::kThumbButtonClicked) {
+                        if (st->menuCommand != nullptr) {
+                            *st->menuCommand = static_cast<int>(LOWORD(wParam));
+                        }
+                        return 0;
+                    }
                     // 结束所有实例 的"别问了，直接关"标记：它总是先于那记 WM_CLOSE 到。
                     if (message == cppsekaiForceQuitMessage()) {
                         if (st->forceQuit != nullptr) {
@@ -9506,6 +9550,9 @@ int main(int argc, char** argv)
     while (running) {
         runFrame();
 #ifdef _WIN32
+        // 任务栏缩略图按钮跟着状态走（暂停/继续的图标、灰不灰）。SystemMedia 自己
+        // 比对上一次的值，没变就什么都不做，所以每帧调不心疼。
+        systemMedia.updateThumbButtons(state == AppState::Play && session.active, paused, userMuted);
         refreshNativeMenuBar();
 #endif
     }

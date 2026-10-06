@@ -2420,6 +2420,27 @@ UI 在 **设置 → 演奏 → 按键映射**（3 列 × 4 行，点一格再按
 - 媒体键：`SDLK_AUDIOPLAY` 演奏中 = 开关暂停卡片、选曲 = 回车；`AUDIONEXT/PREV` =
   上下方向键；`AUDIOSTOP` = ESC。**SDL2 没有 AUDIOPAUSE / TOGGLEPLAYPAUSE**，
   键盘上那颗播放/暂停合键落到 AUDIOPLAY。
+- **任务栏缩略图工具栏按钮**（`platform/SystemMedia.cpp` 的 `addThumbButtons` /
+  `updateThumbButtons`）：鼠标悬停任务栏图标时那三个小按钮 —— 暂停/继续、静音、
+  返回选曲。要点：
+  * `ITaskbarList3Vtbl` 是**手写**的，COM 的 vtable 位置寻址 —— 要用
+    `ThumbBarAddButtons` 就必须把前面的 `RegisterTab` / `UnregisterTab` /
+    `SetTabOrder` / `SetTabActive` 也声明出来，少一个后面全错位。
+  * `THUMBBUTTON` 那个头文件没进来，按 ABI 手写（x64 下 sizeof == 32）。
+    走 **`THB_ICON` + `hIcon`**，所以不需要 `ThumbBarSetImageList` / IImageList。
+  * 图标是**现画**的（`IconCanvas` + 矩形/三角形/粗线，32x32，然后
+    `CreateDIBSection` 填 BGRA → `CreateIconIndirect`）。不读 assets：那边只有选曲
+    界面用的白色字形。**颜色要按 alpha 预乘**，不然半透明边缘发白。
+    字形固定用 #444466（缩略图那条底是浅的；系统切主题不会替我们反色）。
+  * 点击以 `WM_COMMAND`（`HIWORD == THBN_CLICKED == 0x1800`，`LOWORD` = 按钮 id）
+    回到窗口过程，走**跟菜单栏同一条挂起命令通道**（id 区间不重叠：缩略图 1..3、
+    菜单 101 起）。
+  * 「灰掉」只是 UI：处理端也要挡一道（暂停按钮在选曲界面按下去会把暂停卡片盖到
+    选曲界面上 —— 实测踩到过）。`updateThumbButtons` 每帧调，自己比对上次的值。
+  * 返回选曲 = 置 `escapePressed`，所以消费块被挪到了 ESC 分支**之前**
+    （同帧生效）；`--sus` 起的局按它就是退出，跟 ESC 一致。
+  * 静音是游戏自己的（`userMuted`，本次运行有效不落盘），跟"最小化静音"并列，
+    见帧内那个 `wantMute` 轮询。
 
 ## 多人游玩（`platform/Party.*` + `game/PartyScreen.*`）
 

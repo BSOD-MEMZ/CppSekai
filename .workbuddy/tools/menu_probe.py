@@ -80,8 +80,11 @@ u32.ClientToScreen.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.POINT)]
 
 
 def pids_of(image):
+    # 解码要显式指定：tasklist 的输出跟着控制台代码页走（中文系统上是 GBK），
+    # 而 subprocess 的 text=True 默认按 UTF-8 解 —— 环境一变就 UnicodeDecodeError。
+    # errors="replace" 兜底：这一行只是为了拿 pid，个别字节坏了也不该整个脚本挂掉。
     out = subprocess.run(["tasklist", "/FI", "IMAGENAME eq %s" % image, "/FO", "CSV", "/NH"],
-                         capture_output=True, text=True).stdout
+                         capture_output=True, encoding="utf-8", errors="replace").stdout or ""
     pids = []
     for line in out.splitlines():
         cells = [c.strip().strip('"') for c in line.split('","')]
