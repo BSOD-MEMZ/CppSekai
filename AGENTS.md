@@ -2380,6 +2380,47 @@ UI 在 **设置 → 演奏 → 按键映射**（3 列 × 4 行，点一格再按
   `menuloop enter` 是**合成**的 WM_ENTERMENULOOP，用来在无头会话里驱动喂帧分支 ——
   实测 enter 后 `[window] drag frames: 30 (… timer=30)`，exit 后干净收尾。
 
+## 与 Windows 的接缝（2026-10-06 一批）
+
+一夜之间补的四件事，都是"和桌面融合"的基础设施，各自都有坑：
+
+- **`WM_CLOSE` 必须被窗口过程吞掉**（重要）。SDL 收到它会交给 `DefWindowProc`，
+  **窗口当场被销毁**（实测 `0x0010` 后面紧跟 WM_DESTROY / WM_NCDESTROY），进程随后
+  就走不下去了 —— 所以"演奏中点 X 先问一句"（`closeAsk`）在 SDL 那层做不了。
+  做法：窗口过程拦下 WM_CLOSE → `SDL_PushEvent` 一个**自己登记的事件类型**
+  （`closeRequestEventType = SDL_RegisterEvents(1)`）→ 主循环里
+  `requestWindowClose()` 一处决策（演奏中就弹卡，其余直接 `running = false`）。
+  窗口不销毁就一直是活的，用户选「继续演出」之后一切照旧。
+  `SDL_WINDOWEVENT_CLOSE` 那条分支留着只当兜底（Windows 上一般走不到）。
+- **UI 卡片只能被按钮关掉**：`game/Ui.cpp` 的 `eulaDialog` / `messageDialog` 出场动画是
+  卡片自己的内部状态（`st.open`），调用方把标志置回 false **不会**关掉它（下一帧照样画）。
+  想让 ESC 关掉一张卡，要么像猜歌那样在卡片里自己读键，要么走 `forcedChoice`
+  替用户"按"某颗按钮 —— `closeAsk` 用的是后者（ESC → `closeAskPadChoice = 0`）。
+  注意垫片那个每帧都跑的模态块会把 forcedChoice 覆盖成 -1，要加
+  `if (xxxPadChoice < 0)` 让路。
+- **`结束所有实例` 用的是"标记 + WM_CLOSE"两条消息**：`postCloseToAllInstances` 先发
+  `RegisterWindowMessageW(L"CppSekaiForceQuit")`、再发 WM_CLOSE；收到标记的窗口
+  （`subclass.forceQuit`）跳过演奏中那张确认卡。不加标记的话，一次"结束所有实例"会在
+  每个正在演奏的窗口里各弹一张卡。`PostMessage` 有序，标记一定先到。
+- **窗口位置**：`windowX` / `windowY`（-1 = 没意见 = 居中）。启动时**必须校验它落在
+  某块当前接着的显示器上**（`SDL_GetDisplayUsableBounds` 取并集，只看左上角），
+  否则拔了扩展坞就会开出一个看不见的窗口 —— 那天回落到居中并打一行日志。
+  记录跟着 `persistUserData()` 走（**不要在 SDL_WINDOWEVENT_MOVED 里记**，那会每拖
+  一下写一次盘）；全屏时不记（坐标是桌面的，跟"用户把窗口摆在哪"无关）。
+- **`SetCurrentProcessExplicitAppUserModelID`**（`main.cpp` 顶部手写声明，
+  shobjidl.h 里那个签名；shell32 已在链接行上）。**必须在建窗口之前调**。
+  副作用：多开时所有窗口会**并到一个任务栏按钮**里 —— 多人游玩同时看几个窗口时
+  靠 Alt+Tab / 缩略图切，不再是并排几个按钮。不想要就注释掉那一句。
+- 窗口标题现在跟着**曲目**走（演奏中是 `CppSekai · 曲名 · 难度`），每帧调一次
+  `syncWindowTitle()` —— 它看到标题没变就直接返回，几纳秒的事。
+- 防屏保 / 防休眠：窗口没最小化就 `SetThreadExecutionState(ES_CONTINUOUS |
+  ES_DISPLAY_REQUIRED | ES_SYSTEM_REQUIRED)`，最小化放行，状态变了才调。
+- 拖放：`SDL_DROPFILE` 收 `.sus`，只在**选曲界面**生效（演奏/结算中间换曲会把那一局的
+  收尾流程绕过去）。`--drop-test <path> [sec]` 能合成这个事件，真实拖放没法从脚本驱动。
+- 媒体键：`SDLK_AUDIOPLAY` 演奏中 = 开关暂停卡片、选曲 = 回车；`AUDIONEXT/PREV` =
+  上下方向键；`AUDIOSTOP` = ESC。**SDL2 没有 AUDIOPAUSE / TOGGLEPLAYPAUSE**，
+  键盘上那颗播放/暂停合键落到 AUDIOPLAY。
+
 ## 多人游玩（`platform/Party.*` + `game/PartyScreen.*`）
 
 同一台机器开多个窗口一起打。房间**没有自己的页面**：它就在选曲界面上。

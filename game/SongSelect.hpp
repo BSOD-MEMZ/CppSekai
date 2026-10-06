@@ -135,6 +135,15 @@ struct UserSettings
     // fixed mode the render size is still this.
     int windowWidth = 1366;
     int windowHeight = 768;
+    // Where the window was last time (the other half of 分辨率, which only ever
+    // stored the size). -1 = 没有意见, put it in the middle of the primary
+    // screen. A remembered spot that no longer lands on any attached display
+    // (the second monitor it lived on is gone) is ignored the same way, so a
+    // laptop that undocks never opens a window off-screen - see main.cpp.
+    // Recorded on every save (the position as of the last settings write or
+    // exit), so it costs nothing while the game runs.
+    int windowX = -1;
+    int windowY = -1;
     int fpsLimit = 60;  // 0 = vsync only; >refresh rate auto-disables vsync
     // Render size. 0 = the window size *is* the render size (dragging the
     // window relayouts the lanes and the HUD), 1 = always render at

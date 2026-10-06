@@ -1017,6 +1017,8 @@ void loadUserData(const std::string& path, UserSettings& settings,
             settings.windowMode = s.value("windowMode", settings.windowMode);
             settings.windowWidth = s.value("windowWidth", settings.windowWidth);
             settings.windowHeight = s.value("windowHeight", settings.windowHeight);
+            settings.windowX = s.value("windowX", settings.windowX);
+            settings.windowY = s.value("windowY", settings.windowY);
             settings.renderScale = s.value("renderScale", settings.renderScale);
             settings.instanceMode = s.value("instanceMode", settings.instanceMode);
             // An install that already had multi-open before this key existed
@@ -1170,6 +1172,8 @@ void saveUserData(const std::string& path, const UserSettings& settings,
         {"windowMode", settings.windowMode},
         {"windowWidth", settings.windowWidth},
         {"windowHeight", settings.windowHeight},
+        {"windowX", settings.windowX},
+        {"windowY", settings.windowY},
         {"renderScale", settings.renderScale},
         {"instanceMode", settings.instanceMode},
         {"multiInstanceAccepted", settings.multiInstanceAccepted},

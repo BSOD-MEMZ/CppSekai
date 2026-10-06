@@ -67,6 +67,24 @@ double gFillerSec = -1.0;    // < 0: auto-detect the leading silence
 double gUserOffsetSec = 0.0; // manual fine tune, seconds
 bool gForceFlickLog = false; // --flick-log: same switch as the 判定 card's checkbox
 
+#ifdef _WIN32
+// AppUserModelID（任务栏分组 / SMTC / Jump List 认人用的那个 ID）。声明在
+// shobjidl.h 里，但为一个函数把整个 COM 头拉进来不划算 —— shell32 已经在链接行上，
+// 手写一句就够了（跟 SystemMedia 手写 WinRT vtable 是同一个理由）。**必须在建窗口
+// 之前调用**（前台窗口的 AUMID 在窗口创建那一刻定下来）。
+extern "C" HRESULT WINAPI SetCurrentProcessExplicitAppUserModelID(PCWSTR appId);
+
+// 一个自己登记的消息：设置 > 系统 > 结束所有实例 在发 WM_CLOSE **之前**先发它，
+// 收到的一方就知道这次关窗是"别的窗口让的"，不是用户点了 X —— 演奏中那张"要退出吗"
+// 的确认卡（closeAsk）只为后者弹。RegisterWindowMessage 的返回值跨进程一致，所以
+// 两个窗口拿到的是同一个 id。
+UINT cppsekaiForceQuitMessage()
+{
+    static const UINT id = RegisterWindowMessageW(L"CppSekaiForceQuit");
+    return id;
+}
+#endif
+
 namespace
 {
     // SDL2's MinGW import library references three screensaver entry points
@@ -488,6 +506,10 @@ namespace
                 if (!ours) {
                     return TRUE;
                 }
+                // 先发"强制退出"标记，再发 WM_CLOSE：收到的窗口据此跳过演奏中那张
+                // "要退出吗"的确认卡（否则一次结束所有实例会在每个在演奏的窗口里各弹一张）。
+                // PostMessage 是有序的，所以标记一定先被处理。
+                PostMessageW(hwnd, cppsekaiForceQuitMessage(), 0, 0);
                 PostMessageW(hwnd, WM_CLOSE, 0, 0);
                 ++self->count;
                 return TRUE;
@@ -1135,6 +1157,14 @@ int main(int argc, char** argv)
     // WM_DROPFILES 里的 HDROP 属于"放"的那个进程）。用法见 CLI.md。
     std::string dropTestPath;
     double dropTestAtSec = 1.0;
+    // "窗口被要求关闭"的**自定义 SDL 事件**类型（SDL_RegisterEvents，SDL_Init 之后赋）。
+    //
+    // 为什么需要它：点 X / Alt+F4 撞到的是 WM_CLOSE，而 **SDL 会把它交给 DefWindowProc，
+    // 窗口当场被销毁**（实测 0x0010 后面紧跟 WM_DESTROY / WM_NCDESTROY），进程随后就走
+    // 不下去了 —— 想先问一句，只能在窗口过程里把那条 WM_CLOSE 吞掉、换成一个自定义事件
+    // 通知主循环，由主循环按 state 决定是退出还是弹确认卡（见 requestWindowClose）。
+    // 声明在这里是因为 SDL_RegisterEvents 那句在主函数很靠前的位置。
+    Uint32 closeRequestEventType = 0;
     int winWidth = 1366;
     int winHeight = 768;
     float uiScaleArg = 1.0f;      // --ui-scale: song-select / result zoom
@@ -1453,12 +1483,33 @@ int main(int argc, char** argv)
         SDL_SetHint(SDL_HINT_WINDOWS_DPI_SCALING, "1");
     }
 
+#ifdef _WIN32
+    // AppUserModelID：任务栏分组、SMTC（系统媒体控件）和 Jump List 都靠它认人。
+    // 不设的话 Windows 拿 exe 路径去猜，多开 / 换个目录启动就可能被当成另一个程序，
+    // SMTC 面板和任务栏按钮会分裂成两份。**必须在建窗口之前**调（前台窗口的 AUMID
+    // 是在窗口创建时定下来的）。
+    // 签名在 shobjidl.h 里；为一个函数拉整个 COM 头不划算，所以在文件顶部手写声明
+    // （跟 SystemMedia 手写 vtable 是同一个理由）。shell32 本来就在链接行上。
+    // 副作用要知道：设了之后同一台机器上多个窗口会**并到一个任务栏按钮**里。
+    // 多人游玩同时看几个窗口时，切窗口要靠 Alt+Tab 或缩略图，不再是并排几个按钮。
+    // 不想要这个就注释掉这一句（没有别的联动）。
+    const HRESULT aumidHr = SetCurrentProcessExplicitAppUserModelID(L"BSOD-MEMZ.CppSekai");
+    std::printf("[shell] AppUserModelID %s (hr=0x%lX)\n",
+        aumidHr == S_OK ? "set" : "NOT set", static_cast<unsigned long>(aumidHr));
+    std::fflush(stdout);
+#endif
+
     SDL_SetMainReady();
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER) != 0) {
         std::fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
         return 1;
     }
     bootLog("sdl init");
+    // 登记一个自定义 SDL 事件类型：窗口过程收到 WM_CLOSE 时用它通知主循环
+    // （SDL 自己那条 SDL_WINDOWEVENT_CLOSE 到不了 —— 窗口在那之前就被销毁了）。
+    closeRequestEventType = SDL_RegisterEvents(1);
+    std::printf("[window] close-request event type %u\n", closeRequestEventType);
+    std::fflush(stdout);
     // Touch must synthesize mouse events or ImGui (which only reads mouse)
     // ignores taps entirely: every UI element (song list, settings, dialogs)
     // becomes unclickable on a touchscreen. The raw SDL_FINGER* path still
@@ -1900,40 +1951,43 @@ int main(int argc, char** argv)
     // the player's name in it.
     const std::string windowTitle = partyLabel.empty() ? std::string("CppSekai")
                                                        : ("CppSekai - " + partyLabel);
+    // 上次的窗口位置（设置 > 画面 只存了尺寸，这是另一半）。认这个位置的条件是它
+    // 还落在**某块当前接着的显示器**上：副屏拔掉之后那个坐标就飘在屏幕外了，这种
+    // 情况回落到居中，免得笔记本一拔扩展坞就开出一个看不见的窗口。
+    // 判定用可用区（GetDisplayUsableBounds，避开了任务栏），并且只要求窗口左上角
+    // 落在里面 —— 窗口比屏幕宽的时候（--width 2600 那种无头配方）不该被否掉。
+    int windowX = SDL_WINDOWPOS_CENTERED;
+    int windowY = SDL_WINDOWPOS_CENTERED;
+    if (userSettings.windowX != -1 || userSettings.windowY != -1) {
+        bool onScreen = false;
+        const int displays = SDL_GetNumVideoDisplays();
+        for (int d = 0; d < displays && !onScreen; ++d) {
+            SDL_Rect usable{};
+            if (SDL_GetDisplayUsableBounds(d, &usable) != 0) {
+                continue;
+            }
+            onScreen = userSettings.windowX >= usable.x && userSettings.windowX < usable.x + usable.w
+                && userSettings.windowY >= usable.y && userSettings.windowY < usable.y + usable.h;
+        }
+        if (onScreen) {
+            windowX = userSettings.windowX;
+            windowY = userSettings.windowY;
+            std::printf("[window] restoring position %d,%d\n", windowX, windowY);
+        } else {
+            std::printf("[window] saved position %d,%d is not on any display - centring\n",
+                userSettings.windowX, userSettings.windowY);
+        }
+        std::fflush(stdout);
+    }
     SDL_Window* window = SDL_CreateWindow(
         windowTitle.c_str(),
-        SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+        windowX, windowY,
         windowW, windowH,
         windowFlags);
     if (window == nullptr) {
         std::fprintf(stderr, "SDL_CreateWindow failed: %s\n", SDL_GetError());
         return 1;
     }
-    // The title has to follow the active user: 设置 > 账户 can switch profile (and
-    // rename) at any time, and a title that stays on the boot-time name is the
-    // one thing about a profile switch that is visible outside the game. Only a
-    // 多人游玩 window carries a name - a solo window keeps the bare "CppSekai",
-    // which is what the single-instance "bring the running window to the front"
-    // finder matches on (see the instance policy above).
-    const auto syncWindowTitle = [&]() {
-        std::string title = "CppSekai";
-        if (!partyLabel.empty()) {
-            const std::string name = !partyName.empty() ? partyName : account.name;
-            title += " - " + (name.empty() ? partyLabel : name);
-        }
-        // Only set it when it actually changed. SDL_SetWindowTitle goes straight to
-        // SetWindowTextW, and this is called on *every keystroke* in the account
-        // card's text fields - on a frameless / DWM-extended window each of those
-        // makes Windows re-evaluate the frame, which reads as a full-screen flash
-        // per character. (Windowed mode hides it; that is why it took a while to
-        // show up - and with 多人游玩 off the title never even changes.)
-        static std::string currentTitle;
-        if (title == currentTitle) {
-            return;
-        }
-        currentTitle = title;
-        SDL_SetWindowTitle(window, title.c_str());
-    };
 
     // Window / taskbar icon, from icon.png next to the exe (or the repo root in
     // the dev layout). The *file* icon comes from the embedded resource
@@ -2584,6 +2638,40 @@ int main(int argc, char** argv)
 
     AppState state = susPath.empty() ? AppState::Select : AppState::Play;
     Session session;
+    // 窗口标题。跟着两样东西走：当前用户，和正在打的那首曲子。
+    //   * 用户：设置 > 账户 随时能切 / 改名，标题停在启动时那个名字是"切了档案"在
+    //     游戏外面唯一看得见的地方。只有多人游玩的窗口带名字 —— 单人窗口保持光秃秃的
+    //     "CppSekai"，单实例那套"把已运行的窗口提到前台"就是靠它认的（见实例策略）。
+    //   * 曲目：演奏中挂上「曲名 · 难度」。多开 / 任务栏缩略图 / Alt+Tab 就靠它分辨
+    //     哪个窗口在打什么。
+    // 定义放在这里（而不是建窗口那段）是因为要读 state / session —— lambda 的捕获在
+    // 定义处就定死了。调用点是设置卡片里那两处 + 帧内每帧一次（见下面 runFrame）。
+    const auto syncWindowTitle = [&]() {
+        std::string title = "CppSekai";
+        if (!partyLabel.empty()) {
+            const std::string name = !partyName.empty() ? partyName : account.name;
+            title += " - " + (name.empty() ? partyLabel : name);
+        }
+        if (state == AppState::Play && session.active && !session.intro.title.empty()) {
+            title += " · " + session.intro.title;
+            if (!session.entry.difficulty.empty()) {
+                title += " · " + session.entry.difficulty;
+            }
+        }
+        // Only set it when it actually changed. SDL_SetWindowTitle goes straight to
+        // SetWindowTextW, and this is called on *every keystroke* in the account
+        // card's text fields - on a frameless / DWM-extended window each of those
+        // makes Windows re-evaluate the frame, which reads as a full-screen flash
+        // per character. (Windowed mode hides it; that is why it took a while to
+        // show up - and with 多人游玩 off the title never even changes.)
+        // 也是因为这个提前返回，每帧调一次不心疼（曲目一变就跟着换）。
+        static std::string currentTitle;
+        if (title == currentTitle) {
+            return;
+        }
+        currentTitle = title;
+        SDL_SetWindowTitle(window, title.c_str());
+    };
     bool beginSessionClockPending = false;
     bool restartDone = false; // --test-restart bookkeeping
     int restartIndex = 0;
@@ -3121,6 +3209,16 @@ int main(int argc, char** argv)
         userSettings.holdStartGraceMs = w.holdStartGraceMs;
         userSettings.strictFlick = judgement.strictFlick();
         userSettings.flickAsTap = judgement.flickAsTap();
+        // 窗口位置跟着每一次落盘一起记 —— 不在 WM_MOVE / SDL_WINDOWEVENT_MOVED 里记，
+        // 那样每拖一下就是一次磁盘写。全屏时不记：那时候的坐标是整个桌面的坐标，
+        // 跟"用户把窗口摆在哪"没关系，记下去会把上次的位置冲掉。
+        if (windowMode != 2) {
+            int windowPosX = 0;
+            int windowPosY = 0;
+            SDL_GetWindowPosition(window, &windowPosX, &windowPosY);
+            userSettings.windowX = windowPosX;
+            userSettings.windowY = windowPosY;
+        }
         game::saveUserData(userDataFile, userSettings, scores, account);
     };
 
@@ -3540,6 +3638,10 @@ int main(int argc, char** argv)
     // 说明这是实验性功能，确认后才真的写进设置。
     bool multiInstanceAsk = false;
     bool multiInstanceAskFromParty = false; // true = 用户点的是多人游玩
+    // 演奏中点窗口关闭（X / Alt+F4）时先问一句，别把这一局直接扔掉 —— 全屏下
+    // 误触 Alt+F4 是常事。只有"用户关窗"才问：结束所有实例 会先发一个登记过的消息
+    // （见 cppsekaiForceQuitMessage），那种关法不弹这张卡。
+    bool closeAsk = false;
 #ifdef _WIN32
     // Headless check (CPSEKAI_MULTIASK=1): raise the card at startup. Clicking the
     // combo is the only other way to get here, and a posted click does not reach an
@@ -4832,6 +4934,8 @@ int main(int argc, char** argv)
     // `eulaAlive` / `eulaDismissedThisRun` / `eulaPadChoice` are declared up with
     // the settings card's state (so its 关于 page can raise the licence card).
     int multiAskPadChoice = -1;
+    int closeAskPadChoice = -1;
+    bool closeAskAlive = false;
     auto drawMultiInstanceAskDialog = [&]() {
         if (multiInstanceAsk) {
             multiInstanceAskAlive = true;
@@ -4872,6 +4976,44 @@ int main(int argc, char** argv)
             persistUserData();
             multiInstanceAsk = false;
             multiInstanceAskFromParty = false;
+        }
+    };
+
+    // ------------------------------------------------------------------
+    // 演奏中点 X / Alt+F4 的确认卡。
+    //
+    // 全屏下按错 Alt+F4，或者手抖点到右上角，这一局连同还没写进档案的成绩一起就没了。
+    // 「继续演出」= 什么都不做 —— 窗口本来也没被真的关掉（WM_CLOSE 被我们吞下了，
+    // 系统不会再补一刀）。只有「退出」才真的走 running = false。
+    // 结束所有实例 不弹这张卡：那条路会先发一个登记过的消息（cppsekaiForceQuitMessage），
+    // 不然一次"结束所有实例"会在每个正在演奏的窗口里都弹一张卡。
+    // ------------------------------------------------------------------
+    auto drawCloseAskDialog = [&]() {
+        if (closeAsk) {
+            closeAskAlive = true;
+        }
+        if (!closeAskAlive) {
+            return;
+        }
+        const int action = ui::eulaDialog(renderer, "##closeask", "要退出吗？",
+            {
+                "这一局还在进行中，现在退出不会保存本局的成绩。",
+            },
+            nullptr, nullptr, {std::string("继续演出"), std::string("退出")}, {true, false},
+            closeAskPadChoice);
+        closeAskPadChoice = -1; // one press is one pick
+        if (action == -2) {
+            closeAskAlive = false; // close animation over, drop the card
+            return;
+        }
+        if (action == 0) {
+            std::printf("[close] stay (the live is kept)\n");
+            std::fflush(stdout);
+            closeAsk = false;
+        } else if (action == 1) {
+            std::printf("[close] quit confirmed while playing\n");
+            std::fflush(stdout);
+            running = false;
         }
     };
 
@@ -5517,8 +5659,41 @@ int main(int argc, char** argv)
     //   menuPauseWanted - 菜单一展开就置上，帧内看到且正在演奏就调 requestPause()。
     // 跟 dragFramePacing 一样必须**声明在 runFrame 之前**：lambda 的捕获在定义处
     // 就定死了，写在下面（subclass 那块）它会看不见。
+#ifdef _WIN32
+    // 主窗口的 HWND。跟上面两个一样必须声明在 runFrame 之前：菜单命令里有几项
+    // （结束所有实例的确认框）要用它，而 lambda 的捕获在定义处就定死了。
+    // 真正的赋值在下面窗口过程那一段（SDL_GetWindowWMInfo）。
+    HWND gameWindow = nullptr;
+    // 别的窗口用 结束所有实例 让我们关：收到这个标记之后就不再弹"要退出吗"那张卡。
+    // 由窗口过程写（cppsekaiForceQuitMessage），关窗那条路读。
+    bool forceQuitRequested = false;
+#endif
     int menuCommand = -1;
     bool menuPauseWanted = false;
+    // 窗口被要求关闭（X / Alt+F4 / 别的窗口让我们关）时的唯一决策点。
+    //
+    // 演奏中先问一句，其余情况直接退。放在这里（runFrame 之前）是因为窗口过程那条路
+    // 也要调到它（自定义事件）—— 见 SDL_WINDOWEVENT_CLOSE 与 closeRequestEventType。
+    auto requestWindowClose = [&]() {
+        // 卡片还开着（或正在做退场动画）的时候再来一次请求就当没看见 —— X 连点两下
+        // 不该等于"确认退出"。
+        if (closeAsk || closeAskAlive) {
+            std::printf("[close] already asking - ignoring\n");
+            std::fflush(stdout);
+            return;
+        }
+        if (state == AppState::Play && session.active && !forceQuitRequested
+            && screenshotPath.empty()) {
+            // 全屏下按错 Alt+F4 会把这一局连同还没写进档案的成绩一起扔掉。
+            std::printf("[close] window close during a live -> asking first\n");
+            std::fflush(stdout);
+            closeAsk = true;
+            return;
+        }
+        std::printf("[instance] window close -> exiting\n");
+        std::fflush(stdout);
+        running = false;
+    };
     // 拖进窗口的谱面（SDL_DROPFILE）。声明在 runFrame 前面，因为事件循环里要用它，
     // 而 lambda 的捕获在定义处就定死了 —— 跟 dragFramePacing 一个理由。
     //
@@ -5554,12 +5729,6 @@ int main(int argc, char** argv)
         std::fflush(stdout);
         return true;
     };
-#ifdef _WIN32
-    // 主窗口的 HWND。跟上面两个一样必须声明在 runFrame 之前：菜单命令里有几项
-    // （结束所有实例的确认框）要用它，而 lambda 的捕获在定义处就定死了。
-    // 真正的赋值在下面窗口过程那一段（SDL_GetWindowWMInfo）。
-    HWND gameWindow = nullptr;
-#endif
     // ------------------------------------------------------------------
     // One frame of the main loop, wrapped so it can also be served from inside
     // Windows' modal move/size loop (see the window subclass right below).
@@ -5843,8 +6012,14 @@ int main(int argc, char** argv)
     bool mediaNextRequested = false;
     bool mediaPrevRequested = false;
     bool mediaConfirmRequested = false;
-        while (SDL_PollEvent(&event) != 0) {
-            mapPointerEvent(event);
+            while (SDL_PollEvent(&event) != 0) {
+                // 窗口被要求关闭：窗口过程拦下 WM_CLOSE 之后塞进来的自定义事件
+                // （见窗口过程那段 —— 直接让 SDL 处理的话窗口当场就销毁了）。
+                if (closeRequestEventType != 0 && event.type == closeRequestEventType) {
+                    requestWindowClose();
+                    continue;
+                }
+                mapPointerEvent(event);
             ImGui_ImplSDL2_ProcessEvent(&event);
             switch (event.type) {
                 case SDL_QUIT:
@@ -5876,13 +6051,9 @@ int main(int argc, char** argv)
                 }
                 case SDL_WINDOWEVENT:
                     if (event.window.event == SDL_WINDOWEVENT_CLOSE) {
-                        // The X button, and 设置 > 系统 > 结束所有实例 (which posts
-                        // a WM_CLOSE to every window of this game, this one
-                        // included). Either way this is the ordinary exit: the
-                        // loop leaves and the profile is saved on the way out.
-                        std::printf("[instance] window close -> exiting\n");
-                        std::fflush(stdout);
-                        running = false;
+                        // Windows 上这条路一般走不到了（窗口过程把 WM_CLOSE 吞掉、改发
+                        // 自定义事件，见那边），留着是给"SDL 自己发的 CLOSE"和别的平台兜底。
+                        requestWindowClose();
                     } else if (event.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
                         // The real window changed; the render size only follows
                         // it when the render mode is "window sized".
@@ -6439,6 +6610,10 @@ int main(int argc, char** argv)
             }
         }
 
+        // 窗口标题（用户名 / 演奏中的曲目）。每帧一次：曲子一换就得跟着换，而这个
+        // 函数一看见标题没变就直接返回，所以是几纳秒的事。
+        syncWindowTitle();
+
         // ------------------------------------------------------------------
         // 防屏保 / 防休眠。
         //
@@ -6477,7 +6652,16 @@ int main(int argc, char** argv)
 
         if (escapePressed && !game::guessDialogOpen()) {
             countdownActive = false; // leaving / continuing cancels any countdown
-            if (pauseDialogOpen) {
+            if (closeAskAlive) {
+                // 「要退出吗」开着的时候 ESC = 继续演出（那个问题显然答"不退"）。
+                //
+                // 注意不能只是把 closeAsk 置回 false：卡片是**按钮驱动的**，光收回标志
+                // 它下一帧照样画（出场动画是它自己的内部状态，见 game/Ui.cpp 的
+                // st.open）。所以这里走 forcedChoice 那条路，等于替用户按了第一颗。
+                std::printf("[close] ESC -> 继续演出\n");
+                std::fflush(stdout);
+                closeAskPadChoice = 0;
+            } else if (pauseDialogOpen) {
                 beginResumeCountdown();
             } else if (state == AppState::Result || (state == AppState::Play && susPath.empty())) {
                 // back to the song list
@@ -6850,9 +7034,15 @@ int main(int argc, char** argv)
             // 多开确认 / 首启 ELUA outrank everything else: they are modal, and
             // a START that slipped through to "open the settings card" behind
             // them would leave two cards fighting over the same input.
-            const bool padModalCard = multiInstanceAsk || eulaAlive;
+            const bool padModalCard = multiInstanceAsk || eulaAlive || closeAsk;
             if (padModalCard) {
-                if (multiInstanceAsk) {
+                if (closeAsk) {
+                    // 左/上 = 继续演出（默认那一边），右/下 = 退出。
+                    // 已经有一个非负的选择（ESC 刚设的）时别覆盖它 —— 这个块每帧都跑。
+                    if (closeAskPadChoice < 0) {
+                        closeAskPadChoice = (padA || padStart) ? 0 : ((padB || padX) ? 1 : -1);
+                    }
+                } else if (multiInstanceAsk) {
                     multiAskPadChoice = (padA || padStart) ? 1 : ((padB || padX) ? 0 : -1);
                 } else {
                     // ELUA has one button; B/X dismiss it the same way.
@@ -6862,7 +7052,8 @@ int main(int argc, char** argv)
                 }
                 if (padA || padStart || padB || padX) {
                     std::printf("[pad] modal card -> choice %d\n",
-                        multiInstanceAsk ? multiAskPadChoice : eulaPadChoice);
+                        closeAsk ? closeAskPadChoice
+                                 : (multiInstanceAsk ? multiAskPadChoice : eulaPadChoice));
                     std::fflush(stdout);
                 }
             } else if (showDebug && padA) {
@@ -7666,6 +7857,8 @@ int main(int argc, char** argv)
 
             // Settings card, opened from the musicsetting button (or H).
             drawSettingsCard();
+            // 演奏中点 X / Alt+F4 的确认卡。
+            drawCloseAskDialog();
             // 多开的实验性功能确认框（设置卡片里点出来的）。
             drawMultiInstanceAskDialog();
             // 导入用户数据的覆盖确认框（同样是设置卡片里点出来的）。
@@ -8345,6 +8538,7 @@ int main(int argc, char** argv)
 
             // Settings card (H key), shared with the song select state.
             drawSettingsCard();
+            drawCloseAskDialog();
             drawMultiInstanceAskDialog();
             drawImportAskDialog();
             // 多人游玩刚打开时问的那句「立即重启？」。
@@ -8976,6 +9170,10 @@ int main(int argc, char** argv)
         bool menuOpen = false;
         int* menuCommand = nullptr;      // WM_COMMAND 的菜单 id，主循环消费
         bool* menuPauseWanted = nullptr; // 菜单展开 -> 演奏中暂停（用户选的行为）
+        // 结束所有实例 发来的强制退出标记（见 cppsekaiForceQuitMessage）。
+        bool* forceQuit = nullptr;
+        // "窗口被要求关闭"那条自定义 SDL 事件的类型（见 main 里的 closeRequestEventType）。
+        Uint32 closeEventType = 0;
     };
     SubclassState subclass;
     subclass.frame = &runFrame;
@@ -8984,6 +9182,8 @@ int main(int argc, char** argv)
     subclass.logMessages = std::getenv("CPSEKAI_MSG_LOG") != nullptr;
     subclass.menuCommand = &menuCommand;
     subclass.menuPauseWanted = &menuPauseWanted;
+    subclass.forceQuit = &forceQuitRequested;
+    subclass.closeEventType = closeRequestEventType;
     SDL_SysWMinfo mainWmi;
     SDL_VERSION(&mainWmi.version);
     // gameWindow 本身声明在上面（runFrame 也要用它），这里只是把值填进去。
@@ -9021,6 +9221,29 @@ int main(int argc, char** argv)
                         && LOWORD(wParam) <= static_cast<UINT>(platform::menu::CmdXxtsoft)) {
                         if (st->menuCommand != nullptr) {
                             *st->menuCommand = static_cast<int>(LOWORD(wParam));
+                        }
+                        return 0;
+                    }
+                    // 吞掉 WM_CLOSE，换成一条自定义 SDL 事件丢给主循环。
+                    //
+                    // **不能**像别的消息那样转给 SDL 的窗口过程：SDL 会把它交给
+                    // DefWindowProc，窗口当场被销毁（实测 WM_CLOSE 后面紧跟
+                    // WM_DESTROY / WM_NCDESTROY），那样就没机会"先问一句"了。
+                    // 决策（退出 / 弹确认卡）在主循环里做，这里不认识游戏状态；
+                    // 窗口不销毁就一直是活的，所以用户选了「继续演出」之后一切照旧。
+                    if (message == WM_CLOSE) {
+                        if (st->closeEventType != 0) {
+                            SDL_Event closeRequest{};
+                            closeRequest.type = st->closeEventType;
+                            SDL_PushEvent(&closeRequest);
+                            return 0;
+                        }
+                        return CallWindowProcW(st->chain, hwnd, message, wParam, lParam);
+                    }
+                    // 结束所有实例 的"别问了，直接关"标记：它总是先于那记 WM_CLOSE 到。
+                    if (message == cppsekaiForceQuitMessage()) {
+                        if (st->forceQuit != nullptr) {
+                            *st->forceQuit = true;
                         }
                         return 0;
                     }
