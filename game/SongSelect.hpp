@@ -101,6 +101,16 @@ double expToNextRank(int rank);
 // game::scoreRankAndBar) -> the exp an official live would grant for it.
 int scoreRankExp(char rank);
 
+// 演出能量 -> 结算经验的倍率。
+//
+// 官方（4.0.0 平衡调整之后）的表：
+//   0 → ×1    1 → ×5    2 → ×10   3 → ×15   4 → ×20   5 → ×25
+//   6 → ×26   7 → ×27   8 → ×28   9 → ×29  10 → ×30
+// 能消耗的档位到 10（平时上限 5、活动期间放到 10），再往上官方没有数据。
+// 6 档起就是「20 + 消耗」这条直线，11 档以上本项目**照这条线外推** ——
+// 这段是我们自己的延伸，不是官方数值（设置页那一行和 AGENTS.md 都写明了）。
+double liveBonusExpMultiplier(int bonus);
+
 // Banks `amount` exp and rolls the rank over as often as it needs to.
 // Returns the number of ranks gained (0 = none).
 int addPlayerExp(AccountData& account, double amount);
@@ -292,6 +302,13 @@ struct UserSettings
     // latin letters one section each), 3 = by first character (one section per
     // kana).
     int groupMode = 0;
+    // 演出能量 (演出 > 演出能量): how much ライブボーナス to stake on a live.
+    // It multiplies the exp a run grants (see liveBonusExpMultiplier) - the same
+    // thing it does in the official game, where a live grants score-rank exp
+    // times the bonus multiplier. 0 = play without spending any. The official
+    // ladder covers 0..10 (you can stake up to 5 normally, 10 during an event);
+    // above that the curve is our own extension, spelled out on the function.
+    int liveBonus = 5;
     // The 许可 / 免责声明 card (the ELUA) comes up over the song select on the
     // first run. Tick "以后不再显示" in it and this goes true, so the card never
     // appears again. It is a *picked* flag (the dialog does not have to be
@@ -560,7 +577,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     int windowW, int windowH, float timeSec, int& sortMode, int& groupMode, int& vocalIndex,
     float uiScale = 1.0f, ImVec2* confirmCenter = nullptr, const AccountData* account = nullptr,
     const SelectPartyInfo* party = nullptr, SelectPartyResult* partyOut = nullptr,
-    int* favoriteToggle = nullptr, bool nativeMenuBar = false);
+    int* favoriteToggle = nullptr, bool nativeMenuBar = false, int* deleteRequest = nullptr);
 
 // Debug (`--profile`): force the profile card open. It normally only appears
 // when the level chip is clicked, which a --screenshot run cannot do.

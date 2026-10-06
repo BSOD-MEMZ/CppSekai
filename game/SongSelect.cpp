@@ -952,6 +952,22 @@ int scoreRankExp(char rank)
     }
 }
 
+double liveBonusExpMultiplier(int bonus)
+{
+    // 官方表见头文件。这里的写法就是把那张表折成两段：
+    //   0        -> 1
+    //   1..5     -> 5 * n        （×5 ×10 ×15 ×20 ×25）
+    //   n >= 6   -> 20 + n       （×26 ×27 ×28 ×29 ×30，官方数据到此为止）
+    // 11 档以上照第二段继续，属于本项目自己的延伸 —— 官方没有这些档位。
+    if (bonus <= 0) {
+        return 1.0;
+    }
+    if (bonus <= 5) {
+        return 5.0 * static_cast<double>(bonus);
+    }
+    return 20.0 + static_cast<double>(bonus);
+}
+
 int addPlayerExp(AccountData& account, double amount)
 {
     if (amount <= 0.0) {
@@ -1073,6 +1089,7 @@ void loadUserData(const std::string& path, UserSettings& settings,
             settings.uiScale = s.value("uiScale", settings.uiScale);
             settings.sortMode = s.value("sortMode", settings.sortMode);
             settings.groupMode = s.value("groupMode", settings.groupMode);
+            settings.liveBonus = s.value("liveBonus", settings.liveBonus);
             // Missing in an old profile: the ELUA shows once, which is exactly
             // what an existing install should see after this version lands.
             settings.eulaAccepted = s.value("eulaAccepted", settings.eulaAccepted);
@@ -1128,6 +1145,8 @@ void loadUserData(const std::string& path, UserSettings& settings,
     settings.uiScale = std::clamp(settings.uiScale, 0.7f, 1.5f);
     settings.sortMode = std::clamp(settings.sortMode, 0, 1);
     settings.groupMode = std::clamp(settings.groupMode, 0, kSelectGroupCount - 1);
+    // 演出能量：手改过的档案（负数 / 1000）不该让结算经验飞出去。
+    settings.liveBonus = std::clamp(settings.liveBonus, 0, 100);
 
     // Account: a rank past the cap (a hand-edited file) would make
     // expToNextRank() return 0 and freeze the bar, so clamp it. Exp is left
@@ -1213,6 +1232,7 @@ void saveUserData(const std::string& path, const UserSettings& settings,
         {"uiScale", settings.uiScale},
         {"sortMode", settings.sortMode},
         {"groupMode", settings.groupMode},
+        {"liveBonus", settings.liveBonus},
         {"eulaAccepted", settings.eulaAccepted},
     };
     doc["scores"] = scoreDoc;
@@ -2582,7 +2602,8 @@ bool guessOptionPill(const char* label, const ImVec2& size, ImU32 fill, float s,
 int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& entries, int& selected,
     int windowW, int windowH, float timeSec, int& sortMode, int& groupMode, int& vocalIndex,
     float uiScale, ImVec2* confirmCenter, const AccountData* account, const SelectPartyInfo* party,
-    SelectPartyResult* partyOut, int* favoriteToggle, bool nativeMenuBar)
+    SelectPartyResult* partyOut, int* favoriteToggle, bool nativeMenuBar,
+    int* deleteRequest)
 {
     int action = SelectNone;
     // 多人游玩: the room owns the song. The host keeps a normal, fully
@@ -2967,7 +2988,11 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     const float comboW = 168.0f * k;
     const float comboX0 = listX + searchW + 18.0f * k;
     const float comboGap = 12.0f * k;
-    {
+    // 原生菜单栏开着的时候（设置 > 系统），排序 / 分组也搬进 视图 菜单了 ——
+    // 两个下拉一起收起来，不然同一件事有两个入口，改一边看不出另一边动。
+    // 值本身还是 settings.sortMode / groupMode，菜单和这里读写的是同一个字段。
+    const bool headerSelectors = !nativeMenuBar;
+    if (headerSelectors) {
         const char* kSortLabels[2] = {"按名称", "按难度"};
         const char* kGroupLabels[kGroupCount] = {"关闭", "按难度段", "按读音", "按首字", "按收藏"};
         const std::string sortPreview = std::string("排序：") + kSortLabels[sortMode];
@@ -3005,7 +3030,9 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     // 省得为"哪几个按钮在"写两套坐标；多人游玩那条横幅的右边界挂在 guessX 上，所以
     // 它自己会跟着收窄，不用单独管。
     const bool headerFileButtons = !nativeMenuBar;
-    float headerX = comboX0 + (comboW + comboGap) * 2.0f + 4.0f * k;
+    // 下拉收起来的时候按钮跟着往左站（不然中间空出两个下拉的宽度）。
+    float headerX = comboX0
+        + (headerSelectors ? (comboW + comboGap) * 2.0f + 4.0f * k : 0.0f);
     // 下载谱面 sits right of 刷新: the downloader was reachable from the empty-list
     // state and from the settings, but on a full list there was nothing.
     const float rescanW = 104.0f * k;
@@ -3446,6 +3473,20 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
                         for (int d = 0; d < kDiffCount; ++d) {
                             if (g.idx[d] >= 0) {
                                 *favoriteToggle = g.idx[d];
+                                break;
+                            }
+                        }
+                    }
+                }
+                ImGui::Separator();
+                // 删除谱面文件：**只把请求交出去**，真正删（以及先问一句）在 main.cpp。
+                // 这里只认得"这一组是哪首"，删除要动磁盘、还要弹确认卡，都不是选曲界面
+                // 该干的事。菜单栏 编辑 > 删除谱面文件 走的是同一个出口。
+                if (ImGui::MenuItem("删除谱面文件…")) {
+                    if (deleteRequest != nullptr) {
+                        for (int d = 0; d < kDiffCount; ++d) {
+                            if (g.idx[d] >= 0) {
+                                *deleteRequest = g.idx[d];
                                 break;
                             }
                         }

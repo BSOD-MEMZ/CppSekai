@@ -27,17 +27,31 @@
 namespace platform::menu
 {
 // WM_COMMAND 的 id。从 101 起跳，跟窗口可能收到的别的命令错开。
+//
+// 这一串**必须连续**：窗口过程是靠 `[CmdSettings, CmdXxtsoft]` 这个区间把菜单命令
+// 从别的 WM_COMMAND 里认出来的（见 main.cpp 的 subclass）。加新项就往中间插，
+// 别在 CmdXxtsoft 后面追加。
 enum Command
 {
     CmdNone = 0,
     CmdSettings = 101, // 设置…            -> 打开设置卡片
+    CmdOpenChart,      // 打开谱面… Ctrl+O -> 原生选文件框
     CmdRescan,         // 刷新谱面列表 F5   -> 重扫 charts/
     CmdDownload,       // 音乐商店…         -> 起 chartdl.exe
     CmdQuitInstance,   // 结束当前实例      -> running = false
     CmdQuitAll,        // 结束所有实例…     -> 二次确认后关掉每一个窗口
+    CmdFavorite,       // 编辑：加入 / 取消收藏夹
+    CmdDeleteChart,    // 编辑：删除谱面文件…（问一句，然后删本地 .sus）
     CmdWinBorderless,  // 窗口模式 三选一（单选标记）
     CmdWinWindowed,
     CmdWinFullscreen,
+    CmdSortByName,     // 排序方式 二选一（跟选曲界面的「排序」下拉同一个值）
+    CmdSortByLevel,
+    CmdGroupOff,       // 分组依据 五选一（同上，跟「分组」下拉同一个值）
+    CmdGroupDiff,
+    CmdGroupReading,
+    CmdGroupInitial,
+    CmdGroupFavorite,
     CmdShowFps,        // 视图 三个勾选项
     CmdProgressBar,
     CmdSimpleFx,
@@ -52,12 +66,18 @@ enum Command
 struct State
 {
     int windowMode = 1;         // 0 borderless / 1 windowed / 2 fullscreen：单选
+    int sortMode = 0;           // 0 按名称 / 1 按难度：跟 settings.sortMode 同一个值
+    int groupMode = 0;          // 0 关闭 / 1 按难度段 / 2 按读音 / 3 按首字 / 4 按收藏
     bool showFps = false;       // 显示帧率
     bool showProgressBar = true; // 显示播放进度条
     bool simpleEffects = false; // 弱化打击特效
-    // 演奏中：刷新谱面列表 / 音乐商店 置灰（重扫会让正在跑的那一局卡一下，
-    // 下载器更不该在演出中间弹出来）。
+    // 演奏中：刷新谱面列表 / 音乐商店 / 打开谱面 置灰（重扫会让正在跑的那一局卡一下，
+    // 下载器和"换一首打"更不该从演出中间弹出来）。
     bool playing = false;
+    // 选中了一首歌（选曲界面 + 列表里有一首当前曲目）。编辑 整条菜单跟着它灰 / 亮。
+    bool songSelected = false;
+    // 「加入收藏夹」现在显示成「取消收藏」（当前这首已经在收藏里了）。只影响文案。
+    bool songFavorite = false;
 };
 
 // 挂上（enabled）或摘掉菜单栏，幂等。

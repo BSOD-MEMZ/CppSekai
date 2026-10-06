@@ -78,7 +78,9 @@ static void activate(HWND hwnd)
 int main(int argc, char** argv)
 {
     if (argc < 3) {
-        fprintf(stderr, "usage: winsend <title> click <x> <y> | key <vk> | move <x> <y>\n");
+        fprintf(stderr,
+            "usage: winsend <title> click <x> <y> | key <vk> | syskey <vk> | "
+            "chord <modvk> <vk> | move <x> <y> | focus | rect | place <x> <y>\n");
         return 2;
     }
     g_needle = argv[1];
@@ -165,6 +167,86 @@ int main(int argc, char** argv)
         PostMessage(g_found, WM_KEYDOWN, vk, keyLParam);
         Sleep(60);
         PostMessage(g_found, WM_KEYUP, vk, keyLParam | (LPARAM)(1u << 30) | (LPARAM)(1u << 31));
+    } else if (strcmp(argv[2], "syskey") == 0 && argc >= 4) {
+        // 系统键：Alt / F10 那一类。走 WM_SYSKEYDOWN 而不是 WM_KEYDOWN ——
+        // "按 Alt 进菜单模式"是 DefWindowProc 对**系统键**做的事，WM_KEYDOWN
+        // 它根本不看。菜单访问键的回归测试就靠这条。
+        //   bit29 = 上下文码（Alt 正按着）
+        const WPARAM vk = (WPARAM)atoi(argv[3]);
+        const UINT scan = MapVirtualKey((UINT)vk, MAPVK_VK_TO_VSC);
+        LPARAM sysLParam = (LPARAM)(1 | (scan << 16)) | (LPARAM)(1u << 29);
+        activate(g_found);
+        PostMessage(g_found, WM_SYSKEYDOWN, vk, sysLParam);
+        Sleep(60);
+        PostMessage(g_found, WM_SYSKEYUP, vk,
+            sysLParam | (LPARAM)(1u << 30) | (LPARAM)(1u << 31));
+    } else if (strcmp(argv[2], "chord") == 0 && argc >= 5) {
+        // 修饰键 + 一个键（Ctrl+O 这种）。修饰键先按下、后抬起；SDL 自己维护
+        // 修饰键状态，所以合成的那一笔 "o" 到 SDL 手上时 mod 里就有 KMOD_CTRL 了。
+        const WPARAM mod = (WPARAM)atoi(argv[3]);
+        const WPARAM vk = (WPARAM)atoi(argv[4]);
+        const UINT modScan = MapVirtualKey((UINT)mod, MAPVK_VK_TO_VSC);
+        const UINT scan = MapVirtualKey((UINT)vk, MAPVK_VK_TO_VSC);
+        const LPARAM modDown = (LPARAM)(1 | (modScan << 16));
+        const LPARAM keyDown = (LPARAM)(1 | (scan << 16));
+        activate(g_found);
+        PostMessage(g_found, WM_KEYDOWN, mod, modDown);
+        Sleep(50);
+        PostMessage(g_found, WM_KEYDOWN, vk, keyDown);
+        Sleep(60);
+        PostMessage(g_found, WM_KEYUP, vk, keyDown | (LPARAM)(1u << 30) | (LPARAM)(1u << 31));
+        Sleep(50);
+        PostMessage(g_found, WM_KEYUP, mod, modDown | (LPARAM)(1u << 30) | (LPARAM)(1u << 31));
+    } else if ((strcmp(argv[2], "real") == 0 || strcmp(argv[2], "realalt") == 0)
+        && argc >= 4) {
+        // 真·键盘输入：SendInput 走驱动那一层，GetKeyState / GetAsyncKeyState 会真的
+        // 跟着变。PostMessage 合成的那套做不到这一点 —— 而 DefWindowProc 判"进菜单
+        // 模式"看的正是**真实的修饰键状态**，所以"按 Alt 出菜单栏下划线"这件事只能
+        // 用这条测（合成 WM_SYSKEYDOWN 能送到窗口过程，但没人会进菜单模式）。
+        //
+        // **必须拆成多次 SendInput、中间留时间**：一整批灌进去的话，等应用把
+        // GetMessage 取到第一条时，异步键状态早就翻到"最终状态"了 —— TranslateMessage
+        // 那时已经看不到"Alt 按着"，WM_SYSCHAR / 菜单模式都不会发生。真人按键之间隔着
+        // 几十毫秒，就是这点间隔让 GetKeyState 正确。
+        //   real <vk>       : 按一下再放开
+        //   realalt <vk>    : Alt 按住 -> vk 按一下 -> Alt 放开（Alt+V 这种）
+        const WORD vk = (WORD)atoi(argv[3]);
+        const BOOL withAlt = strcmp(argv[2], "realalt") == 0;
+        INPUT ev;
+        activate(g_found);
+        Sleep(250); // 让 SetForegroundWindow 真的生效之后再注入
+        // 扫描码一定要给：不给的话 SendInput 把 VK_MENU 当成**右 Alt**（扩展键）发出去，
+        // lParam 的上下文位被置上，DefWindowProc 就按 AltGr 处理 —— 永远不进菜单模式
+        // （实测：`0x0104 wparam=18 lparam=0x20000001`，上下文位 = 1）。左 Alt 是 0x38。
+        ZeroMemory(&ev, sizeof(ev));
+        ev.type = INPUT_KEYBOARD;
+        if (withAlt) {
+            ev.ki.wVk = VK_MENU;
+            ev.ki.wScan = (WORD)MapVirtualKey(VK_MENU, MAPVK_VK_TO_VSC);
+            SendInput(1, &ev, sizeof(INPUT));
+            Sleep(300);
+        }
+        ev.ki.wVk = vk;
+        ev.ki.wScan = (WORD)MapVirtualKey(vk, MAPVK_VK_TO_VSC);
+        SendInput(1, &ev, sizeof(INPUT));
+        Sleep(120);
+        ZeroMemory(&ev, sizeof(ev));
+        ev.type = INPUT_KEYBOARD;
+        ev.ki.wVk = vk;
+        ev.ki.wScan = (WORD)MapVirtualKey(vk, MAPVK_VK_TO_VSC);
+        ev.ki.dwFlags = KEYEVENTF_KEYUP;
+        SendInput(1, &ev, sizeof(INPUT));
+        if (withAlt) {
+            Sleep(150);
+            ZeroMemory(&ev, sizeof(ev));
+            ev.type = INPUT_KEYBOARD;
+            ev.ki.wVk = VK_MENU;
+            ev.ki.wScan = (WORD)MapVirtualKey(VK_MENU, MAPVK_VK_TO_VSC);
+            ev.ki.dwFlags = KEYEVENTF_KEYUP;
+            SendInput(1, &ev, sizeof(INPUT));
+        }
+        printf("real: target=%p foreground=%p err=%lu\n",
+            (void*)g_found, (void*)GetForegroundWindow(), GetLastError());
     } else {
         fprintf(stderr, "winsend: unknown action\n");
         return 2;

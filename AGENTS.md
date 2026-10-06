@@ -124,8 +124,9 @@ platform/Party.*  # 多人游玩（同机多窗口联机）的共享内存总线
 game/PartyScreen.* # 多人游玩的浮层：选曲界面左下角的房间条（谁在房里）与演奏中的队友分数条。
                   # 房间自己没有页面——它就在选曲界面上（见「多人游玩」一节）。
                   # 难度名/序号（`difficultyIndex` / `difficultyName`）也在这，房间协议与手机面板共用。
-platform/NativeMenu.* # 原生 Win32 菜单栏（设置 > 系统 > 原生菜单栏，默认关）。见下面
-                  # 「原生菜单栏」一节。
+platform/NativeMenu.* # 原生 Win32 菜单栏：文件 / 编辑 / 视图 / 帮助（设置 > 系统 >
+                  # 原生菜单栏，默认关）。订单见下面「原生菜单栏」一节 ——
+                  # **Alt / 访问键那一节（SC_KEYMENU）别跳过**，SDL 会吞掉它。
 platform/ShellIntegration.* # 与资源管理器的接缝：.sus 文件关联（HKCU\Software\Classes）
                   # + 任务栏跳转列表（收藏 / 最近播放）。见「与 Windows 的接缝」里的批 D。
 main.cpp          # SDL2 窗口、事件循环、输入映射、ImGui HUD、截图模式、多人时钟跟随
@@ -275,7 +276,22 @@ main.cpp          # SDL2 窗口、事件循环、输入映射、ImGui HUD、截�
   别名是社区持续补充的，隔一阵重跑一次就好。纯数字别名会被丢掉（输入 id 本来就能搜到）。
 - `.workbuddy/tools/winsend.c` → `build/winsend.exe`：按窗口标题找窗口再送假输入，
   无交互会话下驱动 UI（动作：`click x y` / `move x y` / `key <vk>` / `focus` /
-  `place x y` / `rect`；见「平台 / 输入相关的坑」）。
+  `place x y` / `rect`；见「平台 / 输入相关的坑」）。三个和键有关的动作区别很大：
+  * `key <vk>` —— `PostMessage` 合成一笔按键。够用于普通键（F5 / ESC / 媒体键），
+    **但对"修饰键 + 键"和系统键没用**（见下）。
+  * `syskey <vk>` —— `PostMessage` 一笔 `WM_SYSKEYDOWN/UP`（Alt / F10 那类）。
+    能把消息送进窗口过程，但**没人会进菜单模式**：DefWindowProc 判这个要看真实的
+    修饰键状态。
+  * `chord <modvk> <vk>` —— 修饰键 + 一个键（Ctrl+O 这种），合成按下/抬起。
+    SDL 自己维护修饰键状态，所以 `mod` 里能带上 `KMOD_CTRL`。
+  * `real <vk>` / `realalt <vk>` —— **真·键盘输入**（`SendInput`，走驱动那一层，
+    `GetKeyState` 真的会变）。`realalt` = Alt 按住 → 键按一下 → Alt 放开。
+    **只有这两个能测出菜单的访问键**（Alt 下划线 / Alt+字母）。
+    两个细节：① 必须**拆成多次 `SendInput` 调用、中间留几十毫秒**，一整批灌进去的话
+    应用取到第一条消息时异步键状态已经翻到最终值了；② 要带**扫描码**，不带的话
+    Windows 把 `VK_MENU` 当右 Alt（扩展键）发出去，DefWindowProc 按 AltGr 处理。
+    `real` 会打一行 `real: target=… foreground=…`，注入失败（沙箱里 `SetForegroundWindow`
+    会被拒）时重试一次就好。
 - `.workbuddy/tools/asset_audit.py` → **素材清点**：把各 loader 里点名的路径当成清单，
   列出 assets/ 里游戏永远不会读的文件（`--list` 打全表，`--paths` 只打路径给脚本用）。
   文件顶部的 `KEEP` 是"手放进来、暂时没接线但有意留着"的白名单（整个 `assets/se/`
@@ -2344,10 +2360,22 @@ UI 在 **设置 → 演奏 → 按键映射**（3 列 × 4 行，点一格再按
 ## 原生菜单栏（2026-10-06，`platform/NativeMenu.*` + main.cpp 的 subclass）
 
 设置 > 系统 > **原生菜单栏**（`UserSettings::nativeMenuBar`，**默认关**）：给窗口挂一条
-真正的 Win32 菜单（文件 / 视图 / 帮助），把选曲顶栏那三个**窗口级**操作收进去 ——
-刷新谱面列表 / 音乐商店 / 设置。开启时 `drawSongSelect` 收到 `nativeMenuBar=true`，
-顶栏那三个按钮不画（`headerFileButtons`），坐标从一个游标往后排，**猜歌 / 随机 /
-切换歌手保留**。关闭时一切照旧。
+真正的 Win32 菜单 —— **文件 / 编辑 / 视图 / 帮助**：
+
+- 文件：打开谱面…(`Ctrl+O`) / 设置… / 刷新谱面列表(`F5`) / 音乐商店… / 结束当前实例 /
+  结束所有实例…
+- 编辑：加入收藏夹（当前曲目已在收藏里时显示"取消收藏"）/ 删除谱面文件…。
+  **没有当前曲目（非选曲界面 / 列表为空）时整条菜单置灰** —— 里面两项都是"对当前这首
+  做点什么"（`State::songSelected`）。
+- 视图：窗口模式 / 排序方式 / 分组依据（三组都是单选点）/ 显示帧率 / 显示播放进度条 /
+  弱化打击特效。
+- 帮助：关于本软件 / 许可与免责声明 / GitHub / 访问 xxtsoft。
+
+开启时 `drawSongSelect` 收到 `nativeMenuBar=true`，顶栏那三个**窗口级**按钮
+（刷新 / 音乐商店 / 设置）**和排序 / 分组两个下拉**都不画（`headerFileButtons` /
+`headerSelectors`），坐标从一个游标往后排，**猜歌 / 随机 / 切换歌手保留**。
+排序 / 分组是**同一个值**（`settings.sortMode` / `settings.groupMode`），菜单和下拉
+读写同一份，所以不会打架。关闭时一切照旧。
 
 - **挂载条件**（main.cpp 的 `refreshNativeMenuBar`，一帧跑完在 `runFrame` 外面调）：
   设置开着 && `windowMode == 1`（windowed）&& `noFrameMode == 0`。
@@ -2364,14 +2392,44 @@ UI 在 **设置 → 演奏 → 按键映射**（3 列 × 4 行，点一格再按
   `kDragTimerId`，复用拖动那套喂帧；`WM_EXITMENULOOP` 收尾。
   **`WM_TIMER` 那条"左键抬起 = 拖动结束"的兜底必须让路**（`!st->menuOpen` 才判）：
   菜单是点一下开、松开后还开着，照判会把喂帧定时器当场杀掉。
+  * **每消费一条菜单命令要补一次 `EndMenu()`**：命令是从**信箱**来的，不是菜单自己发的，
+    所以菜单的模态循环不会因为它退出。按 Alt 把菜单栏拉高（菜单模式，泵停在
+    DefWindowProc 里）之后再来一条命令，窗口就一直卡在菜单模式里 —— 连
+    `running = false` 都没用，主循环根本没在跑（实测：改之前 `send 105` 之后进程还在）。
+    `EndMenu()` 结束**本线程**的活动菜单，没有菜单在跑时只是返回 FALSE。
+    `menuOpen` 是 `SubclassState` 的成员、而那个结构体在 `runFrame` 之后才声明，所以
+    帧内读的是镜像 `menuIsOpen`（窗口过程在 ENTER/EXITMENULOOP 时同步它）。
+- **Alt / 访问键（mnemonic）必须在窗口过程里放行给 DefWindowProc**（2026-10-06 修，
+  用户报的"按 Alt 不出下划线、Alt+字母没反应"就是这个）。**SDL 的窗口过程把这一族
+  消息吃了**：它把 `WM_SYSKEYDOWN` 当普通按键喂 `SDL_KEYDOWN`，于是 DefWindowProc
+  永远收不到，"进菜单模式 / 显示访问键下划线 / Alt+字母打开对应菜单"全都不发生。
+  菜单挂着时（`platform::menu::attached(hwnd)`）把这些**原样转给 `DefWindowProcW`**：
+  `WM_SYSKEYDOWN` / `WM_SYSKEYUP` / `WM_SYSCHAR` / `WM_MENUCHAR` / `WM_INITMENU` /
+  `WM_INITMENUPOPUP` / `WM_UNINITMENUPOPUP` / `WM_MENUSELECT`，**外加
+  `WM_SYSCOMMAND` 里的 `SC_KEYMENU`**。
+  * `SC_KEYMENU` 是**最后一道门**，漏了它前面全白做：DefWindowProc 收到 Alt 之后会
+    把"请你把菜单打开"发回来 —— 实测 `Alt 按一下 → 0x0112 wParam=0xF100 lParam=0`
+    （拉高菜单栏）、`Alt+V → 0x0112 wParam=0xF100 lParam=118`（118 = 'v'）。
+    这条也是 SDL 吞掉的。
+  * **只转 `SC_KEYMENU`**，`WM_SYSCOMMAND` 的其余项（`SC_SCREENSAVE` /
+    `SC_MONITORPOWER`）要留给 SDL 挡 —— DefWindowProc 对那两个是**真的会**起屏保 /
+    关屏的。
+  * 回归：`.workbuddy/tools/winsend.exe CppSekai real 18`（真·Alt，见下面「工具」一节）
+    + `CPSEKAI_MSG_LOG=1`，日志里要出现 `0x0211`(WM_ENTERMENULOOP)；`realalt 86` 之后
+    再出现 `0x0117 lParam=2`（视图 那个 popup 被初始化）。
 - **命令不在窗口过程里执行**：`WM_COMMAND` 只把 id 记进 `menuCommand` 信箱
   （`HIWORD(wParam)==0` 且落在 `CmdSettings..CmdXxtsoft` 区间才算菜单命令），
   主循环在帧内消费。喂帧是递归的（WM_TIMER → 帧 → 泵 → WM_COMMAND），这块既可能
   在某次喂帧里跑到、也可能在正常帧里跑到，两边都得成立。
-- 勾选/单选/置灰由 `platform::menu::sync()` 打（`CheckMenuRadioItem` 画窗口模式那组
-  单选点，**逐个 CheckMenuItem 会画出三个勾**）；sync 会重画菜单栏，所以只在
-  值变化时调。演奏中把 刷新谱面列表 / 音乐商店 置灰（重扫会卡那一帧，下载器更不该
-  从演出中间弹出来）。
+- 勾选/单选/置灰由 `platform::menu::sync()` 打：窗口模式 / 排序方式 / 分组依据三组都是
+  `CheckMenuRadioItem`（**逐个 CheckMenuItem 会画出好几个勾**）。sync 会重画菜单栏，
+  所以只在值变化时调。演奏中把 刷新谱面列表 / 音乐商店 / 打开谱面 置灰（重扫会卡那一帧，
+  下载器和"换一首打"更不该从演出中间弹出来）。
+  * 两个**踩过的坑**：① `GetSubMenu(h, n)` 的 n 是"第 n 个**项**"，**分隔线也占位置**
+    （碰到分隔线返回 nullptr）—— 视图 里 排序方式/分组依据 是 2 和 3，写成 1 和 2 的话
+    两个子菜单一个勾都打不上（dump 出来全是空的）。② `ModifyMenuW`（改收藏项文案）会把
+    那一项**整个重新加回去**，顺手把 enabled 状态刷成可用 —— 所以**先改文案、后置灰**，
+    反过来的话空列表下"加入收藏夹"还是亮的。
 - **演奏中打开菜单自动暂停**（用户选的行为）：`WM_ENTERMENULOOP` 置
   `menuPauseWanted`，帧内看到且 `state == Play && session.active` 就调
   `requestPause()`（多人里非房主会被现有的规则挡掉）。选曲/结算不暂停。
@@ -2422,27 +2480,13 @@ UI 在 **设置 → 演奏 → 按键映射**（3 列 × 4 行，点一格再按
 - 媒体键：`SDLK_AUDIOPLAY` 演奏中 = 开关暂停卡片、选曲 = 回车；`AUDIONEXT/PREV` =
   上下方向键；`AUDIOSTOP` = ESC。**SDL2 没有 AUDIOPAUSE / TOGGLEPLAYPAUSE**，
   键盘上那颗播放/暂停合键落到 AUDIOPLAY。
-- **任务栏缩略图工具栏按钮**（`platform/SystemMedia.cpp` 的 `addThumbButtons` /
-  `updateThumbButtons`）：鼠标悬停任务栏图标时那三个小按钮 —— 暂停/继续、静音、
-  返回选曲。要点：
-  * `ITaskbarList3Vtbl` 是**手写**的，COM 的 vtable 位置寻址 —— 要用
-    `ThumbBarAddButtons` 就必须把前面的 `RegisterTab` / `UnregisterTab` /
-    `SetTabOrder` / `SetTabActive` 也声明出来，少一个后面全错位。
-  * `THUMBBUTTON` 那个头文件没进来，按 ABI 手写（x64 下 sizeof == 32）。
-    走 **`THB_ICON` + `hIcon`**，所以不需要 `ThumbBarSetImageList` / IImageList。
-  * 图标是**现画**的（`IconCanvas` + 矩形/三角形/粗线，32x32，然后
-    `CreateDIBSection` 填 BGRA → `CreateIconIndirect`）。不读 assets：那边只有选曲
-    界面用的白色字形。**颜色要按 alpha 预乘**，不然半透明边缘发白。
-    字形固定用 #444466（缩略图那条底是浅的；系统切主题不会替我们反色）。
-  * 点击以 `WM_COMMAND`（`HIWORD == THBN_CLICKED == 0x1800`，`LOWORD` = 按钮 id）
-    回到窗口过程，走**跟菜单栏同一条挂起命令通道**（id 区间不重叠：缩略图 1..3、
-    菜单 101 起）。
-  * 「灰掉」只是 UI：处理端也要挡一道（暂停按钮在选曲界面按下去会把暂停卡片盖到
-    选曲界面上 —— 实测踩到过）。`updateThumbButtons` 每帧调，自己比对上次的值。
-  * 返回选曲 = 置 `escapePressed`，所以消费块被挪到了 ESC 分支**之前**
-    （同帧生效）；`--sus` 起的局按它就是退出，跟 ESC 一致。
-  * 静音是游戏自己的（`userMuted`，本次运行有效不落盘），跟"最小化静音"并列，
-    见帧内那个 `wantMute` 轮询。
+- **任务栏缩略图工具栏按钮：做过又撤了**（2026-10-06 当天）。`ITaskbarList3` 的
+  `ThumbBarAddButtons` 那套（悬停任务栏图标出 暂停/静音/返回选曲 三个小按钮）当天写完
+  也验证过（`hr=0x0`，图标是 `CreateDIBSection` + `CreateIconIndirect` 现画的，颜色要按
+  alpha 预乘），但用户随后决定不要，整个特性被移除 —— vtable 里为它加的
+  `RegisterTab..ThumbBarUpdateButtons` 也一起删了。**留个记录是为了别再"重新发现"一遍**：
+  真想加回去的话，vtable 位置寻址、`THUMBBUTTON` 的 ABI、`THB_ICON + hIcon`（省掉
+  IImageList）这些结论都还成立。
 
 ### 批 D：`.sus` 文件关联 + 跳转列表（`platform/ShellIntegration.*`）
 
@@ -2481,6 +2525,33 @@ UI 在 **设置 → 演奏 → 按键映射**（3 列 × 4 行，点一格再按
   `loadUserData` / `saveUserData` **两处都要改**，漏一处静默丢）。去重后插最前，
   留 10 条；写盘跟着 `persistUserData` 走。
 - 路径已经没了的条目**跳过不加**（点了打不开比不显示更糟）——`GetFileAttributes`
+
+### 批 E：打开谱面 / 编辑菜单 / 排序分组子菜单 / 演出能量（2026-10-06 晚）
+
+- **文件 > 打开谱面…（`Ctrl+O`）**：`GetOpenFileNameW`（`main.cpp` 顶部的
+  `browseForChart`，**必须带 `OFN_NOCHANGEDIR`** —— 不然对话框会把进程的 cwd 改掉，
+  baseDir 那套相对路径全废）。选中的路径交给 `startDroppedChart(path, "open")` ——
+  **跟拖放是同一条起奏路**（日志前缀就是第二个参数，拖放传 `"drop"`）。
+  `Ctrl+O` 本身由键盘处理置 `openChartRequested`，帧内跟菜单那条命令汇合；
+  菜单项上那个 `	Ctrl+O` 只是**提示**（没建加速键表，SDL 的泵不调
+  `TranslateAccelerator`）。演奏中这项置灰 —— 演出中间换曲会把这一局的收尾流程绕过去。
+- **编辑 > 删除谱面文件…**：**全程序里唯一会毁掉用户数据的动作**（删磁盘上的 .sus，
+  没有回收站）。走游戏自己的确认卡 `deleteAsk`（`drawDeleteAskCard`，`eulaDialog`），
+  卡片上写清楚文件名 + 完整路径，**默认那颗是"取消"**（`primary` 给左边，跟
+  「要退出吗」那张卡正好反过来）。同名的 mp3 / 曲绘**不跟着删**（可能被好几首共用，
+  也可能是用户自己配的）。选曲界面右键曲目那份菜单里也有同一项，出口一样
+  （`drawSongSelect` 的 `deleteRequest` 出参 → main.cpp 举卡）。删完**自己重扫一遍列表**
+  并把光标停在原来的位置（不走 `rescanRequested`：那条路会把光标打回第 0 首）。
+- **视图 > 排序方式 / 分组依据**：跟选曲界面两个下拉是同一个值，菜单开着时下拉收起。
+- **演出能量**（设置 > 演奏，`UserSettings::liveBonus`，0..100，默认 5）：结算经验 =
+  评级经验 × `game::liveBonusExpMultiplier(bonus)`。倍率是**官方的 ライブボーナス 表**
+  （4.0.0 平衡调整后）：`0→×1  1..5→×5n  6..10→×20+n`；官方能消耗的档位到 10
+  （平时上限 5、活动期间 10），**11 档以上是照 6..10 那条直线外推的、本项目自己的延伸**
+  —— 代码注释、设置页那一行、CLI.md 都写明了，别把它说成官方数值。
+  无头验证用 `--live-bonus <0..100>`（跟 `--player-rank` 一个性质，正常退出会写回档案）。
+  实测：0→20、5→500（×25）、10→600（×30）、100→2400（×120）。
+- 调试开关 `CPSEKAI_DELETEASK=1`：开局就把删除卡举到列表第一首上（截图 / 无头驱动用；
+  `PrintWindow` 抓不到 GL 画面，只有游戏自己的 `--screenshot` 拍得到那张卡）。
 
 ## 多人游玩（`platform/Party.*` + `game/PartyScreen.*`）
 

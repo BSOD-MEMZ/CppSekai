@@ -154,7 +154,14 @@ cppsekai [--sus <file.sus>] [--bgm <audio>] [--charts <dir>] [--cover <image>]
 | `--drop-test <路径> [秒=1.0]` | 合成一次**拖放谱面**（`SDL_DROPFILE`，默认 1.0s 时发）。真实拖放没法从脚本驱动——`WM_DROPFILES` 里的 `HDROP` 属于"放"的那个进程——但这条合成事件走的是完全相同的路：同样的 `.sus` 后缀过滤、同样的「只在选曲界面生效」、同样的起奏收尾。日志 `[drop] playing <路径>` = 成功了 |
 | `--associate-sus` | **装 `.sus` 文件关联**并退出（不开窗口）：写 `HKCU\Software\Classes\.sus` → `CppSekai.Chart`，command 行为 `<本程序 exe 绝对路径> --sus "%1"`。只写 HKCU、不要管理员。等价于 设置 > 系统 > 关联 .sus 谱面文件，给安装程序/脚本用。成功 exit 0 |
 | `--unassociate-sus` | 撤销上面的关联（`RegDeleteTree` 掉 `.sus` 与 `CppSekai.Chart`）。**`.sus` 若指向别的程序就不动它**，直接失败 exit 1 |
+| `--live-bonus <0..100>` | 本次运行的**演出能量**（默认读设置里的值，出厂 5）。结算经验 = 评级经验 × 倍率，倍率见下。跟 `--player-rank` 一个性质：**正常退出会把覆盖值写回档案**（只有 `--screenshot` 那种不落盘） |
 | `--help` / `-h` | 打印用法并退出 |
+
+**演出能量的倍率**（`game::liveBonusExpMultiplier`）：`0→×1`、`1..5→×5n`（×5 ×10 ×15
+×20 ×25）、`6..10→×20+n`（×26 … ×30）。前 10 档是**官方的 ライブボーナス 表**（4.0.0 平衡
+调整之后；官方能消耗的档位就是 0..10，平时上限 5、活动期间 10）；**11 档以上是照 6..10
+那条直线外推的，属于本项目自己的延伸，不是官方数值**。启动日志有一行
+`[settings] live bonus N -> exp xM`，结算经验对不上先看它。
 
 ---
 
@@ -204,6 +211,9 @@ cppsekai [--sus <file.sus>] [--bgm <audio>] [--charts <dir>] [--cover <image>]
   所以有个 `CPSEKAI_CARD_T=<0..1>`——把**所有卡片的动画冻结在这个进度**上再抓图，
   `0.3` 左右最能看出内容是不是跟着框一起缩放/淡入。
 - `--flick-as-tap`：本次运行把 flick 音符按 tap 判（等价于设置里的「Flick 视作 Tap」，**不写档案**）。
+- `CPSEKAI_DELETEASK=1`：开局就把「删除谱面文件？」那张确认卡举到列表第一首上（截图 / 无头
+  驱动用）。注意 `PrintWindow`（即 `.workbuddy/tools/shoot_win.py`）抓不到 GL 画面，
+  要看卡片只能用游戏自己的 `--screenshot`。
 - **失血阴影**（掉血时四边变暗）：`CPSEKAI_VIGNETTE=0.85` 把阴影冻结在这个强度上，用来截无头对比图——
   掉血需要真人漏接，`--screenshot` 造不出来。`0` = 关（当对照图用）。
 - **某个键"按了没反应"**：`CPSEKAI_KEY_LOG=1` 会把每一笔按键打一行
@@ -213,6 +223,9 @@ cppsekai [--sus <file.sus>] [--bgm <audio>] [--charts <dir>] [--cover <image>]
   两者都只在窗口过程 / 事件循环里打，不写文件（跟别的日志一个出口）。
 - **驱动一个正在跑的窗口**（无交互会话里测按键 / 点击）：
   `build/winsend.exe <标题子串> key <虚拟键码>` / `click <客户区x> <y>`。
+  修饰键组合用 `chord <修饰键vk> <键vk>`（如 Ctrl+O = `chord 17 79`）；系统键用
+  `syskey <vk>`；**要测菜单的 Alt 访问键只能用真键盘注入** `real <vk>` / `realalt <vk>`
+  （合成消息进不了菜单模式，原因见 AGENTS.md「原生菜单栏」）。
   注意 `key` 的 lParam 必须带**扫描码**（`MapVirtualKey`）——SDL 是从 lParam 的 16..23 位读扫描码的，
   以前这里传 0，事件会被 SDL 丢掉：窗口过程明明收到了 `WM_KEYDOWN`，游戏里毫无反应（2026-10-06 修的）。
   媒体键（0xB0..0xB7）还要置扩展键位（bit24），否则扫描码会撞上普通键（0x22 是 G）。

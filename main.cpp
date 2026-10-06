@@ -93,6 +93,39 @@ std::wstring currentExecutablePath()
     }
 }
 
+// 文件 > 打开谱面…（Ctrl+O）：原生选文件框。
+//
+// 用 shell 的 GetOpenFileNameW 而不是自己画一张卡：要的是**系统**的文件浏览器
+// （收藏夹、最近位置、网络位置、拖进去、地址栏都有），这些自己写不出来。代价是它
+// 是模态的、而且会在我们自己的帧里跑起来 —— 跟"结束所有实例"那个 MessageBox 一样，
+// 同一类东西（都是用户主动从菜单里叫出来的）。
+//
+// 返回选中的路径（UTF-8，跟游戏其余部分一致），取消 / 失败返回空串。
+// 初始目录给 charts/：那儿是谱面的家，也是启动扫描用的那个目录。
+std::string browseForChart(HWND owner, const std::string& initialDir)
+{
+    wchar_t fileBuffer[MAX_PATH] = {};
+    const std::wstring initialW = path_utf8::widen(initialDir);
+    const std::wstring filter =
+        std::wstring(L"SUS 谱面 (*.sus)") + L'\0' + L"*.sus" + L'\0'
+        + L"所有文件 (*.*)" + L'\0' + L"*.*" + L'\0';
+
+    OPENFILENAMEW ofn{};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = owner;
+    ofn.lpstrFilter = filter.c_str();
+    ofn.lpstrFile = fileBuffer;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.lpstrInitialDir = initialW.empty() ? nullptr : initialW.c_str();
+    ofn.lpstrTitle = L"打开 SUS 谱面";
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER | OFN_NOCHANGEDIR;
+    if (GetOpenFileNameW(&ofn) == FALSE) {
+        // 取消也是 FALSE，所以这里不打错误 —— 用户按取消不算异常。
+        return std::string();
+    }
+    return path_utf8::narrow(fileBuffer);
+}
+
 // 一个自己登记的消息：设置 > 系统 > 结束所有实例 在发 WM_CLOSE **之前**先发它，
 // 收到的一方就知道这次关窗是"别的窗口让的"，不是用户点了 X —— 演奏中那张"要退出吗"
 // 的确认卡（closeAsk）只为后者弹。RegisterWindowMessage 的返回值跨进程一致，所以
@@ -1143,6 +1176,7 @@ int main(int argc, char** argv)
     bool playerSpecGiven = false;
     int playerRankGiven = -1;      // --player-rank
     double playerExpGiven = -1.0;  // --player-exp: fraction towards the next rank
+    int liveBonusGiven = -1;       // --live-bonus: 覆盖本次运行的演出能量（不落盘）
     int renderSizeW = 0;           // --render-size <w>x<h>: fixed render mode
     int renderSizeH = 0;
     std::string activateProfileArg; // --activate-profile <id> (headless check)
@@ -1387,6 +1421,12 @@ int main(int argc, char** argv)
             // Fraction of the way to the next rank (the chip's green fill), for
             // screenshot runs - e.g. --player-exp 0.35.
             playerExpGiven = std::clamp(std::atof(utf8Argv[++i]), 0.0, 1.0);
+        } else if (arg == "--live-bonus" && i + 1 < utf8Argc) {
+            // 演出能量（0..100）。无头验证"倍率真的进了结算经验"要用它，不然得
+            // 真打一局。跟 --player-rank / --player-exp 一个性质：覆盖档案里读到的
+            // 值，**正常退出会连这个值一起写回去**（--screenshot 那种不落盘的运行
+            // 才不留痕）。见 liveBonusExpMultiplier。
+            liveBonusGiven = std::clamp(std::atoi(utf8Argv[++i]), 0, 100);
         } else if (arg == "--test-restart") {
             // Debug: at --restart-at seconds, give the running song up and
             // start the next chart (the sequence that used to hang on the
@@ -1767,6 +1807,10 @@ int main(int argc, char** argv)
     }
     if (playerExpGiven >= 0.0) {
         account.exp = playerExpGiven * game::expToNextRank(account.rank);
+    }
+    // --live-bonus 覆盖档案里的演出能量（同样是"只在本次运行里生效"）。
+    if (liveBonusGiven >= 0) {
+        userSettings.liveBonus = liveBonusGiven;
     }
 
     // ------------------------------------------------------------------
@@ -2417,6 +2461,10 @@ int main(int argc, char** argv)
                     "holdTail=%.0f holdStart=%.0f linked=%d\n",
             windows.perfectMs, windows.greatMs, windows.goodMs, windows.badMs, windows.missAfterMs,
             windows.holdTailGraceMs, windows.holdStartGraceMs, userSettings.linkBadMiss ? 1 : 0);
+        // 演出能量单独一行：结算经验 = 评级经验 x 这个倍率，"打了一首歌经验不对"
+        // 第一眼看它。倍率的来历见 game::liveBonusExpMultiplier。
+        std::printf("[settings] live bonus %d -> exp x%.0f\n",
+            userSettings.liveBonus, game::liveBonusExpMultiplier(userSettings.liveBonus));
         std::fflush(stdout);
     }
 
@@ -2587,9 +2635,6 @@ int main(int argc, char** argv)
     // ------------------------------------------------------------------
     platform::SystemMedia systemMedia;
     systemMedia.init(window);
-    // 任务栏缩略图上的三个小按钮（暂停 / 静音 / 返回选曲）。点了会以 WM_COMMAND
-    // （HIWORD = THBN_CLICKED）回到窗口过程，再走跟菜单栏同一条"挂起命令"通道。
-    systemMedia.addThumbButtons(window);
     if (!userSettings.reportSmtc) {
         // Turned off in the settings: never become the active media session,
         // so Windows keeps showing whatever it showed before.
@@ -3766,12 +3811,28 @@ int main(int argc, char** argv)
     // 误触 Alt+F4 是常事。只有"用户关窗"才问：结束所有实例 会先发一个登记过的消息
     // （见 cppsekaiForceQuitMessage），那种关法不弹这张卡。
     bool closeAsk = false;
+    // 删除谱面文件 的确认卡（菜单 编辑>删除 或 曲目右键>删除谱面文件）。
+    //
+    // 删的是**本地磁盘上的 .sus**，删掉就没了 —— 这是整个程序里唯一一个会毁掉
+    // 用户数据的动作，所以必须问一句，而且要说清楚删的是哪个文件。
+    bool deleteAsk = false;
+    int deleteAskIndex = -1;   // entries 里的下标（删完把光标挪到附近那首）
+    std::string deleteAskPath; // 要删的文件（卡片上显示名字）
 #ifdef _WIN32
     // Headless check (CPSEKAI_MULTIASK=1): raise the card at startup. Clicking the
     // combo is the only other way to get here, and a posted click does not reach an
     // ImGui button, so this is how the entrance animation gets looked at.
     if (std::getenv("CPSEKAI_MULTIASK") != nullptr) {
         multiInstanceAsk = true;
+    }
+    // Same for 删除谱面文件: CPSEKAI_DELETEASK=1 raises it for the first chart in
+    // the list, so a --screenshot run can look at the card (and so a script can
+    // find the buttons: PrintWindow does not capture the GL surface, only the
+    // game's own --screenshot does).
+    if (std::getenv("CPSEKAI_DELETEASK") != nullptr && !entries.empty()) {
+        deleteAsk = true;
+        deleteAskIndex = 0;
+        deleteAskPath = entries.front().susPath;
     }
     // Same for 导入: CPSEKAI_IMPORTASK=1 raises the confirmation card over the
     // active profile's own file, which is the one thing about it that cannot be
@@ -3958,6 +4019,27 @@ int main(int argc, char** argv)
                     ui::bindSe(&audio, 0.8f * seVolume);
                     persistUserData();
                 }
+                // 演出能量（演出 > 演出能量）。结算经验 = 评级经验 x 这个倍率，
+                // 跟官方 live bonus 对奖励做的事一样（官方那里一局给
+                // 「评级经验 x bonus 倍率」）。
+                //
+                // 倍率的来历见 game::liveBonusExpMultiplier：0..10 是官方表，
+                // 11 以上是本项目照官方 6..10 档那条直线外推的。卡片上必须留着
+                // 那句说明 —— 不写清楚就成了"我们瞎编的数值"。
+                contentLeft();
+                ImGui::Text("演出能量");
+                float liveBonusPct = static_cast<float>(userSettings.liveBonus);
+                contentLeft();
+                if (ui::slider("livebonus", &liveBonusPct, 0.0f, 100.0f, 1.0f, "%.0f", interior)) {
+                    userSettings.liveBonus = std::clamp(static_cast<int>(liveBonusPct + 0.5f), 0, 100);
+                    persistUserData();
+                }
+                contentLeft();
+                // 一行说完。这一页本来就快满了（CPSEKAI_UI_TRACE 量过：
+                // used 794 / view 620），多一行就多 30px 的滚动。
+                ImGui::TextWrapped("结算经验 x%.0f（11 档以上为本项目延伸）",
+                    game::liveBonusExpMultiplier(userSettings.liveBonus));
+
                 // 手柄震动 + 震动: everything under here needs a pad with motors to
                 // mean anything, so the whole run of rows is hidden outright when
                 // none is plugged in (padConnected, refreshed in runFrame). Not
@@ -5080,6 +5162,8 @@ int main(int argc, char** argv)
     int multiAskPadChoice = -1;
     int closeAskPadChoice = -1;
     bool closeAskAlive = false;
+    int deleteAskPadChoice = -1;
+    bool deleteAskAlive = false;
     auto drawMultiInstanceAskDialog = [&]() {
         if (multiInstanceAsk) {
             multiInstanceAskAlive = true;
@@ -5158,6 +5242,68 @@ int main(int argc, char** argv)
             std::printf("[close] quit confirmed while playing\n");
             std::fflush(stdout);
             running = false;
+        }
+    };
+
+    // ------------------------------------------------------------------
+    // 删除谱面文件 的确认框（菜单 编辑 > 删除谱面文件 / 曲目右键 > 删除谱面文件）。
+    //
+    // 这是整个程序里唯一一个会毁掉用户数据的动作：删的是磁盘上的 .sus 本身，删完
+    // 就没了，程序里没有任何回收站。所以卡上写清楚是哪个文件（同名文件散在不同目录
+    // 很常见），而且默认那颗给"取消"（primary 是左边那颗）—— 跟"要退出吗"那张卡
+    // 正好反过来，那张的默认是"继续演出"。
+    // 同名的音频 / 曲绘**不跟着删**：它们可能被好几首共用，也可能是用户自己配的。
+    // ------------------------------------------------------------------
+    auto drawDeleteAskDialog = [&]() {
+        if (deleteAsk) {
+            deleteAskAlive = true;
+        }
+        if (!deleteAskAlive) {
+            return;
+        }
+        const std::string label = deleteAskPath.empty()
+            ? std::string("(没有文件)")
+            : path_utf8::fromPath(path_utf8::toPath(deleteAskPath).filename());
+        const int action = ui::eulaDialog(renderer, "##deleteask", "删除谱面文件？",
+            {
+                "文件：" + label,
+                deleteAskPath,
+                "会把这个 .sus 从磁盘上删掉，无法恢复。",
+                "同名的音频 / 曲绘不会被删。",
+            },
+            nullptr, nullptr, {std::string("取消"), std::string("删除")}, {true, false},
+            deleteAskPadChoice);
+        deleteAskPadChoice = -1; // one press is one pick
+        if (action == -2) {
+            deleteAskAlive = false; // 关场动画放完，把卡片撤掉
+            return;
+        }
+        if (action == 0) {
+            std::printf("[delete] cancelled\n");
+            std::fflush(stdout);
+            deleteAsk = false;
+        } else if (action == 1) {
+            bool ok = false;
+#ifdef _WIN32
+            ok = DeleteFileW(path_utf8::widen(deleteAskPath).c_str()) != 0;
+#else
+            ok = std::remove(deleteAskPath.c_str()) == 0;
+#endif
+            std::printf("[delete] %s %s\n", ok ? "removed" : "FAILED", deleteAskPath.c_str());
+            std::fflush(stdout);
+            deleteAsk = false;
+            // 重新扫一遍列表，光标尽量停在原来的位置（删的是最后一条就往前挪一格）。
+            // 不走 rescanRequested：那条路会把光标打回第 0 首，删完一首就被甩到列表
+            // 开头，连删几首会很难受。
+            const int want = deleteAskIndex;
+            entries = scanAllChartDirs();
+            refreshEntryFlags();
+            selected = entries.empty()
+                ? -1
+                : std::clamp(want, 0, static_cast<int>(entries.size()) - 1);
+            loadedCoverPath.clear();
+            std::printf("[select] %d chart(s) after delete\n", static_cast<int>(entries.size()));
+            std::fflush(stdout);
         }
     };
 
@@ -5814,9 +5960,9 @@ int main(int argc, char** argv)
 #endif
     int menuCommand = -1;
     bool menuPauseWanted = false;
-    // 任务栏缩略图那颗静音按钮的状态（本次运行有效，不落盘）。跟"最小化静音"是
-    // 两个来源，见帧内那个轮询：两边任何一个成立就静音。
-    bool userMuted = false;
+    // "菜单正开着（菜单模式）"的镜子。`menuOpen` 是 SubclassState 的成员，而那个结构体
+    // 在 runFrame **之后**才声明 —— 帧内够不着，所以这里放一份，由窗口过程同步。
+    bool menuIsOpen = false;
     // 窗口被要求关闭（X / Alt+F4 / 别的窗口让我们关）时的唯一决策点。
     //
     // 演奏中先问一句，其余情况直接退。放在这里（runFrame 之前）是因为窗口过程那条路
@@ -5847,7 +5993,7 @@ int main(int argc, char** argv)
     // 只认 .sus，而且只在**选曲界面**生效：演奏 / 结算中间换曲会把这一局的收尾
     // 流程（结算记录、多人房间的状态、任务栏进度）绕过去，那两个状态漏掉的收尾
     // 比"拖了没反应"麻烦得多。
-    auto startDroppedChart = [&](const std::string& path) -> bool {
+    auto startDroppedChart = [&](const std::string& path, const char* how) -> bool {
         game::ChartEntry entry;
         entry.susPath = path;
         game::resolveSidecars(entry); // 旁边的同名 mp3 / 曲绘自己认
@@ -5855,7 +6001,7 @@ int main(int argc, char** argv)
             std::fprintf(stderr, "%s\n", error.c_str());
             reportLoadFailure(entry);
             error.clear();
-            std::printf("[drop] load failed: %s\n", path.c_str());
+            std::printf("[%s] load failed: %s\n", how, path.c_str());
             std::fflush(stdout);
             return false;
         }
@@ -5872,7 +6018,7 @@ int main(int argc, char** argv)
         songEndBlackout = 0.0f;
         state = AppState::Play;
         beginSessionClock();
-        std::printf("[drop] playing %s\n", path.c_str());
+        std::printf("[%s] playing %s\n", how, path.c_str());
         std::fflush(stdout);
         return true;
     };
@@ -6154,6 +6300,9 @@ int main(int argc, char** argv)
 
     bool escapePressed = false;
     bool rescanRequested = false; // F5 in the song list: re-read charts/
+    // Ctrl+O（文件 > 打开谱面…）。事件循环里只记一笔，真正弹选文件框放在帧内、
+    // 跟菜单那条命令同一个地方 —— 那个框是模态的，不能在事件泵里挂住。
+    bool openChartRequested = false;
     // 媒体键的上一首 / 下一首 / 确定。事件循环里只记下来，等帧内 pulse() 可用时再发
     // —— pulse 定义在事件循环**后面**，跟手柄那条路共用同一个出口（见下面的 D-pad）。
     bool mediaNextRequested = false;
@@ -6285,7 +6434,7 @@ int main(int argc, char** argv)
                             dropped.c_str());
                         std::fflush(stdout);
                     } else {
-                        startDroppedChart(dropped);
+                        startDroppedChart(dropped, "drop");
                     }
                     break;
                 }
@@ -6396,6 +6545,11 @@ int main(int argc, char** argv)
                         }
                     } else if (!typingText && event.key.keysym.sym == SDLK_h) {
                         showDebug = !showDebug;
+                    } else if (event.key.keysym.sym == SDLK_o
+                        && (event.key.keysym.mod & KMOD_CTRL) != 0) {
+                        // Ctrl+O = 文件 > 打开谱面…（菜单项上那个 "	Ctrl+O" 只是提示：
+                        // 这里没有加速键表，SDL 的泵不调 TranslateAccelerator）。
+                        openChartRequested = true;
                     } else if (event.key.keysym.sym == SDLK_F5 && state == AppState::Select) {
                         // The chart folder is scanned once at startup; this lets
                         // the player drop a new .sus in and pick it up without
@@ -6751,8 +6905,7 @@ int main(int argc, char** argv)
         // replay an event that has already gone by.
         {
             const bool minimized = (SDL_GetWindowFlags(window) & SDL_WINDOW_MINIMIZED) != 0;
-            // userMuted = 缩略图那颗静音按钮（本次运行有效，不落盘）。
-            const bool wantMute = (userSettings.muteWhenMinimized && minimized) || userMuted;
+            const bool wantMute = userSettings.muteWhenMinimized && minimized;
             if (wantMute != audio.muted()) {
                 audio.setMuted(wantMute);
             }
@@ -6807,38 +6960,15 @@ int main(int argc, char** argv)
         // 开头、状态干净的地方。喂帧是递归的（WM_TIMER -> 帧 -> 泵 -> WM_COMMAND），
         // 所以这一块既可能在某次喂帧里跑到，也可能在正常的一帧里跑到。
         // ------------------------------------------------------------------
+        // Ctrl+O：跟 文件 > 打开谱面… 完全同一条路（菜单命令那条 case 就在下面）。
+        if (openChartRequested) {
+            openChartRequested = false;
+            menuCommand = platform::menu::CmdOpenChart;
+        }
         if (menuCommand >= 0) {
             const int cmd = menuCommand;
             menuCommand = -1;
             switch (cmd) {
-            // ---- 任务栏缩略图按钮（systemMedia.addThumbButtons）----
-            // 跟菜单命令共用这一个开关：id 区间不重叠（缩略图 1..3，菜单 101 起）。
-            case platform::ThumbPause:
-                // 灰着的时候点不出来，但"灰"只是 UI 上的事 —— 这里也要挡一道，
-                // 不然在选曲界面按下去会把暂停卡片盖到选曲界面上。
-                if (state != AppState::Play) {
-                    break;
-                }
-                if (pauseDialogOpen) {
-                    pauseDialogChoice = 2; // 「继续演出」，跟媒体键同一个动作
-                } else if (!paused) {
-                    requestPause();
-                }
-                break;
-            case platform::ThumbMute:
-                userMuted = !userMuted;
-                std::printf("[audio] %s (taskbar thumb button)\n",
-                    userMuted ? "muted" : "unmuted");
-                std::fflush(stdout);
-                break;
-            case platform::ThumbBack:
-                // 跟 ESC 完全同一条路（回选曲 / --sus 起的直接退出）：这里置上
-                // escapePressed，上面那个分支**同一帧**就会消费它 —— 消费块被特意
-                // 挪到了 ESC 分支之前，就是为了这个。
-                if (state == AppState::Play) {
-                    escapePressed = true;
-                }
-                break;
             case platform::menu::CmdSettings:
                 showDebug = true; // 同一张卡片，选曲和演奏界面都画它
                 break;
@@ -6851,6 +6981,77 @@ int main(int argc, char** argv)
                     std::fflush(stdout);
                 }
                 break;
+            case platform::menu::CmdOpenChart: {
+                // 演奏中这一项是灰的（见 refreshNativeMenuBar 的 st.playing），
+                // 但"灰"只是画出来的样子，这里再挡一道。
+                if (state != AppState::Select) {
+                    break;
+                }
+                const std::string picked = browseForChart(gameWindow, chartsDir);
+                if (picked.empty()) {
+                    std::printf("[open] cancelled\n");
+                    std::fflush(stdout);
+                    break;
+                }
+                startDroppedChart(picked, "open");
+                break;
+            }
+            case platform::menu::CmdSortByName:
+            case platform::menu::CmdSortByLevel:
+                // 跟选曲界面那个「排序」下拉是同一个值（settings.sortMode），
+                // 所以两边永远不会打架 —— 菜单开着的时候那个下拉会收起来。
+                userSettings.sortMode = cmd == platform::menu::CmdSortByName ? 0 : 1;
+                persistUserData();
+                std::printf("[menu] sort = %d\n", userSettings.sortMode);
+                std::fflush(stdout);
+                break;
+            case platform::menu::CmdGroupOff:
+            case platform::menu::CmdGroupDiff:
+            case platform::menu::CmdGroupReading:
+            case platform::menu::CmdGroupInitial:
+            case platform::menu::CmdGroupFavorite:
+                // 0 关闭 / 1 按难度段 / 2 按读音 / 3 按首字 / 4 按收藏
+                userSettings.groupMode = static_cast<int>(cmd - platform::menu::CmdGroupOff);
+                persistUserData();
+                std::printf("[menu] group = %d\n", userSettings.groupMode);
+                std::fflush(stdout);
+                break;
+            case platform::menu::CmdFavorite:
+            case platform::menu::CmdDeleteChart: {
+                // 编辑 里的两项：只有"选曲界面 + 列表里有一首当前曲目"才点得到
+                // （菜单那边是灰的，这里再挡一道）。当前曲目就是 `selected`。
+                if (state != AppState::Select || selected < 0
+                    || selected >= static_cast<int>(entries.size())) {
+                    break;
+                }
+                const game::ChartEntry& cur = entries[static_cast<size_t>(selected)];
+                if (cmd == platform::menu::CmdFavorite) {
+                    if (cur.musicId > 0) {
+                        std::vector<int>& favorites = userSettings.favoriteMusicIds;
+                        const auto hit = std::find(favorites.begin(), favorites.end(), cur.musicId);
+                        const bool added = hit == favorites.end();
+                        if (added) {
+                            favorites.push_back(cur.musicId);
+                        } else {
+                            favorites.erase(hit);
+                        }
+                        refreshEntryFlags();
+                        persistUserData();
+                        std::printf("[favorite] %s musicId=%d (menu bar, %d total)\n",
+                            added ? "added" : "removed", cur.musicId,
+                            static_cast<int>(favorites.size()));
+                        std::fflush(stdout);
+                    } else {
+                        std::printf("[favorite] 这一首没有 musicId，收藏不了\n");
+                        std::fflush(stdout);
+                    }
+                } else {
+                    deleteAsk = true;
+                    deleteAskIndex = selected;
+                    deleteAskPath = cur.susPath;
+                }
+                break;
+            }
             case platform::menu::CmdQuitInstance:
                 std::printf("[instance] quit requested from the menu bar\n");
                 std::fflush(stdout);
@@ -6929,6 +7130,14 @@ int main(int argc, char** argv)
                 break;
             }
         }
+        // 命令是从**信箱**来的，不是菜单自己发的 —— 所以菜单的模态循环不会因为它而
+        // 退出：按 Alt 把菜单栏拉高（菜单模式，泵停在 DefWindowProc 里）之后再来一条
+        // 命令（PostMessage 驱动、以后真要加的键盘加速键也一样），窗口会一直卡在菜单
+        // 模式里（`running = false` 也没用，主循环根本没在跑）。
+        // `EndMenu()` 结束**本线程**的活动菜单；没有菜单在跑时它只是返回 FALSE，无害。
+        if (menuIsOpen) {
+            EndMenu();
+        }
         if (menuPauseWanted) {
             menuPauseWanted = false;
             // 用户选的行为：演奏中打开菜单就暂停。选曲 / 结算界面不暂停 —— 那里没有
@@ -6941,7 +7150,14 @@ int main(int argc, char** argv)
 
         if (escapePressed && !game::guessDialogOpen()) {
             countdownActive = false; // leaving / continuing cancels any countdown
-            if (closeAskAlive) {
+            if (deleteAskAlive) {
+                // 「删除谱面文件？」开着的时候 ESC = 取消（这种问题的默认答案显然
+                // 是"不删"）。跟 closeAsk 一样走 forcedChoice：卡片是按钮驱动的，
+                // 光把标志收回它下一帧照样画。
+                std::printf("[delete] ESC -> %s\n", "cancelled");
+                std::fflush(stdout);
+                deleteAskPadChoice = 0;
+            } else if (closeAskAlive) {
                 // 「要退出吗」开着的时候 ESC = 继续演出（那个问题显然答"不退"）。
                 //
                 // 注意不能只是把 closeAsk 置回 false：卡片是**按钮驱动的**，光收回标志
@@ -7210,9 +7426,14 @@ int main(int argc, char** argv)
             // 多开确认 / 首启 ELUA outrank everything else: they are modal, and
             // a START that slipped through to "open the settings card" behind
             // them would leave two cards fighting over the same input.
-            const bool padModalCard = multiInstanceAsk || eulaAlive || closeAsk;
+            const bool padModalCard = multiInstanceAsk || eulaAlive || closeAsk || deleteAsk;
             if (padModalCard) {
-                if (closeAsk) {
+                if (deleteAsk) {
+                    // 左/上 = 取消（默认那一边），右/下 = 删除。
+                    if (deleteAskPadChoice < 0) {
+                        deleteAskPadChoice = (padA || padStart) ? 0 : ((padB || padX) ? 1 : -1);
+                    }
+                } else if (closeAsk) {
                     // 左/上 = 继续演出（默认那一边），右/下 = 退出。
                     // 已经有一个非负的选择（ESC 刚设的）时别覆盖它 —— 这个块每帧都跑。
                     if (closeAskPadChoice < 0) {
@@ -7228,8 +7449,10 @@ int main(int argc, char** argv)
                 }
                 if (padA || padStart || padB || padX) {
                     std::printf("[pad] modal card -> choice %d\n",
-                        closeAsk ? closeAskPadChoice
-                                 : (multiInstanceAsk ? multiAskPadChoice : eulaPadChoice));
+                        deleteAsk ? deleteAskPadChoice
+                                  : (closeAsk ? closeAskPadChoice
+                                              : (multiInstanceAsk ? multiAskPadChoice
+                                                                  : eulaPadChoice)));
                     std::fflush(stdout);
                 }
             } else if (showDebug && padA) {
@@ -7571,6 +7794,9 @@ int main(int argc, char** argv)
             const int prevSortMode = userSettings.sortMode;
             const int prevGroupMode = userSettings.groupMode;
             int favoriteToggle = -1;
+            // 曲目右键 > 删除谱面文件…：跟菜单 编辑 > 删除谱面文件 汇到同一处
+            // （deleteAsk 那张确认卡），选曲界面自己不碰磁盘。
+            int deleteRequest = -1;
             int action = game::drawSongSelect(renderer, entries, selected, windowW, windowH,
                 static_cast<float>(uiClock), userSettings.sortMode, userSettings.groupMode,
                 selectedVocal, userSettings.uiScale, &selectConfirmCenter, &account,
@@ -7579,7 +7805,9 @@ int main(int argc, char** argv)
                 // 原生菜单栏开着就把 刷新 / 音乐商店 / 设置 从顶栏收走（它们在菜单里）。
                 // 传的是**设置值**而不是"菜单现在真的挂着"：全屏/无框时菜单暂时挂不上，
                 // 但顶栏按钮也不该在那时候又冒出来 —— 那样切个窗口模式按钮就跳来跳去。
-                userSettings.nativeMenuBar);
+                userSettings.nativeMenuBar,
+                // 曲目右键 > 删除谱面文件…：这里只收一个"删哪一首"，动手的是下面。
+                &deleteRequest);
             // 右键 / 长按曲目 → 收藏夹切换。按 musicId 记（同一首曲子的四个难度共享），
             // 存进 profile，再重贴一遍 flag 让列表（和「按收藏」分组）立刻跟着变。
             if (favoriteToggle >= 0 && favoriteToggle < static_cast<int>(entries.size())) {
@@ -7599,6 +7827,12 @@ int main(int argc, char** argv)
                         musicId, static_cast<int>(favorites.size()));
                     std::fflush(stdout);
                 }
+            }
+            // 曲目右键 > 删除谱面文件…：举确认卡，动作在 drawDeleteAskDialog 里。
+            if (deleteRequest >= 0 && deleteRequest < static_cast<int>(entries.size())) {
+                deleteAsk = true;
+                deleteAskIndex = deleteRequest;
+                deleteAskPath = entries[static_cast<size_t>(deleteRequest)].susPath;
             }
             // Debug (--party-auto): the host's 确定, without a mouse. Waits for
             // the list to settle so the chart it picks is the one the list
@@ -8039,6 +8273,8 @@ int main(int argc, char** argv)
             drawMultiInstanceAskDialog();
             // 导入用户数据的覆盖确认框（同样是设置卡片里点出来的）。
             drawImportAskDialog();
+            // 删除谱面文件的确认框（菜单 编辑 > 删除谱面文件 / 曲目右键）。
+            drawDeleteAskDialog();
             // 多人游玩刚打开时问的那句「立即重启？」。
             drawRestartAskDialog();
             // Who else is in the room (hidden while the settings card is up:
@@ -8368,12 +8604,13 @@ int main(int argc, char** argv)
                     if (!autoRun) {
                         scores[key] = game::mergeScore(prevRecord, cleared, fullCombo, st.score);
                     }
-                    // Player rank: an official live grants the score-rank
-                    // multiplier (we have no live-bonus system, so it is not
-                    // multiplied again). Same score-rank call the result screen
-                    // makes, so the badge and the exp can never disagree.
+                    // Player rank: an official live grants the score-rank exp
+                    // times the 演出能量 (ライブボーナス) multiplier. Same score-rank
+                    // call the result screen makes, so the badge and the exp can
+                    // never disagree.
                     const game::ScoreRank sr = game::scoreRankAndBar(st.score, judgement.chartRating());
-                    resultExpGain = game::scoreRankExp(sr.rank);
+                    resultExpGain = static_cast<int>(game::scoreRankExp(sr.rank)
+                        * game::liveBonusExpMultiplier(userSettings.liveBonus));
                     resultRankUps = game::addPlayerExp(account, resultExpGain);
                     ++account.plays;
                     account.totalScore += st.score;
@@ -8717,6 +8954,7 @@ int main(int argc, char** argv)
             drawCloseAskDialog();
             drawMultiInstanceAskDialog();
             drawImportAskDialog();
+            drawDeleteAskDialog();
             // 多人游玩刚打开时问的那句「立即重启？」。
             drawRestartAskDialog();
 
@@ -9344,6 +9582,7 @@ int main(int argc, char** argv)
         // 让路（菜单是点一下开、松开后还开着，那个判断会把定时器当场杀掉），
         // 以及往主循环送的两个信箱。
         bool menuOpen = false;
+        bool* menuIsOpen = nullptr;      // menuOpen 的镜子（主循环帧内要读，见上面）
         int* menuCommand = nullptr;      // WM_COMMAND 的菜单 id，主循环消费
         bool* menuPauseWanted = nullptr; // 菜单展开 -> 演奏中暂停（用户选的行为）
         // 结束所有实例 发来的强制退出标记（见 cppsekaiForceQuitMessage）。
@@ -9358,6 +9597,7 @@ int main(int argc, char** argv)
     subclass.logMessages = std::getenv("CPSEKAI_MSG_LOG") != nullptr;
     subclass.menuCommand = &menuCommand;
     subclass.menuPauseWanted = &menuPauseWanted;
+    subclass.menuIsOpen = &menuIsOpen;
     subclass.forceQuit = &forceQuitRequested;
     subclass.closeEventType = closeRequestEventType;
     SDL_SysWMinfo mainWmi;
@@ -9380,6 +9620,50 @@ int main(int argc, char** argv)
                             static_cast<unsigned long long>(wParam),
                             static_cast<long long>(lParam));
                         std::fflush(stdout);
+                    }
+                    // ------------------------------------------------------
+                    // Alt / F10：菜单的访问键（mnemonic）。
+                    //
+                    // "按 Alt 进菜单模式、把访问键的**下划线**显示出来、Alt+字母打开
+                    // 对应菜单"这几件事全是 DefWindowProc 做的 —— 而 SDL 的窗口过程
+                    // 把 WM_SYSKEYDOWN 当普通按键吃了（它要靠这个喂 SDL_KEYDOWN），
+                    // 于是 DefWindowProc 永远收不到，菜单栏就成了一块只能拿鼠标点的
+                    // 装饰。菜单挂着的时候把这一族消息直接转给 DefWindowProc。
+                    //
+                    // 顺带把 WM_MENUCHAR 也交出去：菜单展开期间按字母跳项要靠它。
+                    // WM_INITMENU / WM_INITMENUPOPUP / WM_MENUSELECT 一起交给它，
+                    // 免得菜单项的高亮 / 状态我们自己维护一半。
+                    //
+                    // Alt+F4 也走这条路（它本来就是 WM_SYSKEYDOWN）：DefWindowProc 会
+                    // 发 WM_CLOSE，而 WM_CLOSE 上面那段已经拦下来了，所以"演奏中先问
+                    // 一句"照样成立。
+                    // ------------------------------------------------------
+                    if (platform::menu::attached(hwnd)
+                        && (message == WM_SYSKEYDOWN || message == WM_SYSKEYUP
+                            || message == WM_SYSCHAR || message == WM_MENUCHAR
+                            || message == WM_INITMENU || message == WM_INITMENUPOPUP
+                            || message == WM_UNINITMENUPOPUP || message == WM_MENUSELECT)) {
+                        return DefWindowProcW(hwnd, message, wParam, lParam);
+                    }
+                    // ------------------------------------------------------
+                    // WM_SYSCOMMAND / SC_KEYMENU —— Alt 菜单的**最后一道门**。
+                    //
+                    // 上面那一段只是把"Alt 按下了"这个事实送到 DefWindowProc；真正
+                    // 把菜单打开的是 DefWindowProc 随后发回来的这一条：
+                    //   Alt 按一下        -> 0x0112 wparam=0xF100 lparam=0      （拉高菜单栏）
+                    //   Alt+V             -> 0x0112 wparam=0xF100 lparam=118    （118 = 'v'）
+                    // （实测的日志，见 AGENTS.md。）
+                    //
+                    // 而 **SDL 的窗口过程把 SC_KEYMENU 吞掉了** —— 它不想要菜单栏，
+                    // Alt 在游戏里得老老实实当一个普通修饰键。于是这条消息到了窗口
+                    // 过程却没人应答：Alt 按下去什么也不发生，访问键也永远打不开。
+                    //
+                    // 只转 SC_KEYMENU。同一族里的 SC_SCREENSAVE / SC_MONITORPOWER 要
+                    // 留给 SDL 挡 —— DefWindowProc 对那两个是**真的会**起屏保 / 关屏的。
+                    // ------------------------------------------------------
+                    if (platform::menu::attached(hwnd) && message == WM_SYSCOMMAND
+                        && (wParam & 0xFFF0u) == SC_KEYMENU) {
+                        return DefWindowProcW(hwnd, message, wParam, lParam);
                     }
                     // ------------------------------------------------------
                     // 原生菜单栏（设置 > 系统）。
@@ -9416,15 +9700,6 @@ int main(int argc, char** argv)
                         }
                         return CallWindowProcW(st->chain, hwnd, message, wParam, lParam);
                     }
-                    // 任务栏缩略图按钮（暂停 / 静音 / 返回选曲）：WM_COMMAND 的 HIWORD
-                    // 是 THBN_CLICKED(0x1800)，LOWORD 是按钮 id（platform::ThumbButtonId，
-                    // 1..3）。跟菜单命令共用同一个信箱 —— 两套 id 区间不重叠。
-                    if (message == WM_COMMAND && HIWORD(wParam) == platform::kThumbButtonClicked) {
-                        if (st->menuCommand != nullptr) {
-                            *st->menuCommand = static_cast<int>(LOWORD(wParam));
-                        }
-                        return 0;
-                    }
                     // 结束所有实例 的"别问了，直接关"标记：它总是先于那记 WM_CLOSE 到。
                     if (message == cppsekaiForceQuitMessage()) {
                         if (st->forceQuit != nullptr) {
@@ -9434,6 +9709,9 @@ int main(int argc, char** argv)
                     }
                     if (message == WM_ENTERMENULOOP) {
                         st->menuOpen = true;
+                        if (st->menuIsOpen != nullptr) {
+                            *st->menuIsOpen = true;
+                        }
                         if (st->menuPauseWanted != nullptr) {
                             *st->menuPauseWanted = true; // 帧内看到且正在演奏才真的暂停
                         }
@@ -9450,6 +9728,9 @@ int main(int argc, char** argv)
                         std::fflush(stdout);
                     } else if (message == WM_EXITMENULOOP) {
                         st->menuOpen = false;
+                        if (st->menuIsOpen != nullptr) {
+                            *st->menuIsOpen = false;
+                        }
                         st->dragging = false;
                         *st->dragPacing = false;
                         KillTimer(hwnd, kDragTimerId);
@@ -9671,15 +9952,32 @@ int main(int argc, char** argv)
         }
         platform::menu::State st;
         st.windowMode = windowMode;
+        st.sortMode = userSettings.sortMode;
+        st.groupMode = userSettings.groupMode;
         st.showFps = showFps;
         st.showProgressBar = showProgressBar;
         st.simpleEffects = simpleEffects;
-        // 演奏中才把 刷新谱面列表 / 音乐商店 灰掉：重扫 charts/ 会让正在跑的那一帧
-        // 卡一下，下载器更不该从演出中间弹出来。
+        // 演奏中才把 刷新谱面列表 / 音乐商店 / 打开谱面 灰掉：重扫 charts/ 会让正在跑
+        // 的那一帧卡一下，下载器和"换一首打"更不该从演出中间弹出来。
         st.playing = state == AppState::Play && session.active;
-        if (!haveLastState || st.windowMode != lastState.windowMode || st.showFps != lastState.showFps
+        // 编辑 那两条命令都是"对当前这首做点什么"：只有**选曲界面 + 列表里有一首
+        // 当前曲目**时才有意义。结算 / 演奏 / 空列表都是灰的。
+        st.songSelected = state == AppState::Select && selected >= 0
+            && selected < static_cast<int>(entries.size());
+        if (st.songSelected) {
+            const int musicId = entries[static_cast<size_t>(selected)].musicId;
+            st.songFavorite = musicId > 0
+                && std::find(userSettings.favoriteMusicIds.begin(),
+                       userSettings.favoriteMusicIds.end(), musicId)
+                    != userSettings.favoriteMusicIds.end();
+        }
+        if (!haveLastState || st.windowMode != lastState.windowMode
+            || st.sortMode != lastState.sortMode || st.groupMode != lastState.groupMode
+            || st.showFps != lastState.showFps
             || st.showProgressBar != lastState.showProgressBar
-            || st.simpleEffects != lastState.simpleEffects || st.playing != lastState.playing) {
+            || st.simpleEffects != lastState.simpleEffects || st.playing != lastState.playing
+            || st.songSelected != lastState.songSelected
+            || st.songFavorite != lastState.songFavorite) {
             lastState = st;
             haveLastState = true;
             platform::menu::sync(gameWindow, st);
@@ -9691,9 +9989,6 @@ int main(int argc, char** argv)
     while (running) {
         runFrame();
 #ifdef _WIN32
-        // 任务栏缩略图按钮跟着状态走（暂停/继续的图标、灰不灰）。SystemMedia 自己
-        // 比对上一次的值，没变就什么都不做，所以每帧调不心疼。
-        systemMedia.updateThumbButtons(state == AppState::Play && session.active, paused, userMuted);
         refreshNativeMenuBar();
 #endif
     }
