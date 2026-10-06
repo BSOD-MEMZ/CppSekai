@@ -11,6 +11,8 @@
 - `game/` 与 `platform/` 的 .cpp 走 **glob**（`build.sh` 的 `SOURCES`），新加文件不用改脚本；
   只有 `core/`、`third_party/` 要手工加进 `UPSTREAM_SOURCES`。
 - 中文注释脚本用 Git Bash；含中文的 PowerShell 用 pwsh。
+- **用 python 脚本改源码时小心 `\n`**：Bash 工具是 JSON，`\\n` 传到 python 源里会变成真换行。
+  改含 `printf("...\n")` 的行用 `chr(92)+'n'` 拼，或干脆按位置切片。
 
 ## 高危坑
 - `build.sh` 的 `-mcpu=baseline` **不能删**（zig 不给 `-mcpu` 默认 native → 产物带 AVX2/FMA，
@@ -26,7 +28,8 @@
 - 无头：`--screenshot <文件路径>`（给目录静默失败，父目录要先存在）；`--no-party` 别忘。
 - 残留实例：`tasklist | grep cppsekai`（Get-Process 看不到）→ `MSYS_NO_PATHCONV=1 taskkill /PID x /F`。
 - 无交互会话下 PostMessage 点不动 ImGui → 用调试开关（`--fake-pad` / `--drop-test` /
-  `--chartdl-test`）；ImGui 卡片可以直接 PostMessage 点在**客户区坐标**上（实测有效）。
+  `--chartdl-test` / `CPSEKAI_DELETEASK`）；ImGui 卡片可以直接 PostMessage 点在**客户区坐标**上（实测有效）。
+- **`PrintWindow`（`shoot_win.py`）抓不到 GL 画面** → 要看 ImGui 卡片只能靠游戏自己的 `--screenshot`。
 - 拖动窗口会挂住消息泵 → 已用 `SDL_SetWindowsMessageHook` 变成静默暂停。
 
 ## 目录 / 数据 / 设置
@@ -43,27 +46,28 @@
   `ui::PadScope + padNav`；新增原生 `ImGui::Combo` 要接 `ui::padComboNudge`。
 - **模态卡片要和主循环 ESC 抢优先级**：新加卡片要把 `!game::xxxDialogOpen()` 加进 `escapePressed`
   分支条件，否则 Select 下按 ESC 直接退出游戏。卡片里键盘用 `ImGui::IsKeyPressed(k, false)`。
-- 设置卡片 380x800，页签余量很小；加行先 `CPSEKAI_UI_TRACE=1` 看 `used`。
+  卡片**只能被按钮关掉**，想让 ESC 关就得走 `forcedChoice` 替它按一颗。
+- 设置卡片 380x800；演奏页已经很满（`CPSEKAI_UI_TRACE`: used 794 / view 620，靠滚动），加行先量。
 - 观感基准 = sekai-stories.pages.dev：文字色只有 `#444466`；**浮起阴影一律 `ui::dropShadow`**
   （零偏移晕，衰减曲线实测过别改参数）；卡片圆角 `14*s`；**按钮按下是反白不是变深**。
 
 ## 窗口外观 / 与 Windows 的接缝（细节 → AGENTS.md 对应节 + 2026-10-06 日志）
 - 窗口是标准带边框窗口；`applyWindowTransparency` 的 `DwmExtendFrameIntoClientArea(-1,-1,-1,-1)`
   顺带吃掉 Win10 的 1px 黑边。NC 区仍在（左右下各 8px、上 32px），截图会露透明。
-- 量矩形 `.workbuddy/tools/win_window.py rect`；菜单栏/缩略图按钮在**非客户区**、`--screenshot`
-  拍不到 → `.workbuddy/tools/menu_probe.py`（rect/dump/send/menuloop）。
-- 模块：`platform/NativeMenu.*` 原生菜单栏、`platform/ShellIntegration.*` .sus 关联 + 跳转列表、
-  `SystemMedia.cpp` 手写 vtable 的 SMTC / 任务栏进度条 / 缩略图按钮。
+- 量矩形 `.workbuddy/tools/win_window.py rect`；菜单栏在**非客户区**、`--screenshot` 拍不到
+  → `.workbuddy/tools/menu_probe.py`（rect/dump/send/menuloop）。
+- 模块：`platform/NativeMenu.*` 原生菜单栏（文件/编辑/视图/帮助）、`platform/ShellIntegration.*`
+  .sus 关联 + 跳转列表、`SystemMedia.cpp` 手写 vtable 的 SMTC + 任务栏进度条。
 - **SDL 会把 `WM_CLOSE` 交给 `DefWindowProc`、窗口当场销毁** → 想"先问一句"必须在窗口过程里吞掉，
-  用 `SDL_RegisterEvents` 自定义事件通知主循环。手写 COM vtable **按位置寻址**，要用第 N 个方法
-  就得把前面全声明出来；GUID 对着 `toolchain/.../any-windows-any` 头文件核，别凭记忆写。
-- 命令共用一条挂起通道（`WM_COMMAND` → 主循环帧内消费），**每消费一条要补 `EndMenu()`**
-  （不然菜单模式的模态循环不会退）。**「灰掉」只是 UI，处理端要另挡一道**。
-  跳转列表要尊重 `BeginList` 的 removed 数组，`CommitList` 失败要 `AbortList`。
-- **菜单的 Alt / 访问键要把 `WM_SYSKEY*` / `WM_SYSCHAR` / `WM_MENU*` **和
-  `WM_SYSCOMMAND` 里的 `SC_KEYMENU`** 转给 `DefWindowProcW`** —— SDL 把这一族全吃了
-  （2026-10-06 用户报的"Alt 没反应"就是这个）。测这个只能用 winsend 的
-  `real` / `realalt`（SendInput 真键盘）；合成消息进不了菜单模式。
+  用 `SDL_RegisterEvents` 自定义事件通知主循环。**SDL 还会吞掉 `WM_SYSKEY*` / `WM_SYSCHAR` /
+  `WM_MENU*` 和 `SC_KEYMENU`** —— 菜单的 Alt / 访问键就是栽在这（要把这一族转给 `DefWindowProcW`）。
+- 手写 COM vtable **按位置寻址**，要用第 N 个方法就得把前面全声明出来；GUID 对着
+  `toolchain/.../any-windows-any` 头文件核，别凭记忆写。
+- 命令共用一条挂起通道（`WM_COMMAND` → 主循环帧内消费），**每消费一条要补 `EndMenu()`**。
+  **「灰掉」只是 UI，处理端要另挡一道**。跳转列表要尊重 `BeginList` 的 removed 数组，
+  `CommitList` 失败要 `AbortList`。
+- **`GetSubMenu(h, n)` 的 n 数的是"项"，分隔线占位置**；`ModifyMenuW` 会把 enabled 刷回可用
+  （改文案要放在置灰**之前**）。
 
 ## ⚠ 版权口径（2026-09-24 更新，别再引旧文档）
 - 官方 2026-04-27 公告：SNS 上被确认使用「外部非公式应用」→ **禁参加官方大会/活动（资格罚）**。
@@ -72,7 +76,6 @@
 
 ## 最近工作
 - 10-06：原生菜单栏 + 「与 Windows 融合」四批（防休眠/拖放/媒体键、窗口位置/标题/关窗确认、
-  ~~缩略图按钮~~**当天撤掉**、.sus 关联/Jump List）；第二批修好**菜单 Alt 访问键**
-  （SDL 吞 `SC_KEYMENU`）+ 打开谱面/编辑菜单/排序分组子菜单/演出能量。
-  10-04：模态卡片 ESC 优先级。10-03：观感对齐 sekai-stories。
-- 09-24：设置卡片一批。09-20：chartdl 数据源 + 猜歌 + 手柄焦点环。09-19：多人、结算改版、Win7 三连修。
+  ~~缩略图按钮~~**当天撤掉**、.sus 关联/Jump List）；第二批修好**菜单 Alt 访问键**（SDL 吞
+  `SC_KEYMENU`）+ 打开谱面 / 编辑（删除谱面文件）/ 排序分组子菜单 / 演出能量（0..100，官方表到 10）。
+- 10-04：模态卡片 ESC 优先级。10-03：观感对齐 sekai-stories。09-24：设置卡片一批。
