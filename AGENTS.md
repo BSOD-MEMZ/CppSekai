@@ -124,6 +124,8 @@ platform/Party.*  # 多人游玩（同机多窗口联机）的共享内存总线
 game/PartyScreen.* # 多人游玩的浮层：选曲界面左下角的房间条（谁在房里）与演奏中的队友分数条。
                   # 房间自己没有页面——它就在选曲界面上（见「多人游玩」一节）。
                   # 难度名/序号（`difficultyIndex` / `difficultyName`）也在这，房间协议与手机面板共用。
+platform/NativeMenu.* # 原生 Win32 菜单栏（设置 > 系统 > 原生菜单栏，默认关）。见下面
+                  # 「原生菜单栏」一节。
 main.cpp          # SDL2 窗口、事件循环、输入映射、ImGui HUD、截图模式、多人时钟跟随
 ```
 
@@ -2322,6 +2324,47 @@ UI 在 **设置 → 演奏 → 按键映射**（3 列 × 4 行，点一格再按
 正好空着。数值每 0.25 s 采一次瞬时帧率（逐帧刷新数字跳得读不出来）。截图自检会打一行
 `[fps] 60.0 (frame 16.7 ms)`，**别靠读图判断**：10 px 字号的 "60.0" 在图上跟 "0.0" 长得一样，
 我第一次就被坑了。
+
+## 原生菜单栏（2026-10-06，`platform/NativeMenu.*` + main.cpp 的 subclass）
+
+设置 > 系统 > **原生菜单栏**（`UserSettings::nativeMenuBar`，**默认关**）：给窗口挂一条
+真正的 Win32 菜单（文件 / 视图 / 帮助），把选曲顶栏那三个**窗口级**操作收进去 ——
+刷新谱面列表 / 音乐商店 / 设置。开启时 `drawSongSelect` 收到 `nativeMenuBar=true`，
+顶栏那三个按钮不画（`headerFileButtons`），坐标从一个游标往后排，**猜歌 / 随机 /
+切换歌手保留**。关闭时一切照旧。
+
+- **挂载条件**（main.cpp 的 `refreshNativeMenuBar`，一帧跑完在 `runFrame` 外面调）：
+  设置开着 && `windowMode == 1`（windowed）&& `noFrameMode == 0`。
+  菜单栏画在**非客户区**：borderless 是 `WS_POPUP` 画不出来，fullscreen 铺满桌面，
+  玻璃实现 = 自绘无框（`WM_NCCALCSIZE -> 0`）把非客户区整个交了出去。所以全屏 /
+  无框时设置项留着、菜单先摘掉，回普通窗口再挂回来。注意 `glassMode 2` 只在
+  背景 = 透明（Aero 玻璃）时才真生效（`bgStyle != 2` 会被强制回 0），所以
+  「没开玻璃背景却挂上了菜单」不是 bug。
+- **SetMenu 只动非客户区**：窗口外框不变，客户区矮一条菜单栏（实测 1000x600 →
+  1000x580，20px）。SDL 会把它当 `SIZE_CHANGED` 发出来，游戏自己重排；
+  设置 > 画面的"分辨率"本来就是客户区尺寸，不用补偿。
+- **菜单是模态的**：一展开 Windows 就进自己的模态循环，SDL 的泵被停住 —— 和拖标题栏
+  同一个病。所以 subclass 里 `WM_ENTERMENULOOP` 把 `dragging` 也置上 + 起
+  `kDragTimerId`，复用拖动那套喂帧；`WM_EXITMENULOOP` 收尾。
+  **`WM_TIMER` 那条"左键抬起 = 拖动结束"的兜底必须让路**（`!st->menuOpen` 才判）：
+  菜单是点一下开、松开后还开着，照判会把喂帧定时器当场杀掉。
+- **命令不在窗口过程里执行**：`WM_COMMAND` 只把 id 记进 `menuCommand` 信箱
+  （`HIWORD(wParam)==0` 且落在 `CmdSettings..CmdXxtsoft` 区间才算菜单命令），
+  主循环在帧内消费。喂帧是递归的（WM_TIMER → 帧 → 泵 → WM_COMMAND），这块既可能
+  在某次喂帧里跑到、也可能在正常帧里跑到，两边都得成立。
+- 勾选/单选/置灰由 `platform::menu::sync()` 打（`CheckMenuRadioItem` 画窗口模式那组
+  单选点，**逐个 CheckMenuItem 会画出三个勾**）；sync 会重画菜单栏，所以只在
+  值变化时调。演奏中把 刷新谱面列表 / 音乐商店 置灰（重扫会卡那一帧，下载器更不该
+  从演出中间弹出来）。
+- **演奏中打开菜单自动暂停**（用户选的行为）：`WM_ENTERMENULOOP` 置
+  `menuPauseWanted`，帧内看到且 `state == Play && session.active` 就调
+  `requestPause()`（多人里非房主会被现有的规则挡掉）。选曲/结算不暂停。
+- 结束所有实例 走 **`MessageBoxW` 是/否确认**（菜单栏本来就是原生外观，没套游戏卡片）；
+  它是在某次喂帧里弹的模态框，嵌套帧被 `st->depth` 挡住，不会有第二帧挤进来。
+- 验证用 `.workbuddy/tools/menu_probe.py`（rect / dump / send <id> / menuloop enter|exit）：
+  菜单栏在非客户区，`--screenshot`（只拍 GL 帧）看不见它，只能从外面用 user32 查。
+  `menuloop enter` 是**合成**的 WM_ENTERMENULOOP，用来在无头会话里驱动喂帧分支 ——
+  实测 enter 后 `[window] drag frames: 30 (… timer=30)`，exit 后干净收尾。
 
 ## 多人游玩（`platform/Party.*` + `game/PartyScreen.*`）
 

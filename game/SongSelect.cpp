@@ -1064,6 +1064,7 @@ void loadUserData(const std::string& path, UserSettings& settings,
             settings.splashStyle = s.value("splashStyle", settings.splashStyle);
             settings.bgStyle = s.value("bgStyle", settings.bgStyle);
             settings.glassMode = s.value("glassMode", settings.glassMode);
+            settings.nativeMenuBar = s.value("nativeMenuBar", settings.nativeMenuBar);
             settings.bgBlur = s.value("bgBlur", settings.bgBlur);
             settings.bgDim = s.value("bgDim", settings.bgDim);
             settings.uiScale = s.value("uiScale", settings.uiScale);
@@ -1200,6 +1201,7 @@ void saveUserData(const std::string& path, const UserSettings& settings,
         {"splashStyle", settings.splashStyle},
         {"bgStyle", settings.bgStyle},
         {"glassMode", settings.glassMode},
+        {"nativeMenuBar", settings.nativeMenuBar},
         {"bgBlur", settings.bgBlur},
         {"bgDim", settings.bgDim},
         {"uiScale", settings.uiScale},
@@ -2574,7 +2576,7 @@ bool guessOptionPill(const char* label, const ImVec2& size, ImU32 fill, float s,
 int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& entries, int& selected,
     int windowW, int windowH, float timeSec, int& sortMode, int& groupMode, int& vocalIndex,
     float uiScale, ImVec2* confirmCenter, const AccountData* account, const SelectPartyInfo* party,
-    SelectPartyResult* partyOut, int* favoriteToggle)
+    SelectPartyResult* partyOut, int* favoriteToggle, bool nativeMenuBar)
 {
     int action = SelectNone;
     // 多人游玩: the room owns the song. The host keeps a normal, fully
@@ -2992,17 +2994,33 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     // The geometry is computed out here because the 多人游玩 banner has to cover
     // the whole header row, this button included.
     const float headerRowH = 33.0f * k; // same as the search box / combos / chip
-    const float rescanW = 104.0f * k;
-    const float rescanX = comboX0 + (comboW + comboGap) * 2.0f + 4.0f * k;
+    // 原生菜单栏开着的时候（设置 > 系统），刷新 / 音乐商店 / 设置 三个窗口级操作已经
+    // 收进窗口顶部的菜单里了 —— 顶栏只留 猜歌，不然两处重复。位置从一个游标往后排，
+    // 省得为"哪几个按钮在"写两套坐标；多人游玩那条横幅的右边界挂在 guessX 上，所以
+    // 它自己会跟着收窄，不用单独管。
+    const bool headerFileButtons = !nativeMenuBar;
+    float headerX = comboX0 + (comboW + comboGap) * 2.0f + 4.0f * k;
     // 下载谱面 sits right of 刷新: the downloader was reachable from the empty-list
     // state and from the settings, but on a full list there was nothing.
+    const float rescanW = 104.0f * k;
+    const float rescanX = headerX;
+    if (headerFileButtons) {
+        headerX += rescanW + 10.0f * k;
+    }
     const float storeW = 144.0f * k;
-    const float storeX = rescanX + rescanW + 10.0f * k;
+    const float storeX = headerX;
+    if (headerFileButtons) {
+        headerX += storeW + 10.0f * k;
+    }
     // 猜歌 sits right of 音乐商店. It is the one button here that does not touch
     // the filesystem - it opens a card, so it does not queue an action for
     // main.cpp to run (see the 猜歌 card at the end of this function).
     const float guessW = 104.0f * k;
-    const float guessX = storeX + storeW + 10.0f * k;
+    const float guessX = headerX;
+    headerX += guessW + 10.0f * k;
+    // 设置 的位置（只在顶栏还留着它的时候用）。
+    const float settingsW = 104.0f * k;
+    const float settingsX = headerX;
     // 刷新 / 音乐商店 / 猜歌: one pjsk-style header button each - white capsule,
     // faint shadow, dark label - i.e. the same chrome as the search box and the
     // combos beside them. The shipped icons (assets/select/*.png) are white on
@@ -3041,13 +3059,15 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     // No SetTooltip on these on purpose. ImGui's default font atlas has no CJK
     // glyphs, so a Chinese tooltip renders as a row of '?'; the label already
     // says what the button does (刷新 also has F5 in the empty-state hint).
-    if (headerButton("##rescan", rescanX, rescanW, "refresh", "刷新")) {
-        ui::se(ui::SeClick);
-        action = SelectRescan;
-    }
-    if (headerButton("##store", storeX, storeW, "store", "音乐商店")) {
-        ui::se(ui::SeClick);
-        action = SelectDownload;
+    if (headerFileButtons) {
+        if (headerButton("##rescan", rescanX, rescanW, "refresh", "刷新")) {
+            ui::se(ui::SeClick);
+            action = SelectRescan;
+        }
+        if (headerButton("##store", storeX, storeW, "store", "音乐商店")) {
+            ui::se(ui::SeClick);
+            action = SelectDownload;
+        }
     }
     if (headerButton("##guess", guessX, guessW, "guess", "猜歌")) {
         ui::se(ui::SeClick);
@@ -3122,9 +3142,11 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     // Deliberately outside the partyReadOnly scope above and drawn after the room
     // banner: a 多人游玩 member keeps its own volume / judgement windows, and the
     // banner stops at 猜歌 so it never covers this button if the row grows again.
-    const float settingsW = 104.0f * k;
-    const float settingsX = guessX + guessW + 10.0f * k;
-    if (headerButton("##abssettings", settingsX, settingsW, "musicsetting", "设置")) {
+    //
+    // 原生菜单栏开着的时候它不在这儿 —— 菜单的 文件 > 设置… 就是它（位置照旧留给
+    // 猜歌右边，只是不画）。多人游玩成员的窗口也一样：菜单栏是每个窗口自己的。
+    if (headerFileButtons
+        && headerButton("##abssettings", settingsX, settingsW, "musicsetting", "设置")) {
         ui::se(ui::SeClick);
         action = SelectSettings;
     }

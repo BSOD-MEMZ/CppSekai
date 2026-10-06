@@ -259,6 +259,14 @@ struct UserSettings
     //       moving/resizing back by hand (WM_NCHITTEST): the recipe Microsoft
     //       documents in "Custom Window Frame Using DWM". Experiment.
     int glassMode = 0;
+    // 原生菜单栏 (settings > 系统): put a real Win32 menu bar on the window and
+    // move the three *window* commands off the song select's header row into it
+    // (刷新谱面列表 / 音乐商店 / 设置). Off by default - the game's own chrome is
+    // the normal look, and the in-game buttons are the ones players know.
+    // Only a plain framed window can carry a menu bar (it is drawn in the
+    // non-client area), so borderless / fullscreen / 玻璃实现 = 自绘无框 leave it
+    // off while the setting stays on - see platform/NativeMenu.hpp.
+    bool nativeMenuBar = false;
     // UI scale for the two screens laid out on a virtual canvas - song select and
     // the result screen (1.0 = fit the window). The play screen and the HUD
     // deliberately ignore it: those are played, not read, and a mis-scaled lane
@@ -529,11 +537,17 @@ struct SelectPartyResult
 //
 // In 多人游玩 a member's 确定 never comes back as a chart index: it arrives in
 // `partyOut` instead (the room decides what starts, see SelectPartyInfo).
+//
+// `nativeMenuBar` (设置 > 系统) means the window carries a real Win32 menu bar,
+// which owns 刷新谱面列表 / 音乐商店 / 设置 now - the header row drops those
+// three buttons and keeps 猜歌, so the two never duplicate each other. The
+// actions themselves are unchanged: main.cpp maps the menu ids onto the very
+// same SelectRescan / SelectDownload / showDebug paths.
 int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& entries, int& selected,
     int windowW, int windowH, float timeSec, int& sortMode, int& groupMode, int& vocalIndex,
     float uiScale = 1.0f, ImVec2* confirmCenter = nullptr, const AccountData* account = nullptr,
     const SelectPartyInfo* party = nullptr, SelectPartyResult* partyOut = nullptr,
-    int* favoriteToggle = nullptr);
+    int* favoriteToggle = nullptr, bool nativeMenuBar = false);
 
 // Debug (`--profile`): force the profile card open. It normally only appears
 // when the level chip is clicked, which a --screenshot run cannot do.

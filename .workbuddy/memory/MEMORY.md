@@ -1,151 +1,67 @@
-# CppSekai — 项目长期记忆（索引版）
+# CppSekai — 项目长期记忆（索引）
 
-> **权威文档在仓库里，不在这个文件**：`AGENTS.md`（架构 + 全部坑 + 各功能一节）、
-> `CODE-REVIEW.md`（体量）、`CLI.md`（命令行）、`CHARTS.md`（谱面）、`COPYRIGHT.md`（能发什么）。
-> 这里只放跨会话必须记住的**约定与索引**；细节翻 `.workbuddy/memory/2026-09-*.md`（append-only）。
+> **权威文档在仓库里**，不是这个文件：`AGENTS.md`（245KB，架构 / 全部坑 / 各功能一节，改代码前按章节查）、
+> `CLI.md`（命令行 + 无头自检）、`CHARTS.md`、`CODE-REVIEW.md`（体量）、`COPYRIGHT.md`。
+> 这里只留跨会话必须记住的**约定**和**入口索引**；细节翻 `.workbuddy/memory/2026-*.md`（append-only）。
 
-## 协作约定
-- **改完 + 验证过就 commit**（用户明确要求），别攒着。
-- **禁止 `git checkout <file>` / `git restore` 撤临时改动**（09-18 把 main.cpp 一整轮未提交改动冲掉过）。
-  撤动用精确编辑或先 commit。用户原话：「不要乱 checkout，有什么问题我们手动改」。
-- 加新 .cpp 到 `game/` / `platform/` 必须同时加进 `build.sh` 的 `SOURCES`。
-- 中文注释的脚本（build.sh 等）用 Git Bash；含中文的 PowerShell 脚本用 pwsh。
-- **验证卡住几分钟就先停手**，把「需要人工点哪里、期望什么」交代清楚交给他。
+## 协作约定（用户明确要求）
+- **改完 + 验证过就 commit**，别攒着。
+- **禁止 `git checkout <file>` / `git restore` 撤临时改动**（09-18 冲掉过整轮 main.cpp 改动）。
+  撤动用精确编辑或先 commit。原话：「不要乱 checkout，有问题我们手动改」。
+- 加新 .cpp 到 `game/` / `platform/` 必须同步加进 `build.sh` 的 `SOURCES`。
+- 中文注释脚本用 Git Bash；含中文的 PowerShell 用 pwsh。
+- **验证卡住超过几分钟就停手**，把「人工点哪里、期望什么」交代给他。
 
-## 构建 / 运行硬性坑
-- **`CXXFLAGS` 里的 `-mcpu=baseline` 不能删**（09-25）：zig 不给 `-mcpu` 时默认目标是 **native**
-  （构建这台机器＝Alder Lake），产物带 AVX2/FMA/**AVX-VNNI**，老 CPU 上第一条就 `0xC000001D`
-  「看完启动画面静默消失」。发布前 `python .workbuddy/tools/cpu_isa_scan.py build/cppsekai.exe`
-  （`package.sh` 已接这道闸，FAIL 拒绝打包）。细节见 AGENTS.md「CPU 基线」。
-- `bash build.sh`（Git Bash）。zig **0.14.1**（`toolchain/` 不入库），别换 0.16（吞 `-I`）；
-  zig 缓存必须在 C 盘。全量编译 35~45s。游戏链接行有 `-lcomdlg32`（账户页导入/导出）。
-- `main.cpp` 必须在 `#include <SDL.h>` 前 `#define SDL_MAIN_HANDLED`，否则"秒退无输出"。
-- exe 是 Windows 子系统；日志去 **cwd 的 `cppsekai.log`**；`--screenshot` 参数是**文件路径**
-  （给目录静默失败），父目录必须已存在。
-- **`cppsekai.log` 只在"没附加到控制台"时才写**（`main.cpp` 启动那段：先试
-  `AttachConsole(ATTACH_PARENT_PROCESS)`，成了就写 CONOUT$，否则才 `freopen` 到文件）。
-  所以：前台跑 / `( exe & )` → 有 `cppsekai.log`；**`run_in_background` 会让它附加到
-  控制台，日志跑去任务输出、文件根本不建**。要看文件就别用后台任务。
-- **`( exe & )` 必须和"中途的操作"写在同一条命令里**：`( ./exe & ); sleep 6; <操作>;
-  sleep 3; <读日志>; taskkill ...`。跨调用会丢——父 shell 一退子进程跟着走（实测日志
-  停在中断处）。要长期跑又不想丢，用 `run_in_background`，但那样没有日志文件。
-- **Win7 补丁在 build.sh 顶部**（09-19）：强制 libc++ chrono 走运行时探测，否则 Win7 报
-  "无法定位程序输入点"。**toolchain 重解压会自动重打，别删**（`grep -c CPPSEKAI-WIN7 = 2` 断言）。
-  复查用 `.workbuddy/tools/pe_imports.py`（别用 strings|grep）。Win7 还缺 UCRT，待拍板。
-- **警告开关 09-21 起开着，保持 0 警告**（`-Wall -Wextra`）。做法：上游/第三方单独编 `.o` + `-w`
-  （`UPSTREAM_SOURCES` 段），新上游 .cpp 要手工加进去。**判断有无警告只能跑完整 build.sh
-  同时数 `error:` 和 `warning:`**（逐文件 `-fsyntax-only` 会把"提前中止"读成"0 警告"）。
-- ⚠ **`third_party/DirectXMath/Inc` 必须留在 `-I`，不能改 `-isystem`**：toolchain 里有个 MinGW
-  小写 `directxmath.h` 桩头会顶掉真头。排错用 `zig c++ -E -v`。
+## 高危坑
+- `build.sh` 的 `CXXFLAGS` 里 **`-mcpu=baseline` 不能删**：zig 不给 `-mcpu` 默认 native →
+  产物带 AVX2/FMA/AVX-VNNI，老 CPU「看完启动画面静默消失」(0xC000001D)。
+  发布前跑 `.workbuddy/tools/cpu_isa_scan.py`（package.sh 已接闸）。
+- `main.cpp` 必须在 `#include <SDL.h>` 前 `#define SDL_MAIN_HANDLED`。
+- `bash build.sh`（Git Bash），zig 0.14.1（别换 0.16，吞 `-I`），全量 35~45s。
+  警告开关开着（`-Wall -Wextra`）**保持 0 警告**；判断只能跑完整 build.sh 数 error/warning。
+- ⚠ `third_party/DirectXMath/Inc` 必须留在 `-I`（不能 `-isystem`）：MinGW 有同名小写桩头。
+  上游/第三方 .cpp 走 `UPSTREAM_SOURCES` + `-w`，新增要手工加。
+- **Win7 补丁在 build.sh 顶部**（`grep -c CPPSEKAI-WIN7` = 2 断言），toolchain 重解压会自动重打，别删。
+  复查用 `pe_imports.py`。
+- 日志 = cwd 的 `cppsekai.log`；**只在"没附加到控制台"时才写**（`run_in_background` 会附加 → 没日志文件）。
+  `( exe & )` 必须和后续操作写在**同一条命令**里（跨调用子进程会被带走）。
+- 无头：`--screenshot <文件路径>`（给目录静默失败，父目录要先存在）；`--no-party` 别忘。
+- 残留实例：`tasklist | grep cppsekai`（Get-Process 看不到）→ `MSYS_NO_PATHCONV=1 taskkill /PID x /F`。
+- 无交互会话下 PostMessage 点不动 ImGui → 加调试开关（`--fake-pad` / `--chartdl-test`）；
+  `--fake-pad NONE` = 伪造"插了个不会按的手柄"。
+- 拖动窗口会挂住消息泵 → 已用 `SDL_SetWindowsMessageHook` 变成静默暂停。
 
-## 发布 / 打包
-- `bash package.sh [版本]`（内部先跑 build.sh）→ `dist/CppSekai-<日期>/` + zip。默认带 assets，
-  `--no-assets` 出精简包；charts / toolchain 一律不发。
-- 图标：`app.rc`（`zig rc`，id 1）+ `SDL_SetWindowIcon(icon.png)`；改 id 要同步改 chartdl 的
-  `LoadImageW(MAKEINTRESOURCE(1))`。
-- **发二进制要带 SDL2 的 zlib 许可文本**（SDL2.dll 随包发）。
-
-## 资源 / git / 工具
-- `.gitignore` 忽略 `assets/`、`charts/`、`build/`、`toolchain/`、`userdata.json`、`profiles/`、
-  `chartdl.json`。**新加的 `assets/` 子目录要 `git add -f`**。`.workbuddy/` 入库存工具。
-- 工具在 `.workbuddy/tools/`：`png_color_probe.js`（无 Pillow 时的 PNG 颜色探针）、`shot_probe.py`、
-  `pngcrop.py`、`pe_imports.py`、`mem_sample.py`、`update_music_db.py`、`fetch_music_aliases.py`、
-  `mp_verify.sh`、`asset_audit.py`、`shrink_assets.py`、`chartdl_detail_check.py`、
-  `chartdl_wheel_check.py`（真发 WM_MOUSEWHEEL）、`chartdl_minimize_check.py`（真发
-  SC_MINIMIZE/SC_RESTORE，断言两栏宽度不变；**按 PID 找自己的窗口**，chartdl 允许多开）、
-  `chartdl_delete_check.py`（真点「删除文件」，验确认框两种回答 + 最小尺寸下按钮不重叠）。
-- **精灵图集不许缩**：`notes*` / `effect.png` / `longNoteLine*` / `touchLine*`（矩形像素坐标写死在
-  `core/native/generated/generated_resources.h`）。`assets/se/**` 是白名单，不许删。
-- 字体只用系统字体（`assets/mmw/font` 已删，`--pjsk-font` 已去掉）；`CPSEKAI_FONT_FILE=<路径>` 可强制指定。
-
-## 数据表 / 谱面目录
-- 仓库根四个**可选**表：`musics.json`、`music-vocals.json`、`music-levels.json`（定数）、
-  `music-aliases.json`（社区别名）。缺一个只少一块功能。同步用 `update_music_db.py`（`--check` 只报告）；
-  **表是本地快照会过时，日服出新曲就跑它**。
-- 曲库两源按 id 分派：日服（id ≤ 804）走 `assets.unipjsk.com`；**国服独占曲（11000+）走
-  `storage.sekai.best/sekai-cn-assets`**，布局三处不同。**别往 10000 以上放新 id**。
-- 谱面只认 **exe 同级的 `charts\`**；多用户 `<dataDir>\profiles\<id>.json` + `index.json`，
-  首次运行把 `userdata.json` 复制成 `default`。**加设置字段要同时改 `SongSelect.cpp` 的
-  `loadUserData`（`s.value(...)`）与 `saveUserData`（`doc["settings"]`）**，漏一处就是静默丢设置。
+## 目录 / 数据 / 设置
+- 根目录四个**可选**表：`musics.json` / `music-vocals.json` / `music-levels.json` / `music-aliases.json`。
+  同步用 `update_music_db.py`（`--check` 只报告）。曲库按 id 分派：≤804 走 assets.unipjsk.com，
+  国服独占 11000+ 走 storage.sekai.best。**别往 10000 以上放新 id**。
+- `.gitignore` 忽略 assets/ charts/ build/ toolchain/ userdata.json profiles/ chartdl.json；
+  **新增 assets/ 子目录要 `git add -f`**。`.workbuddy/` 入库。
+- **加设置字段必须同时改 `SongSelect.cpp` 的 `loadUserData` 与 `saveUserData`**，漏一处静默丢设置。
 
 ## UI 通则（1920x1080 虚拟画布 + 缩放）
-- HUD / 结算 / 选曲都走 `px()/py()/ps()`。**ImGui `AddText(font,size,...)` 的 size 是像素**，
-  虚拟单位必须自己乘 scale。数值/文字优先用游戏自带精灵（`score/digit/*`、`combo/p*`）。
-- 自绘控件（`ui::slider` / `checkBox` / `radioRow` / `stepper` / `capsuleButton`）**键盘焦点够不着** ——
-  手柄靠焦点环（`ui::PadScope` + `padNav`）；**新增原生 `ImGui::Combo` 要接一句 `ui::padComboNudge`**。
-- **模态卡片要和 ESC 抢优先级**（10-04）：主循环的 `escapePressed` 分支跑在
-  `drawSongSelect` **之前**，看到的是**上一帧**的卡片状态。猜歌的做法是把
-  `!game::guessDialogOpen()` 加进分支条件（于是 ESC 归卡片）。**新加卡片照办**——
-  不然 Select 状态下按 ESC 会掉进 `running = false` 直接退出游戏。
-- 卡片里的键盘操作用 `ImGui::IsKeyPressed(key, **false**)`（默认 true 带 auto-repeat，
-  长按会连触发），它读的是全局键盘状态、**不依赖焦点**，所以不用抢 `SetWindowFocus`。
-- 设置卡片 **380x800**（设计像素，`ui::scale()` = 视高/860 封顶 2.0）；页签内容放裁剪 child 里，
-  **余量很小**（演奏 515 / 账户 488）。加行先跑 `CPSEKAI_UI_TRACE=1` 看 `used`。
-- **观感基准 = sekai-stories.pages.dev（非官方站点）**，规格与实测对照见 `2026-10-03.md`。
-  三条别忘的约定：① 文字色全站只有一个 `#444466`（层级只靠字号/字重，别再加灰阶）；
-  ② **浮起控件的阴影一律走 `ui::dropShadow`（零偏移晕）**，不要再写"偏移几像素的硬影"。
-  **衰减曲线是实测过的，别随手改参数**：原作的 `0 0 8px rgba(68,68,102,.5)` 到边缘
-  只剩 a≈0.19、约 10px 耗尽（浓度每 2.5px 减半），所以内部用「由外向内每层翻倍」的同心环。
-  等浓度地叠几层会在远处留下几倍于原作的浓度，观感是一团灰而不是一道边。
-  要用 `.workbuddy/tools/png_scanline.py` 量过再动（扫描起点要离开控件 ~30px）。
-  ③ `ui::combo` 自己在内部钉 full-pill 圆角，调用方不需要推 FrameRounding。
-  卡片圆角保持 `14*s`（与原作 20px 对 60px 控件等价，照抄 20 会圆过头）；
-  **按钮按下是「反白」不是变深**（薄荷→#E3FCF8 底+薄荷字，白→#A1F4EC 底+白字）。
+- HUD / 结算 / 选曲都走 `px()/py()/ps()`；ImGui `AddText(font,size)` 的 size 是像素，虚拟单位自己乘 scale。
+- 自绘控件（`ui::slider/checkBox/radioRow/stepper/capsuleButton`）键盘焦点够不着 → 手柄靠
+  `ui::PadScope + padNav`；新增原生 `ImGui::Combo` 要接 `ui::padComboNudge`。
+- **模态卡片要和主循环 ESC 抢优先级**：新加卡片要把 `!game::xxxDialogOpen()` 加进 `escapePressed`
+  分支条件，否则 Select 下按 ESC 直接退出游戏。
+- 卡片里键盘操作用 `ImGui::IsKeyPressed(k, false)`（false 关 auto-repeat）。
+- 设置卡片 380x800，页签余量很小（演奏 515 / 账户 488）；加行先 `CPSEKAI_UI_TRACE=1` 看 `used`。
+- 观感基准 = sekai-stories.pages.dev：文字色只有 `#444466`；**浮起阴影一律 `ui::dropShadow`
+  （零偏移晕，衰减曲线实测过别改参数）**；卡片圆角 `14*s`；**按钮按下是反白不是变深**。细则见 2026-10-03。
 
 ## 窗口外观（Win32 / DWM）
-- **主窗口就是标准的带边框窗口，没有自绘边框**：创建时因为静态启动图临时
-  `SDL_WINDOW_BORDERLESS`，`splashShown` 之后 `SDL_SetWindowBordered(TRUE)` 装回来。
-- **看不到 Win10 那条 1px 黑边**，是因为 `DwmExtendFrameIntoClientArea(-1,-1,-1,-1)`
-  （`applyWindowTransparency`；只要 `splashStyle == 0` 就开着，与用不用玻璃背景无关）：
-  整个窗口矩形被当成"扩展 frame"，默认装饰连同那条线一起被客户区的 alpha 合成接管。
-  **这是副作用不是特意去边**——代码里没有 `DWMWA_BORDER_COLOR`；
-  `DWMWA_NCRENDERING_POLICY` 试过，Win7 会掉回 Basic 边框所以否了（注释就在那个 lambda 里）。
-- **代价**：NC 区域布局上仍在（`WM_NCCALCSIZE` 没接管，日志 `frameless 0`）。
-  实测窗口 1382x808 / 客户区 1366x768 → **左右下各 8px（`SM_CXSIZEFRAME 4 + SM_CXPADDEDBORDER 4`）、
-  上 32px**，那圈**没有游戏像素**，所以截图会露出一条透明；
-  `DWMWA_EXTENDED_FRAME_BOUNDS` **等于** `GetWindowRect`，用哪个矩形都躲不掉。
-  要"客户区铺满窗口"只有 `glassMode 2`（自绘无框：`WM_NCCALCSIZE→0` + `WM_NCHITTEST` 自管拖动）。
-- 量这些用 `.workbuddy/tools/win_window.py rect`（三个矩形一次打出来）。
+- 主窗口是标准带边框窗口；创建时因启动图临时 `SDL_WINDOW_BORDERLESS`，`splashShown` 后装回来。
+- `applyWindowTransparency` 的 `DwmExtendFrameIntoClientArea(-1,-1,-1,-1)` 顺带吃掉了 Win10 的 1px 黑边
+  （副作用，不是特意去边）。NC 区仍在：窗口比客户区左右下各多 8px、上 32px，截图会露透明。
+- 量矩形用 `.workbuddy/tools/win_window.py rect`。
 
-## 验证手法（精选）
-- **截图能直接看**（Read 一张 PNG）。**先看 PNG 尺寸**：窗口多大截图就多大，别按 1920x1080 算裁剪框。
-  `--party-auto` 会在结算 2s 后自动按「继续」，拍结算别加它。开场卡片要 `--intro-preview`。
-- **别只读 `lastHitKind` / `lastJudge*`**（一帧判多个音时只剩最后一个）——统计用只增不减的
-  `JudgementStats::hitCount` / `criticalHitCount` / `flickHitCount` 比增量。
-- 无头自检：`--screenshot` + `--screenshot-time`，断言看 `[stats]`/`[score]`/`[result]`；
-  设置卡片 `--settings --settings-tab N`。`--no-party` 别忘（多人默认开着）。
-- **日志按 cwd 落盘、进程启动时截断** → **一个测试用一个独立目录**。
-  **Git Bash 不等 GUI exe**，要 `( exe & wait )` 或 `exe & sleep N`。
-- 无交互会话下 PostMessage 到不了多数 ImGui 界面（实测 `winmsg/winsend click` 点选曲 combo /
-  设置齿轮 / 刷新全无反应，只有 SDL 层自绘热区能到）→ 在代码里加自动按的调试开关
-  （`--fake-pad`、`--chartdl-test`），或临时加 env 探针 `OpenPopup`，**只开一次**，验完删干净。
-  **`--fake-pad <不存在的键名>`（如 `NONE`）= 伪造"插了一个不会按的手柄"**：状态类分支
-  （如设置页按 `padConnected` 显示手柄行）能用它验，而且不会乱点界面。
-- **残留实例会同时骗你两次**：`tasklist | grep cppsekai` 才看得到（`Get-Process` 看不到），
-  既占着 exe 让链接报 Permission denied，又用单实例 mutex 挡掉无头跑。清理：
-  `MSYS_NO_PATHCONV=1 taskkill /PID <pid> /F`。
-- 拖动窗口会让 Windows 跑模态循环挂住消息泵（画面冻结、音频照跑）；已用 `SDL_SetWindowsMessageHook`
-  变成静默暂停。临时条件探针**别设计数上限**。
-- 内存用 `mem_sample.py`：GL 空窗口 72MB、游戏稳态 212MB；启动后 10~12s 有一次 ~46MB 延迟归还，
-  别当泄漏。chartdl 设置窗口用 `GetWindow(hwnd, GW_OWNER)` 判关闭（不是 `GetParent()`）。
+## ⚠ 版权口径（2026-09-24 更新，别再引旧文档）
+- 官方 2026-04-27 公告：SNS 上被确认使用「外部非公式应用」→ **禁参加官方大会/活动（资格罚）**。
+  风险优先级：**资格罚 > 平台下架 > 诉讼**；相关关键词在 github/dmca 里 0 条 → 没走 DMCA。
+  **「repo 404」不能归因**，别拿别人 repo 的状态当决策依据。
 
-## ⚠️ 版权口径（2026-09-24 更新，别再引旧文档）
-- **官方 2026-04-27 公告**（@pj_sekai，5/5 起生效）：**在 SNS 上被确认使用「外部非公式应用」
-  → 禁参加官方大会/官方活动（资格罚）**，并要求尽量删除既有视频。**执法工具是资格罚不是诉讼。**
-- 结果：`sevenc-nanashi` 于 2026-05-04 自删 14 个仓库（Chart Cyanvas / MMW4CC /
-  Potato Leaves / pjsekai-* 系列），动机是**保住官方活动资格**；`crash5band/MikuMikuWorld`
-  同期 404（账号没封）。**`github/dmca` 里相关关键词 0 条 → 没走 DMCA。**
-- 我 2026-09-24 前引的《二次创作规范》（2021/2025-03）是**旧口径**，不能当护身符。
-  风险优先级：**资格罚 > 平台下架 > 诉讼**。
-- **「repo 404」不能归因**（删除/转私有/改名都是 404）。**别拿上游/别人的 repo 状态当决策依据。**
-
-## 最近工作（细节看 AGENTS.md 对应小节 + 当日日志）
-- **2026-09-24**：设置卡片一批（账户页导入/导出、系统页结束实例、判定预设 宽松/标准/严格
-  —— 出厂**宽松** = 官方各 +30ms，新增 `ui::radioRow`；震动三勾；页签触摸拖动滚动）；
-  第二批：窗口标题跟随用户、开多人弹「立即重启？」（重启前 CloseHandle 两个命名互斥体）、
-  **自动演出给经验但不写谱面成绩**、README 581→203 行（**技术细节禁止再往 README 加**）。
-- **2026-09-20**：chartdl 数据源体检 + 定数表纳入同步；确定闪光改全白；猜歌卡片；
-  **手柄焦点环** + 开局与结算数字滚动的震动（`UserSettings::padRumble`）。
-- **2026-09-19**：多人开局倒计时删掉；失血阴影重做；Win7 三连修；素材压到 10MB；
-  内存审计 + 结算界面改版。更早：多人（9-17）、profiles 与下载器（9-16）、结算/设置 4 页/
-  长条尾判/ELUA（9-13~9-15）。
+## 最近工作（细节 → AGENTS.md 对应小节 + 当日日志）
+- 10-04：模态卡片 ESC 优先级、UI 复核。10-03：观感对齐 sekai-stories 规格。
+- 09-24：设置卡片一批（账户导入导出 / 结束实例 / 判定预设、`ui::radioRow`、震动三勾、页签拖动）。
+- 09-20：chartdl 数据源 + 猜歌 + 手柄焦点环。09-19：多人、结算改版、Win7 三连修、内存审计。

@@ -43,6 +43,7 @@
 // its folder browser; the game only needs it now, and build.sh's link line has
 // it.
 #include <commdlg.h>
+#include "platform/NativeMenu.hpp" // 原生菜单栏（设置 > 系统）；windows.h 上面已经进来
 #endif
 
 #include <algorithm>
@@ -4312,6 +4313,20 @@ int main(int argc, char** argv)
                     persistUserData();
                 }
                 contentLeft();
+                bool menuBarBox = userSettings.nativeMenuBar;
+                ui::checkBox("原生菜单栏", &menuBarBox, interior);
+                if (menuBarBox != userSettings.nativeMenuBar) {
+                    userSettings.nativeMenuBar = menuBarBox;
+                    // 挂/摘**不在这里做**：SetMenu 会重排非客户区（WM_NCCALCSIZE
+                    // 一类的同步消息），而这正是"从 ImGui 帧中间动窗口"最不该干的
+                    // 事 —— 跟玻璃实现同一个理由。帧外那段 refreshNativeMenuBar
+                    // 会在这一帧结束后按设置自己挂/摘。
+                    persistUserData();
+                }
+                contentLeft();
+                ImGui::TextWrapped("把 刷新谱面列表 / 音乐商店 / 设置 收进窗口顶部的菜单栏；"
+                                   "只在 windowed 模式下显示。");
+                contentLeft();
                 ImGui::Text("多开");
                 contentLeft();
                 {
@@ -5482,6 +5497,19 @@ int main(int argc, char** argv)
     };
 
     bool dragFramePacing = false; // true while the window subclass is feeding frames
+    // 原生菜单栏（设置 > 系统）的两个信箱，都从窗口过程往主循环送东西：
+    //   menuCommand     - WM_COMMAND 收到的菜单 id（-1 = 没有），由帧内消费；
+    //   menuPauseWanted - 菜单一展开就置上，帧内看到且正在演奏就调 requestPause()。
+    // 跟 dragFramePacing 一样必须**声明在 runFrame 之前**：lambda 的捕获在定义处
+    // 就定死了，写在下面（subclass 那块）它会看不见。
+    int menuCommand = -1;
+    bool menuPauseWanted = false;
+#ifdef _WIN32
+    // 主窗口的 HWND。跟上面两个一样必须声明在 runFrame 之前：菜单命令里有几项
+    // （结束所有实例的确认框）要用它，而 lambda 的捕获在定义处就定死了。
+    // 真正的赋值在下面窗口过程那一段（SDL_GetWindowWMInfo）。
+    HWND gameWindow = nullptr;
+#endif
     // ------------------------------------------------------------------
     // One frame of the main loop, wrapped so it can also be served from inside
     // Windows' modal move/size loop (see the window subclass right below).
@@ -6324,6 +6352,119 @@ int main(int argc, char** argv)
             }
         }
 
+#ifdef _WIN32
+        // ------------------------------------------------------------------
+        // 原生菜单栏（设置 > 系统）的命令。
+        //
+        // 菜单展开时 Windows 的模态循环把 SDL 的泵停住，唯一还在跑的是窗口过程 ——
+        // 那里只把命令 id 记进信箱（见 subclass 那段），真正执行放在这里：一帧的
+        // 开头、状态干净的地方。喂帧是递归的（WM_TIMER -> 帧 -> 泵 -> WM_COMMAND），
+        // 所以这一块既可能在某次喂帧里跑到，也可能在正常的一帧里跑到。
+        // ------------------------------------------------------------------
+        if (menuCommand >= 0) {
+            const int cmd = menuCommand;
+            menuCommand = -1;
+            switch (cmd) {
+            case platform::menu::CmdSettings:
+                showDebug = true; // 同一张卡片，选曲和演奏界面都画它
+                break;
+            case platform::menu::CmdRescan:
+                rescanRequested = true; // 跟 F5 走同一条路
+                break;
+            case platform::menu::CmdDownload:
+                if (!launchChartDownloader()) {
+                    std::printf("[chartdl] could not start the downloader\n");
+                    std::fflush(stdout);
+                }
+                break;
+            case platform::menu::CmdQuitInstance:
+                std::printf("[instance] quit requested from the menu bar\n");
+                std::fflush(stdout);
+                running = false; // 普通退出路径：走的时候会把档案存回去
+                break;
+            case platform::menu::CmdQuitAll: {
+                // 破坏性、而且会连带关掉别的窗口，所以用系统的确认框问一句 ——
+                // 菜单栏本来就是原生外观，这里不必再套游戏自己那张卡片。
+                // 这个确认框是在**某次喂帧里**弹的（菜单还开着），但嵌套帧被
+                // st->depth 挡住了，不会有第二帧挤进来。
+                const int answer = MessageBoxW(gameWindow, L"关掉本机所有 CppSekai 窗口？",
+                    L"结束所有实例", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2);
+                if (answer == IDYES) {
+                    const int asked = postCloseToAllInstances();
+                    std::printf("[instance] closed %d window(s) on request (menu bar)\n", asked);
+                    std::fflush(stdout);
+                    running = false; // ...this window included
+                }
+                break;
+            }
+            case platform::menu::CmdWinBorderless:
+            case platform::menu::CmdWinWindowed:
+            case platform::menu::CmdWinFullscreen: {
+                // 跟设置 > 画面 里那个下拉走同一套动作（那儿是内联的，这里重写一遍
+                // 是因为它在另一个 lambda 里）。切到 borderless/fullscreen 之后菜单栏
+                // 自己会被摘掉（见下面 refreshNativeMenuBar 的挂载条件）。
+                const int next = cmd == platform::menu::CmdWinBorderless ? 0
+                    : (cmd == platform::menu::CmdWinWindowed ? 1 : 2);
+                if (next != windowMode) {
+                    windowMode = next;
+                    if (next == 2) {
+                        SDL_SetWindowFullscreen(window, SDL_WINDOW_FULLSCREEN_DESKTOP);
+                    } else {
+                        SDL_SetWindowFullscreen(window, 0);
+                        SDL_SetWindowBordered(window, next == 1 ? SDL_TRUE : SDL_FALSE);
+                        // 出全屏会掉 WS_THICKFRAME（见启动流程那段），显式装回来。
+                        SDL_SetWindowResizable(window, SDL_TRUE);
+                    }
+                    applyRenderMode();
+                    persistUserData(); // 里面会同步 userSettings.windowMode
+                }
+                break;
+            }
+            case platform::menu::CmdShowFps:
+                showFps = !showFps;
+                persistUserData();
+                break;
+            case platform::menu::CmdProgressBar:
+                showProgressBar = !showProgressBar;
+                persistUserData();
+                break;
+            case platform::menu::CmdSimpleFx:
+                simpleEffects = !simpleEffects;
+                core_api::setSimpleEffect(simpleEffects);
+                persistUserData();
+                break;
+            case platform::menu::CmdAbout:
+                // 关于本软件 = 设置卡片的 关于 页（版本 / 制作 / 两条外链都在那儿），
+                // 不是首次启动那张许可卡 —— 那个是下面那条。
+                showDebug = true;
+                settingsTab = 5;
+                break;
+            case platform::menu::CmdLicense:
+                // 跟 关于 页的「许可与免责声明」按钮一样，把首次启动那张卡再举起来。
+                eulaAlive = true;
+                eulaDismissedThisRun = false;
+                eulaPadChoice = -1;
+                break;
+            case platform::menu::CmdGithub:
+                openUrl(L"https://github.com/BSOD-MEMZ/CppSekai");
+                break;
+            case platform::menu::CmdXxtsoft:
+                openUrl(L"https://xxtsoft.top");
+                break;
+            default:
+                break;
+            }
+        }
+        if (menuPauseWanted) {
+            menuPauseWanted = false;
+            // 用户选的行为：演奏中打开菜单就暂停。选曲 / 结算界面不暂停 —— 那里没有
+            // "正在跑的一局"，而且选曲界面的动画还在走，画面照样要出帧。
+            if (state == AppState::Play && session.active && !paused && !pauseDialogOpen) {
+                requestPause();
+            }
+        }
+#endif
+
         // ------------------------------------------------------------------
         // Game controller: turn the pad into key presses (see the note above
         // the main loop). Runs after the SDL event pump, so a pulse lands in
@@ -6847,7 +6988,11 @@ int main(int argc, char** argv)
                 static_cast<float>(uiClock), userSettings.sortMode, userSettings.groupMode,
                 selectedVocal, userSettings.uiScale, &selectConfirmCenter, &account,
                 party.active() ? &selParty : nullptr, party.active() ? &selPartyOut : nullptr,
-                &favoriteToggle);
+                &favoriteToggle,
+                // 原生菜单栏开着就把 刷新 / 音乐商店 / 设置 从顶栏收走（它们在菜单里）。
+                // 传的是**设置值**而不是"菜单现在真的挂着"：全屏/无框时菜单暂时挂不上，
+                // 但顶栏按钮也不该在那时候又冒出来 —— 那样切个窗口模式按钮就跳来跳去。
+                userSettings.nativeMenuBar);
             // 右键 / 长按曲目 → 收藏夹切换。按 musicId 记（同一首曲子的四个难度共享），
             // 存进 profile，再重贴一遍 flag 让列表（和「按收藏」分组）立刻跟着变。
             if (favoriteToggle >= 0 && favoriteToggle < static_cast<int>(entries.size())) {
@@ -8601,16 +8746,29 @@ int main(int argc, char** argv)
         // reentrant; that is the crash this counter used to catch (see servedOutside).
         bool dragging = false;
         int servedOutside = 0;
+        // ---- 原生菜单栏（设置 > 系统）----
+        // 菜单展开时 Windows 跑自己的模态循环，跟拖标题栏一样把 SDL 的泵停住，所以
+        // 上面那套喂帧机制原样复用：WM_ENTERMENULOOP 时把 dragging 也置上，画面就
+        // 不会在菜单展开的这几秒里冻住。
+        // 多出来的两样：menuOpen 让 WM_TIMER 那条"左键抬起 = 拖动结束"的兜底判断
+        // 让路（菜单是点一下开、松开后还开着，那个判断会把定时器当场杀掉），
+        // 以及往主循环送的两个信箱。
+        bool menuOpen = false;
+        int* menuCommand = nullptr;      // WM_COMMAND 的菜单 id，主循环消费
+        bool* menuPauseWanted = nullptr; // 菜单展开 -> 演奏中暂停（用户选的行为）
     };
     SubclassState subclass;
     subclass.frame = &runFrame;
     subclass.dragPacing = &dragFramePacing;
     subclass.noFrame = &noFrameMode;
     subclass.logMessages = std::getenv("CPSEKAI_MSG_LOG") != nullptr;
+    subclass.menuCommand = &menuCommand;
+    subclass.menuPauseWanted = &menuPauseWanted;
     SDL_SysWMinfo mainWmi;
     SDL_VERSION(&mainWmi.version);
+    // gameWindow 本身声明在上面（runFrame 也要用它），这里只是把值填进去。
     if (SDL_GetWindowWMInfo(window, &mainWmi) && mainWmi.subsystem == SDL_SYSWM_WINDOWS) {
-        HWND gameWindow = mainWmi.info.win.window;
+        gameWindow = mainWmi.info.win.window;
         subclass.chain = reinterpret_cast<WNDPROC>(GetWindowLongPtrW(gameWindow, GWLP_WNDPROC));
         SetPropW(gameWindow, L"CppSekaiSubclassState", reinterpret_cast<HANDLE>(&subclass));
         SetWindowLongPtrW(gameWindow, GWLP_WNDPROC,
@@ -8625,6 +8783,51 @@ int main(int argc, char** argv)
                         std::printf("[msg] 0x%04X wparam=%llu lparam=%lld\n", message,
                             static_cast<unsigned long long>(wParam),
                             static_cast<long long>(lParam));
+                        std::fflush(stdout);
+                    }
+                    // ------------------------------------------------------
+                    // 原生菜单栏（设置 > 系统）。
+                    //
+                    // 菜单一展开，Windows 就进自己的模态循环，SDL 的泵被停住 —— 这里
+                    // 能跑的只有窗口过程，跟拖动窗口是同一个病，所以照抄那套：把
+                    // dragging 置上、起 WM_TIMER，由下面的喂帧分支出画面。
+                    //
+                    // 命令本身不在这里执行：只把 id 记进信箱，让主循环在**帧内**处理。
+                    // 在窗口过程里直接改游戏状态，会撞上"这个 WM_TIMER 可能正落在某个
+                    // 帧的中间"（喂帧是递归的），状态改到一半就出事。
+                    // ------------------------------------------------------
+                    if (message == WM_COMMAND && HIWORD(wParam) == 0
+                        && LOWORD(wParam) >= static_cast<UINT>(platform::menu::CmdSettings)
+                        && LOWORD(wParam) <= static_cast<UINT>(platform::menu::CmdXxtsoft)) {
+                        if (st->menuCommand != nullptr) {
+                            *st->menuCommand = static_cast<int>(LOWORD(wParam));
+                        }
+                        return 0;
+                    }
+                    if (message == WM_ENTERMENULOOP) {
+                        st->menuOpen = true;
+                        if (st->menuPauseWanted != nullptr) {
+                            *st->menuPauseWanted = true; // 帧内看到且正在演奏才真的暂停
+                        }
+                        st->dragging = true;
+                        *st->dragPacing = true;
+                        st->fromTimer = 0;
+                        st->fromMoving = 0;
+                        st->fromSizing = 0;
+                        st->lastServedMs = 0;
+                        SetTimer(hwnd, kDragTimerId, kDragFrameMs, nullptr);
+                        std::printf("[menu] WM_ENTERMENULOOP: pump parked, feeding frames from a "
+                                    "%u ms WM_TIMER\n",
+                            kDragFrameMs);
+                        std::fflush(stdout);
+                    } else if (message == WM_EXITMENULOOP) {
+                        st->menuOpen = false;
+                        st->dragging = false;
+                        *st->dragPacing = false;
+                        KillTimer(hwnd, kDragTimerId);
+                        std::printf("[menu] WM_EXITMENULOOP: %d frame(s) served while the menu was "
+                                    "open (timer=%d)\n",
+                            st->fromMoving + st->fromSizing + st->fromTimer, st->fromTimer);
                         std::fflush(stdout);
                     }
                     // ------------------------------------------------------
@@ -8744,7 +8947,10 @@ int main(int argc, char** argv)
                             // which used to leave the timer running and vsync off
                             // forever. The button state is the ground truth, so
                             // check it here and clean up if the drag is over.
-                            if ((GetAsyncKeyState(VK_LBUTTON) & 0x8000) == 0) {
+                            // 菜单开着的时候这个判断必须让路：菜单是"点一下开、
+                            // 松开之后还开着"，左键此刻必然是抬起的，照判会把喂帧
+                            // 的定时器当场杀掉（画面在菜单展开期间冻住）。
+                            if (!st->menuOpen && (GetAsyncKeyState(VK_LBUTTON) & 0x8000) == 0) {
                                 KillTimer(hwnd, kDragTimerId);
                                 st->dragging = false;
                                 *st->dragPacing = false;
@@ -8803,10 +9009,62 @@ int main(int argc, char** argv)
             std::fflush(stdout);
         }
     }
+
+    // ------------------------------------------------------------------
+    // 原生菜单栏（设置 > 系统）：挂/摘 + 勾选同步。
+    //
+    // 一帧跑完（在 runFrame 外面）调一次 —— SetMenu / DrawMenuBar 会重排非客户区，
+    // 不能从帧中间、更不能从 ImGui 正在画的时候做。只在**输入真的变了**的时候才动
+    // 菜单：sync() 会把菜单栏重画一遍。
+    //
+    // 挂上去要三件事同时成立：
+    //   * 设置里开着（默认关）；
+    //   * windowMode == 1（windowed）—— 菜单栏画在窗口的非客户区，borderless 是
+    //     WS_POPUP、fullscreen 铺满桌面，两种都画不出来；
+    //   * noFrameMode == 0 —— 玻璃实现 = 自绘无框把非客户区整个交了出去
+    //     （WM_NCCALCSIZE -> 0），而菜单栏正是画在那里。
+    // 所以全屏 / 无框 / 自绘无框时设置项留着、菜单先摘掉，回到普通窗口再挂回来。
+    // ------------------------------------------------------------------
+    auto refreshNativeMenuBar = [&]() {
+        if (gameWindow == nullptr) {
+            return;
+        }
+        const bool want = userSettings.nativeMenuBar && windowMode == 1 && noFrameMode == 0;
+        static bool lastWant = false;
+        static platform::menu::State lastState{};
+        static bool haveLastState = false;
+        if (want != lastWant) {
+            lastWant = want;
+            platform::menu::apply(gameWindow, want);
+            haveLastState = false; // 新菜单的勾还没打过
+        }
+        if (!want) {
+            return;
+        }
+        platform::menu::State st;
+        st.windowMode = windowMode;
+        st.showFps = showFps;
+        st.showProgressBar = showProgressBar;
+        st.simpleEffects = simpleEffects;
+        // 演奏中才把 刷新谱面列表 / 音乐商店 灰掉：重扫 charts/ 会让正在跑的那一帧
+        // 卡一下，下载器更不该从演出中间弹出来。
+        st.playing = state == AppState::Play && session.active;
+        if (!haveLastState || st.windowMode != lastState.windowMode || st.showFps != lastState.showFps
+            || st.showProgressBar != lastState.showProgressBar
+            || st.simpleEffects != lastState.simpleEffects || st.playing != lastState.playing) {
+            lastState = st;
+            haveLastState = true;
+            platform::menu::sync(gameWindow, st);
+        }
+    };
+    refreshNativeMenuBar();
 #endif
 
     while (running) {
         runFrame();
+#ifdef _WIN32
+        refreshNativeMenuBar();
+#endif
     }
 
     // Headless checks (--screenshot) must not touch the player's data file.
