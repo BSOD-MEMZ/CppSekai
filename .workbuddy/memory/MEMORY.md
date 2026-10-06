@@ -8,7 +8,8 @@
 - **改完 + 验证过就 commit**，别攒着。
 - **禁止 `git checkout <file>` / `git restore` 撤临时改动**（09-18 冲掉过整轮 main.cpp 改动）。
   撤动用精确编辑或先 commit。原话：「不要乱 checkout，有问题我们手动改」。
-- 加新 .cpp 到 `game/` / `platform/` 必须同步加进 `build.sh` 的 `SOURCES`。
+- `game/` 与 `platform/` 的 .cpp 走 **glob**（`build.sh` 的 `SOURCES`），新加文件不用改脚本；
+  只有 `core/`、`third_party/` 要手工加进 `UPSTREAM_SOURCES`。
 - 中文注释脚本用 Git Bash；含中文的 PowerShell 用 pwsh。
 - **验证卡住超过几分钟就停手**，把「人工点哪里、期望什么」交代给他。
 
@@ -54,7 +55,20 @@
 - 主窗口是标准带边框窗口；创建时因启动图临时 `SDL_WINDOW_BORDERLESS`，`splashShown` 后装回来。
 - `applyWindowTransparency` 的 `DwmExtendFrameIntoClientArea(-1,-1,-1,-1)` 顺带吃掉了 Win10 的 1px 黑边
   （副作用，不是特意去边）。NC 区仍在：窗口比客户区左右下各多 8px、上 32px，截图会露透明。
-- 量矩形用 `.workbuddy/tools/win_window.py rect`。
+- 量矩形用 `.workbuddy/tools/win_window.py rect`；菜单栏/缩略图按钮在**非客户区**，
+  `--screenshot` 拍不到 → 用 `.workbuddy/tools/menu_probe.py`（rect/dump/send/menuloop）。
+
+## 与 Windows 的接缝（2026-10-06 四个批次，细节 → AGENTS.md 那一节）
+- `platform/NativeMenu.*` 原生菜单栏 / `platform/ShellIntegration.*` .sus 关联 + 跳转列表 /
+  `platform/SystemMedia.cpp` 里手写 vtable 的 SMTC、任务栏进度条 + **缩略图按钮**。
+- **SDL 会把 `WM_CLOSE` 交给 `DefWindowProc`、窗口当场销毁** → 想"先问一句"必须在窗口过程
+  里吞掉它，用 `SDL_RegisterEvents` 的自定义事件通知主循环（批 B 踩的）。
+- 手写 COM vtable 一律**按位置寻址**：要用第 N 个方法就得把前面所有方法声明出来，少一个后面全错位。
+  GUID 对着 `toolchain/.../libc/include/any-windows-any` 头文件核，别凭记忆写。
+- 缩略图/菜单命令共用一条挂起命令通道（`WM_COMMAND` → 主循环帧内消费），id 区间不重叠。
+  **「灰掉」只是 UI，处理端要另挡一道**。
+- 跳转列表 `BeginList` 给的 removed 数组**必须尊重**（不然用户删掉的项下次又回来）；
+  `CommitList` 失败要 `AbortList`。
 
 ## ⚠ 版权口径（2026-09-24 更新，别再引旧文档）
 - 官方 2026-04-27 公告：SNS 上被确认使用「外部非公式应用」→ **禁参加官方大会/活动（资格罚）**。
@@ -62,6 +76,8 @@
   **「repo 404」不能归因**，别拿别人 repo 的状态当决策依据。
 
 ## 最近工作（细节 → AGENTS.md 对应小节 + 当日日志）
+- 10-06：原生菜单栏（4103628）+ 「与 Windows 融合」四批：A 防休眠/拖放/媒体键(4c9c625)、
+  B 窗口位置/标题/AUMID/关窗确认(f04ad4f)、C 缩略图按钮(3f6355e)、D .sus 关联/Jump List(166fac9)。
 - 10-04：模态卡片 ESC 优先级、UI 复核。10-03：观感对齐 sekai-stories 规格。
 - 09-24：设置卡片一批（账户导入导出 / 结束实例 / 判定预设、`ui::radioRow`、震动三勾、页签拖动）。
 - 09-20：chartdl 数据源 + 猜歌 + 手柄焦点环。09-19：多人、结算改版、Win7 三连修、内存审计。
