@@ -190,6 +190,10 @@ struct UserSettings
     // 收藏夹里的曲目，按 musicId 记（0 表示这个谱面文件没有编号，不收）。
     // 列表分组可以按它分「收藏 / 其他」，右键曲目即可切换。
     std::vector<int> favoriteMusicIds;
+    // 最近打过的谱面路径（最近在前，最多 10 条）。**只喂 Windows 的任务栏跳转列表**
+    // （右键任务栏图标那份菜单），游戏自己不用它 —— 所以记在哪条起奏路径上都行，
+    // 见 main.cpp 的 announceTrack。
+    std::vector<std::string> recentSusPaths;
     // Judgement windows, in ms. These defaults are the 宽松 preset (the official
     // set opened up by 30 ms on every window); 设置 > 判定 > 判定预设 offers
     // 标准 (the bare official set) and 严格 (30 ms tighter) next to it.

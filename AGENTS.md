@@ -126,6 +126,8 @@ game/PartyScreen.* # 多人游玩的浮层：选曲界面左下角的房间条�
                   # 难度名/序号（`difficultyIndex` / `difficultyName`）也在这，房间协议与手机面板共用。
 platform/NativeMenu.* # 原生 Win32 菜单栏（设置 > 系统 > 原生菜单栏，默认关）。见下面
                   # 「原生菜单栏」一节。
+platform/ShellIntegration.* # 与资源管理器的接缝：.sus 文件关联（HKCU\Software\Classes）
+                  # + 任务栏跳转列表（收藏 / 最近播放）。见「与 Windows 的接缝」里的批 D。
 main.cpp          # SDL2 窗口、事件循环、输入映射、ImGui HUD、截图模式、多人时钟跟随
 ```
 
@@ -2441,6 +2443,44 @@ UI 在 **设置 → 演奏 → 按键映射**（3 列 × 4 行，点一格再按
     （同帧生效）；`--sus` 起的局按它就是退出，跟 ESC 一致。
   * 静音是游戏自己的（`userMuted`，本次运行有效不落盘），跟"最小化静音"并列，
     见帧内那个 `wantMute` 轮询。
+
+### 批 D：`.sus` 文件关联 + 跳转列表（`platform/ShellIntegration.*`）
+
+两件事装在一个模块里，都只碰 **HKCU、不要管理员**，失败一律降级成 no-op 打日志。
+
+**`.sus` 关联**（设置 > 系统 > 关联 .sus 谱面文件，默认关；CLI `--associate-sus` /
+`--unassociate-sus` 调的是同一对函数）：
+
+- 写三处：`HKCU\Software\Classes\.sus`(默认值 → `CppSekai.Chart`)、
+  `…\Classes\CppSekai.Chart\shell\open\command`(默认值 → `"<exe>" --sus "%1"`)、
+  `…\Classes\CppSekai.Chart\DefaultIcon`。**exe 路径用 `GetModuleFileNameW`**，
+  不要拼 baseDir（命令行给过相对路径时只有它是对的）。
+- 撤销前**先读** `.sus` 现在的默认值：不是 `CppSekai.Chart` 就什么都不做（不去拆
+  别人的关联），返回 false。设了之后 `.sus` 指向我们，再撤就是 `RegDeleteTreeW`
+  两棵子树。
+- 双击走的是已有的 `--sus <文件>`，那条路早就是"启动即演奏"。
+- `HKCU\Software\Classes` 是**每用户**的：换账户、重装系统都不残留；想手动清就
+  删这两棵子树。
+
+**跳转列表**（右键任务栏图标 → 收藏 / 最近播放）：
+
+- vtable 全部手写（`ICustomDestinationList` / `IShellLinkW` / `IPropertyStore`），
+  加上自己实现的一个 `IObjectArray`（`LinkArray`，包一个 `vector<void*>`）。
+  **GUID 全部对着 `toolchain/.../libc/include/any-windows-any` 的头文件核过**，
+  别凭记忆写。
+- 两个必须做的收尾：① `BeginList` 交出来的 **removed 数组要尊重** —— 我们是
+  每次全量重建（`AppendCategory` 是追加语义，旧的不会自己清），不把它记下来又
+  原样加回去的话，用户右键"从列表中删除"删一次、下次启动它又回来；比对用的是
+  **参数串**（`--sus "路径"`），比抠路径稳；② `CommitList` 失败之后要
+  `AbortList`，否则下一次 `BeginList` 一直报"上一次的事务没结束"。
+- 显示名走 `IShellLinkW::QueryInterface(IPropertyStore)` + `PKEY_Title`。
+  `PROPERTYKEY` = `{fmtid, pid}`，pid 是 **2**（不是 FLAGS 那种字段）。
+- 建表时机两处：启动扫完谱面之后一次（`syncJumpList()`），以及演奏中
+  `announceTrack` 记完最近播放之后一次。
+- "最近播放"是 `settings.recentSusPaths`（跟 `favoriteMusicIds` 一样，
+  `loadUserData` / `saveUserData` **两处都要改**，漏一处静默丢）。去重后插最前，
+  留 10 条；写盘跟着 `persistUserData` 走。
+- 路径已经没了的条目**跳过不加**（点了打不开比不显示更糟）——`GetFileAttributes`
 
 ## 多人游玩（`platform/Party.*` + `game/PartyScreen.*`）
 

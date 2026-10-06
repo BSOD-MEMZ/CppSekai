@@ -15,6 +15,7 @@
 #include "path_utf8.hpp"
 #include "platform/Audio.hpp"
 #include "platform/Party.hpp"
+#include "platform/ShellIntegration.hpp"
 #include "platform/Renderer.hpp"
 #include "platform/SystemMedia.hpp"
 #include "game/Intro.hpp"
@@ -73,6 +74,24 @@ bool gForceFlickLog = false; // --flick-log: same switch as the 判定 card's ch
 // 手写一句就够了（跟 SystemMedia 手写 WinRT vtable 是同一个理由）。**必须在建窗口
 // 之前调用**（前台窗口的 AUMID 在窗口创建那一刻定下来）。
 extern "C" HRESULT WINAPI SetCurrentProcessExplicitAppUserModelID(PCWSTR appId);
+
+// 本程序 exe 的绝对路径 —— .sus 关联的 command 行要用它。用 GetModuleFileNameW
+// 而不是拼 baseDir：命令行里给过相对路径时只有它是对的。
+std::wstring currentExecutablePath()
+{
+    std::vector<wchar_t> buffer(MAX_PATH);
+    for (;;) {
+        const DWORD length = GetModuleFileNameW(nullptr, buffer.data(),
+            static_cast<DWORD>(buffer.size()));
+        if (length == 0) {
+            return std::wstring();
+        }
+        if (static_cast<size_t>(length) + 1 < buffer.size()) {
+            return std::wstring(buffer.data(), length);
+        }
+        buffer.resize(buffer.size() * 2);
+    }
+}
 
 // 一个自己登记的消息：设置 > 系统 > 结束所有实例 在发 WM_CLOSE **之前**先发它，
 // 收到的一方就知道这次关窗是"别的窗口让的"，不是用户点了 X —— 演奏中那张"要退出吗"
@@ -1165,6 +1184,9 @@ int main(int argc, char** argv)
     // 通知主循环，由主循环按 state 决定是退出还是弹确认卡（见 requestWindowClose）。
     // 声明在这里是因为 SDL_RegisterEvents 那句在主函数很靠前的位置。
     Uint32 closeRequestEventType = 0;
+    // --associate-sus / --unassociate-sus：装 / 卸 .sus 文件关联，做完就退出。
+    // 给脚本和安装程序用（设置卡片里那个开关调的是同一对函数）。
+    int susAssocAction = 0; // 1 = 装，-1 = 卸
     int winWidth = 1366;
     int winHeight = 768;
     float uiScaleArg = 1.0f;      // --ui-scale: song-select / result zoom
@@ -1298,6 +1320,12 @@ int main(int argc, char** argv)
             testHits = true;
         } else if (arg == "--judge-frame" && i + 1 < utf8Argc) {
             judgeAnimFrame = std::atoi(utf8Argv[++i]);
+        } else if (arg == "--associate-sus") {
+            // 装 .sus 关联（HKCU\Software\Classes），做完直接退出。等价于
+            // 设置 > 系统 > 关联 .sus 谱面文件 勾上，但不需要开窗口。
+            susAssocAction = 1;
+        } else if (arg == "--unassociate-sus") {
+            susAssocAction = -1;
         } else if (arg == "--show-pause-dialog") {
             showPauseDialogShot = true;
         } else if (arg == "--intro-preview") {
@@ -1497,6 +1525,22 @@ int main(int argc, char** argv)
     std::printf("[shell] AppUserModelID %s (hr=0x%lX)\n",
         aumidHr == S_OK ? "set" : "NOT set", static_cast<unsigned long>(aumidHr));
     std::fflush(stdout);
+#endif
+
+#ifdef _WIN32
+    const std::wstring exePathW = currentExecutablePath();
+    if (susAssocAction != 0) {
+        // 一次性动作，做完就退 —— 不需要窗口，也不该顺手开一局游戏。
+        const bool done = susAssocAction > 0 ? platform::shell::associateSus(exePathW)
+                                             : platform::shell::disassociateSus();
+        std::printf("[shell] %s\n", done ? "done" : "failed (see the line above)");
+        std::fflush(stdout);
+        return done ? 0 : 1;
+    }
+#else
+    if (susAssocAction != 0) {
+        return 1;
+    }
 #endif
 
     SDL_SetMainReady();
@@ -2604,6 +2648,71 @@ int main(int argc, char** argv)
 
     std::vector<game::ChartEntry>& chartEntries = entries;
     chartEntries = scanAllChartDirs();
+
+    // ------------------------------------------------------------------
+    // 任务栏跳转列表（右键任务栏图标那份菜单）：收藏 + 最近播放。
+    //
+    // 每条都是一个 `--sus <谱面>` 的快捷方式，所以曲子路径必须还在（rebuildJumpList
+    // 会跳过已经不存在的）。启动扫完谱面建一次、退出前再建一次（把这一局新加进去的
+    // 最近播放、以及新收藏带进去）。--screenshot 不碰它 —— 那会改用户的任务栏。
+    // ------------------------------------------------------------------
+    auto syncJumpList = [&]() {
+#ifdef _WIN32
+        if (exePathW.empty()) {
+            return;
+        }
+        // 按 musicId / 路径在扫描出来的列表里找谱面，取第一条（同一首的多个难度里
+        // 扫描顺序的第一个），标题用曲名、副标题用难度。
+        auto toEntry = [&](const game::ChartEntry& chart) {
+            platform::shell::JumpEntry item;
+            item.title = path_utf8::widen(chart.title.empty() ? chart.displayName : chart.title);
+            item.susPath = path_utf8::widen(chart.susPath);
+            item.detail = path_utf8::widen(chart.difficulty);
+            return item;
+        };
+        std::vector<std::pair<std::wstring, std::vector<platform::shell::JumpEntry>>> categories;
+        std::vector<platform::shell::JumpEntry> favorites;
+        for (int musicId : userSettings.favoriteMusicIds) {
+            for (const game::ChartEntry& chart : entries) {
+                if (chart.musicId != musicId || chart.susPath.empty()) {
+                    continue;
+                }
+                favorites.push_back(toEntry(chart));
+                break;
+            }
+            if (favorites.size() >= 5) {
+                break;
+            }
+        }
+        std::vector<platform::shell::JumpEntry> recent;
+        for (const std::string& recentPath : userSettings.recentSusPaths) {
+            for (const game::ChartEntry& chart : entries) {
+                if (chart.susPath != recentPath || chart.susPath.empty()) {
+                    continue;
+                }
+                recent.push_back(toEntry(chart));
+                break;
+            }
+            if (recent.size() >= 5) {
+                break;
+            }
+        }
+        if (!favorites.empty()) {
+            categories.emplace_back(L"收藏", favorites);
+        }
+        if (!recent.empty()) {
+            categories.emplace_back(L"最近播放", recent);
+        }
+        if (categories.empty()) {
+            return; // 两个都空：别去碰列表（也别把系统自己那部分清掉）
+        }
+        platform::shell::rebuildJumpList(exePathW, categories);
+#endif
+    };
+
+    if (screenshotPath.empty()) {
+        syncJumpList();
+    }
     if (chartsDir.empty()) {
         chartsDir = chartCandidates.front();
     }
@@ -2684,6 +2793,18 @@ int main(int argc, char** argv)
     auto announceTrack = [&]() {
         if (!session.active) {
             return;
+        }
+        // 最近播放：喂任务栏那份跳转列表（见 syncJumpList）。放在这里是因为**所有**
+        // "起了一局"的路径最后都会走到 announceTrack（选曲确定 / 拖放 / --sus 启动 /
+        // 重试 / 多人开演），不用去四个调用点各写一遍。去重之后插到最前面，留 10 条。
+        if (!session.entry.susPath.empty()) {
+            std::vector<std::string>& recent = userSettings.recentSusPaths;
+            recent.erase(std::remove(recent.begin(), recent.end(), session.entry.susPath),
+                recent.end());
+            recent.insert(recent.begin(), session.entry.susPath);
+            if (recent.size() > 10) {
+                recent.resize(10);
+            }
         }
         const double musicLen = audio.musicDurationSec();
         double duration = 0.0;
@@ -4446,6 +4567,26 @@ int main(int argc, char** argv)
                 contentLeft();
                 ImGui::TextWrapped("把 刷新谱面列表 / 音乐商店 / 设置 收进窗口顶部的菜单栏；"
                                    "只在 windowed 模式下显示。");
+#ifdef _WIN32
+                // .sus 文件关联：注册表是唯一真相，所以不存进档案 —— 启动查一次，
+                // 之后跟着这个开关走（在别处改过关联时，重启就看到真实状态）。
+                contentLeft();
+                static bool susAssocBox = platform::shell::susAssociated();
+                bool susBox = susAssocBox;
+                ui::checkBox("关联 .sus 谱面文件", &susBox, interior);
+                if (susBox != susAssocBox) {
+                    if (susBox) {
+                        // 写失败就把开关弹回去，别让界面显示一个没生效的状态。
+                        susAssocBox = platform::shell::associateSus(exePathW);
+                    } else {
+                        platform::shell::disassociateSus();
+                        susAssocBox = platform::shell::susAssociated();
+                    }
+                }
+                contentLeft();
+                ImGui::TextWrapped("双击 .sus 直接用本程序打开；只写 HKCU\\Software\\Classes，"
+                                   "随时可以关掉它还回去。");
+#endif
                 contentLeft();
                 ImGui::Text("多开");
                 contentLeft();
@@ -9560,6 +9701,8 @@ int main(int argc, char** argv)
     // Headless checks (--screenshot) must not touch the player's data file.
     if (screenshotPath.empty()) {
         persistUserData();
+        // 退出前再建一次跳转列表：这一局新打的曲子（最近播放）和新收藏才算数。
+        syncJumpList();
     }
 
     // Leave the 多人游玩 room before anything else: the other windows see the

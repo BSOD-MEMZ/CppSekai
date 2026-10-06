@@ -1035,6 +1035,7 @@ void loadUserData(const std::string& path, UserSettings& settings,
             settings.showFps = s.value("showFps", settings.showFps);
             settings.laneKeys = s.value("laneKeys", settings.laneKeys);
             settings.favoriteMusicIds = s.value("favoriteMusicIds", settings.favoriteMusicIds);
+            settings.recentSusPaths = s.value("recentSusPaths", settings.recentSusPaths);
             settings.perfectMs = s.value("perfectMs", settings.perfectMs);
             settings.greatMs = s.value("greatMs", settings.greatMs);
             settings.goodMs = s.value("goodMs", settings.goodMs);
@@ -1185,6 +1186,7 @@ void saveUserData(const std::string& path, const UserSettings& settings,
         {"showFps", settings.showFps},
         {"laneKeys", settings.laneKeys},
         {"favoriteMusicIds", settings.favoriteMusicIds},
+        {"recentSusPaths", settings.recentSusPaths},
         {"perfectMs", settings.perfectMs},
         {"greatMs", settings.greatMs},
         {"goodMs", settings.goodMs},

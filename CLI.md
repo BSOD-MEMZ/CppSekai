@@ -152,6 +152,8 @@ cppsekai [--sus <file.sus>] [--bgm <audio>] [--charts <dir>] [--cover <image>]
 | `--party-name <name>` | 房间里显示的名字（默认取账户昵称），同时进窗口标题：`CppSekai - <name>`，多个窗口才分得清 / 脚本才点得准 |
 | `--party-auto [<难度 0-6>]` | 无头跑一整轮多人：房主自动在当前这首按「确定」，每个窗口自动选该难度并准备。配合 `CPSEKAI_MP_TRACE=1`（每秒一行 `[sync] qpc/t/offset` + 队友分数）就能断言时钟同步。回归脚本见 `.workbuddy/tools/mp_verify.sh` |
 | `--drop-test <路径> [秒=1.0]` | 合成一次**拖放谱面**（`SDL_DROPFILE`，默认 1.0s 时发）。真实拖放没法从脚本驱动——`WM_DROPFILES` 里的 `HDROP` 属于"放"的那个进程——但这条合成事件走的是完全相同的路：同样的 `.sus` 后缀过滤、同样的「只在选曲界面生效」、同样的起奏收尾。日志 `[drop] playing <路径>` = 成功了 |
+| `--associate-sus` | **装 `.sus` 文件关联**并退出（不开窗口）：写 `HKCU\Software\Classes\.sus` → `CppSekai.Chart`，command 行为 `<本程序 exe 绝对路径> --sus "%1"`。只写 HKCU、不要管理员。等价于 设置 > 系统 > 关联 .sus 谱面文件，给安装程序/脚本用。成功 exit 0 |
+| `--unassociate-sus` | 撤销上面的关联（`RegDeleteTree` 掉 `.sus` 与 `CppSekai.Chart`）。**`.sus` 若指向别的程序就不动它**，直接失败 exit 1 |
 | `--help` / `-h` | 打印用法并退出 |
 
 ---
