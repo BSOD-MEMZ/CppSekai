@@ -13,7 +13,9 @@ and would drag extra licensing along.
 usage:
     python make_nogpu_patch.py [<dir holding the mesa x64 dlls>]
 
-To refresh the dlls (also the recipe when the packaged Mesa version changes):
+The dlls live in toolchain/mesa-<ver>/x64 (gitignored, like the rest of
+toolchain/). Refreshing them - also the recipe when the packaged Mesa version
+changes:
 
     curl -L -o mesa.7z https://github.com/pal1000/mesa-dist-win/releases/download/\
 <ver>/mesa3d-<ver>-release-msvc.7z
@@ -38,7 +40,8 @@ MESA_HOME = "https://www.mesa3d.org/license.html"
 LICENSE_URL = "https://gitlab.freedesktop.org/mesa/mesa/-/raw/main/docs/license.rst"
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-DLL_DIR = sys.argv[1] if len(sys.argv) > 1 else r"D:\tmp-sw\CppSekai"
+DLL_DIR = sys.argv[1] if len(sys.argv) > 1 else os.path.join(
+    ROOT, "toolchain", f"mesa-{MESA_VERSION}", "x64")
 LICENSE_CACHE = os.path.join(ROOT, "build", "_mesalic.txt")
 OUT_DIR = os.path.join(ROOT, "dist")
 STAGE = os.path.join(OUT_DIR, "_staging_nogpu")
