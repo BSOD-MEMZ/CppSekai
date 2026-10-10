@@ -44,6 +44,7 @@
 // its folder browser; the game only needs it now, and build.sh's link line has
 // it.
 #include <commdlg.h>
+#include <io.h> // _fileno / _dup2 - pointing stderr at stdout's log file (see redirectStdioToLog)
 #include "platform/NativeMenu.hpp" // 原生菜单栏（设置 > 系统）；windows.h 上面已经进来
 #endif
 
@@ -948,8 +949,9 @@ namespace
 // line of cppsekai.log, which says which startup stage was live.
 //
 // This runs on a broken stack, so it stays tiny: no C++ strings, no allocation,
-// plain stdio. The globals below are the only module-level mutable state in the
-// program, written once a frame so the log says what was going on.
+// plain stdio. The globals below are the only module-level mutable state the
+// crash handler touches, written once a frame so the log says what was going on.
+// (gStdioRedirected, further down, is the other one - it is set once at startup.)
 // ---------------------------------------------------------------------------
 volatile long gCrashState = -1;
 volatile long gCrashGlassMode = -1;
@@ -1085,6 +1087,104 @@ bool fitWindowToDesktop(int& w, int& h, int margin, bool usableArea)
     return true;
 }
 
+// ---------------------------------------------------------------------------
+// Log redirection (2026-10-10 fix).
+//
+// A double-clicked run has no console, so stdout *and* stderr have to end up in
+// cppsekai.log - and the obvious way to do that, two freopen() calls, is wrong
+// twice over. Each call creates its own FILE with its own file position, so the
+// two writers overwrite each other byte by byte instead of appending in order.
+// That is what mangled the log we were sent: the head of
+// `[dpi] scaling on (per-monitor v2, SDL uses DPI scaled points)` was gone and
+// only ` uses DPI scaled points)` survived, because a longer stderr warning had
+// been written across it. (The --screenshot block below then made it worse by
+// opening the same file a second time with "w", truncating everything the first
+// redirect had already written.)
+//
+// So: one open, and stderr shares stdout's descriptor via _dup2 - after that
+// both streams advance the same file position, and the file reads in print
+// order.
+// ---------------------------------------------------------------------------
+bool gStdioRedirected = false; // set by redirectStdioToLog, read by the --screenshot block
+
+bool redirectStdioToLog(const char* path)
+{
+    if (std::freopen(path, "w", stdout) == nullptr) {
+        return false;
+    }
+#ifdef _WIN32
+    if (_dup2(_fileno(stdout), _fileno(stderr)) == -1) {
+        std::freopen(path, "a", stderr); // fall back rather than lose stderr
+    }
+#else
+    std::freopen(path, "a", stderr);
+#endif
+    setvbuf(stdout, nullptr, _IONBF, 0);
+    setvbuf(stderr, nullptr, _IONBF, 0);
+    gStdioRedirected = true;
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// OpenGL capability gate (2026-10-10).
+//
+// The renderer, the shaders ("#version 330 core") and the ImGui GL3 backend all
+// need OpenGL 3.3 core. On a machine with no 3D driver - Microsoft Basic
+// Display Adapter, an RDP session, a VM without 3D, an old Intel driver -
+// SDL_GL_CreateContext can still succeed and hand back a *usable* GL 1.1
+// software context (the GDI generic implementation). That is exactly the report
+// we got:
+//
+//     Failed to initialize OpenGL loader!     <- imgui's loader, GL version < 2.0
+//     --- crash: exception 0xC0000005         <- ImGui_ImplOpenGL3_NewFrame
+//       fault cppsekai.exe+0xDA3E7            <- bd == NULL, then bd->ShaderHandle
+//
+// So the old guard (only a NULL context check) never fired, the loader failure
+// was never checked, and the process died on a null pointer without the window
+// ever being drawn. Now the context is asked what it is, the answer goes in the
+// log, and anything below 3.3 gets refused politely - with a message box,
+// because a double-clicked Windows-subsystem program has nowhere else to say it.
+// ---------------------------------------------------------------------------
+void queryGlVersion(int& major, int& minor)
+{
+    major = 0;
+    minor = 0;
+    // GL_MAJOR_VERSION / GL_MINOR_VERSION (GL 3.0) are not in MinGW's 1.1 gl.h,
+    // so they are spelled out. On a pre-3.0 context both queries fail and leave
+    // the values at 0 - then "1.1.0" from GL_VERSION is what we parse instead.
+    glGetIntegerv(0x821B /* GL_MAJOR_VERSION */, &major);
+    glGetIntegerv(0x821C /* GL_MINOR_VERSION */, &minor);
+    if (major == 0 && minor == 0) {
+        if (const char* version = reinterpret_cast<const char*>(glGetString(GL_VERSION))) {
+            std::sscanf(version, "%d.%d", &major, &minor);
+        }
+    }
+}
+
+// "We are not starting, and here is why." The two places reachable without a
+// console: the log, and a native box. `headless` is for --screenshot runs - they
+// have nobody to click OK, and a modal box would just hang the check.
+void reportGlRefusal(SDL_Window* window, const std::string& text, bool headless)
+{
+    std::fprintf(stderr, "%s\n", text.c_str());
+    std::fflush(stderr);
+    if (headless) {
+        return;
+    }
+#ifdef _WIN32
+    HWND owner = nullptr;
+    SDL_SysWMinfo wmi;
+    SDL_VERSION(&wmi.version);
+    if (window != nullptr && SDL_GetWindowWMInfo(window, &wmi)
+        && wmi.subsystem == SDL_SYSWM_WINDOWS) {
+        owner = wmi.info.win.window;
+    }
+    MessageBoxW(owner, path_utf8::widen(text).c_str(), L"CppSekai", MB_OK | MB_ICONERROR);
+#else
+    (void)window;
+#endif
+}
+
 int main(int argc, char** argv)
 {
 #ifdef _WIN32
@@ -1104,10 +1204,10 @@ int main(int argc, char** argv)
             if (attached) {
                 std::freopen("CONOUT$", "w", stdout);
                 std::freopen("CONOUT$", "w", stderr);
-            } else if (std::freopen("cppsekai.log", "w", stdout) != nullptr) {
-                std::freopen("cppsekai.log", "w", stderr);
-                setvbuf(stdout, nullptr, _IONBF, 0);
-                setvbuf(stderr, nullptr, _IONBF, 0);
+            } else {
+                // One open for both streams - see redirectStdioToLog above for
+                // why two freopen() calls corrupt the file.
+                redirectStdioToLog("cppsekai.log");
             }
         }
     }
@@ -1476,16 +1576,11 @@ int main(int argc, char** argv)
     }
 
     // GUI-subsystem binaries have no console; when running headless checks
-    // route stdout/stderr into a log file next to the screenshot.
-    if (!screenshotPath.empty()) {
-        std::FILE* logFile = std::fopen("cppsekai.log", "w");
-        if (logFile != nullptr) {
-            std::fclose(logFile);
-            std::freopen("cppsekai.log", "w", stdout);
-            std::freopen("cppsekai.log", "w", stderr);
-            setvbuf(stdout, nullptr, _IONBF, 0);
-            setvbuf(stderr, nullptr, _IONBF, 0);
-        }
+    // route stdout/stderr into a log file next to the screenshot. Skipped when
+    // the startup block already redirected - reopening the file with "w" here
+    // would truncate every line written since.
+    if (!screenshotPath.empty() && !gStdioRedirected) {
+        redirectStdioToLog("cppsekai.log");
     }
 
     // ------------------------------------------------------------------
@@ -2131,6 +2226,46 @@ int main(int argc, char** argv)
     SDL_GL_MakeCurrent(window, glContext);
     SDL_GL_SetSwapInterval(1);
     bootLog("gl context");
+    // Capability gate, before anything else touches the context (see the note
+    // above "OpenGL capability gate"): a GL 1.1 context here is what turned
+    // "no GPU" into a null-pointer crash with no window at all.
+    int glMajor = 0;
+    int glMinor = 0;
+    queryGlVersion(glMajor, glMinor);
+    if (const char* forced = std::getenv("CPSEKAI_FAKE_GL_VERSION")) {
+        // Debug switch: pretend the context reports this version, so the refusal
+        // path below can be exercised on a machine that does have a GPU.
+        int fakeMajor = 0;
+        int fakeMinor = 0;
+        if (std::sscanf(forced, "%d.%d", &fakeMajor, &fakeMinor) == 2) {
+            glMajor = fakeMajor;
+            glMinor = fakeMinor;
+        }
+    }
+    {
+        const char* glVersion = reinterpret_cast<const char*>(glGetString(GL_VERSION));
+        const char* glRenderer = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
+        const char* glVendor = reinterpret_cast<const char*>(glGetString(GL_VENDOR));
+        std::printf("[gl] %d.%d | version='%s' renderer='%s' vendor='%s'\n", glMajor, glMinor,
+            glVersion != nullptr ? glVersion : "?",
+            glRenderer != nullptr ? glRenderer : "?",
+            glVendor != nullptr ? glVendor : "?");
+        std::fflush(stdout);
+    }
+    const bool headlessRun = !screenshotPath.empty();
+    if (glMajor < 3 || (glMajor == 3 && glMinor < 3)) {
+        char buffer[768];
+        std::snprintf(buffer, sizeof(buffer),
+            "CppSekai 需要 OpenGL 3.3，而当前上下文只提供了 %d.%d。\n\n"
+            "最常见的原因：显卡驱动没装（Windows 只给了「Microsoft 基本显示适配器」），"
+            "或者在云主机 / 远程桌面 / 没有 3D 加速的虚拟机里运行。\n\n"
+            "如果这台机器确实没有能用的显卡驱动，可以到发布页下载「无显卡补丁」"
+            "（Mesa 软件渲染），解压到本程序所在的文件夹再启动。\n"
+            "具体信息见程序目录下的 cppsekai.log。",
+            glMajor, glMinor);
+        reportGlRefusal(window, buffer, headlessRun);
+        return 1;
+    }
     // Paint the very first frame before any asset is loaded. Without it
     // Windows shows an unpainted window - and after a swap the compositor has
     // something to display even if the load below takes a while.
@@ -2195,7 +2330,19 @@ int main(int argc, char** argv)
     // Over the backend's IME sink: it would reset the candidate window's position
     // on every frame (see setImeRectOnChange above).
     ImGui::GetPlatformIO().Platform_SetImeDataFn = setImeRectOnChange;
-    ImGui_ImplOpenGL3_Init("#version 330 core");
+    // Never ignore this return value: on failure the backend leaves
+    // io.BackendRendererUserData NULL and the very next NewFrame() dereferences
+    // it. That is the 0xC0000005 at cppsekai.exe+0xDA3E7 in the "no GPU" report.
+    if (!ImGui_ImplOpenGL3_Init("#version 330 core")) {
+        reportGlRefusal(window,
+            "OpenGL 初始化失败：无法加载 3.3 的函数入口点。\n\n"
+            "这台机器的 OpenGL 驱动不完整，多半是没装显卡驱动，"
+            "或者在云主机 / 远程桌面 / 没有 3D 加速的虚拟机里运行。\n\n"
+            "没有可用显卡驱动的机器，可以到发布页下载「无显卡补丁」"
+            "（Mesa 软件渲染），解压到本程序所在的文件夹再启动。",
+            !screenshotPath.empty());
+        return 1;
+    }
     bootLog("imgui");
     // Splash frames are few and each one only costs a GPU submission - but
     // with vsync on every SDL_GL_SwapWindow would still block for a full

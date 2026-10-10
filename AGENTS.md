@@ -393,6 +393,16 @@ bash build.sh          # 仅需 Git Bash；产物 build/cppsekai.exe + SDL2.dll 
   用来判断"内容挤不下"是没撑开还是被裁掉）和 `[ui] confirm button at x,y`（无头点确定用的坐标，
   1920x1080 下是 1623,783）。注意 **`--screenshot` 会把 stdout 重定向到 `cppsekai.log`**，
   所以这类日志要从日志文件里读。
+- **`cppsekai.log` 只能被 open 一次（2026-10-10 修）**：双击运行（无控制台）和 `--screenshot`
+  两条路都要把 stdout/stderr 送进日志文件，而**两次 `freopen(..., "w")` 是错的** ——
+  两个 FILE 各有自己的文件位置，于是按字节互相覆盖，日志读起来像被谁啃过。用户报上来的那份里
+  `[dpi] scaling on (per-monitor v2, SDL` 整段没了、只剩 ` uses DPI scaled points)`，
+  就是一条更长的 stderr 警告从偏移 0 写在了它上面；`--screenshot` 那条路还会再 `freopen("w")`
+  一次，把前面已经写好的行整段截掉。
+  现在统一走 `redirectStdioToLog()`：**只 open 一次**，再用
+  `_dup2(_fileno(stdout), _fileno(stderr))` 让 stderr 共用 stdout 的文件描述符
+  （同一个位置、按打印顺序落盘），并用 `gStdioRedirected` 拦住第二条路重复打开。
+  **别退回两个 freopen，也别在别处再 open 这个文件。**
 - **设置卡片的内容是可滚动的**（画面页实测 `used=866 > view=642`）：child 里去掉了
   `ImGuiWindowFlags_NoScrollbar`，首行用 `SetCursorPos`（**窗口内坐标**）而不是
   `SetCursorScreenPos`，否则滚动时第一行会被钉住不动。
@@ -1803,6 +1813,28 @@ Win10 亚克力只能他那台 22H2 验。材质只在"背景不填充"（`bgSty
 先决定"要不要为 Intel 集显把渲染器降到 GL 3.1"（shader 改 1.40 + 手动 `glBindAttribLocation` +
 ImGui 后端降级 + 去掉 `glBindSampler`），那是一块真活儿，而目标机器（Vista + Intel 集显）基本
 只剩虚拟机。**我的判断：不值得**。要收就只承诺"独显机器可以试"，并把 UCRT 前置条件写清楚。
+
+**没 3D 驱动时要优雅拒绝，别崩（2026-10-10 修，用户实机报的）**：
+
+`SDL_GL_CreateContext` **会成功** —— GDI Generic 会给一个能用的 **OpenGL 1.1** 上下文，所以
+「上下文为 NULL 就退出」那条守卫根本不触发；接着 imgui 的 GL3 loader 因版本 < 2.0 打印
+`Failed to initialize OpenGL loader!` 并返回 false，而 `io.BackendRendererUserData` 一直是 NULL，
+于是第一个 `NewFrame()` 里 `bd->ShaderHandle` 读了 `[NULL+0x30]` → **0xC0000005 @ rva 0xDA3E7**，
+窗口都没出来、也没有崩溃框。现在有四道：
+
+- 拿到上下文后先 `queryGlVersion()`。**3.0 的 `GL_MAJOR_VERSION` 枚举 MinGW 的 1.1 gl.h 里没有**，
+  写成字面量 `0x821B` / `0x821C`；老上下文上这两个查询会失败并留下 0，这时回退解析
+  `GL_VERSION` 的 `"major.minor"` 前缀。
+- 每次启动打一行 **`[gl] 3.3 | version='…' renderer='…' vendor='…'`** —— 别人机器上的显卡问题
+  以后就靠这一行定性（这次排查时日志里什么 GL 信息都没有）。
+- `< 3.3` 走 `reportGlRefusal()`（stderr + 原生 `MessageBoxW`）后 `return 1`。双击运行没有控制台，
+  那个消息框是唯一能让用户看见的东西；**`--screenshot` 无头跑不弹框**（没人点确定，会挂住自检）。
+- **`ImGui_ImplOpenGL3_Init()` 的返回值必须接**（false 就是 loader 没干活），否则又回到上面那个
+  NULL 解引用。调试开关 `CPSEKAI_FAKE_GL_VERSION=2.1` 可以假装版本不够，用来在有显卡的机器上
+  无头验证这条拒绝路径。
+- 用户侧的解法是 Mesa 软件渲染补丁包：`dist/CppSekai-software-gl-mesa-*.zip`，
+  打包脚本 `.workbuddy/tools/make_nogpu_patch.py`（Mesa 的 dll 放 `toolchain/mesa-<ver>/x64`）。
+  实测 i7-1260P 1366x768 关 vsync：选曲 55–66 fps、演奏 83–112 fps，同机真显卡 214–219 fps。
 
 **降 GL 版本不会有性能收益**（2026-09-19 实测，用户问 "GL3.1 性能会不会比 3.3 好"）：GL 版本号
 是**能力集**不是性能档，同一驱动的光栅化路径一样。我们本来就已经在 **3.3 core profile** 上

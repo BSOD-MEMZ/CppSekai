@@ -302,7 +302,7 @@ cppsekai [--sus <file.sus>] [--bgm <audio>] [--charts <dir>] [--cover <image>]
 | 码 | 含义 |
 |---|---|
 | `0` | 正常退出（含 `--help`、`--screenshot` 完成） |
-| `1` | 启动失败：`SDL_Init` / 建窗口 / GL 3.3 上下文 / 资源加载失败（原因写在日志里） |
+| `1` | 启动失败：`SDL_Init` / 建窗口 / GL 3.3 上下文 / **上下文版本低于 3.3**（会弹一个说明框）/ 资源加载失败（原因写在日志里） |
 
 ---
 
@@ -313,6 +313,12 @@ cppsekai [--sus <file.sus>] [--bgm <audio>] [--charts <dir>] [--cover <image>]
 - **中文 / 日文参数**：程序内部按 UTF-8 处理，命令行也是从 `GetCommandLineW()` 重新取的，
   所以 cmd（GBK 代码页）里敲日文标题也能正确显示。
 - **`--charts` 给了就只用它**：不会再去 `exe/../charts` 兜底。
+- **机器没有 3D 驱动**（只剩「Microsoft 基本显示适配器」、云主机 / 远程桌面 / 没开 3D 加速的
+  虚拟机）：启动会弹一个说明框并以 `1` 退出，日志里 `[gl] x.y | version=… renderer=…` 那行会写清
+  实际拿到的是什么上下文。这类机器可以用 Mesa 软件渲染补丁包跑起来
+  （发布页的 `CppSekai-software-gl-mesa-*.zip`，解压到程序目录）。`--screenshot` 无头跑
+  **不弹框**、只写日志；调试开关 `CPSEKAI_FAKE_GL_VERSION=2.1` 可以假装版本不够，
+  用来在有显卡的机器上验证这条拒绝路径。
 - **不要用 `--auto` 当日常启动参数**：它连经验都不给、也不接输入（设置里的「自动演出」是
   另一回事：给经验、不写谱面成绩，见 README 的 Q&A）。
 - **别在 D 盘跑 zig 编译**（缓存必须放 C 盘，`build.sh` 已经处理）；这条只影响编译，不影响运行。
