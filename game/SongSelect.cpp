@@ -799,7 +799,14 @@ namespace
 
 std::string userDataDir(const std::string& exeDir)
 {
-    const fs::path file = userDataPath(exeDir);
+    // userDataPath() hands back UTF-8. Letting that std::string flow straight
+    // into an fs::path (as this line used to do) makes libc++ decode it with the
+    // *local ANSI code page*, which on a cp936 machine turns
+    // `D:\...\中文安装目录\子目录` into a mojibake name - and if the bytes are not
+    // valid GBK at all, it throws `filesystem_error: __char_to_wide: Illegal
+    // byte sequence`, which nothing catches, so the process dies before the
+    // window ever appears. Go back through path_utf8::toPath().
+    const fs::path file = toFsPath(userDataPath(exeDir));
     return fromFsPath(file.parent_path());
 }
 

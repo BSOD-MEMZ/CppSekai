@@ -2183,6 +2183,20 @@ ImGui 后端降级 + 去掉 `glBindSampler`），那是一块真活儿，而目�
   - 过 `fs::path` 边界只走 `path_utf8::toPath()` / `path_utf8::fromPath()`，
     不许再出现 `fs::path(窄串)` 和 `.string()`（`game/SongSelect.cpp` 里已经清干净，
     调用方想省事就照它那两行包装 `toFsPath` / `fromFsPath`）；
+  - **隐式构造同样是坑（2026-10-10 修）**：`const fs::path p = <UTF-8 std::string>;`、
+    或者把「返回 `std::string` 的函数」直接赋给 `fs::path`，走的还是 ACP 解码 —— 上面那句
+    「不许 `fs::path(窄串)`」按字面 grep 抓不到这种写法。踩到的就是 `game::userDataDir()`：
+    `const fs::path file = userDataPath(exeDir);` 把 UTF-8 的 `...\userdata.json` 交给 libc++
+    用 cp936 解，目录名被毁（末尾的 `\` 还可能被双字节字的尾字节吞掉，于是 `parent_path()`
+    切在别处 —— 表现为「存档目录从 exe 目录变成了它的父目录」）；字节不合法时直接
+    `filesystem_error: __char_to_wide: Illegal byte sequence` → 静默退出。
+    实测：程序装在 `D:\tmp-cn2\中文安装目录\子目录\` 时，存档落到
+    `D:\tmp-cn2\涓枃瀹夎鐩綍\profiles\`（目录名里带 U+E15F 私用区字符）。
+    **审计办法**：`grep -rn "fs::path [a-zA-Z_]* *=" game/ platform/ main.cpp` 逐条看右边
+    是不是 `toFsPath(...)`；形参是 `const fs::path&` 的函数，调用点也要确认没传窄串。
+    **这也解释了「Win11 的下载目录没事、Win10 的不行」**：Win11 那台开了
+    「Beta: 使用 Unicode UTF-8 支持全球语言」时 ACP=65001，往返就是恒等变换，
+    同样的代码不会坏 —— 不是 Win11 更聪明，是那台机器的 ANSI 代码页碰巧是 UTF-8。
   - `build.sh` 加了 `-DSTBI_WINDOWS_UTF8`（stb 才会用 `_wfopen`）；
     miniaudio 自己就把 UTF-8 转宽字符，不用管。
   回归：`build/cppsekai.exe --charts <含 emoji 文件名的目录>` 必须能扫出 1 首并出图。
