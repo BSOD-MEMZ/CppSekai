@@ -1231,6 +1231,26 @@ void cardTitle(const char* text, float interiorWidth, float sizePx)
     ImGui::SetCursorScreenPos(ImVec2(pos.x, ruleY + 12.0f * s));
 }
 
+void sectionLabel(const char* text, float rowWidth, float topGapPx)
+{
+    const float s = scale();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImFont* font = game::bodyFont();
+    const float fontSize = 21.0f * s;
+    const float barH = 23.0f * s;
+    const float gap = topGapPx < 0.0f ? 5.0f * s : topGapPx;
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+    const float rowW = rowWidth > 0.0f ? rowWidth : ImGui::GetContentRegionAvail().x;
+    const ImVec2 barLo(pos.x, pos.y + gap);
+    const ImVec2 barHi(pos.x + rowW, barLo.y + barH);
+    ImGui::Dummy(ImVec2(rowW, gap + barH)); // reserve the band
+    dl->AddRectFilled(barLo, barHi, kSectionBg, 8.0f * s);
+    const ImVec2 ts = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, text);
+    dl->AddText(font, fontSize,
+        ImVec2((barLo.x + barHi.x - ts.x) * 0.5f, (barLo.y + barHi.y - ts.y) * 0.5f), kBodyText, text);
+    ImGui::SetCursorScreenPos(ImVec2(pos.x, barHi.y + 5.0f * s));
+}
+
 bool checkBox(const char* label, bool* value, float rowWidth, bool enabled)
 {
     const float s = scale();

@@ -108,6 +108,11 @@ constexpr ImU32 kPillBg = IM_COL32(199, 199, 212, 255);     // gray value pill (
 constexpr ImU32 kTabIdle = IM_COL32(203, 204, 222, 255);    // inactive tab fill
 constexpr ImU32 kDarkBtn = IM_COL32(96, 96, 110, 255);      // dark -/+ slider buttons
 constexpr ImU32 kRowsBg = IM_COL32(222, 222, 232, 255);     // infoRows box
+// Section header strip (ui::sectionLabel) - the gray bar the reference's
+// settings dialog puts over each group ("演出音量" / "系统音量" / "音符设置").
+// Sampled a shade darker than the card and a shade lighter than its text, so
+// the strip reads as a band on the card rather than as another button.
+constexpr ImU32 kSectionBg = IM_COL32(180, 180, 200, 255);
 constexpr ImU32 kDisabledFill = IM_COL32(198, 198, 210, 255); // greyed-out control body
 constexpr ImU32 kDisabledText = IM_COL32(158, 158, 175, 255); // greyed-out label / value
 
@@ -193,6 +198,14 @@ void caption(const char* text, float sizePx = 0.0f, ImU32 color = kTitleText, fl
 // Left-aligned card title with the thin divider rule underneath (the classic
 // pjsk dialog header). interiorWidth is the usable card width for centering.
 void cardTitle(const char* text, float interiorWidth, float sizePx = 24.0f);
+
+// Full-width gray section header bar with centered dark text - the
+// "演出音量 / 系统音量 / 音符设置" strip of the reference's settings dialog.
+// Marks where a group of rows starts, so a page with a dozen rows reads as
+// three or four blocks instead of one flat list. Pass the card interior width
+// for rowWidth. `topGapPx` is the space above the bar (< 0 = the default); the
+// cursor ends up just under the bar.
+void sectionLabel(const char* text, float rowWidth = 0.0f, float topGapPx = -1.0f);
 
 // White rounded checkbox with a PINK tick + label, the whole group centered
 // in rowWidth. Toggles *value on click; returns the new value.

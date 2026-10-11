@@ -639,8 +639,9 @@ namespace
             "--result-at <sec>: show the result screen once the chart reaches <sec>.\n"
             "--confirm-flash [<sec>]: play the 确定 white burst in the song list (debug;\n"
             "                        no song is loaded).\n"
-            "--settings [--settings-tab <0-5>]: open the settings card at boot on the\n"
-            "          given page (0 演奏 / 1 画面 / 2 判定 / 3 系统 / 4 账户 / 5 关于).\n"
+            "--settings [--settings-tab <0-6>]: open the settings card at boot on the\n"
+            "          given page (0 演奏 / 1 画面 / 2 外观 / 3 判定 / 4 系统 / 5 账户 /\n"
+            "          6 关于).\n"
             "--profile: open the player profile card (the level chip's card) at boot.\n"
             "--guess: open the 猜歌 alias quiz (the header button's card) at boot.\n"
             "--singer-panel: open the 切换歌手 vocal-version panel (the phone panel's\n"
@@ -1491,7 +1492,9 @@ int main(int argc, char** argv)
                 dropTestAtSec = std::atof(utf8Argv[++i]);
             }
         } else if (arg == "--settings-tab" && i + 1 < utf8Argc) {
-            settingsTabShot = std::atoi(utf8Argv[++i]);
+            // Clamped to the seven pages (0..6): an out-of-range value would
+            // match none of the tab branches and screenshot an empty card.
+            settingsTabShot = std::clamp(std::atoi(utf8Argv[++i]), 0, 6);
         } else if (arg == "--profile") {
             // Headless check: open the account's profile card on the song
             // select, so a --screenshot run can look at it (the card normally
@@ -3786,7 +3789,7 @@ int main(int argc, char** argv)
         {60.0f, 40.0f},   // 严格
     };
     const std::vector<std::string> kHoldPresetLabels = {"宽容", "较紧", "严格"};
-    constexpr int kSettingsTabCount = 6;
+    constexpr int kSettingsTabCount = 7;
     int settingsTab = settingsTabShot >= 0 ? settingsTabShot : 0;
     // The ELUA card's liveness. Declared up here (rather than next to the card
     // itself, further down) so the settings card's 关于 page can raise it again on
@@ -3990,6 +3993,19 @@ int main(int argc, char** argv)
     // controller setup is further down), so it cannot look at that pointer and a
     // later declaration would not be in scope for it. runFrame() refreshes this
     // once a frame from the one place that owns `pad`; see the pad poll there.
+    // 按键映射卡片（2026-10-11）：演奏页那一行「按键映射 …」点开的就是它。
+    // 12 个 lane 的网格从设置卡片里搬到了这里，页面上只剩一行摘要。
+    // alive 和 eulaAlive 一样，是为了让关闭动画播完再停手（见 beginCard）。
+    bool keymapCardOpen = false;
+    bool keymapCardAlive = false;
+#ifdef _WIN32
+    // Headless check (CPSEKAI_KEYMAP=1): raise the 按键映射 card at boot, the way
+    // CPSEKAI_MULTIASK raises its own - a posted click does not reach an ImGui
+    // button, so this is the only way a --screenshot run can look at the card.
+    if (std::getenv("CPSEKAI_KEYMAP") != nullptr) {
+        keymapCardOpen = true;
+    }
+#endif
     bool padConnected = false;
     auto drawSettingsCard = [&]() {
         static bool settingsAlive = false;
@@ -4006,14 +4022,15 @@ int main(int argc, char** argv)
         ui::PadScope padScope(showDebug);
         // pjsk style settings panel (tabbed card, pjsk sliders).
         const float s = ui::scale();
-        // 800 tall (was 520 -> 640 -> 700 -> 780): the 判定 tab keeps growing
-        // (判定预设 + the two long-note rows on top of the five windows) and now
-        // scrolls on purpose - CPSEKAI_UI_TRACE prints what each page needs
-        // against the view. 演奏 / 画面 are the ones that have to fit exactly,
-        // and 演奏 moved right up against the old height (515 used of a 502
-        // view) when 震动 and 自动演出 arrived. The tab content is still clipped
-        // by a child, so nothing can run under the 关闭 button either way.
-        ImVec2 cardSize = ImVec2(380.0f * s, 800.0f * s);
+        // 440 wide (was 380): seven tabs have to share the row now that 画面 was
+        // split into 画面 + 外观 (2026-10-11), and at 380 the two-character
+        // labels would have run into each other. 800 tall (was 520 -> 640 ->
+        // 700 -> 780): the 判定 tab keeps growing (判定预设 + the two long-note
+        // rows on top of the five windows) and now scrolls on purpose -
+        // CPSEKAI_UI_TRACE prints what each page needs against the view. The tab
+        // content is still clipped by a child, so nothing can run under the
+        // 关闭 button either way.
+        ImVec2 cardSize = ImVec2(440.0f * s, 800.0f * s);
         ImVec2 cardCenter = ImVec2(18.0f * s + cardSize.x * 0.5f, 18.0f * s + cardSize.y * 0.5f);
         const float interior = cardSize.x - 56.0f * s;
         const float padX = 28.0f * s;
@@ -4021,6 +4038,7 @@ int main(int argc, char** argv)
         if (ui::beginCard("##settings", &cardCenter, &cardSize, true, false, &closeClicked, showDebug)) {
             if (closeClicked) {
                 showDebug = false;
+                keymapCardOpen = false; // 副卡片跟着收，别留一张孤零零的浮着
             }
             ImGui::SetCursorScreenPos(ImVec2(cardCenter.x - cardSize.x * 0.5f + padX,
                 cardCenter.y - cardSize.y * 0.5f + 16.0f * s));
@@ -4031,8 +4049,8 @@ int main(int argc, char** argv)
             // simply unreachable.
             int& tab = settingsTab;
             ui::tabBar("settings-tabs",
-                {std::string("演奏"), std::string("画面"), std::string("判定"), std::string("系统"),
-                    std::string("账户"), std::string("关于")},
+                {std::string("演奏"), std::string("画面"), std::string("外观"), std::string("判定"),
+                    std::string("系统"), std::string("账户"), std::string("关于")},
                 &tab, interior);
 
             // ImGui::Text starts each line at the window's left edge
@@ -4122,7 +4140,9 @@ int main(int argc, char** argv)
             ImGui::SetCursorPos(ImVec2(padX, tabSlide));
 
             if (tab == 0) {
-                // 演奏: audio offset + note speed + the two volume sliders.
+                // 演奏: 音频与手感 / 玩法与奖励 / 输入与外设 三组（2026-10-11 分组）。
+                contentLeft();
+                ui::sectionLabel("音频与手感", interior, 0.0f);
                 contentLeft();
                 ImGui::Text("音频偏移");
                 static float offsetMs = static_cast<float>(gUserOffsetSec * 1000.0);
@@ -4168,19 +4188,49 @@ int main(int argc, char** argv)
                 // 11 以上是本项目照官方 6..10 档那条直线外推的。卡片上必须留着
                 // 那句说明 —— 不写清楚就成了"我们瞎编的数值"。
                 contentLeft();
-                ImGui::Text("演出能量");
+                ui::sectionLabel("玩法与奖励", interior);
+                // 倍率直接写进标题，省掉原来下面那行说明（2026-10-11 精简）。
+                contentLeft();
+                ImGui::Text("演出能量（经验 ×%.0f）",
+                    game::liveBonusExpMultiplier(userSettings.liveBonus));
                 float liveBonusPct = static_cast<float>(userSettings.liveBonus);
                 contentLeft();
                 if (ui::slider("livebonus", &liveBonusPct, 0.0f, 100.0f, 1.0f, "%.0f", interior)) {
                     userSettings.liveBonus = std::clamp(static_cast<int>(liveBonusPct + 0.5f), 0, 100);
                     persistUserData();
                 }
+                // 自动演出 (moved here from 画面): it is a play-mode switch, not a
+                // display one.
                 contentLeft();
-                // 一行说完。这一页本来就快满了（CPSEKAI_UI_TRACE 量过：
-                // used 794 / view 620），多一行就多 30px 的滚动。
-                ImGui::TextWrapped("结算经验 x%.0f（11 档以上为本项目延伸）",
-                    game::liveBonusExpMultiplier(userSettings.liveBonus));
-
+                // checkBox returns the *new* value, so gate on a real change -
+                // gating on the return value made the box impossible to untick.
+                bool autoPlayBox = autoPlay;
+                ui::checkBox("自动演出", &autoPlayBox, interior);
+                if (autoPlayBox != autoPlay) {
+                    autoPlay = autoPlayBox;
+                    userSettings.autoplay = autoPlayBox;
+                    persistUserData();
+                }
+                contentLeft();
+                ui::sectionLabel("输入与外设", interior);
+                // 按键映射：这里只留一行「摘要 + 打开」，12 个 lane 的网格搬进了
+                // 独立卡片（keymapCardOpen，绘制见下面的 drawKeymapCard）——
+                // 原来那 12 格直接平铺在页面上，占了近一半高度。
+                contentLeft();
+                {
+                    std::string keySummary;
+                    for (int lane = 0; lane < 12; ++lane) {
+                        keySummary += SDL_GetKeyName(laneKeys[lane]);
+                    }
+                    if (keySummary.size() > 16) {
+                        keySummary = keySummary.substr(0, 15) + "…";
+                    }
+                    char keyLabel[96];
+                    std::snprintf(keyLabel, sizeof(keyLabel), "按键映射　%s", keySummary.c_str());
+                    if (ui::capsuleButton(keyLabel, ImVec2(interior, 40.0f * s), false)) {
+                        keymapCardOpen = true;
+                    }
+                }
                 // 手柄震动 + 震动: everything under here needs a pad with motors to
                 // mean anything, so the whole run of rows is hidden outright when
                 // none is plugged in (padConnected, refreshed in runFrame). Not
@@ -4230,65 +4280,12 @@ int main(int argc, char** argv)
                         persistUserData();
                     }
                 }
-                // 自动演出 (moved here from 画面): it is a play-mode switch, not a
-                // display one.
-                contentLeft();
-                // checkBox returns the *new* value, so gate on a real change -
-                // gating on the return value made the box impossible to untick.
-                bool autoPlayBox = autoPlay;
-                ui::checkBox("自动演出", &autoPlayBox, interior);
-                if (autoPlayBox != autoPlay) {
-                    autoPlay = autoPlayBox;
-                    userSettings.autoplay = autoPlayBox;
-                    persistUserData();
-                }
-                // 开始游戏时切到英文输入法：只把当前输入法切到英文（半角）模式，
-                // 不换键盘布局——中文输入法就不会把 12 个 lane 键吃进候选框。
-                // 实现在 main.cpp 的 switchImeToAscii()，由 beginSessionClockAt 调。
-                contentLeft();
-                bool imeBox = userSettings.switchImeOnStart;
-                ui::checkBox("开始游戏时切到英文输入法", &imeBox, interior);
-                if (imeBox != userSettings.switchImeOnStart) {
-                    userSettings.switchImeOnStart = imeBox;
-                    persistUserData();
-                }
-                // 按键映射: 12 个 lane 各自的键。默认 z s x d c v g b h n j m（kLaneKeys），
-                // 点一格再按一个键就改；新键已被别的 lane 占用时两条 lane 直接对调，省得
-                // 先清空。ESC 取消。存 profile（settings.laneKeys）。
-                contentLeft();
-                ImGui::Text("按键映射");
-                {
-                    const float gap = 6.0f * s;
-                    const float cellW = (interior - gap * 2.0f) / 3.0f;
-                    for (int lane = 0; lane < 12; ++lane) {
-                        if (lane % 3 == 0) {
-                            contentLeft();
-                        } else {
-                            ImGui::SameLine(0.0f, gap);
-                        }
-                        char keyLabel[64];
-                        if (rebindLane == lane) {
-                            std::snprintf(keyLabel, sizeof(keyLabel), "%d 按新键…", lane + 1);
-                        } else {
-                            std::snprintf(keyLabel, sizeof(keyLabel), "%d  %s", lane + 1,
-                                SDL_GetKeyName(laneKeys[lane]));
-                        }
-                        if (ui::capsuleButton(keyLabel, ImVec2(cellW, 40.0f * s), rebindLane == lane)) {
-                            rebindLane = rebindLane == lane ? -1 : lane;
-                        }
-                    }
-                }
-                contentLeft();
-                if (ui::capsuleButton("恢复默认键位", ImVec2(interior * 0.55f, 40.0f * s), false)) {
-                    userSettings.laneKeys.clear(); // 空数组 = 回落到 kLaneKeys
-                    applyLaneKeys();
-                    rebindLane = -1;
-                    persistUserData();
-                }
             } else if (tab == 1) {
-                // 画面: resolution + window mode + frame rate.
+                // 画面: 窗口与渲染 / 性能 / 画面与特效 三组（2026-10-11 分组）。
                 // UI zoom for the two screens that are laid out on a virtual
                 // canvas. The play screen is not affected on purpose.
+                contentLeft();
+                ui::sectionLabel("窗口与渲染", interior, 0.0f);
                 contentLeft();
                 ImGui::Text("界面缩放");
                 float uiScalePct = userSettings.uiScale * 100.0f;
@@ -4415,6 +4412,8 @@ int main(int argc, char** argv)
                     }
                 }
                 contentLeft();
+                ui::sectionLabel("性能", interior);
+                contentLeft();
                 ImGui::Text("帧率上限");
                 static float fpsLimitF = static_cast<float>(fpsLimit);
                 contentLeft();
@@ -4425,6 +4424,20 @@ int main(int argc, char** argv)
                 ImGui::Text("实测: %.1f fps", 1.0 / std::max(1e-6, lastFrameDeltaSec));
                 contentLeft();
                 ImGui::Text("超过 %d Hz 自动关垂直同步", displayRefreshHz);
+                contentLeft();
+                // 显示帧率 was down in 画面与特效; it is a performance readout, so it
+                // moved up with the fps rows when 画面 was split (2026-10-11).
+                bool showFpsBox = showFps;
+                ui::checkBox("显示帧率", &showFpsBox, interior);
+                if (showFpsBox != showFps) {
+                    showFps = showFpsBox;
+                    persistUserData();
+                }
+            } else if (tab == 2) {
+                // 外观（2026-10-11 从 画面 拆出来的）: 界面 / 背景 / 特效.
+                // 画面页原来 16 项、要滚 340px；拆开之后两页都放得下，组也分得清楚。
+                contentLeft();
+                ui::sectionLabel("界面", interior, 0.0f);
                 contentLeft();
                 bool showProgressBox = showProgressBar;
                 ui::checkBox("显示播放进度条", &showProgressBox, interior);
@@ -4441,6 +4454,8 @@ int main(int argc, char** argv)
                     userSettings.splashStyle = classicSplashBox ? 1 : 0;
                     persistUserData();
                 }
+                contentLeft();
+                ui::sectionLabel("背景", interior);
                 contentLeft();
                 // Song-select background: the built-in gradient, the user's
                 // desktop wallpaper (blurred + dimmed), or nothing at all so the
@@ -4519,6 +4534,8 @@ int main(int argc, char** argv)
                     }
                 }
                 contentLeft();
+                ui::sectionLabel("特效", interior);
+                contentLeft();
                 // 弱化打击特效: pjsk's light effect profile. Only the basic layer
                 // of a hit burst survives - the judgement spark and a flick's
                 // flash - so the lane lights, the auras drawn under the notes and
@@ -4526,13 +4543,6 @@ int main(int argc, char** argv)
                 // also the single biggest cut in per-frame overdraw, which is
                 // what a weak integrated GPU feels first. Takes effect on the
                 // next spawned particle; ones already flying finish their life.
-                contentLeft();
-                bool showFpsBox = showFps;
-                ui::checkBox("显示帧率", &showFpsBox, interior);
-                if (showFpsBox != showFps) {
-                    showFps = showFpsBox;
-                    persistUserData();
-                }
                 contentLeft();
                 bool simpleFxBox = simpleEffects;
                 ui::checkBox("弱化打击特效", &simpleFxBox, interior);
@@ -4551,11 +4561,11 @@ int main(int argc, char** argv)
 #endif
                     persistUserData();
                 }
-            } else if (tab == 2) {
+            } else if (tab == 3) {
                 // 判定: judgement windows + the long-note tolerance. 震动 moved
                 // to 演奏 (it is about the run, not about the judgement).
                 contentLeft();
-                ImGui::Text("判定窗口 (ms)");
+                ui::sectionLabel("判定窗口 (ms)", interior);
                 static float perfect = 70.0f;
                 static float great = 120.0f;
                 static float good = 170.0f;
@@ -4657,7 +4667,7 @@ int main(int argc, char** argv)
                 }
 
                 contentLeft();
-                ImGui::Text("长条容错 (ms)");
+                ui::sectionLabel("长条容错 (ms)", interior);
                 // Same pick-one shape as the judgement presets above. -1 = the
                 // current values match no preset, i.e. 松手/起按 were dragged by
                 // hand (then no circle is lit).
@@ -4679,6 +4689,8 @@ int main(int argc, char** argv)
                 // Read straight off the engine every frame instead of in a static:
                 // 账户 > 导入 can replace these two under the card, and a stale
                 // copy would push its own value back on the next frame.
+                contentLeft();
+                ui::sectionLabel("Flick", interior);
                 bool strictFlick = judgement.strictFlick();
                 contentLeft();
                 ui::checkBox("严格 Flick 方向", &strictFlick, interior);
@@ -4697,9 +4709,9 @@ int main(int argc, char** argv)
                 }
                 // Starting life. The engine seeds every session's stats from its own
                 // copy on reset(), so pushing it here (and once at boot) is enough.
-                float life = judgement.initialLife();
                 contentLeft();
-                ImGui::Text("初始血量");
+                ui::sectionLabel("生命", interior);
+                float life = judgement.initialLife();
                 contentLeft();
                 if (ui::slider("initlife", &life, 100.0f, game::kMaxInitialLife, 50.0f, "%.0f", interior)) {
                     const float next = std::clamp(life, 100.0f, game::kMaxInitialLife);
@@ -4743,8 +4755,10 @@ int main(int argc, char** argv)
                     userSettings.holdStartGraceMs = holdStart;
                     persistUserData();
                 }
-            } else if (tab == 3) {
-                // 系统: how the game behaves towards Windows and the desktop.
+            } else if (tab == 4) {
+                // 系统: 窗口行为 / 系统集成 / 多实例 三组（2026-10-11 分组）。
+                contentLeft();
+                ui::sectionLabel("窗口行为", interior, 0.0f);
                 contentLeft();
                 bool autoPauseBox = userSettings.autoPauseOnBlur;
                 ui::checkBox("失焦时自动暂停", &autoPauseBox, interior);
@@ -4762,6 +4776,8 @@ int main(int argc, char** argv)
                     // 就会按新设置静音；取消勾选时窗口是还原的，轮询也会把静音摘掉。
                     persistUserData();
                 }
+                contentLeft();
+                ui::sectionLabel("系统集成", interior);
                 contentLeft();
                 bool smtcBox = userSettings.reportSmtc;
                 ui::checkBox("启用 SMTC 汇报", &smtcBox, interior);
@@ -4788,8 +4804,6 @@ int main(int argc, char** argv)
                     persistUserData();
                 }
                 contentLeft();
-                ImGui::TextWrapped("把 刷新谱面列表 / 音乐商店 / 设置 收进窗口顶部的菜单栏；"
-                                   "只在 windowed 模式下显示。");
 #ifdef _WIN32
                 // .sus 文件关联：注册表是唯一真相，所以不存进档案 —— 启动查一次，
                 // 之后跟着这个开关走（在别处改过关联时，重启就看到真实状态）。
@@ -4806,12 +4820,20 @@ int main(int argc, char** argv)
                         susAssocBox = platform::shell::susAssociated();
                     }
                 }
-                contentLeft();
-                ImGui::TextWrapped("双击 .sus 直接用本程序打开；只写 HKCU\\Software\\Classes，"
-                                   "随时可以关掉它还回去。");
 #endif
+                // 开始游戏时切到英文输入法（2026-10-11 从 演奏 挪来）：只把当前输入法
+                // 切到英文（半角）模式、不换键盘布局，中文输入法就不会把 12 个 lane
+                // 键吃进候选框。本质是跟 Windows 输入法打交道，所以落在这一组。
+                // 实现在 main.cpp 的 switchImeToAscii()，由 beginSessionClockAt 调。
                 contentLeft();
-                ImGui::Text("多开");
+                bool imeBox = userSettings.switchImeOnStart;
+                ui::checkBox("开始游戏时切到英文输入法", &imeBox, interior);
+                if (imeBox != userSettings.switchImeOnStart) {
+                    userSettings.switchImeOnStart = imeBox;
+                    persistUserData();
+                }
+                contentLeft();
+                ui::sectionLabel("多实例", interior);
                 contentLeft();
                 {
                     int mode = userSettings.instanceMode;
@@ -4876,12 +4898,10 @@ int main(int argc, char** argv)
                     }
                 }
                 contentLeft();
-                if (userSettings.instanceMode == 0) {
-                    ImGui::TextWrapped("多人游玩需要允许多开。");
-                } else if (userSettings.multiplayer) {
+                // 只在真的开了多人时留一行「重开生效」；勾选框自己已经说明前两条了
+                // （2026-10-11 精简：原来三条状态各占一行）。
+                if (userSettings.instanceMode != 0 && userSettings.multiplayer) {
                     ImGui::TextWrapped("多人游玩已开启，重开所有窗口生效。");
-                } else {
-                    ImGui::TextWrapped("多人游玩：先开的窗口是房主。");
                 }
                 // 结束实例：一张卡里开几个窗口之后，关掉它们不该靠一个个点右上角
                 // （特别是全屏的那个还未必看得见）。两个按钮都在这里，只有
@@ -4913,7 +4933,7 @@ int main(int argc, char** argv)
                         killAllFrames = 180; // the second press has to land within ~3s
                     }
                 }
-            } else if (tab == 4) {
+            } else if (tab == 5) {
                 // 账户: the local profile. Nothing here leaves the machine, and
                 // none of it is drawn during play - see game/AccountData.
                 // ImGui::InputText wants a mutable char buffer, so the three
@@ -4941,7 +4961,7 @@ int main(int argc, char** argv)
 
                 // --- 多用户 ---
                 contentLeft();
-                ImGui::Text("用户");
+                ui::sectionLabel("用户", interior);
                 contentLeft();
                 {
                     int current = 0;
@@ -5044,6 +5064,8 @@ int main(int argc, char** argv)
                 }
 
                 contentLeft();
+                ui::sectionLabel("资料", interior);
+                contentLeft();
                 ImGui::Text("昵称");
                 contentLeft();
                 ImGui::SetNextItemWidth(interior);
@@ -5088,10 +5110,6 @@ int main(int argc, char** argv)
                     persistUserData();
                 }
                 contentLeft();
-                ImGui::Text("只存在本机 userdata.json，");
-                contentLeft();
-                ImGui::Text("点选曲右上角的等级牌可查看。");
-
                 const double need = game::expToNextRank(account.rank);
                 char lvLine[64];
                 std::snprintf(lvLine, sizeof(lvLine), "%d", account.rank);
@@ -5110,6 +5128,7 @@ int main(int argc, char** argv)
                 // another machine" are the same operation - and a reinstall can
                 // be undone. Both go through the native picker.
                 contentLeft();
+                ui::sectionLabel("数据", interior);
                 {
                     const float btnW = (interior - 8.0f * s) * 0.5f;
                     if (ui::capsuleButton("导出用户数据", ImVec2(btnW, 40.0f * s), false)) {
@@ -5173,7 +5192,7 @@ int main(int argc, char** argv)
                     ImGui::PopTextWrapPos();
                     ImGui::PopFont();
                 }
-            } else if (tab == 5) {
+            } else if (tab == 6) {
                 // 关于: what this is, who made it, what it is built on, what it is
                 // not, and the two links (把作者 / 上游 / 素材 / 仓库 / 个人站都放这里,
                 // 免得玩家去翻 README)。
@@ -5273,10 +5292,103 @@ int main(int argc, char** argv)
                 cardCenter.y + cardSize.y * 0.5f - 68.0f * s));
             if (ui::capsuleButton("关闭", ImVec2(132.0f * s, 46.0f * s), false)) {
                 showDebug = false;
+                keymapCardOpen = false;
             }
             ui::endCard();
         } else {
             settingsAlive = false;
+        }
+    };
+
+    // ------------------------------------------------------------------
+    // 按键映射卡片（2026-10-11）。
+    //
+    // 原来 12 个 lane 的键位格子直接平铺在设置卡片的「演奏」页上，连标题带
+    // 恢复默认占了近一半高度，和旁边的音量滑杆一个视觉级别。现在演奏页只留
+    // 一行摘要（点了就把 keymapCardOpen 立起来），网格搬到这里。
+    //
+    // 只有 UI 搬了家：抢键那一段（SDL_KEYDOWN 里的 rebindLane 分支）一行没动，
+    // 它本来就不看是哪张卡片开着的，只看 rebindLane >= 0。ESC 是这里唯一的
+    // 新接线 —— 主循环那条 escapePressed 链里没有这张卡片的条目，不补一个
+    // 分支的话，改键位时按 ESC 会直接退出游戏（见那个 else if）。
+    // ------------------------------------------------------------------
+    auto drawKeymapCard = [&]() {
+        if (keymapCardOpen) {
+            keymapCardAlive = true;
+        }
+        if (!keymapCardAlive) {
+            return;
+        }
+        // Only this card's widgets join the pad's focus ring while it is up.
+        ui::PadScope padScope(keymapCardOpen);
+        const float s = ui::scale();
+        ImGuiIO& io = ImGui::GetIO();
+        ImVec2 cardSize = ImVec2(520.0f * s, 440.0f * s);
+        ImVec2 cardCenter = ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f);
+        const float interior = cardSize.x - 56.0f * s;
+        const float padX = 28.0f * s;
+        bool closeClicked = false;
+        if (ui::beginCard("##keymap", &cardCenter, &cardSize, true, false, &closeClicked, keymapCardOpen)) {
+            if (closeClicked) {
+                keymapCardOpen = false;
+            }
+            // beginCard() rewrote cardSize for the in/out animation, so the left
+            // edge is taken *after* it - same reason the settings card recomputes
+            // its own cursor x in there.
+            const float cardLeft = cardCenter.x - cardSize.x * 0.5f;
+            ImGui::SetCursorScreenPos(ImVec2(cardLeft + padX,
+                cardCenter.y - cardSize.y * 0.5f + 16.0f * s));
+            ui::cardTitle("按键映射", interior);
+
+            ImGui::PushStyleColor(ImGuiCol_Text, ui::kBodyText);
+            ImGui::PushFont(game::bodyFont(), 23.0f * s);
+
+            // 3 列 × 4 行。格子比原来宽（卡片 520 对 380），键名看得清。
+            const float gap = 8.0f * s;
+            const float cellW = (interior - gap * 2.0f) / 3.0f;
+            const float cellH = 48.0f * s;
+            for (int lane = 0; lane < 12; ++lane) {
+                if (lane % 3 == 0) {
+                    ImGui::SetCursorScreenPos(ImVec2(cardLeft + padX,
+                        ImGui::GetCursorScreenPos().y + (lane == 0 ? 8.0f * s : gap)));
+                } else {
+                    ImGui::SameLine(0.0f, gap);
+                }
+                char keyLabel[64];
+                if (rebindLane == lane) {
+                    std::snprintf(keyLabel, sizeof(keyLabel), "%d 按新键…", lane + 1);
+                } else {
+                    std::snprintf(keyLabel, sizeof(keyLabel), "%d  %s", lane + 1,
+                        SDL_GetKeyName(laneKeys[lane]));
+                }
+                if (ui::capsuleButton(keyLabel, ImVec2(cellW, cellH), rebindLane == lane)) {
+                    // 再点一次同一格 = 取消等待（原来的行为）。
+                    rebindLane = rebindLane == lane ? -1 : lane;
+                }
+            }
+            ImGui::PopFont();
+            ImGui::PopStyleColor();
+
+            ImGui::SetCursorScreenPos(ImVec2(cardLeft + padX,
+                cardCenter.y + cardSize.y * 0.5f - 68.0f * s));
+            const float btnW = (interior - 8.0f * s) * 0.5f;
+            if (ui::capsuleButton("恢复默认键位", ImVec2(btnW, 46.0f * s), false)) {
+                userSettings.laneKeys.clear(); // 空数组 = 回落到 kLaneKeys
+                applyLaneKeys();
+                rebindLane = -1;
+                persistUserData();
+            }
+            ImGui::SameLine();
+            if (ui::capsuleButton("关闭", ImVec2(btnW, 46.0f * s), true)) {
+                keymapCardOpen = false;
+            }
+            ui::endCard();
+        } else {
+            // 关闭动画结束，或者一开始就没开过。
+            keymapCardAlive = false;
+            // 卡片走了就别留着"等新键"的状态：那个分支会把键盘全吃掉
+            // （SDL_KEYDOWN 第一件事就是它），留着的话回到游戏里按键全没反应。
+            rebindLane = -1;
         }
     };
 
@@ -7452,7 +7564,16 @@ int main(int argc, char** argv)
 
         if (escapePressed && !game::guessDialogOpen()) {
             countdownActive = false; // leaving / continuing cancels any countdown
-            if (deleteAskAlive) {
+            if (keymapCardAlive) {
+                // 「按键映射」卡片（2026-10-11）：ESC = 关掉它。改键位等待中
+                // （rebindLane >= 0）根本走不到这里 —— 那一笔 SDL_KEYDOWN 在更前面
+                // 就被绑键分支吃掉了，escapePressed 压根没被置位。没有这一支的话，
+                // 卡片开着时按 ESC 会一路落到最后的 else，把游戏关掉。
+                std::printf("[keymap] ESC -> close\n");
+                std::fflush(stdout);
+                keymapCardOpen = false;
+                rebindLane = -1;
+            } else if (deleteAskAlive) {
                 // 「删除谱面文件？」开着的时候 ESC = 取消（这种问题的默认答案显然
                 // 是"不删"）。跟 closeAsk 一样走 forcedChoice：卡片是按钮驱动的，
                 // 光把标志收回它下一帧照样画。
@@ -8567,6 +8688,8 @@ int main(int argc, char** argv)
 
             // Settings card, opened from the musicsetting button (or H).
             drawSettingsCard();
+            // 按键映射卡片（演奏页那一行点出来的），画在设置卡片之上。
+            drawKeymapCard();
             // 演奏中点 X / Alt+F4 的确认卡。
             drawCloseAskDialog();
             // 多开的实验性功能确认框（设置卡片里点出来的）。
@@ -9251,6 +9374,7 @@ int main(int argc, char** argv)
 
             // Settings card (H key), shared with the song select state.
             drawSettingsCard();
+            drawKeymapCard();
             drawCloseAskDialog();
             drawMultiInstanceAskDialog();
             drawImportAskDialog();

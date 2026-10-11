@@ -70,6 +70,7 @@ game/Judgement.*  # 判定引擎（本项目新增，判定逻辑都在这）
 game/Ui.*         # pjsk 风格弹窗组件库：beginCard（缩放入/出场动画 + 标题栏拖动）、
                   # tabBar、slider（深色±按钮+薄荷轨道）、infoRows、capsuleButton、
                   # cardTitle、checkBox、radioRow（一排圆点+标签，判定/长条容错的预设）、
+                  # sectionLabel（灰底胶囊通栏标题，设置卡片每页用它分组，2026-10-11）、
                   # stepper、messageDialog（-3=动画中 -2=关闭完成）、
                   # eulaDialog（关于本软件的首次启动弹窗，见下面「ELUA」一节）、
                   # combo（= BeginCombo + 淡入 + 自绘旋转箭头；最后一个参数 scaleHint 用来
@@ -598,15 +599,20 @@ bash build.sh          # 仅需 Git Bash；产物 build/cppsekai.exe + SDL2.dll 
   弹出），命中就 `t=0 / open=true / soundOpen=false` 重新入场。没有它，任何"中途撤走再弹出"都会弹
   一下。**暂停框（`##pauseDialog`）还是老写法**（每个分支立刻 `pauseDialogAlive=false`）：它的绘制
   点在状态分支里，要改成画到 -2 得先把绘制点从状态分支里提出来，还没做。
-- 无头看对话框：【`--settings --settings-tab <0-5>`】打开设置卡（页签 0 演奏 / 1 画面 / 2 判定 /
-  3 系统 / 4 账户 / 5 关于）；`CPSEKAI_MULTIASK=1` 启动即弹「开启多开？」确认框，
-  `CPSEKAI_IMPORTASK=1` 弹「导入用户数据？」确认框（点 combo、选文件是唯一其它入口，
+- 无头看对话框：【`--settings --settings-tab <0-6>`】打开设置卡（页签 0 演奏 / 1 画面 / 2 外观 /
+  3 判定 / 4 系统 / 5 账户 / 6 关于）；`CPSEKAI_MULTIASK=1` 启动即弹「开启多开？」确认框，
+  `CPSEKAI_IMPORTASK=1` 弹「导入用户数据？」确认框，`CPSEKAI_KEYMAP=1` 弹「按键映射」卡片
+  （点 combo、选文件、点编辑是唯一其它入口，
   而 PostMessage 假点击进不了 ImGui 按钮）。配合 `CPSEKAI_CARD_T` 抓入场中间帧。
   ⚠ **首启那张 ELUA 会盖住设置卡**（两张卡都是独立窗口，ELUA 后画、在**正中间**），
   要看设置卡下半页就把窗口开**宽**：`ui::scale()` 只看高度（`h/860`），所以
   `--width 2600 --height 900` 会让 ELUA 跑到屏幕中间偏右、设置卡留在左上角，两者不再重叠。
-- 设置卡片 380x**800**、六个页签（演奏 / 画面 / 判定 / 系统 / 账户 / 关于）；`--settings` +
-  `--settings-tab <0-5>` 无头打开（按键没法送进无头运行），配合 `--screenshot` 截图。
+- 设置卡片 440x**800**、七个页签（演奏 / 画面 / 外观 / 判定 / 系统 / 账户 / 关于）。
+  2026-10-11 重排：页内用 `ui::sectionLabel` 灰条分组，12 个按键映射格子搬进了独立的
+  「按键映射」卡片（演奏页只留一行摘要 + 编辑入口，卡片由 `CPSEKAI_KEYMAP=1` 无头打开）；
+  卡片同时从 380 加宽到 440 —— 七个两字页签在 380 下会互相压。各页高度用
+  `CPSEKAI_UI_TRACE=1` 量（只剩」判定」页超出 view、要滚动，其余六页都放得下）。
+  `--settings` + `--settings-tab <0-6>` 无头打开（按键没法送进无头运行），配合 `--screenshot` 截图。
   **加页签要同步三处**：`kSettingsTabCount`（LB/RB 循环页签用它）、`ui::tabBar` 的标签数组、
   以及那条 `if (tab == N) ... else if ...` 链 —— **最后一个分支原本是裸 `else`**，
   往后面接新页签时得先把它改成 `else if (tab == N)`（2026-09-23 加「关于」时就这么踩了一下，
