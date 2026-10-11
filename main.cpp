@@ -4022,27 +4022,33 @@ int main(int argc, char** argv)
         ui::PadScope padScope(showDebug);
         // pjsk style settings panel (tabbed card, pjsk sliders).
         const float s = ui::scale();
-        // 440 wide (was 380): seven tabs have to share the row now that 画面 was
-        // split into 画面 + 外观 (2026-10-11), and at 380 the two-character
-        // labels would have run into each other. 800 tall (was 520 -> 640 ->
-        // 700 -> 780): the 判定 tab keeps growing (判定预设 + the two long-note
-        // rows on top of the five windows) and now scrolls on purpose -
-        // CPSEKAI_UI_TRACE prints what each page needs against the view. The tab
-        // content is still clipped by a child, so nothing can run under the
-        // 关闭 button either way.
-        ImVec2 cardSize = ImVec2(440.0f * s, 800.0f * s);
+        // A wide landscape panel now (2026-10-11): the official settings dialog
+        // is roughly half the screen wide and clearly wider than it is tall, and
+        // the width is what lets seven tabs share one row and every page breathe.
+        // (380 -> 440 -> 920.) 820 tall (was 520 -> 640 -> 700 -> 780 -> 800):
+        // 判定 still wants the most room and scrolls on purpose - CPSEKAI_UI_TRACE
+        // prints what each page needs against the view. The tab content is still
+        // clipped by a child, so nothing can run under the 关闭 button either way.
+        ImVec2 cardSize = ImVec2(920.0f * s, 820.0f * s);
         ImVec2 cardCenter = ImVec2(18.0f * s + cardSize.x * 0.5f, 18.0f * s + cardSize.y * 0.5f);
         const float interior = cardSize.x - 56.0f * s;
         const float padX = 28.0f * s;
+        // The tab row IS the header: no 设置 title above it (the official row
+        // has none) and the close X sits at its right end. kCloseHit + its
+        // 8*s margin is 46*s, which is exactly the row height, so the X lands
+        // inside the band by itself - that is why the row has no other padding.
+        const float tabH = ui::tabRowHeight();
+        const float closeZone = 54.0f * s;
         bool closeClicked = false;
-        if (ui::beginCard("##settings", &cardCenter, &cardSize, true, false, &closeClicked, showDebug)) {
+        if (ui::beginCard("##settings", &cardCenter, &cardSize, true, false, &closeClicked, showDebug,
+                /*dragStripTopPx=*/tabH + 2.0f * s)) {
             if (closeClicked) {
                 showDebug = false;
                 keymapCardOpen = false; // 副卡片跟着收，别留一张孤零零的浮着
             }
-            ImGui::SetCursorScreenPos(ImVec2(cardCenter.x - cardSize.x * 0.5f + padX,
-                cardCenter.y - cardSize.y * 0.5f + 16.0f * s));
-            ui::cardTitle("设置", interior);
+            const float cardLeft = cardCenter.x - cardSize.x * 0.5f;
+            const float cardTop = cardCenter.y - cardSize.y * 0.5f;
+            ImGui::SetCursorScreenPos(ImVec2(cardLeft, cardTop));
 
             // Hoisted out of this lambda (see settingsTab): the pad's LB/RB
             // changes it from the input side, where a function-local static is
@@ -4051,13 +4057,12 @@ int main(int argc, char** argv)
             ui::tabBar("settings-tabs",
                 {std::string("演奏"), std::string("画面"), std::string("外观"), std::string("判定"),
                     std::string("系统"), std::string("账户"), std::string("关于")},
-                &tab, interior);
+                &tab, cardSize.x, closeZone);
 
             // ImGui::Text starts each line at the window's left edge
             // (padding is 0); pin content lines to the card interior.
             const auto contentLeft = [&]() {
-                ImGui::SetCursorScreenPos(ImVec2(cardCenter.x - cardSize.x * 0.5f + padX,
-                    ImGui::GetCursorScreenPos().y));
+                ImGui::SetCursorScreenPos(ImVec2(cardLeft + padX, ImGui::GetCursorScreenPos().y));
             };
 
             ImGui::PushStyleColor(ImGuiCol_Text, ui::kBodyText);
@@ -4142,7 +4147,7 @@ int main(int argc, char** argv)
             if (tab == 0) {
                 // 演奏: 音频与手感 / 玩法与奖励 / 输入与外设 三组（2026-10-11 分组）。
                 contentLeft();
-                ui::sectionLabel("音频与手感", interior, 0.0f);
+                ui::sectionLabel("音频与手感", interior);
                 contentLeft();
                 ImGui::Text("音频偏移");
                 static float offsetMs = static_cast<float>(gUserOffsetSec * 1000.0);
@@ -4285,7 +4290,7 @@ int main(int argc, char** argv)
                 // UI zoom for the two screens that are laid out on a virtual
                 // canvas. The play screen is not affected on purpose.
                 contentLeft();
-                ui::sectionLabel("窗口与渲染", interior, 0.0f);
+                ui::sectionLabel("窗口与渲染", interior);
                 contentLeft();
                 ImGui::Text("界面缩放");
                 float uiScalePct = userSettings.uiScale * 100.0f;
@@ -4437,7 +4442,7 @@ int main(int argc, char** argv)
                 // 外观（2026-10-11 从 画面 拆出来的）: 界面 / 背景 / 特效.
                 // 画面页原来 16 项、要滚 340px；拆开之后两页都放得下，组也分得清楚。
                 contentLeft();
-                ui::sectionLabel("界面", interior, 0.0f);
+                ui::sectionLabel("界面", interior);
                 contentLeft();
                 bool showProgressBox = showProgressBar;
                 ui::checkBox("显示播放进度条", &showProgressBox, interior);
@@ -4758,7 +4763,7 @@ int main(int argc, char** argv)
             } else if (tab == 4) {
                 // 系统: 窗口行为 / 系统集成 / 多实例 三组（2026-10-11 分组）。
                 contentLeft();
-                ui::sectionLabel("窗口行为", interior, 0.0f);
+                ui::sectionLabel("窗口行为", interior);
                 contentLeft();
                 bool autoPauseBox = userSettings.autoPauseOnBlur;
                 ui::checkBox("失焦时自动暂停", &autoPauseBox, interior);
@@ -5288,9 +5293,12 @@ int main(int argc, char** argv)
             ImGui::PopFont();
             ImGui::PopStyleVar(2);
             ImGui::PopStyleColor(8);
-            ImGui::SetCursorScreenPos(ImVec2(cardCenter.x - cardSize.x * 0.5f + padX,
+            // 关闭 button: centered, the way the official dialog has it (a narrow
+            // one would sit at the left edge now that the card is 920 wide).
+            const float closeBtnW = 200.0f * s;
+            ImGui::SetCursorScreenPos(ImVec2(cardCenter.x - closeBtnW * 0.5f,
                 cardCenter.y + cardSize.y * 0.5f - 68.0f * s));
-            if (ui::capsuleButton("关闭", ImVec2(132.0f * s, 46.0f * s), false)) {
+            if (ui::capsuleButton("关闭", ImVec2(closeBtnW, 46.0f * s), false)) {
                 showDebug = false;
                 keymapCardOpen = false;
             }
@@ -7576,6 +7584,14 @@ int main(int argc, char** argv)
                 std::fflush(stdout);
                 keymapCardOpen = false;
                 rebindLane = -1;
+            } else if (showDebug) {
+                // 设置卡片自己（2026-10-11）：ESC = 关掉它，副卡片跟着收。
+                // 它以前**不在这条链里**：卡片开着按 ESC 会一路落到最后的 else，
+                // 而那个 else 是「退出游戏」—— 用户只是想退出设置却把游戏关了。
+                std::printf("[settings] ESC -> close\n");
+                std::fflush(stdout);
+                showDebug = false;
+                keymapCardOpen = false;
             } else if (deleteAskAlive) {
                 // 「删除谱面文件？」开着的时候 ESC = 取消（这种问题的默认答案显然
                 // 是"不删"）。跟 closeAsk 一样走 forcedChoice：卡片是按钮驱动的，

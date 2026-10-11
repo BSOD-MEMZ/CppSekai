@@ -156,7 +156,7 @@ void expBar(ImDrawList* dl, ImVec2 pos, float width, float unit, float ratio);
 // *closeClicked is set on the frame the X is pressed (react by setting
 // open=false).
 bool beginCard(const char* id, ImVec2* center, ImVec2* size, bool showClose, bool dimBackdrop,
-    bool* closeClicked, bool open = true);
+    bool* closeClicked, bool open = true, float dragStripTopPx = 0.0f);
 // Child windows (ImGui::BeginChild) get their own ImDrawList, so their vertices
 // are NOT part of the card's own list and endCard() would leave them unscaled
 // and unfaded - the "the card animates but its contents pop in" bug. If a card
@@ -168,7 +168,21 @@ void endCard();
 
 // Rounded-top tab row. The active tab is card-colored and taller, inactive
 // ones lavender. Clicking updates *active. Returns *active.
-int tabBar(const char* id, const std::vector<std::string>& tabs, int* active, float rowWidth);
+//
+// 2026-10-11, to match the official settings dialog: the row is drawn as one
+// gray band across the top of the card with the active tab a WHITE block that
+// hangs a little *below* the band (the official tab grows downwards, ours used
+// to grow upwards), thin separators between the labels, and no title of its
+// own - the row itself is the header. `rowWidth` is the full band width;
+// `rightReserve` keeps that much of it clear on the right for the card's close
+// X, which beginCard() draws over the band.
+int tabBar(const char* id, const std::vector<std::string>& tabs, int* active, float rowWidth,
+    float rightReserve = 0.0f);
+
+// Height (in pixels, already scaled) of the row tabBar() draws. A card that
+// puts the row in its header - and therefore has to know where the content
+// starts and where its drag strip may live - asks for it.
+float tabRowHeight();
 
 // pjsk slider: dark rounded -/+ buttons flanking a teal track with a white
 // round thumb; the value is drawn above the track in pink. `step` is applied

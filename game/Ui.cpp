@@ -109,6 +109,12 @@ namespace
     constexpr float kCloseHit = 38.0f;  // hitbox (bigger than the drawing)
     constexpr float kAnimSec = 0.16f;   // card scale in/out duration
     constexpr float kHeaderH = 44.0f;   // draggable strip height
+    // Height of the tab row (2026-10-11). Taller than the 42 it was: the
+    // official row is the card's whole header, and the close X has to fit
+    // inside it (8*s + kCloseHit = 46*s) - which it does exactly at 46.
+    constexpr float kTabRowH = 46.0f;
+    // Separator between two tab labels: lighter than the band it sits on.
+    constexpr ImU32 kTabSep = IM_COL32(234, 234, 244, 200);
 
     float easeInOut(float t)
     {
@@ -431,7 +437,7 @@ float scale()
 }
 
 bool beginCard(const char* id, ImVec2* center, ImVec2* size, bool showClose, bool dimBackdrop,
-    bool* closeClicked, bool open)
+    bool* closeClicked, bool open, float dragStripTopPx)
 {
     const float s = scale();
     if (closeClicked != nullptr) {
@@ -546,10 +552,13 @@ bool beginCard(const char* id, ImVec2* center, ImVec2* size, bool showClose, boo
     // itself instead - see below - which is how the settings card leaves the
     // playfield clickable.)
     (void)dimBackdrop;
-    // Card body only. There is deliberately NO shadow under it: the reference's
-    // `.window` has no box-shadow either (unlike its controls, which all carry
-    // one), so the card reads as a flat panel on the backdrop while the pills and
-    // fields on top of it float. The old +6/+10 navy smear was ours.
+    // Card body. 2026-10-11: it now DOES carry a shadow. The reference site
+    // (sekai-stories) leaves its .window flat, but the official game's settings
+    // panel floats on a wide soft shadow, and that is what this card copies -
+    // same zero-offset navy halo as every other control, just reaching much
+    // further out (spreadScale 2.4 against the 1.0 a checkbox gets) so it reads
+    // as a panel lifted off the screen rather than as an edge.
+    shadowLayers(dl, lo, hi, kCardRadius * s, s, 1.0f, 3.0f);
     dl->AddRectFilled(lo, hi, kCardBg, kCardRadius * s);
 
     // Close X: submitted BEFORE the header drag strip, and the strip below
@@ -585,9 +594,12 @@ bool beginCard(const char* id, ImVec2* center, ImVec2* size, bool showClose, boo
         }
     }
 
-    // Header strip: drag the card around.
-    const ImVec2 headerLo = lo;
-    const ImVec2 headerHi = ImVec2(headerRight, lo.y + kHeaderH * s);
+    // Header strip: drag the card around. It starts below `dragStripTopPx` so a
+    // card that puts its tab row up here (the settings card) keeps the row's
+    // buttons clickable - the strip is submitted after them and would otherwise
+    // swallow every press in the band it covers.
+    const ImVec2 headerLo = ImVec2(lo.x, lo.y + dragStripTopPx);
+    const ImVec2 headerHi = ImVec2(headerRight, headerLo.y + kHeaderH * s);
     ImGui::SetCursorScreenPos(headerLo);
     ImGui::PushID(id);
     ImGui::InvisibleButton("##drag", ImVec2(headerHi.x - headerLo.x, headerHi.y - headerLo.y));
@@ -598,7 +610,7 @@ bool beginCard(const char* id, ImVec2* center, ImVec2* size, bool showClose, boo
         *center = ImVec2(animCenter.x + delta.x, animCenter.y + delta.y);
     }
     ImGui::PopID();
-    ImGui::SetCursorScreenPos(ImVec2(lo.x, lo.y + kHeaderH * s));
+    ImGui::SetCursorScreenPos(ImVec2(lo.x, headerHi.y));
     // Content is positioned absolutely; still submit an item so the window
     // layout is valid (ImGui asserts on cursor moves without items).
     ImGui::Dummy(ImVec2(1.0f, 1.0f));
@@ -666,7 +678,13 @@ void endCard()
     ImGui::End();
 }
 
-int tabBar(const char* id, const std::vector<std::string>& tabs, int* active, float rowWidth)
+float tabRowHeight()
+{
+    return kTabRowH * scale();
+}
+
+int tabBar(const char* id, const std::vector<std::string>& tabs, int* active, float rowWidth,
+    float rightReserve)
 {
     const float s = scale();
     if (tabs.empty() || active == nullptr) {
@@ -675,28 +693,39 @@ int tabBar(const char* id, const std::vector<std::string>& tabs, int* active, fl
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImFont* font = game::bodyFont();
     const float fontSize = 24.0f * s;
-    // 42 / 10 (was 50 / 14): the header sat as tall as a button row and the corners
-    // read as a pill rather than as a tab.
-    const float tabH = 42.0f * s;
-    const float radius = 10.0f * s;
+    const float tabH = kTabRowH * s;
+    const float radius = kCardRadius * s;
     const ImVec2 pos = ImGui::GetCursorScreenPos();
     const float rowW = rowWidth > 0.0f ? rowWidth : ImGui::GetContentRegionAvail().x;
-    const float tabW = rowW / static_cast<float>(tabs.size());
+    // The labels share the band minus whatever the right end keeps clear - the
+    // close X of a card that draws this row in its header lives there.
+    const float tabsW = std::max(1.0f, rowW - std::max(rightReserve, 0.0f));
+    const float tabW = tabsW / static_cast<float>(tabs.size());
+
+    // The band: one flat gray strip across the card's top, rounded at the top
+    // corners to match the card itself. Everything else is drawn on top of it.
+    dl->AddRectFilled(pos, ImVec2(pos.x + rowW, pos.y + tabH), kTabIdle, radius,
+        ImDrawFlags_RoundCornersTop);
+    for (size_t i = 1; i < tabs.size(); ++i) {
+        const float x = pos.x + tabW * static_cast<float>(i);
+        dl->AddRectFilled(ImVec2(x - 0.5f * s, pos.y + tabH * 0.30f),
+            ImVec2(x + 0.5f * s, pos.y + tabH * 0.70f), kTabSep, 0.5f * s);
+    }
 
     int result = *active;
     ImGui::PushID(id);
     for (size_t i = 0; i < tabs.size(); ++i) {
         const bool isActive = static_cast<int>(i) == *active;
-        // The selected tab slides up out of the row and the colours cross-fade
-        // instead of snapping. Inactive tabs sit a bit lower (bottom aligned).
+        // The picked block slides DOWN out of the band, not up: the official
+        // tab hangs below the strip by roughly a fifth of its height. (This was
+        // the other way round until 2026-10-11.)
         const float act = animToggle(ImGui::GetID(tabs[i].c_str()), isActive, 15.0f);
         const float x0 = pos.x + static_cast<float>(i) * tabW;
-        const float y0 = pos.y + (1.0f - act) * 8.0f * s;
-        const ImVec2 lo(x0 + 4.0f * s, y0);
-        const ImVec2 hi(x0 + tabW - 4.0f * s, pos.y + tabH);
+        const ImVec2 lo(x0 + 2.0f * s, pos.y);
+        const ImVec2 hi(x0 + tabW - 2.0f * s, pos.y + tabH + act * 9.0f * s);
 
         ImGui::SetCursorScreenPos(lo);
-        ImGui::InvisibleButton(tabs[i].c_str(), ImVec2(hi.x - lo.x, hi.y - lo.y));
+        ImGui::InvisibleButton(tabs[i].c_str(), ImVec2(hi.x - lo.x, tabH));
         const bool hovered = ImGui::IsItemHovered();
         const float hov = animToggle(ImGui::GetItemID() ^ 0x51u, hovered && !isActive, 14.0f);
         if (ImGui::IsItemClicked()) {
@@ -706,18 +735,26 @@ int tabBar(const char* id, const std::vector<std::string>& tabs, int* active, fl
         }
         ImGui::SetCursorScreenPos(ImVec2(0.0f, 0.0f));
 
-        constexpr ImU32 kTabHover = IM_COL32(238, 238, 246, 255);
-        ImU32 fill = mixColor(kTabIdle, kCardBg, act);
-        fill = mixColor(fill, kTabHover, hov);
-        const ImU32 textColor = mixColor(
-            mixColor(IM_COL32(125, 125, 148, 255), kTitleText, act), kTitleText, hov * 0.7f);
-        dl->AddRectFilled(lo, hi, fill, radius, ImDrawFlags_RoundCornersTop);
+        // An unpicked tab is just the band (hover tints it a little lighter);
+        // the picked one is a WHITE block - the official's pure white, not the
+        // card's off-white - hanging past the band's bottom edge. Rounded at the
+        // top always, and at the bottom too once it is hanging, so it reads as a
+        // tab rather than as a notch cut out of the band.
+        const float white = std::max(act, hov * 0.45f);
+        if (white > 0.01f) {
+            dl->AddRectFilled(lo, hi, mixColor(kTabIdle, IM_COL32(255, 255, 255, 255), white), radius,
+                act > 0.5f ? 0 : static_cast<ImDrawFlags>(ImDrawFlags_RoundCornersTop));
+        }
+        const ImU32 textColor = mixColor(IM_COL32(96, 96, 122, 255), kTitleText, act);
         const ImVec2 ts = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, tabs[i].c_str());
         dl->AddText(font, fontSize,
-            ImVec2((lo.x + hi.x - ts.x) * 0.5f, (lo.y + hi.y - ts.y) * 0.5f), textColor, tabs[i].c_str());
+            ImVec2((lo.x + hi.x - ts.x) * 0.5f, pos.y + (tabH - ts.y) * 0.5f), textColor,
+            tabs[i].c_str());
     }
     ImGui::PopID();
-    ImGui::SetCursorScreenPos(ImVec2(pos.x, pos.y + tabH + 4.0f * s));
+    // 14*s, not 4: the picked tab hangs 9*s below the band and the content has
+    // to start clear of it.
+    ImGui::SetCursorScreenPos(ImVec2(pos.x, pos.y + tabH + 14.0f * s));
     return result;
 }
 
@@ -732,7 +769,7 @@ bool slider(const char* id, float* value, float minV, float maxV, float step, co
     ImFont* font = game::bodyFont();
     const float fontSize = 23.0f * s;
     const float btnSize = 31.0f * s;
-    const float btnRadius = 8.0f * s;
+    const float btnRadius = 11.0f * s;
     const float trackH = 5.0f * s;
     const float thumbR = 10.0f * s;
     const float rowH = 62.0f * s; // value text + track row (was 96/80/72/64)
@@ -813,45 +850,73 @@ bool slider(const char* id, float* value, float minV, float maxV, float step, co
         }
     }
 
-    // Dark -/+ buttons.
-    auto darkButton = [&](const char* label, float cx) {
+    // pjsk slider's -/+ buttons: a WHITE rounded block with a dark glyph while
+    // it can still be used, and a dark gray-violet block with a white glyph when
+    // it cannot. Both sides are the same control - the official screenshot just
+    // caught every row sitting at 100 (the max), so every "+" was dead and every
+    // "−" live. (2026-10-11: first read off that screenshot as a deliberate
+    // asymmetry; it is a disabled state.)
+    auto stepButton = [&](const char* label, float cx, bool atLimit) {
         const ImVec2 lo(cx, trackY - btnSize * 0.5f);
         const ImVec2 hi(cx + btnSize, trackY + btnSize * 0.5f);
+        const bool usable = enabled && !atLimit;
         ImGui::SetCursorScreenPos(lo);
+        if (!usable) {
+            ImGui::BeginDisabled(); // no hover, no click - the block is inert
+        }
         ImGui::InvisibleButton(label, ImVec2(btnSize, btnSize));
-        const bool clicked = ImGui::IsItemClicked();
-        const bool held = ImGui::IsItemActive();
-        const bool hovered = ImGui::IsItemHovered();
+        const bool clicked = usable && ImGui::IsItemClicked();
+        const bool held = usable && ImGui::IsItemActive();
+        const bool hovered = usable && ImGui::IsItemHovered();
         const ImGuiID btnKey = ImGui::GetItemID();
         if (clicked) {
             se(SeClick);
         }
-        ImGui::SetCursorScreenPos(ImVec2(0.0f, 0.0f));
-        ImU32 fill = enabled ? kDarkBtn : kDisabledFill;
-        // Hover / press blend rather than snap, so the row does not flicker when
-        // the pointer sweeps across the two buttons.
-        if (enabled) {
-            fill = mixColor(fill, IM_COL32(96, 96, 114, 255), animToggle(btnKey ^ 0x32u, hovered, 18.0f));
-            fill = mixColor(fill, IM_COL32(72, 72, 86, 255), animToggle(btnKey ^ 0x33u, held, 26.0f));
+        if (!usable) {
+            ImGui::EndDisabled();
         }
+        ImGui::SetCursorScreenPos(ImVec2(0.0f, 0.0f));
+        ImU32 fill = kWhiteBtn;
+        ImU32 glyph = kDarkBtn;
+        if (!enabled) {
+            // The whole row is off (a value derived from another setting - Miss
+            // while it is slaved to Bad, say): the usual drained grey. Not the
+            // dark block, which means "this side has run out of room" and is a
+            // different statement.
+            fill = kDisabledFill;
+            glyph = kDisabledText;
+        } else if (atLimit) {
+            fill = kDarkBtn;
+            glyph = IM_COL32(255, 255, 255, 255);
+        } else {
+            // Press deepens the block towards the card so the click is felt;
+            // hover barely lifts it, which is all a white block can do.
+            const float hov = animToggle(btnKey ^ 0x32u, hovered, 18.0f);
+            const float prs = animToggle(btnKey ^ 0x33u, held, 26.0f);
+            fill = mixColor(mixColor(fill, kWhiteHover, hov), IM_COL32(224, 224, 235, 255), prs);
+        }
+        // The white one needs the halo to exist at all on an off-white card.
+        dropShadow(dl, lo, hi, btnRadius, s, usable ? 0.85f : 0.55f, 0.45f);
         dl->AddRectFilled(lo, hi, fill, btnRadius);
-        // White glyph.
         const float c = btnSize * 0.5f;
-        const float m = btnSize * 0.28f;
+        const float m = btnSize * 0.22f;
+        const float t = 2.0f * s;
         const ImVec2 mid(lo.x + c, lo.y + c);
-        dl->AddRectFilled(ImVec2(mid.x - m, mid.y - 2.0f * s), ImVec2(mid.x + m, mid.y + 2.0f * s),
-            IM_COL32(255, 255, 255, 255), 1.5f * s);
+        dl->AddRectFilled(ImVec2(mid.x - m, mid.y - t), ImVec2(mid.x + m, mid.y + t), glyph, t * 0.6f);
         if (label[0] == '+') {
-            dl->AddRectFilled(ImVec2(mid.x - 2.0f * s, mid.y - m), ImVec2(mid.x + 2.0f * s, mid.y + m),
-                IM_COL32(255, 255, 255, 255), 1.5f * s);
+            dl->AddRectFilled(ImVec2(mid.x - t, mid.y - m), ImVec2(mid.x + t, mid.y + m), glyph, t * 0.6f);
         }
         return clicked;
     };
-    if (darkButton("-", pos.x)) {
+    // A side is dead once the value sits at its end - that is the state the
+    // official screenshot caught on all three of its rows.
+    const bool atMin = *value <= minV + 1e-3f;
+    const bool atMax = *value >= maxV - 1e-3f;
+    if (stepButton("-", pos.x, atMin)) {
         *value = std::max(minV, *value - step);
         changed = true;
     }
-    if (darkButton("+", trackX1 + 16.0f * s)) {
+    if (stepButton("+", trackX1 + 16.0f * s, atMax)) {
         *value = std::min(maxV, *value + step);
         changed = true;
     }
@@ -1236,9 +1301,9 @@ void sectionLabel(const char* text, float rowWidth, float topGapPx)
     const float s = scale();
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImFont* font = game::bodyFont();
-    const float fontSize = 21.0f * s;
-    const float barH = 23.0f * s;
-    const float gap = topGapPx < 0.0f ? 5.0f * s : topGapPx;
+    const float fontSize = 22.0f * s;
+    const float barH = 27.0f * s;
+    const float gap = topGapPx < 0.0f ? 11.0f * s : topGapPx;
     const ImVec2 pos = ImGui::GetCursorScreenPos();
     const float rowW = rowWidth > 0.0f ? rowWidth : ImGui::GetContentRegionAvail().x;
     const ImVec2 barLo(pos.x, pos.y + gap);
@@ -1248,7 +1313,7 @@ void sectionLabel(const char* text, float rowWidth, float topGapPx)
     const ImVec2 ts = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, text);
     dl->AddText(font, fontSize,
         ImVec2((barLo.x + barHi.x - ts.x) * 0.5f, (barLo.y + barHi.y - ts.y) * 0.5f), kBodyText, text);
-    ImGui::SetCursorScreenPos(ImVec2(pos.x, barHi.y + 5.0f * s));
+    ImGui::SetCursorScreenPos(ImVec2(pos.x, barHi.y + 11.0f * s));
 }
 
 bool checkBox(const char* label, bool* value, float rowWidth, bool enabled)
