@@ -43,7 +43,9 @@
 ## UI 通则（1920x1080 虚拟画布 + 缩放）
 - HUD / 结算 / 选曲都走 `px()/py()/ps()`；ImGui `AddText(font,size)` 的 size 是像素，虚拟单位自己乘 scale。
 - 自绘控件（`ui::slider/checkBox/radioRow/stepper/capsuleButton`）键盘焦点够不着 → 手柄靠
-  `ui::PadScope + padNav`；新增原生 `ImGui::Combo` 要接 `ui::padComboNudge`。
+  `ui::PadScope + padNav`。**设置卡片里的下拉框一律用 `ui::combo`**（白胶囊 + 全圆角 +
+  半透明面板 + 淡投影，照基准站 sekai-stories 的 `<select>` 做的），别再写原生
+  `ImGui::Combo`（浅灰紫方框，和选曲界面不一致）；两者都要接 `ui::padComboNudge`。
 - **模态卡片要和主循环 ESC 抢优先级**：新加卡片要把 `!game::xxxDialogOpen()` 加进 `escapePressed`
   分支条件，否则 Select 下按 ESC 直接退出游戏。卡片里键盘用 `ImGui::IsKeyPressed(k, false)`。
   卡片**只能被按钮关掉**，想让 ESC 关就得走 `forcedChoice` 替它按一颗。
