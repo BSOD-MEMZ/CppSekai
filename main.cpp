@@ -5315,6 +5315,11 @@ int main(int argc, char** argv)
     auto drawKeymapCard = [&]() {
         if (keymapCardOpen) {
             keymapCardAlive = true;
+        } else {
+            // 卡片一关（X / 关闭 / ESC / 设置卡片联动）就不再等新键：那个分支
+            // 会吃掉每一笔 SDL_KEYDOWN，留着的话回到游戏里按键全没反应 —— 不等
+            // 关闭动画播完，现在就清。
+            rebindLane = -1;
         }
         if (!keymapCardAlive) {
             return;
@@ -5384,11 +5389,9 @@ int main(int argc, char** argv)
             }
             ui::endCard();
         } else {
-            // 关闭动画结束，或者一开始就没开过。
+            // 关闭动画结束，或者一开始就没开过。（rebindLane 在上面那个 else
+            // 里已经清过了 —— 这里只负责收动画状态。）
             keymapCardAlive = false;
-            // 卡片走了就别留着"等新键"的状态：那个分支会把键盘全吃掉
-            // （SDL_KEYDOWN 第一件事就是它），留着的话回到游戏里按键全没反应。
-            rebindLane = -1;
         }
     };
 
