@@ -4022,14 +4022,12 @@ int main(int argc, char** argv)
         ui::PadScope padScope(showDebug);
         // pjsk style settings panel (tabbed card, pjsk sliders).
         const float s = ui::scale();
-        // A wide landscape panel now (2026-10-11): the official settings dialog
-        // is roughly half the screen wide and clearly wider than it is tall, and
-        // the width is what lets seven tabs share one row and every page breathe.
-        // (380 -> 440 -> 920.) 820 tall (was 520 -> 640 -> 700 -> 780 -> 800):
-        // 判定 still wants the most room and scrolls on purpose - CPSEKAI_UI_TRACE
-        // prints what each page needs against the view. The tab content is still
-        // clipped by a child, so nothing can run under the 关闭 button either way.
-        ImVec2 cardSize = ImVec2(920.0f * s, 820.0f * s);
+        // A wide landscape panel: the official settings dialog measures 1168x990
+        // (1.18:1) and this is the same shape. The two-column grid is what makes
+        // it possible - with one column per page the content was 1000+ px tall
+        // and 判定 alone needed 1076 against a 845 view; two columns halve that
+        // (the tallest page is now 768) and every page fits without scrolling.
+        ImVec2 cardSize = ImVec2(920.0f * s, 780.0f * s);
         ImVec2 cardCenter = ImVec2(18.0f * s + cardSize.x * 0.5f, 18.0f * s + cardSize.y * 0.5f);
         const float interior = cardSize.x - 56.0f * s;
         const float padX = 28.0f * s;
@@ -4041,7 +4039,7 @@ int main(int argc, char** argv)
         const float closeZone = 54.0f * s;
         bool closeClicked = false;
         if (ui::beginCard("##settings", &cardCenter, &cardSize, true, false, &closeClicked, showDebug,
-                /*dragStripTopPx=*/tabH + 2.0f * s)) {
+                /*tabBandH=*/tabH)) {
             if (closeClicked) {
                 showDebug = false;
                 keymapCardOpen = false; // 副卡片跟着收，别留一张孤零零的浮着
@@ -4063,6 +4061,32 @@ int main(int argc, char** argv)
             // (padding is 0); pin content lines to the card interior.
             const auto contentLeft = [&]() {
                 ImGui::SetCursorScreenPos(ImVec2(cardLeft + padX, ImGui::GetCursorScreenPos().y));
+            };
+
+            // Two-column layout (2026-10-11). The card is wide now, and a single
+            // column of full-width rows just stretches every slider into a long
+            // ribbon - the official dialog lays its settings out as a GRID
+            // instead (两个组并排), which is what "wider" is actually for.
+            // `colSet(n)` parks the cursor at the top of column n, kept because
+            // ImGui::ItemSize resets cursor.x to the window's left edge after
+            // every item - so each widget in a column has to re-aim.
+            // `twoCols(left, right)` draws one row of two blocks: both start at
+            // the same y, and the row ends below whichever block is taller.
+            const float colGap = 48.0f * s;
+            const float colW = (interior - colGap) * 0.5f;
+            const auto colSet = [&](int col) {
+                ImGui::SetCursorScreenPos(ImVec2(cardLeft + padX + static_cast<float>(col) * (colW + colGap),
+                    ImGui::GetCursorScreenPos().y));
+            };
+            const auto twoCols = [&](auto&& drawLeft, auto&& drawRight) {
+                const float y0 = ImGui::GetCursorScreenPos().y;
+                ImGui::SetCursorScreenPos(ImVec2(cardLeft + padX, y0));
+                drawLeft(colW);
+                const float yLeft = ImGui::GetCursorScreenPos().y;
+                ImGui::SetCursorScreenPos(ImVec2(cardLeft + padX + colW + colGap, y0));
+                drawRight(colW);
+                const float yRight = ImGui::GetCursorScreenPos().y;
+                ImGui::SetCursorScreenPos(ImVec2(cardLeft + padX, std::max(yLeft, yRight)));
             };
 
             ImGui::PushStyleColor(ImGuiCol_Text, ui::kBodyText);
@@ -4148,43 +4172,53 @@ int main(int argc, char** argv)
                 // 演奏: 音频与手感 / 玩法与奖励 / 输入与外设 三组（2026-10-11 分组）。
                 contentLeft();
                 ui::sectionLabel("音频与手感", interior);
-                contentLeft();
-                ImGui::Text("音频偏移");
-                static float offsetMs = static_cast<float>(gUserOffsetSec * 1000.0);
-                contentLeft();
-                if (ui::slider("offset", &offsetMs, -2000.0f, 2000.0f, 5.0f, "%+.0f ms", interior)) {
-                    audio.setUserOffset(static_cast<double>(offsetMs) / 1000.0);
-                }
-                contentLeft();
-                ImGui::Text("音符速度");
-                float speed = noteSpeed;
-                contentLeft();
-                if (ui::slider("speed", &speed, 1.0f, 12.0f, 0.1f, "%.1f", interior)) {
-                    noteSpeed = speed;
-                    core_api::setPreviewConfig(0, 1, 1, 1, 0, 0, noteSpeed, 1.0f, 0.6f, 0.0f, 1.0f, 0.85f);
-                }
-                contentLeft();
-                ImGui::Text("BGM 音量");
-                float bgmPct = userSettings.bgmVolume * 100.0f;
-                contentLeft();
-                if (ui::slider("bgmvol", &bgmPct, 0.0f, 100.0f, 5.0f, "%.0f%%", interior)) {
-                    userSettings.bgmVolume = std::clamp(bgmPct / 100.0f, 0.0f, 1.0f);
-                    // Takes effect immediately: the chart track, the select
-                    // preview and the result BGM all read this master.
-                    audio.setBgmVolume(userSettings.bgmVolume);
-                    persistUserData();
-                }
-                contentLeft();
-                ImGui::Text("音效音量");
-                float sePct = seVolume * 100.0f;
-                contentLeft();
-                if (ui::slider("sevol", &sePct, 0.0f, 100.0f, 5.0f, "%.0f%%", interior)) {
-                    seVolume = std::clamp(sePct / 100.0f, 0.0f, 1.0f);
-                    // Hit SE read `seVolume` directly; the UI clicks are bound
-                    // with their own base gain, so re-bind them here.
-                    ui::bindSe(&audio, 0.8f * seVolume);
-                    persistUserData();
-                }
+                twoCols(
+                    [&](float w) {
+                        colSet(0);
+                        ImGui::Text("音频偏移");
+                        static float offsetMs = static_cast<float>(gUserOffsetSec * 1000.0);
+                        colSet(0);
+                        if (ui::slider("offset", &offsetMs, -2000.0f, 2000.0f, 5.0f, "%+.0f ms", w)) {
+                            audio.setUserOffset(static_cast<double>(offsetMs) / 1000.0);
+                        }
+                    },
+                    [&](float w) {
+                        colSet(1);
+                        ImGui::Text("音符速度");
+                        float speed = noteSpeed;
+                        colSet(1);
+                        if (ui::slider("speed", &speed, 1.0f, 12.0f, 0.1f, "%.1f", w)) {
+                            noteSpeed = speed;
+                            core_api::setPreviewConfig(0, 1, 1, 1, 0, 0, noteSpeed, 1.0f, 0.6f, 0.0f, 1.0f, 0.85f);
+                        }
+                    });
+                twoCols(
+                    [&](float w) {
+                        colSet(0);
+                        ImGui::Text("BGM 音量");
+                        float bgmPct = userSettings.bgmVolume * 100.0f;
+                        colSet(0);
+                        if (ui::slider("bgmvol", &bgmPct, 0.0f, 100.0f, 5.0f, "%.0f%%", w)) {
+                            userSettings.bgmVolume = std::clamp(bgmPct / 100.0f, 0.0f, 1.0f);
+                            // Takes effect immediately: the chart track, the select
+                            // preview and the result BGM all read this master.
+                            audio.setBgmVolume(userSettings.bgmVolume);
+                            persistUserData();
+                        }
+                    },
+                    [&](float w) {
+                        colSet(1);
+                        ImGui::Text("音效音量");
+                        float sePct = seVolume * 100.0f;
+                        colSet(1);
+                        if (ui::slider("sevol", &sePct, 0.0f, 100.0f, 5.0f, "%.0f%%", w)) {
+                            seVolume = std::clamp(sePct / 100.0f, 0.0f, 1.0f);
+                            // Hit SE read `seVolume` directly; the UI clicks are bound
+                            // with their own base gain, so re-bind them here.
+                            ui::bindSe(&audio, 0.8f * seVolume);
+                            persistUserData();
+                        }
+                    });
                 // 演出能量（演出 > 演出能量）。结算经验 = 评级经验 x 这个倍率，
                 // 跟官方 live bonus 对奖励做的事一样（官方那里一局给
                 // 「评级经验 x bonus 倍率」）。
@@ -4194,118 +4228,110 @@ int main(int argc, char** argv)
                 // 那句说明 —— 不写清楚就成了"我们瞎编的数值"。
                 contentLeft();
                 ui::sectionLabel("玩法与奖励", interior);
-                // 倍率直接写进标题，省掉原来下面那行说明（2026-10-11 精简）。
-                contentLeft();
-                ImGui::Text("演出能量（经验 ×%.0f）",
-                    game::liveBonusExpMultiplier(userSettings.liveBonus));
-                float liveBonusPct = static_cast<float>(userSettings.liveBonus);
-                contentLeft();
-                if (ui::slider("livebonus", &liveBonusPct, 0.0f, 100.0f, 1.0f, "%.0f", interior)) {
-                    userSettings.liveBonus = std::clamp(static_cast<int>(liveBonusPct + 0.5f), 0, 100);
-                    persistUserData();
-                }
-                // 自动演出 (moved here from 画面): it is a play-mode switch, not a
-                // display one.
-                contentLeft();
-                // checkBox returns the *new* value, so gate on a real change -
-                // gating on the return value made the box impossible to untick.
-                bool autoPlayBox = autoPlay;
-                ui::checkBox("自动演出", &autoPlayBox, interior);
-                if (autoPlayBox != autoPlay) {
-                    autoPlay = autoPlayBox;
-                    userSettings.autoplay = autoPlayBox;
-                    persistUserData();
-                }
+                twoCols(
+                    [&](float w) {
+                        colSet(0);
+                        // 倍率直接写进标题，省掉原来下面那行说明（2026-10-11 精简）。
+                        ImGui::Text("演出能量（经验 ×%.0f）",
+                            game::liveBonusExpMultiplier(userSettings.liveBonus));
+                        float liveBonusPct = static_cast<float>(userSettings.liveBonus);
+                        colSet(0);
+                        if (ui::slider("livebonus", &liveBonusPct, 0.0f, 100.0f, 1.0f, "%.0f", w)) {
+                            userSettings.liveBonus = std::clamp(static_cast<int>(liveBonusPct + 0.5f), 0, 100);
+                            persistUserData();
+                        }
+                    },
+                    [&](float w) {
+                        colSet(1);
+                        // 空一行，跟左列的标题行对齐（checkbox 自带文字，不需要标题）。
+                        ImGui::Dummy(ImVec2(1.0f, ImGui::GetTextLineHeightWithSpacing()));
+                        colSet(1);
+                        // 自动演出 (moved here from 画面): it is a play-mode switch,
+                        // not a display one. checkBox returns the *new* value, so
+                        // gate on a real change - gating on the return value made
+                        // the box impossible to untick.
+                        bool autoPlayBox = autoPlay;
+                        ui::checkBox("自动演出", &autoPlayBox, w);
+                        if (autoPlayBox != autoPlay) {
+                            autoPlay = autoPlayBox;
+                            userSettings.autoplay = autoPlayBox;
+                            persistUserData();
+                        }
+                    });
                 contentLeft();
                 ui::sectionLabel("输入与外设", interior);
-                // 按键映射：这里只留一行「摘要 + 打开」，12 个 lane 的网格搬进了
-                // 独立卡片（keymapCardOpen，绘制见下面的 drawKeymapCard）——
-                // 原来那 12 格直接平铺在页面上，占了近一半高度。
-                contentLeft();
-                {
-                    std::string keySummary;
-                    for (int lane = 0; lane < 12; ++lane) {
-                        keySummary += SDL_GetKeyName(laneKeys[lane]);
-                    }
-                    if (keySummary.size() > 16) {
-                        keySummary = keySummary.substr(0, 15) + "…";
-                    }
-                    char keyLabel[96];
-                    std::snprintf(keyLabel, sizeof(keyLabel), "按键映射　%s", keySummary.c_str());
-                    if (ui::capsuleButton(keyLabel, ImVec2(interior, 40.0f * s), false)) {
-                        keymapCardOpen = true;
-                    }
-                }
-                // 手柄震动 + 震动: everything under here needs a pad with motors to
-                // mean anything, so the whole run of rows is hidden outright when
-                // none is plugged in (padConnected, refreshed in runFrame). Not
-                // greyed out like 多人演出 - there is no pad to enable them on,
-                // and a settings page full of dead switches is worse than a short
-                // one. The values keep living in the profile, so plugging a pad in
-                // brings them back exactly as they were left.
-                if (padConnected) {
-                    contentLeft();
-                    ImGui::Text("手柄震动");
-                    // Scales the song-start buzz and the result screen's score roll
-                    // (see the `rumble` lambda). 0 turns both off; a pad without
-                    // motors ignores it either way.
-                    float rumblePct = userSettings.padRumble * 100.0f;
-                    contentLeft();
-                    if (ui::slider("padrumble", &rumblePct, 0.0f, 100.0f, 5.0f, "%.0f%%", interior)) {
-                        userSettings.padRumble = std::clamp(rumblePct / 100.0f, 0.0f, 1.0f);
-                        persistUserData();
-                    }
-                    // 震动: which hits are worth a kick. The strength / master switch
-                    // is the slider right above; these pick the moments. Each one is
-                    // a short buzz, so it rides on top of the long song-start /
-                    // result-roll vibrations instead of replacing them. (Moved here
-                    // from 判定 - all of them are "how the run plays", not "how the
-                    // notes are judged".)
-                    contentLeft();
-                    ImGui::Text("震动");
-                    contentLeft();
-                    bool rumbleFlickBox = userSettings.rumbleFlick;
-                    ui::checkBox("命中 Flick 时震动", &rumbleFlickBox, interior);
-                    if (rumbleFlickBox != userSettings.rumbleFlick) {
-                        userSettings.rumbleFlick = rumbleFlickBox;
-                        persistUserData();
-                    }
-                    contentLeft();
-                    bool rumbleCriticalBox = userSettings.rumbleCritical;
-                    ui::checkBox("命中绝赞（黄键）时震动", &rumbleCriticalBox, interior);
-                    if (rumbleCriticalBox != userSettings.rumbleCritical) {
-                        userSettings.rumbleCritical = rumbleCriticalBox;
-                        persistUserData();
-                    }
-                    contentLeft();
-                    bool rumbleMissBox = userSettings.rumbleMiss;
-                    ui::checkBox("MISS 时震动", &rumbleMissBox, interior);
-                    if (rumbleMissBox != userSettings.rumbleMiss) {
-                        userSettings.rumbleMiss = rumbleMissBox;
-                        persistUserData();
-                    }
-                }
+                twoCols(
+                    [&](float w) {
+                        colSet(0);
+                        ImGui::Text("按键映射");
+                        colSet(0);
+                        // 只留一行「摘要 + 打开」，12 个 lane 的网格搬进了独立卡片
+                        // （keymapCardOpen，绘制见下面的 drawKeymapCard）。
+                        std::string keySummary;
+                        for (int lane = 0; lane < 12; ++lane) {
+                            keySummary += SDL_GetKeyName(laneKeys[lane]);
+                        }
+                        if (keySummary.size() > 16) {
+                            keySummary = keySummary.substr(0, 15) + "…";
+                        }
+                        char keyLabel[96];
+                        std::snprintf(keyLabel, sizeof(keyLabel), "按键映射　%s", keySummary.c_str());
+                        if (ui::capsuleButton(keyLabel, ImVec2(w, 40.0f * s), false)) {
+                            keymapCardOpen = true;
+                        }
+                    },
+                    [&](float w) {
+                        // 手柄震动 + 震动: everything under here needs a pad with
+                        // motors to mean anything, so the whole run is hidden when
+                        // none is plugged in (padConnected, refreshed in runFrame).
+                        // Not greyed out like 多人演出 - there is no pad to enable
+                        // them on, and a settings page full of dead switches is
+                        // worse than a short one. The values keep living in the
+                        // profile, so plugging a pad in brings them back as they
+                        // were left.
+                        if (!padConnected) {
+                            return;
+                        }
+                        colSet(1);
+                        ImGui::Text("手柄震动");
+                        // Scales the song-start buzz and the result screen's score
+                        // roll (see the `rumble` lambda). 0 turns both off; a pad
+                        // without motors ignores it either way.
+                        float rumblePct = userSettings.padRumble * 100.0f;
+                        colSet(1);
+                        if (ui::slider("padrumble", &rumblePct, 0.0f, 100.0f, 5.0f, "%.0f%%", w)) {
+                            userSettings.padRumble = std::clamp(rumblePct / 100.0f, 0.0f, 1.0f);
+                            persistUserData();
+                        }
+                        colSet(1);
+                        ImGui::Text("震动");
+                        // Which hits are worth a kick. The strength / master switch
+                        // is the slider above; these pick the moments.
+                        colSet(1);
+                        bool rumbleFlickBox = userSettings.rumbleFlick;
+                        ui::checkBox("命中 Flick 时震动", &rumbleFlickBox, w);
+                        if (rumbleFlickBox != userSettings.rumbleFlick) {
+                            userSettings.rumbleFlick = rumbleFlickBox;
+                            persistUserData();
+                        }
+                        colSet(1);
+                        bool rumbleCriticalBox = userSettings.rumbleCritical;
+                        ui::checkBox("命中绝赞（黄键）时震动", &rumbleCriticalBox, w);
+                        if (rumbleCriticalBox != userSettings.rumbleCritical) {
+                            userSettings.rumbleCritical = rumbleCriticalBox;
+                            persistUserData();
+                        }
+                        colSet(1);
+                        bool rumbleMissBox = userSettings.rumbleMiss;
+                        ui::checkBox("MISS 时震动", &rumbleMissBox, w);
+                        if (rumbleMissBox != userSettings.rumbleMiss) {
+                            userSettings.rumbleMiss = rumbleMissBox;
+                            persistUserData();
+                        }
+                    });
             } else if (tab == 1) {
-                // 画面: 窗口与渲染 / 性能 / 画面与特效 三组（2026-10-11 分组）。
-                // UI zoom for the two screens that are laid out on a virtual
-                // canvas. The play screen is not affected on purpose.
-                contentLeft();
-                ui::sectionLabel("窗口与渲染", interior);
-                contentLeft();
-                ImGui::Text("界面缩放");
-                float uiScalePct = userSettings.uiScale * 100.0f;
-                contentLeft();
-                if (ui::slider("uiscale", &uiScalePct, 70.0f, 150.0f, 5.0f, "%.0f%%", interior)) {
-                    const float next = std::clamp(uiScalePct / 100.0f, 0.7f, 1.5f);
-                    if (next != userSettings.uiScale) {
-                        userSettings.uiScale = next;
-                        persistUserData();
-                    }
-                }
-                contentLeft();
-                ImGui::Text("分辨率");
-                // Presets from 640x360 up. The low end is for small windows /
-                // testing; anything else goes through 自定义… below.
+                // 画面: 窗口与渲染 / 性能 两组，组内两列（2026-10-11）。
+                // 分辨率预置和 applySize 先备好，闭包里只管画。
                 static constexpr int kResCount = 10;
                 static constexpr int kResW[kResCount] = {640, 800, 960, 1024, 1120, 1280, 1366, 1600, 1920, 2560};
                 static constexpr int kResH[kResCount] = {360, 450, 540, 576, 630, 720, 768, 900, 1080, 1440};
@@ -4340,232 +4366,285 @@ int main(int argc, char** argv)
                     }
                     return kResCount; // 自定义…
                 }(resW, resH);
+
                 contentLeft();
-                ImGui::SetNextItemWidth(interior);
-                bool resPicked = ImGui::Combo("##resolution", &resIdx,
-                    "640 x 360\0" "800 x 450\0" "960 x 540\0" "1024 x 576\0" "1120 x 630\0"
-                    "1280 x 720\0" "1366 x 768\0" "1600 x 900\0" "1920 x 1080\0" "2560 x 1440\0"
-                    "自定义…\0");
-                // Pad: left / right walk this combo's options (see padComboNudge).
-                resPicked |= ui::padComboNudge(&resIdx, kResCount + 1);
-                if (resPicked) {
-                    if (resIdx < kResCount) {
-                        resW = kResW[resIdx];
-                        resH = kResH[resIdx];
-                        applySize();
-                    }
-                }
-                if (resIdx >= kResCount) {
-                    // Committed on Enter / focus loss, not per keystroke: "1280"
-                    // typed digit by digit would otherwise resize the window
-                    // four times on the way there.
-                    static int customW = resW;
-                    static int customH = resH;
-                    const float half = interior * 0.48f;
-                    contentLeft();
-                    ImGui::Text("自定义宽 / 高");
-                    contentLeft();
-                    ImGui::SetNextItemWidth(half);
-                    ImGui::InputInt("##resw", &customW, 16, 160);
-                    const bool editedW = ImGui::IsItemDeactivatedAfterEdit();
-                    ImGui::SameLine();
-                    ImGui::SetNextItemWidth(half);
-                    ImGui::InputInt("##resh", &customH, 16, 160);
-                    const bool editedH = ImGui::IsItemDeactivatedAfterEdit();
-                    if (editedW || editedH) {
-                        resW = customW;
-                        resH = customH;
-                        applySize();
-                    }
-                }
-                contentLeft();
-                ImGui::Text("渲染模式");
-                contentLeft();
-                {
-                    // Not `static`: a profile switch replaces the whole settings
-                    // struct and a stale index would show the wrong mode.
-                    int renderModeSel = userSettings.renderScale;
-                    ImGui::SetNextItemWidth(interior);
-                    bool renderPicked = ImGui::Combo("##renderscale", &renderModeSel,
-                        "跟随窗口分辨率\0固定分辨率\0");
-                    renderPicked |= ui::padComboNudge(&renderModeSel, 2);
-                    if (renderPicked) {
-                        userSettings.renderScale = std::clamp(renderModeSel, 0, 1);
-                        applyRenderMode();
-                        persistUserData();
-                    }
-                }
-                contentLeft();
-                ImGui::Text("窗口模式");
-                static int winMode = windowMode;
-                contentLeft();
-                ImGui::SetNextItemWidth(interior);
-                bool winPicked = ImGui::Combo("##window-mode", &winMode,
-                    "borderless\0windowed\0fullscreen\0");
-                winPicked |= ui::padComboNudge(&winMode, 3);
-                if (winPicked) {
-                    windowMode = winMode;
-                    if (winMode == 2) {
-                        SDL_SetWindowFullscreen(window, SDL_WINDOW_FULLSCREEN_DESKTOP);
-                    } else {
-                        SDL_SetWindowFullscreen(window, 0);
-                        SDL_SetWindowBordered(window, winMode == 1 ? SDL_TRUE : SDL_FALSE);
-                        // Leaving fullscreen and re-applying the frame drops
-                        // WS_THICKFRAME (see the boot sequence), so put the
-                        // resize frame back explicitly.
-                        SDL_SetWindowResizable(window, SDL_TRUE);
-                    }
-                }
+                ui::sectionLabel("窗口与渲染", interior);
+                twoCols(
+                    [&](float w) {
+                        // UI zoom for the two screens that are laid out on a
+                        // virtual canvas. The play screen is not affected on
+                        // purpose.
+                        colSet(0);
+                        ImGui::Text("界面缩放");
+                        float uiScalePct = userSettings.uiScale * 100.0f;
+                        colSet(0);
+                        if (ui::slider("uiscale", &uiScalePct, 70.0f, 150.0f, 5.0f, "%.0f%%", w)) {
+                            const float next = std::clamp(uiScalePct / 100.0f, 0.7f, 1.5f);
+                            if (next != userSettings.uiScale) {
+                                userSettings.uiScale = next;
+                                persistUserData();
+                            }
+                        }
+                        colSet(0);
+                        ImGui::Text("渲染模式");
+                        colSet(0);
+                        // Not `static`: a profile switch replaces the whole
+                        // settings struct and a stale index would show the wrong
+                        // mode.
+                        int renderModeSel = userSettings.renderScale;
+                        ImGui::SetNextItemWidth(w);
+                        bool renderPicked = ImGui::Combo("##renderscale", &renderModeSel,
+                            "跟随窗口分辨率\0固定分辨率\0");
+                        renderPicked |= ui::padComboNudge(&renderModeSel, 2);
+                        if (renderPicked) {
+                            userSettings.renderScale = std::clamp(renderModeSel, 0, 1);
+                            applyRenderMode();
+                            persistUserData();
+                        }
+                    },
+                    [&](float w) {
+                        colSet(1);
+                        ImGui::Text("分辨率");
+                        colSet(1);
+                        ImGui::SetNextItemWidth(w);
+                        bool resPicked = ImGui::Combo("##resolution", &resIdx,
+                            "640 x 360\0" "800 x 450\0" "960 x 540\0" "1024 x 576\0" "1120 x 630\0"
+                            "1280 x 720\0" "1366 x 768\0" "1600 x 900\0" "1920 x 1080\0" "2560 x 1440\0"
+                            "自定义…\0");
+                        // Pad: left / right walk this combo's options (see padComboNudge).
+                        resPicked |= ui::padComboNudge(&resIdx, kResCount + 1);
+                        if (resPicked) {
+                            if (resIdx < kResCount) {
+                                resW = kResW[resIdx];
+                                resH = kResH[resIdx];
+                                applySize();
+                            }
+                        }
+                        if (resIdx >= kResCount) {
+                            // Committed on Enter / focus loss, not per keystroke:
+                            // "1280" typed digit by digit would otherwise resize
+                            // the window four times on the way there.
+                            static int customW = resW;
+                            static int customH = resH;
+                            const float half = (w - 8.0f * s) * 0.5f;
+                            colSet(1);
+                            ImGui::SetNextItemWidth(half);
+                            ImGui::InputInt("##resw", &customW, 16, 160);
+                            const bool editedW = ImGui::IsItemDeactivatedAfterEdit();
+                            ImGui::SameLine();
+                            ImGui::SetNextItemWidth(half);
+                            ImGui::InputInt("##resh", &customH, 16, 160);
+                            const bool editedH = ImGui::IsItemDeactivatedAfterEdit();
+                            if (editedW || editedH) {
+                                resW = customW;
+                                resH = customH;
+                                applySize();
+                            }
+                        }
+                        colSet(1);
+                        ImGui::Text("窗口模式");
+                        static int winMode = windowMode;
+                        colSet(1);
+                        ImGui::SetNextItemWidth(w);
+                        bool winPicked = ImGui::Combo("##window-mode", &winMode,
+                            "borderless\0windowed\0fullscreen\0");
+                        winPicked |= ui::padComboNudge(&winMode, 3);
+                        if (winPicked) {
+                            windowMode = winMode;
+                            if (winMode == 2) {
+                                SDL_SetWindowFullscreen(window, SDL_WINDOW_FULLSCREEN_DESKTOP);
+                            } else {
+                                SDL_SetWindowFullscreen(window, 0);
+                                SDL_SetWindowBordered(window, winMode == 1 ? SDL_TRUE : SDL_FALSE);
+                                // Leaving fullscreen and re-applying the frame drops
+                                // WS_THICKFRAME (see the boot sequence), so put the
+                                // resize frame back explicitly.
+                                SDL_SetWindowResizable(window, SDL_TRUE);
+                            }
+                        }
+                    });
                 contentLeft();
                 ui::sectionLabel("性能", interior);
-                contentLeft();
-                ImGui::Text("帧率上限");
-                static float fpsLimitF = static_cast<float>(fpsLimit);
-                contentLeft();
-                if (ui::slider("fps", &fpsLimitF, 0.0f, 240.0f, 5.0f, "%.0f fps", interior)) {
-                    fpsLimitLive = static_cast<int>(fpsLimitF);
-                }
-                contentLeft();
-                ImGui::Text("实测: %.1f fps", 1.0 / std::max(1e-6, lastFrameDeltaSec));
-                contentLeft();
-                ImGui::Text("超过 %d Hz 自动关垂直同步", displayRefreshHz);
-                contentLeft();
-                // 显示帧率 was down in 画面与特效; it is a performance readout, so it
-                // moved up with the fps rows when 画面 was split (2026-10-11).
-                bool showFpsBox = showFps;
-                ui::checkBox("显示帧率", &showFpsBox, interior);
-                if (showFpsBox != showFps) {
-                    showFps = showFpsBox;
-                    persistUserData();
-                }
+                twoCols(
+                    [&](float w) {
+                        colSet(0);
+                        ImGui::Text("帧率上限");
+                        static float fpsLimitF = static_cast<float>(fpsLimit);
+                        colSet(0);
+                        if (ui::slider("fps", &fpsLimitF, 0.0f, 240.0f, 5.0f, "%.0f fps", w)) {
+                            fpsLimitLive = static_cast<int>(fpsLimitF);
+                        }
+                        colSet(0);
+                        ImGui::Text("实测: %.1f fps", 1.0 / std::max(1e-6, lastFrameDeltaSec));
+                        colSet(0);
+                        ImGui::Text("超过 %d Hz 自动关垂直同步", displayRefreshHz);
+                    },
+                    [&](float w) {
+                        colSet(1);
+                        // 空一行，跟左列的「帧率上限」标题对齐。
+                        ImGui::Dummy(ImVec2(1.0f, ImGui::GetTextLineHeightWithSpacing()));
+                        colSet(1);
+                        // 显示帧率 was down in 画面与特效; it is a performance
+                        // readout, so it moved up with the fps rows (2026-10-11).
+                        bool showFpsBox = showFps;
+                        ui::checkBox("显示帧率", &showFpsBox, w);
+                        if (showFpsBox != showFps) {
+                            showFps = showFpsBox;
+                            persistUserData();
+                        }
+                    });
             } else if (tab == 2) {
                 // 外观（2026-10-11 从 画面 拆出来的）: 界面 / 背景 / 特效.
                 // 画面页原来 16 项、要滚 340px；拆开之后两页都放得下，组也分得清楚。
                 contentLeft();
                 ui::sectionLabel("界面", interior);
-                contentLeft();
-                bool showProgressBox = showProgressBar;
-                ui::checkBox("显示播放进度条", &showProgressBox, interior);
-                if (showProgressBox != showProgressBar) {
-                    showProgressBar = showProgressBox;
-                    persistUserData();
-                }
-                contentLeft();
-                // Splash style: static image (0) vs classic progress bar (1).
-                // Only read at startup, so a change takes effect next launch.
-                bool classicSplashBox = userSettings.splashStyle != 0;
-                ui::checkBox("经典开屏画面", &classicSplashBox, interior);
-                if (classicSplashBox != (userSettings.splashStyle != 0)) {
-                    userSettings.splashStyle = classicSplashBox ? 1 : 0;
-                    persistUserData();
-                }
+                twoCols(
+                    [&](float w) {
+                        colSet(0);
+                        bool showProgressBox = showProgressBar;
+                        ui::checkBox("显示播放进度条", &showProgressBox, w);
+                        if (showProgressBox != showProgressBar) {
+                            showProgressBar = showProgressBox;
+                            persistUserData();
+                        }
+                    },
+                    [&](float w) {
+                        colSet(1);
+                        // Splash style: static image (0) vs classic progress bar (1).
+                        // Only read at startup, so a change takes effect next launch.
+                        bool classicSplashBox = userSettings.splashStyle != 0;
+                        ui::checkBox("经典开屏画面", &classicSplashBox, w);
+                        if (classicSplashBox != (userSettings.splashStyle != 0)) {
+                            userSettings.splashStyle = classicSplashBox ? 1 : 0;
+                            persistUserData();
+                        }
+                    });
                 contentLeft();
                 ui::sectionLabel("背景", interior);
-                contentLeft();
-                // Song-select background: the built-in gradient, the user's
-                // desktop wallpaper (blurred + dimmed), or nothing at all so the
-                // window itself is see-through (Aero glass on Win7).
-                ImGui::Text("选曲背景");
-                contentLeft();
-                static int bgMode = userSettings.bgStyle;
-                ImGui::SetNextItemWidth(interior);
-                // The Aero entry only exists where Aero does - see aeroGlassAvailable.
-                const char* bgItems = aeroGlass ? "默认渐变\0桌面壁纸\0Aero 玻璃\0"
-                                                : "默认渐变\0桌面壁纸\0";
-                const int bgCount = aeroGlass ? 3 : 2;
-                bool bgPicked = ImGui::Combo("##bgstyle", &bgMode, bgItems);
-                bgPicked |= ui::padComboNudge(&bgMode, bgCount);
-                if (bgPicked) {
-                    userSettings.bgStyle = bgMode;
-                    // The frameless choice lives in the profile but is only in force
-                    // while the background is the Aero one (see the declaration).
-                    glassMode = userSettings.bgStyle == 2 ? std::clamp(userSettings.glassMode, 0, 2) : 0;
-                    refreshSelectBackdrop();
-                    // The play screen shares the setting, and switching it has
-                    // to touch the window too: the frame is what makes the
-                    // client area see-through in the first place.
-                    renderer.setTransparentBackground(userSettings.bgStyle == 2);
+                twoCols(
+                    [&](float w) {
+                        colSet(0);
+                        // Song-select background: the built-in gradient, the user's
+                        // desktop wallpaper (blurred + dimmed), or nothing at all so
+                        // the window itself is see-through (Aero glass on Win7).
+                        ImGui::Text("选曲背景");
+                        static int bgMode = userSettings.bgStyle;
+                        colSet(0);
+                        ImGui::SetNextItemWidth(w);
+                        // The Aero entry only exists where Aero does - see aeroGlassAvailable.
+                        const char* bgItems = aeroGlass ? "默认渐变\0桌面壁纸\0Aero 玻璃\0"
+                                                        : "默认渐变\0桌面壁纸\0";
+                        const int bgCount = aeroGlass ? 3 : 2;
+                        bool bgPicked = ImGui::Combo("##bgstyle", &bgMode, bgItems);
+                        bgPicked |= ui::padComboNudge(&bgMode, bgCount);
+                        if (bgPicked) {
+                            userSettings.bgStyle = bgMode;
+                            // The frameless choice lives in the profile but is only in force
+                            // while the background is the Aero one (see the declaration).
+                            glassMode = userSettings.bgStyle == 2 ? std::clamp(userSettings.glassMode, 0, 2) : 0;
+                            refreshSelectBackdrop();
+                            // The play screen shares the setting, and switching it has
+                            // to touch the window too: the frame is what makes the
+                            // client area see-through in the first place.
+                            renderer.setTransparentBackground(userSettings.bgStyle == 2);
 #ifdef _WIN32
-                    requestGlassWindowMode(splashStyle == 0 || userSettings.bgStyle == 2);
+                            requestGlassWindowMode(splashStyle == 0 || userSettings.bgStyle == 2);
 #endif
-                    persistUserData();
-                }
-                if (aeroGlass && userSettings.bgStyle == 2) {
-                    // How far to go with the window chrome; see AGENTS.md「窗口外观」.
-                    contentLeft();
-                    ImGui::Text("玻璃实现");
-                    contentLeft();
-                    // 0 and 2 only: the middle idea (ask DWM to skip the non-client
-                    // area) falls back to the Basic frame on Windows 7, which is
-                    // worse than what it removes. See AGENTS.md.
-                    static int glassModeUi = userSettings.glassMode == 2 ? 1 : 0;
-                    ImGui::SetNextItemWidth(interior);
-                    bool glassPicked = ImGui::Combo("##glassmode", &glassModeUi,
-                        "extend frame\0无边框窗口\0");
-                    glassPicked |= ui::padComboNudge(&glassModeUi, 2);
-                    if (glassPicked) {
-                        const int chosen = glassModeUi == 1 ? 2 : 0;
-                        userSettings.glassMode = chosen;
-                        glassMode = chosen; // the helper reads this one
+                            persistUserData();
+                        }
+                    },
+                    [&](float w) {
+                        if (!aeroGlass || userSettings.bgStyle != 2) {
+                            return;
+                        }
+                        colSet(1);
+                        // How far to go with the window chrome; see AGENTS.md「窗口外观」.
+                        ImGui::Text("玻璃实现");
+                        colSet(1);
+                        // 0 and 2 only: the middle idea (ask DWM to skip the non-client
+                        // area) falls back to the Basic frame on Windows 7, which is
+                        // worse than what it removes. See AGENTS.md.
+                        static int glassModeUi = userSettings.glassMode == 2 ? 1 : 0;
+                        ImGui::SetNextItemWidth(w);
+                        bool glassPicked = ImGui::Combo("##glassmode", &glassModeUi,
+                            "extend frame\0无边框窗口\0");
+                        glassPicked |= ui::padComboNudge(&glassModeUi, 2);
+                        if (glassPicked) {
+                            const int chosen = glassModeUi == 1 ? 2 : 0;
+                            userSettings.glassMode = chosen;
+                            glassMode = chosen; // the helper reads this one
 #ifdef _WIN32
-                        requestGlassWindowMode(true); // applied between frames, not here
+                            requestGlassWindowMode(true); // applied between frames, not here
 #endif
-                        persistUserData();
-                    }
-                }
+                            persistUserData();
+                        }
+                    });
                 if (userSettings.bgStyle == 1) {
-                    // Re-blurring the picture is a CPU pass over a decoded
-                    // wallpaper, so it runs when the slider is let go, not on
-                    // every frame of the drag.
-                    static bool blurPending = false;
-                    contentLeft();
-                    float bgBlurV = userSettings.bgBlur;
-                    if (ui::slider("背景模糊", &bgBlurV, 0.0f, 1.0f, 0.05f, "%.2f", interior)) {
-                        userSettings.bgBlur = bgBlurV;
-                        blurPending = true;
-                    }
-                    if (blurPending && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-                        blurPending = false;
-                        refreshSelectBackdrop();
-                        persistUserData();
-                    }
-                    contentLeft();
-                    float bgDimV = userSettings.bgDim;
-                    if (ui::slider("背景变暗", &bgDimV, 0.0f, 1.0f, 0.02f, "%.2f", interior)) {
-                        userSettings.bgDim = bgDimV;
-                        // Cheap: only the overlay drawn on top changes.
-                        game::setSelectBackdrop(backdropTex, backdropW, backdropH, bgDimV);
-                        persistUserData();
-                    }
+                    twoCols(
+                        [&](float w) {
+                            colSet(0);
+                            ImGui::Text("背景模糊");
+                            // Re-blurring the picture is a CPU pass over a decoded
+                            // wallpaper, so it runs when the slider is let go, not
+                            // on every frame of the drag.
+                            static bool blurPending = false;
+                            float bgBlurV = userSettings.bgBlur;
+                            colSet(0);
+                            if (ui::slider("背景模糊", &bgBlurV, 0.0f, 1.0f, 0.05f, "%.2f", w)) {
+                                userSettings.bgBlur = bgBlurV;
+                                blurPending = true;
+                            }
+                            if (blurPending && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+                                blurPending = false;
+                                refreshSelectBackdrop();
+                                persistUserData();
+                            }
+                        },
+                        [&](float w) {
+                            colSet(1);
+                            ImGui::Text("背景变暗");
+                            float bgDimV = userSettings.bgDim;
+                            colSet(1);
+                            if (ui::slider("背景变暗", &bgDimV, 0.0f, 1.0f, 0.02f, "%.2f", w)) {
+                                userSettings.bgDim = bgDimV;
+                                // Cheap: only the overlay drawn on top changes.
+                                game::setSelectBackdrop(backdropTex, backdropW, backdropH, bgDimV);
+                                persistUserData();
+                            }
+                        });
                 }
                 contentLeft();
                 ui::sectionLabel("特效", interior);
-                contentLeft();
-                // 弱化打击特效: pjsk's light effect profile. Only the basic layer
-                // of a hit burst survives - the judgement spark and a flick's
-                // flash - so the lane lights, the auras drawn under the notes and
-                // the particles a long note burns while held all go away. It is
-                // also the single biggest cut in per-frame overdraw, which is
-                // what a weak integrated GPU feels first. Takes effect on the
-                // next spawned particle; ones already flying finish their life.
-                contentLeft();
-                bool simpleFxBox = simpleEffects;
-                ui::checkBox("弱化打击特效", &simpleFxBox, interior);
-                if (simpleFxBox != simpleEffects) {
-                    simpleEffects = simpleFxBox;
-                    core_api::setSimpleEffect(simpleEffects);
-                    persistUserData();
-                }
-                contentLeft();
-                bool hideTouchBox = hideTouchFeedback;
-                ui::checkBox("隐藏系统触摸特效", &hideTouchBox, interior);
-                if (hideTouchBox != hideTouchFeedback) {
-                    hideTouchFeedback = hideTouchBox;
+                twoCols(
+                    [&](float w) {
+                        colSet(0);
+                        // 弱化打击特效: pjsk's light effect profile. Only the basic
+                        // layer of a hit burst survives - the judgement spark and a
+                        // flick's flash - so the lane lights, the auras drawn under
+                        // the notes and the particles a long note burns while held
+                        // all go away. It is also the single biggest cut in
+                        // per-frame overdraw, which is what a weak integrated GPU
+                        // feels first. Takes effect on the next spawned particle.
+                        bool simpleFxBox = simpleEffects;
+                        ui::checkBox("弱化打击特效", &simpleFxBox, w);
+                        if (simpleFxBox != simpleEffects) {
+                            simpleEffects = simpleFxBox;
+                            core_api::setSimpleEffect(simpleEffects);
+                            persistUserData();
+                        }
+                    },
+                    [&](float w) {
+                        colSet(1);
+                        bool hideTouchBox = hideTouchFeedback;
+                        ui::checkBox("隐藏系统触摸特效", &hideTouchBox, w);
+                        if (hideTouchBox != hideTouchFeedback) {
+                            hideTouchFeedback = hideTouchBox;
 #ifdef _WIN32
-                    applyTouchFeedback(window, hideTouchFeedback);
+                            applyTouchFeedback(window, hideTouchFeedback);
 #endif
-                    persistUserData();
-                }
+                            persistUserData();
+                        }
+                    });
             } else if (tab == 3) {
                 // 判定: judgement windows + the long-note tolerance. 震动 moved
                 // to 演奏 (it is about the run, not about the judgement).
@@ -4636,34 +4715,49 @@ int main(int argc, char** argv)
                     windowsChanged = true;
                 }
                 bool windowsDragged = false;
-                contentLeft();
-                windowsDragged |= ui::slider("perfect", &perfect, 10.0f, 100.0f, 1.0f, "Perfect %.0f", interior);
-                contentLeft();
-                windowsDragged |= ui::slider("great", &great, 20.0f, 200.0f, 1.0f, "Great %.0f", interior);
-                contentLeft();
-                windowsDragged |= ui::slider("goodw", &good, 30.0f, 260.0f, 1.0f, "Good %.0f", interior);
-                good = std::max(good, great + 10.0f);
-                contentLeft();
-                windowsDragged |= ui::slider("badw", &bad, 40.0f, 400.0f, 5.0f, "Bad %.0f", interior);
-                bad = std::max(bad, good + 10.0f);
-                contentLeft();
-                bool linkBox = linkBadMiss;
-                ui::checkBox("Bad 与 Miss 同步", &linkBox, interior);
-                if (linkBox != linkBadMiss) {
-                    linkBadMiss = linkBox;
-                    userSettings.linkBadMiss = linkBox;
-                    if (linkBox) {
-                        miss = bad; // linked: the two are one number
-                    }
-                    persistUserData();
-                }
-                if (linkBadMiss) {
-                    miss = bad;
-                }
-                contentLeft();
-                windowsDragged |= ui::slider("missw", &miss, 40.0f, 500.0f, 5.0f, "Miss %.0f", interior,
-                    /*enabled=*/!linkBadMiss);
-                miss = std::max(miss, good + 10.0f);
+                twoCols(
+                    [&](float w) {
+                        colSet(0);
+                        windowsDragged |= ui::slider("perfect", &perfect, 10.0f, 100.0f, 1.0f, "Perfect %.0f", w);
+                    },
+                    [&](float w) {
+                        colSet(1);
+                        windowsDragged |= ui::slider("great", &great, 20.0f, 200.0f, 1.0f, "Great %.0f", w);
+                    });
+                twoCols(
+                    [&](float w) {
+                        colSet(0);
+                        windowsDragged |= ui::slider("goodw", &good, 30.0f, 260.0f, 1.0f, "Good %.0f", w);
+                        good = std::max(good, great + 10.0f);
+                    },
+                    [&](float w) {
+                        colSet(1);
+                        windowsDragged |= ui::slider("badw", &bad, 40.0f, 400.0f, 5.0f, "Bad %.0f", w);
+                        bad = std::max(bad, good + 10.0f);
+                    });
+                twoCols(
+                    [&](float w) {
+                        colSet(0);
+                        bool linkBox = linkBadMiss;
+                        ui::checkBox("Bad 与 Miss 同步", &linkBox, w);
+                        if (linkBox != linkBadMiss) {
+                            linkBadMiss = linkBox;
+                            userSettings.linkBadMiss = linkBox;
+                            if (linkBox) {
+                                miss = bad; // linked: the two are one number
+                            }
+                            persistUserData();
+                        }
+                        if (linkBadMiss) {
+                            miss = bad;
+                        }
+                    },
+                    [&](float w) {
+                        colSet(1);
+                        windowsDragged |= ui::slider("missw", &miss, 40.0f, 500.0f, 5.0f, "Miss %.0f", w,
+                            /*enabled=*/!linkBadMiss);
+                        miss = std::max(miss, good + 10.0f);
+                    });
                 // Any slider (and only a slider) takes the row off its preset -
                 // the value is no longer the official one.
                 if (windowsDragged) {
@@ -4683,10 +4777,17 @@ int main(int argc, char** argv)
                     holdStart = kHoldGracePresets[target][1];
                     windowsChanged = true;
                 }
-                contentLeft();
-                bool tailChanged = ui::slider("holdtail", &holdTail, 20.0f, 300.0f, 10.0f, "松手容错 %.0f", interior);
-                contentLeft();
-                bool startChanged = ui::slider("holdstart", &holdStart, 20.0f, 300.0f, 10.0f, "起按容错 %.0f", interior);
+                bool tailChanged = false;
+                bool startChanged = false;
+                twoCols(
+                    [&](float w) {
+                        colSet(0);
+                        tailChanged = ui::slider("holdtail", &holdTail, 20.0f, 300.0f, 10.0f, "松手容错 %.0f", w);
+                    },
+                    [&](float w) {
+                        colSet(1);
+                        startChanged = ui::slider("holdstart", &holdStart, 20.0f, 300.0f, 10.0f, "起按容错 %.0f", w);
+                    });
                 if (tailChanged || startChanged) {
                     windowsChanged = true;
                     holdPreset = -1; // dragged off the presets
@@ -4697,28 +4798,33 @@ int main(int argc, char** argv)
                 contentLeft();
                 ui::sectionLabel("Flick", interior);
                 bool strictFlick = judgement.strictFlick();
-                contentLeft();
-                ui::checkBox("严格 Flick 方向", &strictFlick, interior);
-                if (strictFlick != judgement.strictFlick()) {
-                    judgement.setStrictFlick(strictFlick);
-                    userSettings.strictFlick = strictFlick;
-                    persistUserData();
-                }
                 bool flickAsTap = judgement.flickAsTap();
-                contentLeft();
-                ui::checkBox("Flick 视作 Tap", &flickAsTap, interior);
-                if (flickAsTap != judgement.flickAsTap()) {
-                    judgement.setFlickAsTap(flickAsTap);
-                    userSettings.flickAsTap = flickAsTap;
-                    persistUserData();
-                }
+                twoCols(
+                    [&](float w) {
+                        colSet(0);
+                        ui::checkBox("严格 Flick 方向", &strictFlick, w);
+                        if (strictFlick != judgement.strictFlick()) {
+                            judgement.setStrictFlick(strictFlick);
+                            userSettings.strictFlick = strictFlick;
+                            persistUserData();
+                        }
+                    },
+                    [&](float w) {
+                        colSet(1);
+                        ui::checkBox("Flick 视作 Tap", &flickAsTap, w);
+                        if (flickAsTap != judgement.flickAsTap()) {
+                            judgement.setFlickAsTap(flickAsTap);
+                            userSettings.flickAsTap = flickAsTap;
+                            persistUserData();
+                        }
+                    });
                 // Starting life. The engine seeds every session's stats from its own
                 // copy on reset(), so pushing it here (and once at boot) is enough.
                 contentLeft();
                 ui::sectionLabel("生命", interior);
                 float life = judgement.initialLife();
-                contentLeft();
-                if (ui::slider("initlife", &life, 100.0f, game::kMaxInitialLife, 50.0f, "%.0f", interior)) {
+                colSet(0);
+                if (ui::slider("initlife", &life, 100.0f, game::kMaxInitialLife, 50.0f, "%.0f", colW)) {
                     const float next = std::clamp(life, 100.0f, game::kMaxInitialLife);
                     if (next != userSettings.initialLife) {
                         userSettings.initialLife = next;
@@ -4764,144 +4870,166 @@ int main(int argc, char** argv)
                 // 系统: 窗口行为 / 系统集成 / 多实例 三组（2026-10-11 分组）。
                 contentLeft();
                 ui::sectionLabel("窗口行为", interior);
-                contentLeft();
-                bool autoPauseBox = userSettings.autoPauseOnBlur;
-                ui::checkBox("失焦时自动暂停", &autoPauseBox, interior);
-                if (autoPauseBox != userSettings.autoPauseOnBlur) {
-                    userSettings.autoPauseOnBlur = autoPauseBox;
-                    persistUserData();
-                }
-                contentLeft();
-                bool muteMinBox = userSettings.muteWhenMinimized;
-                ui::checkBox("最小化窗口静音", &muteMinBox, interior);
-                if (muteMinBox != userSettings.muteWhenMinimized) {
-                    userSettings.muteWhenMinimized = muteMinBox;
-                    // 真正切换由帧内那段轮询做（它每帧看一次 SDL_WINDOW_MINIMIZED），
-                    // 所以这里只落盘：勾选时窗口必然不是最小化的，下一次最小化
-                    // 就会按新设置静音；取消勾选时窗口是还原的，轮询也会把静音摘掉。
-                    persistUserData();
-                }
+                twoCols(
+                    [&](float w) {
+                        colSet(0);
+                        bool autoPauseBox = userSettings.autoPauseOnBlur;
+                        ui::checkBox("失焦时自动暂停", &autoPauseBox, w);
+                        if (autoPauseBox != userSettings.autoPauseOnBlur) {
+                            userSettings.autoPauseOnBlur = autoPauseBox;
+                            persistUserData();
+                        }
+                    },
+                    [&](float w) {
+                        colSet(1);
+                        bool muteMinBox = userSettings.muteWhenMinimized;
+                        ui::checkBox("最小化窗口静音", &muteMinBox, w);
+                        if (muteMinBox != userSettings.muteWhenMinimized) {
+                            userSettings.muteWhenMinimized = muteMinBox;
+                            // 真正切换由帧内那段轮询做（它每帧看一次 SDL_WINDOW_MINIMIZED），
+                            // 所以这里只落盘：勾选时窗口必然不是最小化的，下一次最小化
+                            // 就会按新设置静音；取消勾选时窗口是还原的，轮询也会把静音摘掉。
+                            persistUserData();
+                        }
+                    });
                 contentLeft();
                 ui::sectionLabel("系统集成", interior);
-                contentLeft();
-                bool smtcBox = userSettings.reportSmtc;
-                ui::checkBox("启用 SMTC 汇报", &smtcBox, interior);
-                if (smtcBox != userSettings.reportSmtc) {
-                    userSettings.reportSmtc = smtcBox;
-                    // Off: stop the media session right away instead of leaving
-                    // the flyout with a stale song. On: re-announce, otherwise
-                    // nothing shows up until the next song starts.
-                    systemMedia.setReporting(smtcBox);
-                    if (smtcBox) {
-                        announceTrack();
-                    }
-                    persistUserData();
-                }
-                contentLeft();
-                bool menuBarBox = userSettings.nativeMenuBar;
-                ui::checkBox("原生菜单栏", &menuBarBox, interior);
-                if (menuBarBox != userSettings.nativeMenuBar) {
-                    userSettings.nativeMenuBar = menuBarBox;
-                    // 挂/摘**不在这里做**：SetMenu 会重排非客户区（WM_NCCALCSIZE
-                    // 一类的同步消息），而这正是"从 ImGui 帧中间动窗口"最不该干的
-                    // 事 —— 跟玻璃实现同一个理由。帧外那段 refreshNativeMenuBar
-                    // 会在这一帧结束后按设置自己挂/摘。
-                    persistUserData();
-                }
-                contentLeft();
+                twoCols(
+                    [&](float w) {
+                        colSet(0);
+                        bool smtcBox = userSettings.reportSmtc;
+                        ui::checkBox("启用 SMTC 汇报", &smtcBox, w);
+                        if (smtcBox != userSettings.reportSmtc) {
+                            userSettings.reportSmtc = smtcBox;
+                            // Off: stop the media session right away instead of
+                            // leaving the flyout with a stale song. On: re-announce,
+                            // otherwise nothing shows up until the next song starts.
+                            systemMedia.setReporting(smtcBox);
+                            if (smtcBox) {
+                                announceTrack();
+                            }
+                            persistUserData();
+                        }
+                    },
+                    [&](float w) {
+                        colSet(1);
+                        bool menuBarBox = userSettings.nativeMenuBar;
+                        ui::checkBox("原生菜单栏", &menuBarBox, w);
+                        if (menuBarBox != userSettings.nativeMenuBar) {
+                            userSettings.nativeMenuBar = menuBarBox;
+                            // 挂/摘**不在这里做**：SetMenu 会重排非客户区（WM_NCCALCSIZE
+                            // 一类的同步消息），而这正是"从 ImGui 帧中间动窗口"最不该干的
+                            // 事 —— 跟玻璃实现同一个理由。帧外那段 refreshNativeMenuBar
+                            // 会在这一帧结束后按设置自己挂/摘。
+                            persistUserData();
+                        }
+                    });
+                twoCols(
+                    [&](float w) {
 #ifdef _WIN32
-                // .sus 文件关联：注册表是唯一真相，所以不存进档案 —— 启动查一次，
-                // 之后跟着这个开关走（在别处改过关联时，重启就看到真实状态）。
-                contentLeft();
-                static bool susAssocBox = platform::shell::susAssociated();
-                bool susBox = susAssocBox;
-                ui::checkBox("关联 .sus 谱面文件", &susBox, interior);
-                if (susBox != susAssocBox) {
-                    if (susBox) {
-                        // 写失败就把开关弹回去，别让界面显示一个没生效的状态。
-                        susAssocBox = platform::shell::associateSus(exePathW);
-                    } else {
-                        platform::shell::disassociateSus();
-                        susAssocBox = platform::shell::susAssociated();
-                    }
-                }
+                        // .sus 文件关联：注册表是唯一真相，所以不存进档案 —— 启动查一次，
+                        // 之后跟着这个开关走（在别处改过关联时，重启就看到真实状态）。
+                        colSet(0);
+                        static bool susAssocBox = platform::shell::susAssociated();
+                        bool susBox = susAssocBox;
+                        ui::checkBox("关联 .sus 谱面文件", &susBox, w);
+                        if (susBox != susAssocBox) {
+                            if (susBox) {
+                                // 写失败就把开关弹回去，别让界面显示一个没生效的状态。
+                                susAssocBox = platform::shell::associateSus(exePathW);
+                            } else {
+                                platform::shell::disassociateSus();
+                                susAssocBox = platform::shell::susAssociated();
+                            }
+                        }
+#else
+                        (void)w;
 #endif
-                // 开始游戏时切到英文输入法（2026-10-11 从 演奏 挪来）：只把当前输入法
-                // 切到英文（半角）模式、不换键盘布局，中文输入法就不会把 12 个 lane
-                // 键吃进候选框。本质是跟 Windows 输入法打交道，所以落在这一组。
-                // 实现在 main.cpp 的 switchImeToAscii()，由 beginSessionClockAt 调。
-                contentLeft();
-                bool imeBox = userSettings.switchImeOnStart;
-                ui::checkBox("开始游戏时切到英文输入法", &imeBox, interior);
-                if (imeBox != userSettings.switchImeOnStart) {
-                    userSettings.switchImeOnStart = imeBox;
-                    persistUserData();
-                }
+                    },
+                    [&](float w) {
+                        // 开始游戏时切到英文输入法（2026-10-11 从 演奏 挪来）：只把当前
+                        // 输入法切到英文（半角）模式、不换键盘布局，中文输入法就不会把 12
+                        // 个 lane 键吃进候选框。本质是跟 Windows 输入法打交道，所以落在
+                        // 这一组。实现在 main.cpp 的 switchImeToAscii()。
+                        colSet(1);
+                        bool imeBox = userSettings.switchImeOnStart;
+                        ui::checkBox("开始游戏时切到英文输入法", &imeBox, w);
+                        if (imeBox != userSettings.switchImeOnStart) {
+                            userSettings.switchImeOnStart = imeBox;
+                            persistUserData();
+                        }
+                    });
                 contentLeft();
                 ui::sectionLabel("多实例", interior);
-                contentLeft();
-                {
-                    int mode = userSettings.instanceMode;
-                    ImGui::SetNextItemWidth(interior);
-                    bool modePicked = ImGui::Combo("##instancemode", &mode,
-                        "只允许一个实例\0"
-                        "允许多开，新实例登录另一个用户\0");
-                    modePicked |= ui::padComboNudge(&mode, 2);
-                    if (modePicked) {
-                        const int picked = std::clamp(mode, 0, 1);
-                        // 多开是实验性功能：第一次开启要先确认（已经确认过就直接写）。
-                        if (picked == 1 && userSettings.instanceMode == 0
-                            && !userSettings.multiInstanceAccepted) {
-                            multiInstanceAsk = true;
-                            multiInstanceAskFromParty = false;
-                        } else {
-                            userSettings.instanceMode = picked;
-                            // 多人游玩 only means something with several windows, so
-                            // switching to single-instance turns it off instead of
-                            // leaving a switch that can never do anything.
-                            if (userSettings.instanceMode == 0 && userSettings.multiplayer) {
-                                userSettings.multiplayer = false;
-                                std::printf("[settings] multiplayer off (single instance)\n");
+                twoCols(
+                    [&](float w) {
+                        colSet(0);
+                        ImGui::Text("多开");
+                        int mode = userSettings.instanceMode;
+                        colSet(0);
+                        ImGui::SetNextItemWidth(w);
+                        bool modePicked = ImGui::Combo("##instancemode", &mode,
+                            "只允许一个实例\0"
+                            "允许多开，新实例登录另一个用户\0");
+                        modePicked |= ui::padComboNudge(&mode, 2);
+                        if (modePicked) {
+                            const int picked = std::clamp(mode, 0, 1);
+                            // 多开是实验性功能：第一次开启要先确认（已经确认过就直接写）。
+                            if (picked == 1 && userSettings.instanceMode == 0
+                                && !userSettings.multiInstanceAccepted) {
+                                multiInstanceAsk = true;
+                                multiInstanceAskFromParty = false;
+                            } else {
+                                userSettings.instanceMode = picked;
+                                // 多人游玩 only means something with several windows, so
+                                // switching to single-instance turns it off instead of
+                                // leaving a switch that can never do anything.
+                                if (userSettings.instanceMode == 0 && userSettings.multiplayer) {
+                                    userSettings.multiplayer = false;
+                                    std::printf("[settings] multiplayer off (single instance)\n");
+                                    std::fflush(stdout);
+                                }
+                                persistUserData();
+                            }
+                        }
+                    },
+                    [&](float w) {
+                        colSet(1);
+                        // 空一行，跟左列的「多开」标题对齐。
+                        ImGui::Dummy(ImVec2(1.0f, ImGui::GetTextLineHeightWithSpacing()));
+                        colSet(1);
+                        // Needs 允许多开: greyed out (and inert) when the instance
+                        // policy forbids a second window.
+                        const bool multiOpen = userSettings.instanceMode == 1;
+                        bool partyBox = multiOpen ? userSettings.multiplayer : false;
+                        ui::checkBox("多人演出", &partyBox, w, multiOpen);
+                        // Only a click can change it: with the policy on single
+                        // instance the greyed box shows "off" and storing that would
+                        // silently wipe the setting just for opening this page.
+                        if (multiOpen && partyBox != userSettings.multiplayer) {
+                            // 勾上多人游玩同样要先确认多开是实验性功能（已经确认过就直接走）。
+                            if (partyBox && !userSettings.multiInstanceAccepted) {
+                                multiInstanceAsk = true;
+                                multiInstanceAskFromParty = true;
+                            } else {
+                                userSettings.multiplayer = partyBox;
+                                // 多人游玩 needs several windows, so it also switches
+                                // the instance policy to multi-open; each copy logs in
+                                // as its own user (they keep separate records).
+                                if (partyBox) {
+                                    userSettings.instanceMode = 1;
+                                }
+                                std::printf("[settings] multiplayer %s\n", partyBox ? "on" : "off");
                                 std::fflush(stdout);
-                            }
-                            persistUserData();
-                        }
-                    }
-                }
-                contentLeft();
-                {
-                    // Needs 允许多开: greyed out (and inert) when the instance
-                    // policy forbids a second window.
-                    const bool multiOpen = userSettings.instanceMode == 1;
-                    bool partyBox = multiOpen ? userSettings.multiplayer : false;
-                    ui::checkBox("多人演出", &partyBox, interior, multiOpen);
-                    // Only a click can change it: with the policy on single
-                    // instance the greyed box shows "off" and storing that would
-                    // silently wipe the setting just for opening this page.
-                    if (multiOpen && partyBox != userSettings.multiplayer) {
-                        // 勾上多人游玩同样要先确认多开是实验性功能（已经确认过就直接走）。
-                        if (partyBox && !userSettings.multiInstanceAccepted) {
-                            multiInstanceAsk = true;
-                            multiInstanceAskFromParty = true;
-                        } else {
-                            userSettings.multiplayer = partyBox;
-                            // 多人游玩 needs several windows, so it also switches
-                            // the instance policy to multi-open; each copy logs in
-                            // as its own user (they keep separate records).
-                            if (partyBox) {
-                                userSettings.instanceMode = 1;
-                            }
-                            std::printf("[settings] multiplayer %s\n", partyBox ? "on" : "off");
-                            std::fflush(stdout);
-                            persistUserData();
-                            // 刚打开：直接问一句要不要现在就重开（房间是启动时
-                            // 加入的，不重开的话这个窗口一直是单人）。
-                            if (partyBox) {
-                                restartAsk = true;
+                                persistUserData();
+                                // 刚打开：直接问一句要不要现在就重开（房间是启动时
+                                // 加入的，不重开的话这个窗口一直是单人）。
+                                if (partyBox) {
+                                    restartAsk = true;
+                                }
                             }
                         }
-                    }
-                }
+                    });
                 contentLeft();
                 // 只在真的开了多人时留一行「重开生效」；勾选框自己已经说明前两条了
                 // （2026-10-11 精简：原来三条状态各占一行）。
@@ -4995,117 +5123,126 @@ int main(int argc, char** argv)
                     }
                 }
                 contentLeft();
-                {
-                    static char newName[48] = "新用户";
-                    const float buttonW = interior * 0.3f;
-                    const float fieldW = interior - buttonW - 8.0f * s;
-                    ImGui::SetNextItemWidth(fieldW);
-                    ImGui::InputText("##newprofile", newName, sizeof(newName));
-                    ImGui::SameLine();
-                    if (ui::capsuleButton("新建", ImVec2(buttonW, 40.0f * s), true)) {
-                        std::string label(newName);
-                        if (label.empty()) {
-                            label = "新用户";
+                twoCols(
+                    [&](float w) {
+                        colSet(0);
+                        static char newName[48] = "新用户";
+                        const float buttonW = w * 0.34f;
+                        const float fieldW = w - buttonW - 8.0f * s;
+                        ImGui::SetNextItemWidth(fieldW);
+                        ImGui::InputText("##newprofile", newName, sizeof(newName));
+                        ImGui::SameLine();
+                        if (ui::capsuleButton("新建", ImVec2(buttonW, 40.0f * s), true)) {
+                            std::string label(newName);
+                            if (label.empty()) {
+                                label = "新用户";
+                            }
+                            // A fresh profile starts from the defaults (so it does
+                            // not inherit this user's note speed / offset), which
+                            // is also what "save the current one first" protects.
+                            game::saveUserData(userDataFile, userSettings, scores, account);
+                            game::UserProfile user;
+                            user.id = game::makeProfileId(label, profiles);
+                            user.name = label;
+                            profiles.push_back(user);
+                            activeProfileId.clear(); // so activateProfile() does not bail out
+                            activateProfile(user.id);
+                            // New account: clear the mirrored text buffers by
+                            // renaming through the profile id change.
+                            std::printf("[profile] created '%s' as %s\n", label.c_str(), user.id.c_str());
                         }
-                        // A fresh profile starts from the defaults (so it does
-                        // not inherit this user's note speed / offset), which
-                        // is also what "save the current one first" protects.
-                        game::saveUserData(userDataFile, userSettings, scores, account);
-                        game::UserProfile user;
-                        user.id = game::makeProfileId(label, profiles);
-                        user.name = label;
-                        profiles.push_back(user);
-                        activeProfileId.clear(); // so activateProfile() does not bail out
-                        activateProfile(user.id);
-                        // New account: clear the mirrored text buffers by
-                        // renaming through the profile id change.
-                        std::printf("[profile] created '%s' as %s\n", label.c_str(), user.id.c_str());
-                    }
-                }
-                contentLeft();
-                {
-                    // Two-step instead of a modal: the first press only arms it,
-                    // and the same button becomes the confirmation for ~3s.
-                    static int confirmFrames = 0;
-                    const float buttonW = interior * 0.36f;
-                    if (profiles.size() < 2) {
-                        ImGui::BeginDisabled();
-                    }
-                    if (confirmFrames > 0) {
-                        if (ui::capsuleButton("确认删除？", ImVec2(buttonW, 40.0f * s), true)) {
-                            confirmFrames = 0;
-                            const std::string victim = activeProfileId;
-                            std::string victimName;
-                            std::size_t target = profiles.size();
-                            for (std::size_t i = 0; i < profiles.size(); ++i) {
-                                if (profiles[i].id == victim) {
-                                    victimName = profiles[i].name;
-                                } else if (target == profiles.size()) {
-                                    target = i;
+                    },
+                    [&](float w) {
+                        colSet(1);
+                        // Two-step instead of a modal: the first press only arms it,
+                        // and the same button becomes the confirmation for ~3s.
+                        static int confirmFrames = 0;
+                        const float buttonW = w * 0.52f;
+                        if (profiles.size() < 2) {
+                            ImGui::BeginDisabled();
+                        }
+                        if (confirmFrames > 0) {
+                            if (ui::capsuleButton("确认删除？", ImVec2(buttonW, 40.0f * s), true)) {
+                                confirmFrames = 0;
+                                const std::string victim = activeProfileId;
+                                std::string victimName;
+                                std::size_t target = profiles.size();
+                                for (std::size_t i = 0; i < profiles.size(); ++i) {
+                                    if (profiles[i].id == victim) {
+                                        victimName = profiles[i].name;
+                                    } else if (target == profiles.size()) {
+                                        target = i;
+                                    }
+                                }
+                                if (target < profiles.size()) {
+                                    // Take the id first: erasing shifts the indexes.
+                                    const std::string targetId = profiles[target].id;
+                                    profiles.erase(std::remove_if(profiles.begin(), profiles.end(),
+                                                       [&](const game::UserProfile& user) { return user.id == victim; }),
+                                        profiles.end());
+                                    activeProfileId.clear(); // so activateProfile() does not bail out
+                                    activateProfile(targetId);
+                                    // The file is left on disk on purpose: removing a
+                                    // user from the list must never destroy their
+                                    // scores. It sits in profiles/ as <id>.json.
+                                    std::printf("[profile] removed '%s' (%s) from the list; file kept\n",
+                                        victimName.c_str(), victim.c_str());
                                 }
                             }
-                            if (target < profiles.size()) {
-                                // Take the id first: erasing shifts the indexes.
-                                const std::string targetId = profiles[target].id;
-                                profiles.erase(std::remove_if(profiles.begin(), profiles.end(),
-                                                   [&](const game::UserProfile& user) { return user.id == victim; }),
-                                    profiles.end());
-                                activeProfileId.clear(); // so activateProfile() does not bail out
-                                activateProfile(targetId);
-                                // The file is left on disk on purpose: removing a
-                                // user from the list must never destroy their
-                                // scores. It sits in profiles/ as <id>.json.
-                                std::printf("[profile] removed '%s' (%s) from the list; file kept\n",
-                                    victimName.c_str(), victim.c_str());
-                            }
+                            --confirmFrames;
+                        } else if (ui::capsuleButton("删除此用户", ImVec2(buttonW, 40.0f * s), false)) {
+                            confirmFrames = 180;
                         }
-                        --confirmFrames;
-                    } else if (ui::capsuleButton("删除此用户", ImVec2(buttonW, 40.0f * s), false)) {
-                        confirmFrames = 180;
-                    }
-                    if (profiles.size() < 2) {
-                        ImGui::EndDisabled();
-                    }
-                }
+                        if (profiles.size() < 2) {
+                            ImGui::EndDisabled();
+                        }
+                    });
 
                 contentLeft();
                 ui::sectionLabel("资料", interior);
-                contentLeft();
-                ImGui::Text("昵称");
-                contentLeft();
-                ImGui::SetNextItemWidth(interior);
-                if (ImGui::InputText("##pname", nameBuf, sizeof(nameBuf))) {
-                    account.name = nameBuf;
-                    // The 用户 combobox above lists the *profile files*
-                    // (profiles/index.json), which had their own label - so
-                    // renaming yourself left it showing "默认用户" and the two
-                    // looked like unrelated things. Keep them the same label;
-                    // an empty nickname keeps whatever was there before.
-                    for (game::UserProfile& user : profiles) {
-                        if (user.id != activeProfileId || account.name.empty()
-                            || user.name == account.name) {
-                            continue;
+                twoCols(
+                    [&](float w) {
+                        colSet(0);
+                        ImGui::Text("昵称");
+                        colSet(0);
+                        ImGui::SetNextItemWidth(w);
+                        if (ImGui::InputText("##pname", nameBuf, sizeof(nameBuf))) {
+                            account.name = nameBuf;
+                            // The 用户 combobox above lists the *profile files*
+                            // (profiles/index.json), which had their own label - so
+                            // renaming yourself left it showing "默认用户" and the
+                            // two looked like unrelated things. Keep them the same
+                            // label; an empty nickname keeps whatever was there
+                            // before.
+                            for (game::UserProfile& user : profiles) {
+                                if (user.id != activeProfileId || account.name.empty()
+                                    || user.name == account.name) {
+                                    continue;
+                                }
+                                user.name = account.name;
+                                game::saveProfiles(userDataDir, profiles, activeProfileId);
+                                break;
+                            }
+                            if (party.active()) {
+                                // The room shows this name too, and so does the
+                                // window title (it is what tells two rooms' windows
+                                // apart).
+                                party.setName(account.name.empty() ? partyLabel : account.name);
+                            }
+                            syncWindowTitle();
+                            persistUserData();
                         }
-                        user.name = account.name;
-                        game::saveProfiles(userDataDir, profiles, activeProfileId);
-                        break;
-                    }
-                    if (party.active()) {
-                        // The room shows this name too, and so does the window
-                        // title (it is what tells two rooms' windows apart).
-                        party.setName(account.name.empty() ? partyLabel : account.name);
-                    }
-                    syncWindowTitle();
-                    persistUserData();
-                }
-                contentLeft();
-                ImGui::Text("学校 / 组织");
-                contentLeft();
-                ImGui::SetNextItemWidth(interior);
-                if (ImGui::InputText("##porg", orgBuf, sizeof(orgBuf))) {
-                    account.org = orgBuf;
-                    persistUserData();
-                }
+                    },
+                    [&](float w) {
+                        colSet(1);
+                        ImGui::Text("学校 / 组织");
+                        colSet(1);
+                        ImGui::SetNextItemWidth(w);
+                        if (ImGui::InputText("##porg", orgBuf, sizeof(orgBuf))) {
+                            account.org = orgBuf;
+                            persistUserData();
+                        }
+                    });
                 contentLeft();
                 ImGui::Text("个性签名");
                 contentLeft();
@@ -5134,60 +5271,63 @@ int main(int argc, char** argv)
                 // be undone. Both go through the native picker.
                 contentLeft();
                 ui::sectionLabel("数据", interior);
-                {
-                    const float btnW = (interior - 8.0f * s) * 0.5f;
-                    if (ui::capsuleButton("导出用户数据", ImVec2(btnW, 40.0f * s), false)) {
-                        // Nicknames are free text, so illegal file-name
-                        // characters are replaced rather than dropped.
-                        std::string who = account.name.empty() ? activeProfileId : account.name;
-                        for (char& c : who) {
-                            if (std::strchr("\\/:*?\"<>|", c) != nullptr) {
-                                c = '_';
+                twoCols(
+                    [&](float w) {
+                        colSet(0);
+                        if (ui::capsuleButton("导出用户数据", ImVec2(w, 40.0f * s), false)) {
+                            // Nicknames are free text, so illegal file-name
+                            // characters are replaced rather than dropped.
+                            std::string who = account.name.empty() ? activeProfileId : account.name;
+                            for (char& c : who) {
+                                if (std::strchr("\\/:*?\"<>|", c) != nullptr) {
+                                    c = '_';
+                                }
                             }
-                        }
-                        const std::string suggested = path_utf8::fromPath(path_utf8::toPath(userDataDir)
-                            / ("CppSekai-" + who + "-" + dateStamp() + ".json"));
-                        const std::string path = pickUserDataFile(true, suggested);
-                        if (!path.empty()) {
-                            // persistUserData() first: the live mirrors (note
-                            // speed, offset, judgement...) are what make up
-                            // userSettings, and they are only copied on save.
-                            persistUserData();
-                            game::saveUserData(path, userSettings, scores, account);
-                            profileIoStatus = "已导出：" + fileLabel(path);
-                            profileIoStatusFrames = 300;
-                            std::printf("[profile] exported '%s' to %s\n", activeProfileId.c_str(),
-                                path.c_str());
-                            std::fflush(stdout);
-                        }
-                    }
-                    ImGui::SameLine();
-                    if (ui::capsuleButton("导入用户数据", ImVec2(btnW, 40.0f * s), false)) {
-                        const std::string path = pickUserDataFile(false, std::string());
-                        if (!path.empty()) {
-                            // Screened *before* the confirmation card: a file
-                            // that is not user data must not get a "we are about
-                            // to replace your scores" prompt.
-                            if (game::isUserDataFile(path)) {
-                                game::UserSettings probeSettings;
-                                std::map<std::string, game::ScoreRecord> probeScores;
-                                game::AccountData probeAccount;
-                                game::loadUserData(path, probeSettings, probeScores, probeAccount);
-                                importPath = path;
-                                importWho = probeAccount.name.empty() ? "(无昵称)" : probeAccount.name;
-                                importScores = probeScores.size();
-                                importAsk = true;
-                                std::printf("[profile] import candidate %s (user '%s', %zu score(s))\n",
-                                    path.c_str(), importWho.c_str(), importScores);
-                            } else {
-                                profileIoStatus = "不是用户数据文件：" + fileLabel(path);
+                            const std::string suggested = path_utf8::fromPath(path_utf8::toPath(userDataDir)
+                                / ("CppSekai-" + who + "-" + dateStamp() + ".json"));
+                            const std::string path = pickUserDataFile(true, suggested);
+                            if (!path.empty()) {
+                                // persistUserData() first: the live mirrors (note
+                                // speed, offset, judgement...) are what make up
+                                // userSettings, and they are only copied on save.
+                                persistUserData();
+                                game::saveUserData(path, userSettings, scores, account);
+                                profileIoStatus = "已导出：" + fileLabel(path);
                                 profileIoStatusFrames = 300;
-                                std::printf("[profile] import rejected %s (not user data)\n", path.c_str());
+                                std::printf("[profile] exported '%s' to %s\n", activeProfileId.c_str(),
+                                    path.c_str());
+                                std::fflush(stdout);
                             }
-                            std::fflush(stdout);
                         }
-                    }
-                }
+                    },
+                    [&](float w) {
+                        colSet(1);
+                        if (ui::capsuleButton("导入用户数据", ImVec2(w, 40.0f * s), false)) {
+                            const std::string path = pickUserDataFile(false, std::string());
+                            if (!path.empty()) {
+                                // Screened *before* the confirmation card: a file
+                                // that is not user data must not get a "we are about
+                                // to replace your scores" prompt.
+                                if (game::isUserDataFile(path)) {
+                                    game::UserSettings probeSettings;
+                                    std::map<std::string, game::ScoreRecord> probeScores;
+                                    game::AccountData probeAccount;
+                                    game::loadUserData(path, probeSettings, probeScores, probeAccount);
+                                    importPath = path;
+                                    importWho = probeAccount.name.empty() ? "(无昵称)" : probeAccount.name;
+                                    importScores = probeScores.size();
+                                    importAsk = true;
+                                    std::printf("[profile] import candidate %s (user '%s', %zu score(s))\n",
+                                        path.c_str(), importWho.c_str(), importScores);
+                                } else {
+                                    profileIoStatus = "不是用户数据文件：" + fileLabel(path);
+                                    profileIoStatusFrames = 300;
+                                    std::printf("[profile] import rejected %s (not user data)\n", path.c_str());
+                                }
+                                std::fflush(stdout);
+                            }
+                        }
+                    });
                 if (profileIoStatusFrames > 0) {
                     --profileIoStatusFrames;
                     contentLeft();

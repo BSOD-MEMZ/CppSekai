@@ -105,7 +105,9 @@ constexpr ImU32 kNotePink = IM_COL32(255, 85, 153, 255);    // #ff5599 pink hint
 constexpr ImU32 kCheckPink = IM_COL32(255, 119, 172, 255);  // #ff77ac - the CHECK MARK's
                                                             // colour, not a box fill
 constexpr ImU32 kPillBg = IM_COL32(199, 199, 212, 255);     // gray value pill (stepper)
-constexpr ImU32 kTabIdle = IM_COL32(203, 204, 222, 255);    // inactive tab fill
+// Sampled off the official settings dialog's tab band (2026-10-11): #bbbcd0,
+// which is also deep enough for the white inactive labels to read on it.
+constexpr ImU32 kTabIdle = IM_COL32(187, 188, 208, 255);    // tab band / inactive tab
 constexpr ImU32 kDarkBtn = IM_COL32(96, 96, 110, 255);      // dark -/+ slider buttons
 constexpr ImU32 kRowsBg = IM_COL32(222, 222, 232, 255);     // infoRows box
 // Section header strip (ui::sectionLabel) - the gray bar the reference's
@@ -155,8 +157,14 @@ void expBar(ImDrawList* dl, ImVec2 pos, float width, float unit, float ratio);
 // already ended - do NOT call endCard, and stop calling until reopened).
 // *closeClicked is set on the frame the X is pressed (react by setting
 // open=false).
+//
+// `tabBandH` > 0 makes this a tabbed card: a kTabIdle band that tall is drawn
+// across the top (rounded like the card) BEFORE the close X, so the X sits on
+// the band instead of being painted over by it - which is exactly what
+// happened when the band was drawn by tabBar() afterwards. It also moves the
+// drag strip below the band so the tab buttons keep their clicks.
 bool beginCard(const char* id, ImVec2* center, ImVec2* size, bool showClose, bool dimBackdrop,
-    bool* closeClicked, bool open = true, float dragStripTopPx = 0.0f);
+    bool* closeClicked, bool open = true, float tabBandH = 0.0f);
 // Child windows (ImGui::BeginChild) get their own ImDrawList, so their vertices
 // are NOT part of the card's own list and endCard() would leave them unscaled
 // and unfaded - the "the card animates but its contents pop in" bug. If a card

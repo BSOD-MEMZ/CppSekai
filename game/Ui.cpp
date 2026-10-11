@@ -113,8 +113,6 @@ namespace
     // official row is the card's whole header, and the close X has to fit
     // inside it (8*s + kCloseHit = 46*s) - which it does exactly at 46.
     constexpr float kTabRowH = 46.0f;
-    // Separator between two tab labels: lighter than the band it sits on.
-    constexpr ImU32 kTabSep = IM_COL32(234, 234, 244, 200);
 
     float easeInOut(float t)
     {
@@ -437,7 +435,7 @@ float scale()
 }
 
 bool beginCard(const char* id, ImVec2* center, ImVec2* size, bool showClose, bool dimBackdrop,
-    bool* closeClicked, bool open, float dragStripTopPx)
+    bool* closeClicked, bool open, float tabBandH)
 {
     const float s = scale();
     if (closeClicked != nullptr) {
@@ -561,6 +559,14 @@ bool beginCard(const char* id, ImVec2* center, ImVec2* size, bool showClose, boo
     shadowLayers(dl, lo, hi, kCardRadius * s, s, 1.0f, 3.0f);
     dl->AddRectFilled(lo, hi, kCardBg, kCardRadius * s);
 
+    // Tab band (tabbed cards only), drawn BEFORE the close X so the X lands on
+    // top of it. When tabBar() drew this band itself it came after beginCard and
+    // simply painted the X away - the "where did the close button go" bug.
+    if (tabBandH > 0.0f) {
+        dl->AddRectFilled(lo, ImVec2(hi.x, lo.y + tabBandH), kTabIdle, kCardRadius * s,
+            ImDrawFlags_RoundCornersTop);
+    }
+
     // Close X: submitted BEFORE the header drag strip, and the strip below
     // excludes the close corner - zero overlapping items, so the click always
     // lands. (The old layout overlapped the full-width drag strip and hover
@@ -594,11 +600,11 @@ bool beginCard(const char* id, ImVec2* center, ImVec2* size, bool showClose, boo
         }
     }
 
-    // Header strip: drag the card around. It starts below `dragStripTopPx` so a
-    // card that puts its tab row up here (the settings card) keeps the row's
-    // buttons clickable - the strip is submitted after them and would otherwise
-    // swallow every press in the band it covers.
-    const ImVec2 headerLo = ImVec2(lo.x, lo.y + dragStripTopPx);
+    // Header strip: drag the card around. With a tab band it starts below the
+    // band, so the tab buttons keep their clicks (the strip is submitted after
+    // them and would otherwise swallow every press in the band it covers).
+    const float headerTop = tabBandH > 0.0f ? tabBandH + 2.0f * s : 0.0f;
+    const ImVec2 headerLo = ImVec2(lo.x, lo.y + headerTop);
     const ImVec2 headerHi = ImVec2(headerRight, headerLo.y + kHeaderH * s);
     ImGui::SetCursorScreenPos(headerLo);
     ImGui::PushID(id);
@@ -694,7 +700,6 @@ int tabBar(const char* id, const std::vector<std::string>& tabs, int* active, fl
     ImFont* font = game::bodyFont();
     const float fontSize = 24.0f * s;
     const float tabH = kTabRowH * s;
-    const float radius = kCardRadius * s;
     const ImVec2 pos = ImGui::GetCursorScreenPos();
     const float rowW = rowWidth > 0.0f ? rowWidth : ImGui::GetContentRegionAvail().x;
     // The labels share the band minus whatever the right end keeps clear - the
@@ -702,30 +707,22 @@ int tabBar(const char* id, const std::vector<std::string>& tabs, int* active, fl
     const float tabsW = std::max(1.0f, rowW - std::max(rightReserve, 0.0f));
     const float tabW = tabsW / static_cast<float>(tabs.size());
 
-    // The band: one flat gray strip across the card's top, rounded at the top
-    // corners to match the card itself. Everything else is drawn on top of it.
-    dl->AddRectFilled(pos, ImVec2(pos.x + rowW, pos.y + tabH), kTabIdle, radius,
-        ImDrawFlags_RoundCornersTop);
-    for (size_t i = 1; i < tabs.size(); ++i) {
-        const float x = pos.x + tabW * static_cast<float>(i);
-        dl->AddRectFilled(ImVec2(x - 0.5f * s, pos.y + tabH * 0.30f),
-            ImVec2(x + 0.5f * s, pos.y + tabH * 0.70f), kTabSep, 0.5f * s);
-    }
-
+    // The band itself is drawn by beginCard() (its `tabBandH`), because the
+    // close X has to land on top of it - when this function painted the band it
+    // came afterwards and hid the X completely. Off the official dialog the
+    // band is #bbbcd0, its inactive labels are WHITE, and there are no
+    // separators between them.
     int result = *active;
     ImGui::PushID(id);
     for (size_t i = 0; i < tabs.size(); ++i) {
         const bool isActive = static_cast<int>(i) == *active;
-        // The picked block slides DOWN out of the band, not up: the official
-        // tab hangs below the strip by roughly a fifth of its height. (This was
-        // the other way round until 2026-10-11.)
         const float act = animToggle(ImGui::GetID(tabs[i].c_str()), isActive, 15.0f);
         const float x0 = pos.x + static_cast<float>(i) * tabW;
-        const ImVec2 lo(x0 + 2.0f * s, pos.y);
-        const ImVec2 hi(x0 + tabW - 2.0f * s, pos.y + tabH + act * 9.0f * s);
+        const ImVec2 lo(x0 + 5.0f * s, pos.y);
+        const ImVec2 hi(x0 + tabW - 5.0f * s, pos.y + tabH);
 
         ImGui::SetCursorScreenPos(lo);
-        ImGui::InvisibleButton(tabs[i].c_str(), ImVec2(hi.x - lo.x, tabH));
+        ImGui::InvisibleButton(tabs[i].c_str(), ImVec2(hi.x - lo.x, tabH * 1.20f));
         const bool hovered = ImGui::IsItemHovered();
         const float hov = animToggle(ImGui::GetItemID() ^ 0x51u, hovered && !isActive, 14.0f);
         if (ImGui::IsItemClicked()) {
@@ -735,25 +732,31 @@ int tabBar(const char* id, const std::vector<std::string>& tabs, int* active, fl
         }
         ImGui::SetCursorScreenPos(ImVec2(0.0f, 0.0f));
 
-        // An unpicked tab is just the band (hover tints it a little lighter);
-        // the picked one is a WHITE block - the official's pure white, not the
-        // card's off-white - hanging past the band's bottom edge. Rounded at the
-        // top always, and at the bottom too once it is hanging, so it reads as a
-        // tab rather than as a notch cut out of the band.
-        const float white = std::max(act, hov * 0.45f);
-        if (white > 0.01f) {
-            dl->AddRectFilled(lo, hi, mixColor(kTabIdle, IM_COL32(255, 255, 255, 255), white), radius,
-                act > 0.5f ? 0 : static_cast<ImDrawFlags>(ImDrawFlags_RoundCornersTop));
+        // The picked block does NOT start at the card's top edge. Measured off
+        // the official dialog: it begins about a fifth of the band down, runs
+        // past the band's bottom edge, and is filled with the CONTENT colour -
+        // which is why it reads as the page below bulging up into the band
+        // rather than as a white chip floating on it. It grows out of the bottom
+        // edge as the page is picked, instead of sliding down from the top.
+        const float top = pos.y + tabH * 0.21f;
+        const float bottom = pos.y + tabH * 1.20f;
+        const float lit = std::max(act, hov * 0.35f);
+        if (lit > 0.01f) {
+            const float growTop = bottom - (bottom - top) * act;
+            dl->AddRectFilled(ImVec2(lo.x, growTop), ImVec2(hi.x, bottom),
+                mixColor(kTabIdle, kCardBg, lit), 8.0f * s);
         }
-        const ImU32 textColor = mixColor(IM_COL32(96, 96, 122, 255), kTitleText, act);
+        // Inactive label: white on the band. Picked label: the body colour, on
+        // the content-coloured block.
+        const ImU32 textColor = mixColor(IM_COL32(255, 255, 255, 255), kText, act);
         const ImVec2 ts = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, tabs[i].c_str());
         dl->AddText(font, fontSize,
-            ImVec2((lo.x + hi.x - ts.x) * 0.5f, pos.y + (tabH - ts.y) * 0.5f), textColor,
+            ImVec2((lo.x + hi.x - ts.x) * 0.5f, top + (bottom - top - ts.y) * 0.5f), textColor,
             tabs[i].c_str());
     }
     ImGui::PopID();
-    // 14*s, not 4: the picked tab hangs 9*s below the band and the content has
-    // to start clear of it.
+    // 14*s, not 4: the picked block hangs below the band and the content has to
+    // start clear of it.
     ImGui::SetCursorScreenPos(ImVec2(pos.x, pos.y + tabH + 14.0f * s));
     return result;
 }
