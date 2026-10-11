@@ -47,11 +47,12 @@
 - **模态卡片要和主循环 ESC 抢优先级**：新加卡片要把 `!game::xxxDialogOpen()` 加进 `escapePressed`
   分支条件，否则 Select 下按 ESC 直接退出游戏。卡片里键盘用 `ImGui::IsKeyPressed(k, false)`。
   卡片**只能被按钮关掉**，想让 ESC 关就得走 `forcedChoice` 替它按一颗。
-- 设置卡片 440x800、**七个页签**（演奏/画面/外观/判定/系统/账户/关于；2026-10-11 从 380 加宽，
-  否则七个两字页签互相压）。各页用 `ui::sectionLabel`（灰底胶囊通栏标题）分组；按键映射的
-  12 格搬进了独立卡片（演奏页只留一行摘要，`CPSEKAI_KEYMAP=1` 无头打开）。
-  **加行前先量**：`CPSEKAI_UI_TRACE=1 --settings --settings-tab N` 打 used/view（view≈764 @ 1080p 窗口），
-  只剩「判定」页超出、要滚动，其余六页刚刚好。
+- 设置卡片 **920x780**、**七个页签**（演奏/画面/外观/判定/系统/账户/关于）。页内用
+  `ui::sectionLabel` 灰条分组 + **两列网格**（`twoCols`/`colSet`）—— 卡片宽是为了「一行放
+  更多」，不是把控件拉长。**七个页都不滚**（最高判定页 768 / view 796）。
+  标签页行就是标题栏（`beginCard` 的 `tabBandH` 画灰带，必须在 X 之前画，否则盖掉 X）；
+  选中页签是**内容色**块（和正文一体）。按键映射在独立卡片（`CPSEKAI_KEYMAP=1` 无头开）。
+  **加行前先量**：`CPSEKAI_UI_TRACE=1 --settings --settings-tab N`。
 - 观感基准 = sekai-stories.pages.dev：文字色只有 `#444466`；**浮起阴影一律 `ui::dropShadow`**
   （零偏移晕，衰减曲线实测过别改参数）；卡片圆角 `14*s`；**按钮按下是反白不是变深**。
 

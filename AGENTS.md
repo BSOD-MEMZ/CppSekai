@@ -68,7 +68,8 @@ game/Judgement.*  # 判定引擎（本项目新增，判定逻辑都在这）
                   # 分数/血量：分数用上游 TEAM_POWER/weightedCount/comboFactor 公式
                   # （kTeamPower 等常量见 Judgement.hpp），血量 1000 起，整音 MISS -80、长条中断 -40。
 game/Ui.*         # pjsk 风格弹窗组件库：beginCard（缩放入/出场动画 + 标题栏拖动）、
-                  # tabBar、slider（深色±按钮+薄荷轨道）、infoRows、capsuleButton、
+                  # tabBar（灰带 + 内容色选中块）、slider（白色圆角 ± 方块 + 薄荷轨道）、
+                  # infoRows、capsuleButton、
                   # cardTitle、checkBox、radioRow（一排圆点+标签，判定/长条容错的预设）、
                   # sectionLabel（灰底胶囊通栏标题，设置卡片每页用它分组，2026-10-11）、
                   # stepper、messageDialog（-3=动画中 -2=关闭完成）、
@@ -607,12 +608,19 @@ bash build.sh          # 仅需 Git Bash；产物 build/cppsekai.exe + SDL2.dll 
   ⚠ **首启那张 ELUA 会盖住设置卡**（两张卡都是独立窗口，ELUA 后画、在**正中间**），
   要看设置卡下半页就把窗口开**宽**：`ui::scale()` 只看高度（`h/860`），所以
   `--width 2600 --height 900` 会让 ELUA 跑到屏幕中间偏右、设置卡留在左上角，两者不再重叠。
-- 设置卡片 **920x820**、七个页签（演奏 / 画面 / 外观 / 判定 / 系统 / 账户 / 关于）。
-  2026-10-11 重排 + 改版：页内用 `ui::sectionLabel` 灰条分组；12 个按键映射格子搬进独立的
-  「按键映射」卡片（演奏页只留一行摘要 + 编辑入口，卡片由 `CPSEKAI_KEYMAP=1` 无头打开）；
-  **标签页行就是标题栏**（没有「设置」标题，拖 `dragStripTopPx` 置位避开标签行）、卡片从
-  380 → 440 → 920 宽（官方是宽大于高的横向面板，七个两字页签也要宽度）、卡片带阴影。
-  各页高度用 `CPSEKAI_UI_TRACE=1` 量（view=845 @1080p；只剩「判定」页超出、要滚动）。
+- 设置卡片 **920x780**（= 官方 1168x990 的同比例）、七个页签（演奏 / 画面 / 外观 / 判定 /
+  系统 / 账户 / 关于）。2026-10-11 重排 + 改版：
+  - 页内用 `ui::sectionLabel` 灰条分组，组内是 **两列网格**（`twoCols` / `colSet` 辅助）。
+    卡片拉宽是为了「一行放更多」，**不是把单个控件拉成一长条** —— 官方就是网格。
+    两列之后七个页再也没有滚动条（判定页 1076 → 768，view 796）。
+  - **标签页行就是标题栏**（没有「设置」标题）。`beginCard` 的 `tabBandH > 0` 会画那条
+    灰带（`kTabIdle` = #bbbcd0）**并且画在关闭 X 之前** —— 让 tabBar 自己画会把 X 整个盖掉
+    （那是「右上角关闭键被吃了」的原因）。选中页签是**内容色的块**（#ebecf1，和下面的
+    正文连成一体，不是浮在白底上的白块），块顶距卡片顶约带高的 1/5；未选中页签是白字。
+  - 12 个按键映射格子搬进独立的「按键映射」卡片（演奏页只留一行摘要 + 编辑入口，
+    卡片由 `CPSEKAI_KEYMAP=1` 无头打开）。
+  - 卡片带阴影（`shadowLayers`，spreadScale 3.0，比控件的 1.0 远得多）。
+  高度用 `CPSEKAI_UI_TRACE=1` 量（@1080p view = 796，最高的判定页 768，不滚）。
   `--settings` + `--settings-tab <0-6>` 无头打开（按键没法送进无头运行），配合 `--screenshot` 截图。
   **加页签要同步三处**：`kSettingsTabCount`（LB/RB 循环页签用它）、`ui::tabBar` 的标签数组、
   以及那条 `if (tab == N) ... else if ...` 链 —— **最后一个分支原本是裸 `else`**，
