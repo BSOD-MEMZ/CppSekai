@@ -607,11 +607,12 @@ bash build.sh          # 仅需 Git Bash；产物 build/cppsekai.exe + SDL2.dll 
   ⚠ **首启那张 ELUA 会盖住设置卡**（两张卡都是独立窗口，ELUA 后画、在**正中间**），
   要看设置卡下半页就把窗口开**宽**：`ui::scale()` 只看高度（`h/860`），所以
   `--width 2600 --height 900` 会让 ELUA 跑到屏幕中间偏右、设置卡留在左上角，两者不再重叠。
-- 设置卡片 440x**800**、七个页签（演奏 / 画面 / 外观 / 判定 / 系统 / 账户 / 关于）。
-  2026-10-11 重排：页内用 `ui::sectionLabel` 灰条分组，12 个按键映射格子搬进了独立的
+- 设置卡片 **920x820**、七个页签（演奏 / 画面 / 外观 / 判定 / 系统 / 账户 / 关于）。
+  2026-10-11 重排 + 改版：页内用 `ui::sectionLabel` 灰条分组；12 个按键映射格子搬进独立的
   「按键映射」卡片（演奏页只留一行摘要 + 编辑入口，卡片由 `CPSEKAI_KEYMAP=1` 无头打开）；
-  卡片同时从 380 加宽到 440 —— 七个两字页签在 380 下会互相压。各页高度用
-  `CPSEKAI_UI_TRACE=1` 量（只剩」判定」页超出 view、要滚动，其余六页都放得下）。
+  **标签页行就是标题栏**（没有「设置」标题，拖 `dragStripTopPx` 置位避开标签行）、卡片从
+  380 → 440 → 920 宽（官方是宽大于高的横向面板，七个两字页签也要宽度）、卡片带阴影。
+  各页高度用 `CPSEKAI_UI_TRACE=1` 量（view=845 @1080p；只剩「判定」页超出、要滚动）。
   `--settings` + `--settings-tab <0-6>` 无头打开（按键没法送进无头运行），配合 `--screenshot` 截图。
   **加页签要同步三处**：`kSettingsTabCount`（LB/RB 循环页签用它）、`ui::tabBar` 的标签数组、
   以及那条 `if (tab == N) ... else if ...` 链 —— **最后一个分支原本是裸 `else`**，
@@ -1841,6 +1842,14 @@ ImGui 后端降级 + 去掉 `glBindSampler`），那是一块真活儿，而目�
 - 用户侧的解法是 Mesa 软件渲染补丁包：`dist/CppSekai-software-gl-mesa-*.zip`，
   打包脚本 `.workbuddy/tools/make_nogpu_patch.py`（Mesa 的 dll 放 `toolchain/mesa-<ver>/x64`）。
   实测 i7-1260P 1366x768 关 vsync：选曲 55–66 fps、演奏 83–112 fps，同机真显卡 214–219 fps。
+  ⚠ **它解决的是「驱动层」，不是「系统层」**（2026-10-11 有人问「能不能在 XP/Vista 上软解跑」时
+  查证过）：`pe_imports.py` 实测 Mesa 那两个 dll（`opengl32.dll` / `libgallium_wgl.dll`）
+  **不依赖 UCRT**（只链 KERNEL32/GDI32/USER32/ADVAPI32/SHELL32/VERSION/ntdll/ole32），
+  也**没有 Win8+ 的静态导入** → Win7 上加载没有障碍（**但没有在 Win7 上实测过**）。
+  真正挡在前面的是我们自己的 exe：它静态依赖 11 个 `api-ms-win-crt-*`（UCRT），而 UCRT 官方
+  只到 **Vista 及以上**（app-local 分发），**XP 根本不支持**；加上只发 x64、文档底线是
+  Win7 SP1 —— 所以「XP 不用想，Vista 理论上有缝但不值得赌，Win7 SP1 才是有意义的下限」。
+  另外 llvmpipe 吃 CPU 指令集，别拿 SSE2-only 的老 CPU 试。
 
 **降 GL 版本不会有性能收益**（2026-09-19 实测，用户问 "GL3.1 性能会不会比 3.3 好"）：GL 版本号
 是**能力集**不是性能档，同一驱动的光栅化路径一样。我们本来就已经在 **3.3 core profile** 上
