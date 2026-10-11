@@ -723,8 +723,8 @@ int tabBar(const char* id, const std::vector<std::string>& tabs, int* active, fl
 
         ImGui::SetCursorScreenPos(lo);
         ImGui::InvisibleButton(tabs[i].c_str(), ImVec2(hi.x - lo.x, tabH * 1.20f));
-        const bool hovered = ImGui::IsItemHovered();
-        const float hov = animToggle(ImGui::GetItemID() ^ 0x51u, hovered && !isActive, 14.0f);
+        // No hover feedback on the tabs (2026-10-11, asked for): the official
+        // row has none either - a label only changes when the page is picked.
         if (ImGui::IsItemClicked()) {
             se(SeClick);
             result = static_cast<int>(i);
@@ -740,18 +740,19 @@ int tabBar(const char* id, const std::vector<std::string>& tabs, int* active, fl
         // edge as the page is picked, instead of sliding down from the top.
         const float top = pos.y + tabH * 0.21f;
         const float bottom = pos.y + tabH * 1.20f;
-        const float lit = std::max(act, hov * 0.35f);
-        if (lit > 0.01f) {
+        if (act > 0.01f) {
             const float growTop = bottom - (bottom - top) * act;
             dl->AddRectFilled(ImVec2(lo.x, growTop), ImVec2(hi.x, bottom),
-                mixColor(kTabIdle, kCardBg, lit), 8.0f * s);
+                mixColor(kTabIdle, kCardBg, act), 8.0f * s);
         }
         // Inactive label: white on the band. Picked label: the body colour, on
-        // the content-coloured block.
+        // the content-coloured block. Centred on the BAND rather than on the
+        // block - the block runs 20% past the band's bottom edge, so centring on
+        // it drops the text visibly low.
         const ImU32 textColor = mixColor(IM_COL32(255, 255, 255, 255), kText, act);
         const ImVec2 ts = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, tabs[i].c_str());
-        dl->AddText(font, fontSize,
-            ImVec2((lo.x + hi.x - ts.x) * 0.5f, top + (bottom - top - ts.y) * 0.5f), textColor,
+        const float labelY = (top + pos.y + tabH) * 0.5f - ts.y * 0.5f;
+        dl->AddText(font, fontSize, ImVec2((lo.x + hi.x - ts.x) * 0.5f, labelY), textColor,
             tabs[i].c_str());
     }
     ImGui::PopID();

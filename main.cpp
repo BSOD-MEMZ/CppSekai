@@ -4094,16 +4094,11 @@ int main(int argc, char** argv)
             ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(224, 224, 235, 255));
             ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, IM_COL32(214, 214, 228, 255));
             ImGui::PushStyleColor(ImGuiCol_FrameBgActive, IM_COL32(205, 205, 222, 255));
-            // The arrow strip of a native ImGui::Combo is a Button, and nothing
-            // else here pushes ImGuiCol_Button - so all seven combos in this card
-            // were drawing ImGui's default BLUE square to the right of their
-            // frame. SongSelect already solved this for its own combos (see the
-            // PushStyleColor(ImGuiCol_Button, ...) over there); the card never
-            // got the same treatment. Pinned to the frame's own greys, so the
-            // combo reads as one solid pill with a dark caret, like the
-            // reference's <select>. Safe to push card-wide: there is not a
-            // single native ImGui::Button in this card, so a Button colour can
-            // only ever reach those arrow strips.
+            // The combos in this card are all ui::combo now (white pill, its own
+            // colours pushed inside - see game/Ui.cpp), so these Button greys only
+            // reach the InputInt steppers' +/- arrows. Pinned to the frame's greys
+            // so those read as part of the field instead of as ImGui's default
+            // BLUE squares.
             ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(224, 224, 235, 255));
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(214, 214, 228, 255));
             ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(205, 205, 222, 255));
@@ -4391,10 +4386,12 @@ int main(int argc, char** argv)
                         // Not `static`: a profile switch replaces the whole
                         // settings struct and a stale index would show the wrong
                         // mode.
+                        static const std::vector<std::string> kRenderModeItems = {
+                            "跟随窗口分辨率", "固定分辨率"};
                         int renderModeSel = userSettings.renderScale;
-                        ImGui::SetNextItemWidth(w);
-                        bool renderPicked = ImGui::Combo("##renderscale", &renderModeSel,
-                            "跟随窗口分辨率\0固定分辨率\0");
+                        const int renderSel = std::clamp(renderModeSel, 0, 1);
+                        bool renderPicked = ui::combo("##renderscale", kRenderModeItems[renderSel].c_str(),
+                            kRenderModeItems, &renderModeSel, w);
                         renderPicked |= ui::padComboNudge(&renderModeSel, 2);
                         if (renderPicked) {
                             userSettings.renderScale = std::clamp(renderModeSel, 0, 1);
@@ -4406,11 +4403,12 @@ int main(int argc, char** argv)
                         colSet(1);
                         ImGui::Text("分辨率");
                         colSet(1);
-                        ImGui::SetNextItemWidth(w);
-                        bool resPicked = ImGui::Combo("##resolution", &resIdx,
-                            "640 x 360\0" "800 x 450\0" "960 x 540\0" "1024 x 576\0" "1120 x 630\0"
-                            "1280 x 720\0" "1366 x 768\0" "1600 x 900\0" "1920 x 1080\0" "2560 x 1440\0"
-                            "自定义…\0");
+                        static const std::vector<std::string> kResItems = {
+                            "640 x 360", "800 x 450", "960 x 540", "1024 x 576", "1120 x 630",
+                            "1280 x 720", "1366 x 768", "1600 x 900", "1920 x 1080", "2560 x 1440",
+                            "自定义…"};
+                        bool resPicked = ui::combo("##resolution",
+                            kResItems[std::clamp(resIdx, 0, kResCount)].c_str(), kResItems, &resIdx, w);
                         // Pad: left / right walk this combo's options (see padComboNudge).
                         resPicked |= ui::padComboNudge(&resIdx, kResCount + 1);
                         if (resPicked) {
@@ -4444,10 +4442,12 @@ int main(int argc, char** argv)
                         colSet(1);
                         ImGui::Text("窗口模式");
                         static int winMode = windowMode;
+                        static const std::vector<std::string> kWindowModeItems = {
+                            "borderless", "windowed", "fullscreen"};
                         colSet(1);
-                        ImGui::SetNextItemWidth(w);
-                        bool winPicked = ImGui::Combo("##window-mode", &winMode,
-                            "borderless\0windowed\0fullscreen\0");
+                        const int winSel = std::clamp(winMode, 0, 2);
+                        bool winPicked = ui::combo("##window-mode", kWindowModeItems[winSel].c_str(),
+                            kWindowModeItems, &winMode, w);
                         winPicked |= ui::padComboNudge(&winMode, 3);
                         if (winPicked) {
                             windowMode = winMode;
@@ -4532,10 +4532,13 @@ int main(int argc, char** argv)
                         colSet(0);
                         ImGui::SetNextItemWidth(w);
                         // The Aero entry only exists where Aero does - see aeroGlassAvailable.
-                        const char* bgItems = aeroGlass ? "默认渐变\0桌面壁纸\0Aero 玻璃\0"
-                                                        : "默认渐变\0桌面壁纸\0";
+                        const std::vector<std::string> bgItems = aeroGlass
+                            ? std::vector<std::string>{"默认渐变", "桌面壁纸", "Aero 玻璃"}
+                            : std::vector<std::string>{"默认渐变", "桌面壁纸"};
                         const int bgCount = aeroGlass ? 3 : 2;
-                        bool bgPicked = ImGui::Combo("##bgstyle", &bgMode, bgItems);
+                        const int bgSel = std::clamp(bgMode, 0, bgCount - 1);
+                        bool bgPicked = ui::combo("##bgstyle", bgItems[static_cast<std::size_t>(bgSel)].c_str(),
+                            bgItems, &bgMode, w);
                         bgPicked |= ui::padComboNudge(&bgMode, bgCount);
                         if (bgPicked) {
                             userSettings.bgStyle = bgMode;
@@ -4565,9 +4568,11 @@ int main(int argc, char** argv)
                         // area) falls back to the Basic frame on Windows 7, which is
                         // worse than what it removes. See AGENTS.md.
                         static int glassModeUi = userSettings.glassMode == 2 ? 1 : 0;
-                        ImGui::SetNextItemWidth(w);
-                        bool glassPicked = ImGui::Combo("##glassmode", &glassModeUi,
-                            "extend frame\0无边框窗口\0");
+                        static const std::vector<std::string> kGlassItems = {
+                            "extend frame", "无边框窗口"};
+                        const int glassSel = std::clamp(glassModeUi, 0, 1);
+                        bool glassPicked = ui::combo("##glassmode", kGlassItems[glassSel].c_str(),
+                            kGlassItems, &glassModeUi, w);
                         glassPicked |= ui::padComboNudge(&glassModeUi, 2);
                         if (glassPicked) {
                             const int chosen = glassModeUi == 1 ? 2 : 0;
@@ -4967,10 +4972,11 @@ int main(int argc, char** argv)
                         ImGui::Text("多开");
                         int mode = userSettings.instanceMode;
                         colSet(0);
-                        ImGui::SetNextItemWidth(w);
-                        bool modePicked = ImGui::Combo("##instancemode", &mode,
-                            "只允许一个实例\0"
-                            "允许多开，新实例登录另一个用户\0");
+                        static const std::vector<std::string> kInstanceItems = {
+                            "只允许一个实例", "允许多开，新实例登录另一个用户"};
+                        const int instSel = std::clamp(mode, 0, 1);
+                        bool modePicked = ui::combo("##instancemode", kInstanceItems[instSel].c_str(),
+                            kInstanceItems, &mode, w);
                         modePicked |= ui::padComboNudge(&mode, 2);
                         if (modePicked) {
                             const int picked = std::clamp(mode, 0, 1);
@@ -5103,18 +5109,19 @@ int main(int argc, char** argv)
                             current = static_cast<int>(i);
                         }
                     }
-                    std::vector<const char*> labels;
+                    std::vector<std::string> labels;
                     labels.reserve(profiles.size());
                     for (const game::UserProfile& user : profiles) {
-                        labels.push_back(user.name.c_str());
+                        labels.push_back(user.name);
                     }
                     int chosen = current;
-                    ImGui::SetNextItemWidth(interior);
+                    const int labelCount = static_cast<int>(labels.size());
                     bool profilePicked = !labels.empty()
-                        && ImGui::Combo("##profile", &chosen, labels.data(),
-                            static_cast<int>(labels.size()));
+                        && ui::combo("##profile",
+                            labels[static_cast<std::size_t>(std::clamp(chosen, 0, labelCount - 1))].c_str(),
+                            labels, &chosen, interior);
                     if (!labels.empty()) {
-                        profilePicked |= ui::padComboNudge(&chosen, static_cast<int>(labels.size()));
+                        profilePicked |= ui::padComboNudge(&chosen, labelCount);
                     }
                     if (profilePicked) {
                         if (chosen != current) {
