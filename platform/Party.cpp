@@ -22,10 +22,11 @@ constexpr int kTitleBytes = 192;
 // purpose: a window that is busy decoding a chart does not tick either, and
 // reaping a live player mid-load would be far worse than a late cleanup.
 constexpr LONG kStaleMs = 6000;
-// v2: added trackEndMs (the host's run length). The layout is part of the
-// protocol, so an old build simply opens a different mapping instead of reading
-// these fields at the wrong offsets.
-constexpr wchar_t kMappingName[] = L"Local\\CppSekai.Party.v2";
+// v2: added trackEndMs (the host's run length).
+// v3: added the per-seat lead-in skip counter (skipReq).
+// The layout is part of the protocol, so an old build simply opens a different
+// mapping instead of reading these fields at the wrong offsets.
+constexpr wchar_t kMappingName[] = L"Local\\CppSekai.Party.v3";
 
 struct SharedSeat
 {
@@ -37,6 +38,10 @@ struct SharedSeat
     volatile LONG score;
     volatile LONG combo;
     volatile LONG lifePermille;
+    // Lead-in skip requests from this seat: bumped by the 跳过 button, polled by
+    // the host (see PartyLink::requestSkip). Per seat so no two windows ever
+    // write the same word.
+    volatile LONG skipReq;
     char name[kPartyNameBytes];
 };
 
@@ -195,12 +200,13 @@ bool PartyLink::init()
         seat.difficulty = -1;
         // A window that just joined is *in* the round from this moment (it is
         // sitting in the room, on the song select), so the host waits for its
-        // 确定 instead of starting without it. 旁观 is what puts a seat back to
-        // the lobby.
+        // 确定 instead of starting without it. Only a window that never confirms
+        // (or a seat the previous round left behind) falls back to the lobby.
         seat.seat = PartySeatChoosing;
         seat.score = 0;
         seat.combo = 0;
         seat.lifePermille = 1000;
+        seat.skipReq = 0;
         seat.name[0] = '\0';
         std::atomic_thread_fence(std::memory_order_release);
         if (InterlockedCompareExchange(&seat.alive, 1, 0) != 0) {
@@ -464,6 +470,26 @@ void PartyLink::clearPlayingScore()
     seat.lifePermille = 1000;
 }
 
+void PartyLink::requestSkip()
+{
+    if (!mActive || gBlock == nullptr) {
+        return;
+    }
+    InterlockedIncrement(&gBlock->seats[mSlot].skipReq);
+}
+
+int PartyLink::skipTotal() const
+{
+    if (!mActive || gBlock == nullptr) {
+        return 0;
+    }
+    int total = 0;
+    for (int i = 0; i < kPartyMaxSlots; ++i) {
+        total += static_cast<int>(gBlock->seats[i].skipReq);
+    }
+    return total;
+}
+
 void PartyLink::lockSong(int musicId, const std::string& songKey, const std::string& title,
     int difficulty, int leadInMs)
 {
@@ -659,7 +685,7 @@ bool PartyLink::allReady() const
     int inRoom = 0;
     for (const PartyPlayer& player : list) {
         if (player.seat == PartySeatLobby) {
-            continue; // opted out of this round (旁观): not part of it
+            continue; // not in this round (never confirmed, or sat the last one out)
         }
         ++inRoom;
         if (!player.ready) {

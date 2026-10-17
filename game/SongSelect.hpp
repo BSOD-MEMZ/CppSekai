@@ -521,11 +521,13 @@ enum SelectAction
 // ---------------------------------------------------------------------------
 // 多人游玩 on the song select (see platform/Party.hpp).
 //
-// The room has no screen of its own: the list belongs to the host, everybody
-// else sees it greyed out and read-only, and the phone panel shows the song the
-// host is parked on so a member picks a difficulty right there. 确定 is what
-// starts the round - every window presses it once and the live begins as soon
-// as the last player has.
+// The room has no screen of its own: the song list belongs to the host, so on
+// every other window the list itself is read-only (nothing to scroll, nothing
+// to pick) and the phone panel shows the song the host is parked on so a member
+// picks a difficulty right there. Everything *around* the list stays live -
+// 搜索 / 排序 / 分组 / 刷新 / 音乐商店 / 猜歌 / 设置 are per-window tools and
+// were never the room's business. 确定 is what starts the round: every window
+// presses it once and the live begins as soon as the last player has.
 //
 // Pass `party` (and `partyOut`) only when the shared room is live; leaving them
 // out is plain single-window play.
@@ -541,7 +543,6 @@ struct SelectPartyInfo
     int lockedEntry = -1;
     int myDifficulty = -1;  // canonical index (see game::difficultyIndex), -1 = none
     bool confirmed = false; // this window already pressed 确定 for this song
-    bool spectating = false; // opted out of this round (观察)
     std::string status;     // room line under the 确定 button
 };
 
@@ -549,7 +550,6 @@ struct SelectPartyResult
 {
     int difficulty = -1;   // the player picked this canonical difficulty index
     bool confirm = false;  // 确定 was pressed (confirm / start the round)
-    bool spectate = false; // 旁观 was pressed (leave this round, stay in the room)
 };
 
 // Draws the screen. `selected` is kept between frames; returns the index of

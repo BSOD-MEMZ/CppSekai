@@ -2649,18 +2649,26 @@ UI 在 **设置 → 演奏 → 按键映射**（3 列 × 4 行，点一格再按
 只是不拿一排并不存在的队友去烦人。**演算里的"加载中/即将开始"和错误行
 （谱面加载失败 / 本窗口没有这首曲子）照常显示**——那是本窗口自己的状态，不是多人话术。
 
-流程（2026-09-18 定稿，之前的"房间页 + 准备 + 10s 倒计时"已删）：
+流程（2026-09-18 定稿，之前的"房间页 + 准备 + 10s 倒计时"已删；2026-10-17 收尾）：
 **第一个窗口是房主**，选曲列表归它（它的光标停在哪个曲目，就立刻广播哪个曲目）；
-其他窗口的列表是**只读**的（灰罩 + 「只读·由房主选曲」+ 一律禁用的搜索/排序/刷新 + 灰掉的随机按钮），
+其他窗口的列表是**只读**的（灰罩 + 「只读·由房主选曲」+ 随机按钮变灰），
+**但列表之外的工具一律不禁用**——搜索 / 排序 / 分组 / 刷新 / 音乐商店 / 猜歌 / 设置都是
+每个窗口自己的事（2026-10-17 去掉了顶栏的 `BeginDisabled` 和那条盖住顶栏的
+「多人游玩 · 列表只读」横幅）。搜索框在成员窗口也真的会过滤镜像列表，
+只是**房主那首永远留在 `visible` 里**（`lockedGroup` union 回去，并进列表缓存签名），
+否则列表和手机面板会各说各话。
 它们的**手机面板显示房主的曲目**，难度就在那里点；**所有人的「确定」= 已经决定的信号**，
-房主也按确定，最后一个按下去就**立刻**开打（只有 lead-in，没有额外等待）。
+房主也按确定，**最后一个人**按下去才**立刻**开打（只有 lead-in，没有额外等待）。
 
-- **谁按了什么**（`mpConfirmed` / `mpSpectating` / `mpPublished`，都在 main.cpp）：
+- **必须全员确定，没有强制开始**（2026-10-17 删）：房主再按一次确定**什么都不额外发生**
+  （原来那条 `forcing = mpConfirmed && !allReady()` → `beginLoading()` 的路整个没了）。
+  有人不按就谁也别想开——这是刻意的，不是漏洞。
+- **谁按了什么**（`mpConfirmed` / `mpPublished`，都在 main.cpp）：
   - 房主：光标换曲 → `publishHostSong()`（`lockSong`，epoch++，成员据此清空自己的难度/确定）；
-    按确定 → 自己 ready + 记住 `mpConfirmedEpoch`；再按一次且没全 ready → **强制开始**。
+    按确定 → 自己 ready + 记住 `mpConfirmedEpoch`。
   - 成员：手机里点难度 → `party.setDifficulty`；按确定 → ready。换曲/回到大厅时自己的答案作废。
-  - 旁观：banner 右侧的胶囊把座位退回 `PartySeatLobby`，**这样它就不会卡住房主的开局**
-    （`allReady()` 只看非 Lobby 座位；`inRoom >= 1`，所以房里只剩房主时它自己确定就开）。
+  - `allReady()` 只看**非 Lobby** 座位（`inRoom >= 1`，所以房里只剩房主时它自己确定就开）：
+    Lobby 座位 = 没按确定、或者上一轮坐掉的那个窗口，不算在局里。
   - 进房间时座位直接是 `PartySeatChoosing`：刚加入的窗口也算"在局里"，房主要等它按确定
     （否则房主会在新窗口还没看清楚前就开局）。
 - **加载宽限没了**：老代码是 `4s 宽限 + lead-in`（默认 10s），现在只有 lead-in（默认 6s）。
@@ -2677,8 +2685,10 @@ UI 在 **设置 → 演奏 → 按键映射**（3 列 × 4 行，点一格再按
   坑：
   - `armStart` 只在 `phase == PartyCharging` 时才写，否则会把已经释放的房间"复活"；
     房主侧用 `mpArmedEpoch` 保证一轮只武装一次（重复武装会把时刻一直往后推）。
-  - 房主的**强制开始**（第二次按确定）也走 `beginLoading()`：没按确定的窗口会立刻
-    `setSeat(PartySeatLobby)` 让开，所以不会卡住武装。
+  - 房主自己的加载失败时 `releaseSong()` 回大厅，成员按"房主已放弃本曲"回列表。
+  - **没有"强制开始"**（2026-10-17）：房主再按确定不开局，只有 `allReady()` 才 `beginLoading()`。
+    迟到/没按确定的窗口在 charge 那一帧 `setSeat(PartySeatLobby)` 让开（`charge skipped`），
+    这是**它自己让开**，不是房主把它踢出去。
   - 成员第一次看到 charge 时的 **`late` 判定必须带 `startCounter != 0`**：QPC 是个大正数，
     裸写 `now >= startCounter` 会在加载段就把所有窗口判成"错过开局"。
   - **看门狗** `kPartyLoadTimeoutSec = 6.0`：某个窗口加载失败/卡住时房主照常武装
@@ -2688,8 +2698,9 @@ UI 在 **设置 → 演奏 → 按键映射**（3 列 × 4 行，点一格再按
 - **结算画面进不去了（2026-09-18 修）**：多人路径从来没调 `announceTrack()`，
   `trackDurationSec` 一直是 0，于是 `resultDue` 恒假 —— 歌放完就停在演奏画面。
   现在 charge 加载成功后两边都调 `announceTrack()`，并且**房主把 `trackDurationSec`
-  也写进共享页**（`publishTrackEnd` / `readTrackEnd`，共享块多了一个 `trackEndMs`，
-  映射名升到 `Local\CppSekai.Party.v2`；v1 的旧窗口不会读错偏移）。
+  也写进共享页**（`publishTrackEnd` / `readTrackEnd`，共享块多了 `trackEndMs`，映射名 v2；
+  2026-10-17 又一个字段 `skipReq`，映射名升到 `Local\CppSekai.Party.v3`——旧窗口会去开
+  另一个映射，不会读错偏移）。
   成员每帧读它——成员没有 BGM，自己算的话会拿谱面最后一个音符当曲终，比房主早好几秒切结算。
 - **传输**：一条命名文件映射（`platform/Party.cpp`），
   8 个座位 + 一个控制块。没有 socket、没有管道、没有序列化，也不 flush：**一次状态变更
@@ -2719,6 +2730,18 @@ UI 在 **设置 → 演奏 → 按键映射**（3 列 × 4 行，点一格再按
 - **BGM 只有房主播**：成员的 `startSession(..., allowMusic=false)` —— 不 `loadMusic`、不检测
   头部静音，`audio.hasMusic()` 为假，于是时钟自然落回 wall clock（正好被上面的跟随覆盖）。
   选曲界面的试听也只有房主放（`playPreviewHere`）。同一份 mp3 在两个窗口差几毫秒放出来就是回声。
+- **开幕卡的「跳过」是整房一起跳**（2026-10-17 修，原来在多人里按了没反应）：
+  lead-in 属于房间而不是某个窗口——成员的时钟每帧都被拉到房主的时钟上
+  （`resolveSongClock`），所以在成员窗口里挪 `perfStart` / `audio` 位置**下一帧就被擦掉**，
+  看起来就是按钮坏了。现在 `skipIntro()` 在 `party.active()` 时**只记一个请求**
+  （`PartyLink::requestSkip()`，往**自己座位**里的 `skipReq` 计数器 +1），
+  房主在演奏态每帧比一次 `skipTotal()`（所有座位之和），涨了就自己执行
+  `performIntroSkip()` —— 房主的时钟一跳，全房跟着跳。只认**上涨**：
+  座位被回收会让总和掉下去，那不算请求。一帧延迟，看不出来。
+  开局时 `mpSkipSeen = party.skipTotal()` 取基线，否则上一局的请求会在新一局开头触发一次跳跃。
+  实测（两窗口 `--party-auto`，winsend 点成员窗口的跳过钮）：
+  成员日志 `[intro] lead-in skip requested (the host performs it)` →
+  房主日志 `[intro] lead-in skipped (the whole room)`。
 - **暂停 / 放弃 / 重试**（2026-09-18 补）：房主暂停时 `setHostPaused(true)`，成员看到后
   **把画面钉在房主报的那个 songTime 上**（不外推，否则暂停期间会越跑越远）；恢复瞬间靠
   `|error| > 0.2` 的 snap 重新对齐。**成员按不动暂停**（`requestPause()` 直接拒绝并往
@@ -2762,7 +2785,8 @@ UI 在 **设置 → 演奏 → 按键映射**（3 列 × 4 行，点一格再按
   没有房间时它就是在 1.8s 按一下确定（配 `--no-party` 可以测纯单机流程）。
 - **房间状态在选曲界面上**（2026-09-18）：`game::SelectPartyInfo/Result` 是选曲界面
   与房间之间的接口（`drawSongSelect` 最后两个参数，不传就是纯单机）。
-  `--screenshot-time` 在选曲态就能拍到 banner / 灰罩 / 手机面板（不再需要房间页）。
+  `--screenshot-time` 在选曲态就能拍到灰罩 / 手机面板（顶栏那条横幅 2026-10-17 已删，
+  状态行只剩手机面板「确定」下面那一行 + 左下角的房间胶囊）。
 - **偏差断言要绕开"成员追赶"那一下**：mp_verify 里插值时如果成员这段 offset 变了 >20ms
   就单独统计（`member clock corrections seen`），不算进 skew——那是它按设计跳到房主时钟上，
   插值会把一个 350ms 的假偏差报出来（真机上两窗口始终是同一条时间轴）。

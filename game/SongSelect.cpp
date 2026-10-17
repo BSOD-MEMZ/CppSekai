@@ -2743,10 +2743,14 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         }
         return -1;
     };
+    // The list row the room is on, if this window has it (-1 = nothing locked
+    // yet, or this window has no such chart). Kept out here because the search
+    // filter below must never hide it.
+    int lockedGroup = -1;
     if (partyReadOnly && party->songLocked && party->lockedEntry >= 0
         && party->lockedEntry < static_cast<int>(entries.size())) {
         selected = party->lockedEntry;
-        const int lockedGroup = groupOf(party->lockedEntry);
+        lockedGroup = groupOf(party->lockedEntry);
         if (lockedGroup >= 0) {
             groupIndex = lockedGroup;
         }
@@ -2868,11 +2872,10 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     // lines the whole row up at one height and only varies the corner radius,
     // which is what the search pill (fully round) and the combos (12k) do here.
     const float searchH = 33.0f * k;
-    // 多人游玩 member: the header row (search box, sort / grouping, 刷新) all
-    // work on the list, and the list is the host's. Everything is disabled
-    // rather than skipped so the geometry below stays where it is, and the room
-    // banner is drawn over it (see after the 刷新 button).
-    ImGui::BeginDisabled(partyReadOnly);
+    // 多人游玩 member: the header row stays fully usable. Only the *list* is
+    // the host's (see `listHovered` below and the veil at the end of the list);
+    // the tools above it are per-window and were never the room's business -
+    // searching, sorting and 刷新 a mirror list does not change what is played.
     ImGui::SetCursorScreenPos(ImVec2(listX, headerRowY));
     // Same translucent-white pill as ui::combo's box, so the search field and
     // the two selectors beside it read as one row (see ui::combo for the look).
@@ -3028,14 +3031,10 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     // Rescan button, in the same row as the selectors. F5 has always done this
     // but nothing on screen said so; a chart dropped into charts/ while the
     // game is running is exactly what a player reaches for.
-    //
-    // The geometry is computed out here because the 多人游玩 banner has to cover
-    // the whole header row, this button included.
     const float headerRowH = 33.0f * k; // same as the search box / combos / chip
     // 原生菜单栏开着的时候（设置 > 系统），刷新 / 音乐商店 / 设置 三个窗口级操作已经
     // 收进窗口顶部的菜单里了 —— 顶栏只留 猜歌，不然两处重复。位置从一个游标往后排，
-    // 省得为"哪几个按钮在"写两套坐标；多人游玩那条横幅的右边界挂在 guessX 上，所以
-    // 它自己会跟着收窄，不用单独管。
+    // 省得为"哪几个按钮在"写两套坐标。
     const bool headerFileButtons = !nativeMenuBar;
     // 下拉收起来的时候按钮跟着往左站（不然中间空出两个下拉的宽度）。
     float headerX = comboX0
@@ -3113,75 +3112,11 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         ui::se(ui::SeClick);
         newGuessQuestion();
     }
-    ImGui::EndDisabled();
-
-    // ------------------------------------------------------------------
-    // 多人游玩: the banner takes the header row over on a member's window.
-    // Drawn after the (disabled) widgets, so it covers them - which is also how
-    // a member never sees a search filter it could not have typed.
-    // ------------------------------------------------------------------
-    if (partyReadOnly) {
-        const float bannerH = headerRowH + 12.0f * k;
-        const ImVec2 b0(listX, headerRowY - 6.0f * k);
-        const ImVec2 b1(guessX + guessW, b0.y + bannerH);
-        const float cy = (b0.y + b1.y) * 0.5f;
-        dl->AddRectFilled(b0, b1, IM_COL32(18, 20, 38, 246), 12.0f * k);
-        dl->AddRect(b0, b1, IM_COL32(255, 255, 255, 46), 12.0f * k, 0, 1.5f * k);
-        // The same teal dot the room badge carries: "the room is live".
-        dl->AddCircleFilled(ImVec2(b0.x + 22.0f * k, cy), 6.0f * k, IM_COL32(106, 232, 208, 255));
-        float textX = b0.x + 40.0f * k;
-        const char* head = "多人游玩 · 列表只读";
-        addTextLeft(dl, body, 17.0f * k, ImVec2(textX, cy), IM_COL32(236, 238, 248, 255), head);
-        textX += body->CalcTextSizeA(17.0f * k, FLT_MAX, 0.0f, head).x + 14.0f * k;
-
-        // 旁观 / 加入 (right end of the banner): out of this round without
-        // leaving the room, so an idle window never blocks the host's start.
-        const float pillW = 88.0f * k;
-        const float pillH = 30.0f * k;
-        const ImVec2 p0(b1.x - pillW - 10.0f * k, cy - pillH * 0.5f);
-        const ImVec2 p1(p0.x + pillW, p0.y + pillH);
-        const bool spectating = party->spectating;
-        ImGui::SetCursorScreenPos(p0);
-        ImGui::PushID("spectate");
-        ImGui::InvisibleButton("spectate", ImVec2(pillW, pillH));
-        const bool pillHovered = ImGui::IsItemHovered();
-        const bool pillPressed = ImGui::IsItemClicked();
-        ImGui::PopID();
-        dl->AddRectFilled(p0, p1,
-            spectating ? IM_COL32(56, 62, 92, 255) : IM_COL32(32, 36, 60, 255), pillH * 0.5f);
-        dl->AddRect(p0, p1,
-            spectating ? IM_COL32(255, 255, 255, 60)
-                       : (pillHovered ? IM_COL32(255, 255, 255, 90) : IM_COL32(255, 255, 255, 36)),
-            pillH * 0.5f, 0, 1.5f * k);
-        addTextCentered(dl, body, 15.0f * k, ImVec2((p0.x + p1.x) * 0.5f, cy),
-            spectating ? IM_COL32(178, 178, 198, 255) : IM_COL32(236, 238, 248, 255),
-            spectating ? "加入" : "旁观");
-        if (pillPressed && partyOut != nullptr) {
-            ui::se(ui::SeClick);
-            partyOut->spectate = true;
-        }
-
-        // Room status, between the title and the pill ("等待房主选曲" /
-        // "已确定，等待其他玩家" / "本窗口没有这首曲子").
-        const float statusMax = p0.x - textX - 16.0f * k;
-        if (statusMax > 40.0f * k) {
-            const std::string line = ellipsize(body, 15.0f * k, party->status, statusMax);
-            addTextLeft(dl, body, 15.0f * k, ImVec2(textX, cy), grayText, line.c_str());
-        }
-        if (std::getenv("CPSEKAI_UI_TRACE") != nullptr) {
-            std::printf("[ui] room banner %.0f,%.0f - %.0f,%.0f (spectate pill %.0f,%.0f)\n", b0.x,
-                b0.y, b1.x, b1.y, (p0.x + p1.x) * 0.5f, cy);
-        }
-    }
 
     // 设置, in the same header row as the other buttons. It used to be the round
     // gear at the bottom of the phone panel; that spot is 切换歌手 now, and a
     // per-window dialog (volume, judgement windows) belongs with 刷新 / 音乐商店 /
     // 猜歌 rather than inside a panel that is about the *song*.
-    //
-    // Deliberately outside the partyReadOnly scope above and drawn after the room
-    // banner: a 多人游玩 member keeps its own volume / judgement windows, and the
-    // banner stops at 猜歌 so it never covers this button if the row grows again.
     //
     // 原生菜单栏开着的时候它不在这儿 —— 菜单的 文件 > 设置… 就是它（位置照旧留给
     // 猜歌右边，只是不画）。多人游玩成员的窗口也一样：菜单栏是每个窗口自己的。
@@ -3191,11 +3126,13 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         action = SelectSettings;
     }
 
-    // Groups matching the search filter. A 多人游玩 member has no search box (it
-    // is disabled and covered by the room banner), and a stale filter would be
-    // free to hide the very song the room is on - so the filter is ignored
-    // there, not just un-editable.
-    const bool filterOn = !partyReadOnly && searchBuf[0] != '\0';
+    // Groups matching the search filter. The box is usable in 多人游玩 too (it is
+    // a per-window tool, like 排序 / 分组), so the filter applies there as well -
+    // but it must never hide the row the room is on: that row is what the phone
+    // panel is showing, and a filter typed for some other song would leave the
+    // list and the panel telling different stories. So the locked group is
+    // unioned back in below.
+    const bool filterOn = searchBuf[0] != '\0';
     std::vector<int> visible;
     if (!filterOn) {
         for (int gi = 0; gi < static_cast<int>(groups.size()); ++gi) {
@@ -3233,6 +3170,11 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
                 || (useKana && g.kana.find(kanaNeedle) != std::string::npos)) {
                 visible.push_back(gi);
             }
+        }
+        // The room's own row always survives the filter (see the note above).
+        if (partyReadOnly && lockedGroup >= 0
+            && std::find(visible.begin(), visible.end(), lockedGroup) == visible.end()) {
+            visible.push_back(lockedGroup);
         }
         if (std::find(visible.begin(), visible.end(), groupIndex) == visible.end() && !visible.empty()) {
             groupIndex = visible.front();
@@ -3290,7 +3232,11 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             : sortMode;
     const std::string listSignature = std::string(searchBuf) + "|" + std::to_string(order) + "|"
         + std::to_string(groupMode) + "|" + std::to_string(diffIndex) + "|" + std::to_string(entries.size())
-        + "|ro" + std::to_string(partyReadOnly ? 1 : 0);
+        + "|ro" + std::to_string(partyReadOnly ? 1 : 0)
+        // The room's row is unioned into the filtered list (see above), so which
+        // row that is has to be part of the cache key - otherwise a host moving
+        // to a song the filter excludes would leave the old rows on screen.
+        + "|lg" + std::to_string(lockedGroup);
     if (listSignature != lastSignature) {
         lastSignature = listSignature;
         cachedRows = buildRows(groups, visible, entries, diffIndex, order, groupMode);

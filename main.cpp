@@ -3111,14 +3111,14 @@ int main(int argc, char** argv)
     // actually start.
     //
     // 确定 is the room's one button: the host locks/publishes the song with it,
-    // a member marks itself ready with it, and the live starts the moment every
-    // player still in the round has pressed it - hence the three flags below.
+    // a member marks itself ready with it, and the live starts only once *every*
+    // player in the round has pressed it - there is deliberately no way for the
+    // host to start over somebody's head. Hence the flags below.
     // ------------------------------------------------------------------
     game::ChartEntry mpEntry;   // the chart this window plays in the room
     int mpEntryIndex = -1;      // its index in `entries` (host side)
     int mpMyDifficulty = -1;    // canonical difficulty index picked in the room
     bool mpConfirmed = false;   // this window pressed 确定 for the current song
-    bool mpSpectating = false;  // 旁观: out of this round, still in the room
     bool mpPublished = false;   // host: the focused song is already published
     std::string mpPublishedKey; // host: the chart file name it published
     int mpSeenLockEpoch = -1;   // last song lock this window reacted to
@@ -6462,12 +6462,20 @@ int main(int argc, char** argv)
     // Opening-card skip, shared by the mouse / touch paths and the pad's A.
     // The button only exists while the card is on screen, so `available` is
     // also the guard for "A does nothing else during the lead-in".
+    //
+    // 多人游玩: the lead-in belongs to the room, not to this window. Only the
+    // host owns a chart clock - everybody else is steered onto it every frame
+    // (resolveSongClock), so moving a member's own perfStart/audio position
+    // would be undone a frame later. That is why 跳过 did nothing in a room
+    // before. A press in any window now just records a request in that window's
+    // seat; the host polls skipTotal() (see the Play block) and does the real
+    // jump once for everybody.
     // -----------------------------------------------------------------------
     auto introSkipAvailable = [&]() {
         const double currentSongTime = songClock();
         return currentSongTime + leadInSec < static_cast<double>(game::kHudIntroDurationSec);
     };
-    auto skipIntro = [&]() {
+    auto performIntroSkip = [&]() {
         if (audio.hasMusic()) {
             audio.skipLeadIn();
         } else {
@@ -6476,9 +6484,22 @@ int main(int argc, char** argv)
             perfStart = SDL_GetPerformanceCounter()
                 - static_cast<Uint64>(leadInSec * static_cast<double>(perfFreq));
         }
-        std::printf("[intro] lead-in skipped\n");
+        std::printf("[intro] lead-in skipped%s\n", party.active() ? " (the whole room)" : "");
         std::fflush(stdout);
     };
+    auto skipIntro = [&]() {
+        if (party.active()) {
+            party.requestSkip();
+            std::printf("[intro] lead-in skip requested (the host performs it)\n");
+            std::fflush(stdout);
+            return;
+        }
+        performIntroSkip();
+    };
+    // Last skip counter this window acted on (see the Play block). A seat that
+    // gets reclaimed drops the sum back to a lower value, so only a *rise*
+    // counts as a request.
+    int mpSkipSeen = 0;
     // A choice made with the pad on the pause dialog, handed to
     // ui::messageDialog() as a forced click (see the dialog below).
     int pauseDialogChoice = -1;
@@ -8178,7 +8199,6 @@ int main(int argc, char** argv)
                     && mpSnap.epoch != mpSeenLockEpoch) {
                     mpSeenLockEpoch = mpSnap.epoch;
                     mpConfirmed = false;
-                    mpSpectating = false;
                     mpMyDifficulty = -1;
                     mpEntryIndex = -1;
                     party.setDifficulty(-1);
@@ -8190,9 +8210,8 @@ int main(int argc, char** argv)
                 // Back in the lobby (the run just ended): arm the next round, so
                 // the same button starts the next song instead of replaying.
                 if (mpSnap.phase == platform::PartyLobby
-                    && (mpConfirmed || mpSpectating || mpPublished)) {
+                    && (mpConfirmed || mpPublished)) {
                     mpConfirmed = false;
-                    mpSpectating = false;
                     mpPublished = false;
                     mpPublishedKey.clear();
                     mpMyDifficulty = -1;
@@ -8297,7 +8316,6 @@ int main(int argc, char** argv)
                 mpPublishedKey = key;
                 mpConfirmed = false; // a new song needs a fresh 确定
                 mpConfirmedEpoch = -1;
-                mpSpectating = false;
                 const int diff = game::difficultyIndex(focused.difficulty);
                 mpMyDifficulty = diff >= 0 ? diff : -1;
                 party.setReady(false);
@@ -8329,10 +8347,8 @@ int main(int argc, char** argv)
                     } else if (party.allReady()) {
                         mpStatus = partySolo ? std::string() : "全员确定 · 即将开始";
                     } else {
-                        mpStatus = partySolo ? std::string() : "已确定 · 等待其他玩家（再按一次强制开始）";
+                        mpStatus = partySolo ? std::string() : "已确定 · 等待其他玩家";
                     }
-                } else if (mpSpectating) {
-                    mpStatus = "旁观中 · 点确定加入本曲";
                 } else if (mpSnap.phase == platform::PartyLobby) {
                     mpStatus = "等待房主选曲";
                 } else if (mpLocked < 0) {
@@ -8375,7 +8391,6 @@ int main(int argc, char** argv)
                 selParty.lockedEntry = mpLocked;
                 selParty.myDifficulty = mpMyDifficulty;
                 selParty.confirmed = mpConfirmed;
-                selParty.spectating = mpSpectating;
                 selParty.status = mpStatus;
             }
             game::SelectPartyResult selPartyOut;
@@ -8531,23 +8546,13 @@ int main(int argc, char** argv)
 
             // ---- 确定: the room's one button --------------------------------
             // The host locks the song with it, a member marks itself ready with
-            // it, and the live starts the moment every player still in the round
-            // has pressed it (see the charge block below).
+            // it, and the live starts the moment *every* player in the round has
+            // pressed it (see the charge block below). There is no "press again
+            // to force it": a straggler is waited for, on purpose.
             if (party.active()) {
                 const bool host = party.isHost();
-                if (selPartyOut.spectate) {
-                    // 旁观: out of this round without leaving the room, so an
-                    // idle window can never hold the host's start hostage.
-                    mpSpectating = !mpSpectating;
-                    mpConfirmed = false;
-                    party.setReady(false);
-                    party.setSeat(mpSpectating ? platform::PartySeatLobby : platform::PartySeatChoosing);
-                    std::printf("[party] %s\n", mpSpectating ? "spectating this round" : "back in the round");
-                    std::fflush(stdout);
-                }
                 if (!host && selPartyOut.difficulty >= 0) {
                     mpMyDifficulty = selPartyOut.difficulty;
-                    mpSpectating = false;
                     party.setDifficulty(mpMyDifficulty);
                     std::printf("[party] difficulty %s (%d)\n", game::difficultyName(mpMyDifficulty),
                         mpMyDifficulty);
@@ -8571,38 +8576,11 @@ int main(int argc, char** argv)
                                 mpMyDifficulty = hostDiff;
                                 party.setDifficulty(hostDiff);
                             }
-                            // Already confirmed and the room is still not
-                            // ready: this press forces the start, so a member
-                            // who never confirms cannot stall the rest.
-                            const bool forcing = mpConfirmed && !party.allReady();
                             mpConfirmed = true;
                             mpConfirmedEpoch = party.read().epoch;
                             party.setReady(true);
-                            std::printf("[party] host confirmed%s (epoch %d)\n",
-                                forcing ? " [force start]" : "", mpConfirmedEpoch);
+                            std::printf("[party] host confirmed (epoch %d)\n", mpConfirmedEpoch);
                             std::fflush(stdout);
-                            if (forcing) {
-                                // Forcing means "start now, do not wait for the
-                                // stragglers" - so it opens the *loading* phase
-                                // like a normal start and lets the arming block
-                                // decide when the instant is (a window that never
-                                // confirmed sits this one out at once, so it
-                                // cannot hold the start).
-                                party.beginLoading();
-                                mpChargeStartCounter = platform::PartyLink::nowCounter();
-                                std::printf("[party] forced start -> loading\n");
-                                std::fflush(stdout);
-                            }
-                        }
-                    } else if (mpSpectating) {
-                        // Joining back in is the same press: it un-spectates and
-                        // readies up in one go.
-                        mpSpectating = false;
-                        if (mpLocked >= 0 && mpMyDifficulty >= 0) {
-                            mpConfirmed = true;
-                            party.setSeat(platform::PartySeatReady);
-                            party.setReady(true);
-                            party.setDifficulty(mpMyDifficulty);
                         }
                     } else if (mpSnap.phase == platform::PartyLobby || mpLocked < 0) {
                         mpStatus = "房主还没有定下本窗口能打的曲子";
@@ -8636,7 +8614,6 @@ int main(int argc, char** argv)
                     } else if (mpMyDifficulty < 0) {
                         if (findPartyEntry(mpSnap.musicId, mpSnap.songKey, partyAutoDiff) >= 0) {
                             mpMyDifficulty = partyAutoDiff;
-                            mpSpectating = false;
                             party.setDifficulty(mpMyDifficulty);
                             std::printf("[party] auto difficulty %s (debug)\n",
                                 game::difficultyName(mpMyDifficulty));
@@ -8834,6 +8811,10 @@ int main(int argc, char** argv)
                     // is then what the members steer onto, see resolveSongClock).
                     beginSessionClockAt(mpSnap.startCounter);
                     party.setSeat(platform::PartySeatPlaying);
+                    // Skip requests are counted per seat and never reset, so the
+                    // starting value is this round's baseline: a 跳过 pressed on
+                    // the previous run must not fire here.
+                    mpSkipSeen = party.skipTotal();
                     if (host) {
                         // The room is live, not loading any more. Every reader
                         // already treats Charging and Running alike (roundOn,
@@ -8874,9 +8855,7 @@ int main(int argc, char** argv)
             if (party.active() && party.playerCount() > 1 && !showDebug) {
                 std::string hint;
                 if (party.isHost()) {
-                    hint = mpConfirmed ? "已确定 · 再按一次可强制开始" : "选好歌按确定开始";
-                } else if (mpSpectating) {
-                    hint = "旁观中 · 手机里选难度后按确定";
+                    hint = mpConfirmed ? "已确定 · 等待其他玩家" : "选好歌按确定开始";
                 } else if (mpConfirmed) {
                     hint = "已确定 · 等待其他玩家";
                 } else {
@@ -8901,6 +8880,23 @@ int main(int argc, char** argv)
             const double songTime = songClock();
             audio.update();
             const float outputTime = static_cast<float>(songTime + leadInSec);
+
+            // 多人游玩: somebody pressed 跳过 on the opening card. The press only
+            // recorded a request (see skipIntro), and the host is the one who can
+            // honour it - its chart clock is what every other window follows, so
+            // its jump carries the whole room with it. The host's own press takes
+            // this path too, one frame later.
+            if (party.active()) {
+                const int skipTotal = party.skipTotal();
+                if (skipTotal < mpSkipSeen) {
+                    mpSkipSeen = skipTotal; // a seat was reclaimed: the sum went back down
+                } else if (skipTotal > mpSkipSeen) {
+                    mpSkipSeen = skipTotal;
+                    if (party.isHost() && !paused && introSkipAvailable()) {
+                        performIntroSkip();
+                    }
+                }
+            }
 
             // 多人游玩: the room can move on while this window is playing. The
             // host's 放弃 / 重试 on its pause dialog hands the room back to the

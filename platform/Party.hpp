@@ -134,6 +134,17 @@ class PartyLink
     void setPlayingScore(double score, int combo, float life);
     void clearPlayingScore();
 
+    // ---- lead-in skip (any seat) -----------------------------------------
+    // The opening card's 跳过 is a room-wide act, because the lead-in is the
+    // *room's*: only the host owns a chart clock (everybody else follows it and
+    // would be snapped straight back), so a press in any window only records a
+    // request in that window's own seat. The host polls skipTotal() and does the
+    // actual jump once for the whole room. One frame of delay, invisible.
+    void requestSkip();
+    // Sum of every seat's request counter. Monotonic per seat; the host compares
+    // it against the value it last acted on (see the party block in main.cpp).
+    int skipTotal() const;
+
     // ---- host only -------------------------------------------------------
     // Publish the locked song and open the difficulty picker.
     void lockSong(int musicId, const std::string& songKey, const std::string& title, int difficulty,
@@ -163,10 +174,11 @@ class PartyLink
     // ---- shared reads ----------------------------------------------------
     PartyState read() const;
     std::vector<PartyPlayer> players() const;
-    // True when every player still in this round has pressed 确定. A seat that
-    // opted out (旁观) or walked back to the lobby is skipped, so a spectator
-    // never blocks the room - and a host that is alone counts as soon as it has
-    // confirmed itself.
+    // True when every player in this round has pressed 确定. A seat that has
+    // walked back to the lobby (it never confirmed, or it sat the previous round
+    // out) is skipped - it is not in this round - and a host that is alone
+    // counts as soon as it has confirmed itself. Nobody can start over a seat
+    // that *is* in the round: there is no "force start" any more.
     bool allReady() const;
     // True when every player still in this round has its chart decoded (seat
     // PartySeatLoaded). A seat that sat the round out (PartySeatLobby) is
