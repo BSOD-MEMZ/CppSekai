@@ -10307,7 +10307,9 @@ int main(int argc, char** argv)
         }
         if (story::consumeFinished()) {
             platform::guideHide();
-            userSettings.tutorialDone = true;
+            // --story-test is a debug run: it must not mark the profile as
+            // taught (it would silently eat the real first-run tutorial).
+            userSettings.tutorialDone = storyTestId.empty() ? true : userSettings.tutorialDone;
             if (tutorialMenuBarWasOn) {
                 userSettings.nativeMenuBar = true;
                 tutorialMenuBarWasOn = false;

@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 namespace storyui
@@ -20,6 +21,8 @@ namespace
     ImTextureID gDialogue = 0;
     ImTextureID gChoices = 0;
     ImTextureID gSceneText = 0;
+    ImTextureID gSkipIcon = 0;
+    float gSkipAspect = 28.0f / 44.0f;
 
 
     bool isNoLineStart(unsigned int cp)
@@ -150,6 +153,11 @@ bool loadTextures(platform::Renderer& renderer, const std::string& assetDir, std
     gDialogue = reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(dialogue));
     gChoices = reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(choices));
     gSceneText = reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(sceneText));
+    if (const platform::Renderer::HudSprite* skip = renderer.hud("ui_skip");
+        skip != nullptr && skip->id != 0 && skip->width > 0) {
+        gSkipIcon = reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(skip->id));
+        gSkipAspect = static_cast<float>(skip->height) / static_cast<float>(skip->width);
+    }
     if (gDialogue == 0 && gChoices == 0 && gSceneText == 0)
     {
         err = "story ui textures missing under " + base;
@@ -494,6 +502,12 @@ int choices(const Canvas& c, ImFont* font, const std::vector<std::string>& optio
         const bool hovered = ImGui::IsItemHovered();
         const bool held = ImGui::IsItemActive();
         const bool hit = ImGui::IsItemClicked();
+        if (std::getenv("CPSEKAI_UI_TRACE") != nullptr) {
+            std::printf("[story] choice %d hovered=%d any=%d mouse=%.0f,%.0f\n", i,
+                ImGui::IsItemHovered() ? 1 : 0, ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow) ? 1 : 0,
+                ImGui::GetIO().MousePos.x, ImGui::GetIO().MousePos.y);
+            std::fflush(stdout);
+        }
         ImGui::PopID();
         if (hovered)
         {
@@ -704,6 +718,44 @@ void imageCard(const Canvas& c, ImFont* font, const Image& img, const std::strin
                 IM_COL32(232, 232, 242, 245), caption.data() + line.begin, caption.data() + line.end);
             ty += lineH;
         }
+    }
+}
+
+ImTextureID skipIcon()
+{
+    return gSkipIcon;
+}
+
+void skipKey(ImDrawList* dl, const Canvas& c, const ImVec2& center, float hover, float press,
+    ImTextureID icon)
+{
+    if (dl == nullptr)
+    {
+        return;
+    }
+    // Same shape as game/Intro.cpp's opening-card key (SKIP_BTN_*): 40px disc in
+    // 1920x1080 units, three stacked shadow discs, white face, navy glyph. Kept
+    // in sync by hand - if one changes, change both.
+    const float base = 40.0f * c.scale;
+    const float radius = base * (1.0f + 0.05f * hover - 0.04f * press);
+    for (int layer = 3; layer >= 1; --layer) {
+        const float grow = static_cast<float>(layer) * 1.5f * c.scale;
+        const float drop = (1.2f + 0.5f * static_cast<float>(layer)) * c.scale;
+        const float alpha = layer == 3 ? 0.07f : (layer == 2 ? 0.11f : 0.15f);
+        dl->AddCircleFilled(ImVec2(center.x, center.y + drop), radius + grow,
+            IM_COL32(22, 24, 46, static_cast<int>(alpha * 255.0f)), 64);
+    }
+    dl->AddCircleFilled(center, radius,
+        IM_COL32(255, 255, 255, static_cast<int>((0.94f + 0.06f * hover) * 255.0f)), 64);
+
+    if (icon != 0)
+    {
+        const float iconW = 40.0f * c.scale * (1.0f + 0.05f * hover - 0.04f * press);
+        const float iconH = iconW * gSkipAspect;
+        dl->AddImage(icon, ImVec2(center.x - iconW * 0.5f, center.y - iconH * 0.5f),
+            ImVec2(center.x + iconW * 0.5f, center.y + iconH * 0.5f), ImVec2(0.0f, 0.0f),
+            ImVec2(1.0f, 1.0f),
+            IM_COL32(61, 60, 92, static_cast<int>((0.90f + 0.10f * hover) * 255.0f)));
     }
 }
 

@@ -191,9 +191,22 @@ void beginFrame();                                     // 主循环每帧清表
 ### 5.3 输入闸门
 - 鼠标：教学层是一个全屏 `ImGuiWindowFlags_NoBackground` 的窗口，ImGui 按 z 序判定 hover，
   底层按钮自然点不到，**不需要到处加 `if`**。
+  但**光有窗口不够**：ImGui 的 hover 是从窗口链表的**队首**往下找的，而玩家点过的窗口
+  （选曲界面自己的输入层）会被提到队首。原实现带了 `NoBringToFrontOnFocus`，教学层就永远
+  待在它下面 —— 对话框因为用的是全局 `IsMouseClicked` 还能推进，选项胶囊和跳过键却
+  `IsItemHovered()` 永远是 false，**整层看着正常、实际是点击穿透的**。
+  现在非 passthrough 的步骤每帧 `ImGui::SetNextWindowFocus()`（passthrough 不抢，
+  否则设置卡片点不动）。
 - 键盘：`escapePressed`（main.cpp:7744 那条链）加上 `&& !story::active()`，否则选曲界面按 ESC 直接退游戏。
   F5 刷新、空格预览同理。
 - 手柄：选项和推进都要进 `ui::PadScope` / `padNav`，这是老问题（自绘控件键盘够不着），别又漏一次。
+
+### 5.3.1 跳过键
+
+右上角那颗是 **pjsk 的圆形跳过键**，和开演前空白卡上的「跳过」是同一个控件
+（`game/Intro.cpp` 的 `SKIP_BTN_*` ↔ `storyui::skipKey`，40px 圆盘 + 三层投影 +
+`ui_skip` 图标染 `#3D3C5C`）。命中区是**圆**，不是外接矩形；点中就直接 `finish()`。
+两个地方的手感参数要一起改，别只改一边。
 
 ### 5.4 演奏中教学
 要 `paused = true` + `audio.pause()`，但**不要走暂停卡片那条路**（那里会触发 3-2-1 倒计时和房主权限检查）。
@@ -370,7 +383,17 @@ false —— 不锁存的话会永远等一局已经打完的歌。
 - 图片卡布局：等比 fit 进 1040×420；**太宽的图会往左让**（`cx = min(960, 1352 - w/2)`），
   否则会钻到选曲界面的手机面板底下。图片步骤的压暗更重（0.66），并垫一层深色板。
 
-### 9.7 验证
+### 9.7 文案
+
+讲解人是**初音未来**（`who: "初音未来"`），语气按 pjsk 里那个 16 岁的 Miku 来：明亮、
+爱用「～」和短句、会「哇——！」「诶嘿嘿」，鼓励为主，不说教。写新台词时注意：
+
+- 不 OOC：她不会阴阳怪气、不会摆前辈架子；讲解可以清楚，但不能像客服。
+- 字体只有 msyh + `GetGlyphRangesJapanese/ChineseSimplifiedCommon` 的范围，**♪（U+266A）
+  不在里面**，会渲染成「?」——第一版就踩了。真要音符，得给 atlas 加自定义 range。
+- 长句会换行成三行，1300 宽 / 44px 大约 29 个汉字一行，超过约 85 字就会挤到框外。
+
+### 9.8 验证
 
 ```bash
 ./build/cppsekai.exe --story-test --story-step N     --screenshot .workbuddy/shots/x.png --screenshot-time 4 --no-party

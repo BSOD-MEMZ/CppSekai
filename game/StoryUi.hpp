@@ -124,6 +124,16 @@ void imageCard(const Canvas& c, ImFont* font, const Image& img, const std::strin
 
 // Spotlight: dims everything except `lo..hi` and rings it. Coordinates are
 // window pixels (what ui::anchorRect hands back), not virtual units.
+// pjsk's round skip key (white disc + soft shadow + navy ">>"), the same key
+// the opening card draws before a live starts. `hover` / `press` are 0..1 eased
+// values; `icon` is the ui_skip HUD sprite (0 falls back to a plain disc).
+void skipKey(ImDrawList* dl, const Canvas& c, const ImVec2& center, float hover, float press,
+    ImTextureID icon);
+
+// Ready to use after loadTextures(): the ui_skip sprite, or 0 when the HUD pack
+// is missing (then the disc draws without its glyph).
+ImTextureID skipIcon();
+
 void spotlight(ImDrawList* dl, const ImVec2& lo, const ImVec2& hi, float time,
     const std::string& label, int dimAlpha = 120);
 

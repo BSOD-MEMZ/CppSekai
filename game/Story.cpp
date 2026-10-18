@@ -653,6 +653,10 @@ void draw(float windowW, float windowH)
         return;
     }
     Step& step = gCur->steps[gIndex];
+    // Skip key centre, in 1920x1080 virtual units (top-right, clear of the
+    // song-select header row).
+    constexpr float kSkipX = 1830.0f;
+    constexpr float kSkipY = 126.0f;
     // ImGui's display size, not the render size: with renderScale on (or in a
     // screenshot run at a different resolution) windowW/windowH are the
     // offscreen buffer's pixels, and the virtual canvas would be scaled twice.
@@ -666,11 +670,21 @@ void draw(float windowW, float windowH)
     ImGui::SetNextWindowSize(io.DisplaySize);
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove
         | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings
-        | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoFocusOnAppearing
         | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoNav;
     if (step.passthrough)
     {
         flags |= ImGuiWindowFlags_NoInputs;
+    }
+    else
+    {
+        // Ask for focus every frame. ImGui's hit test walks the window list from
+        // the front, and any window the player clicks (the song list's own input
+        // surface) is moved to the front - above this one. With
+        // NoBringToFrontOnFocus the layer stayed *below* it, so the choice pills
+        // and the skip button never registered a hover: the whole tutorial was
+        // click-through while the dialogue still advanced (that path asks for
+        // IsMouseClicked globally, not for a hovered item).
+        ImGui::SetNextWindowFocus();
     }
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
     ImGui::PushStyleColor(ImGuiCol_WindowBg, IM_COL32(0, 0, 0, 0));
@@ -789,31 +803,37 @@ void draw(float windowW, float windowH)
         }
     }
 
-    // Skip: a small capsule in the top-right. It is the only way out that does
-    // not require walking the whole script, and it is why "the player clicked\n    // something unexpected" never leaves them stuck (see STORY-UI.md 5.3).
+    // Skip: pjsk's round key in the top-right - the same white disc the opening
+    // card draws before a live (game/Intro.cpp / storyui::skipKey), so the two
+    // read as one control. Draw-only: the hit test is a disc, and a hit ends the
+    // tutorial (main marks it seen when consumeFinished() fires).
     if (!step.passthrough)
     {
-        const ImVec2 lo = c.p(1700.0f, 96.0f);
-        const ImVec2 hi = c.p(1886.0f, 146.0f);
-        ImGui::SetCursorScreenPos(lo);
-        ImGui::InvisibleButton("##story-skip", ImVec2(hi.x - lo.x, hi.y - lo.y));
-        const bool hovered = ImGui::IsItemHovered();
-        const bool clicked = ImGui::IsItemClicked();
-        dl->AddRectFilled(lo, hi, hovered ? IM_COL32(90, 90, 120, 230) : IM_COL32(60, 60, 84, 205),
-            (hi.y - lo.y) * 0.5f);
-        if (font != nullptr)
-        {
-            const float size = c.s(20.0f);
-            const char* label = "跳过教学";
-            const ImVec2 ts = font->CalcTextSizeA(size, FLT_MAX, 0.0f, label);
-            dl->AddText(font, size, ImVec2(lo.x + (hi.x - lo.x - ts.x) * 0.5f,
-                                    lo.y + (hi.y - lo.y - ts.y) * 0.5f),
-                IM_COL32(235, 235, 245, 255), label);
-        }
-        if (clicked)
+        const ImVec2 center = c.p(kSkipX, kSkipY);
+        const float radius = c.s(40.0f) + c.s(6.0f);
+        ImGui::SetCursorScreenPos(ImVec2(center.x - radius, center.y - radius));
+        ImGui::InvisibleButton("##story-skip", ImVec2(radius * 2.0f, radius * 2.0f));
+        const ImVec2 mouse = ImGui::GetIO().MousePos;
+        const float dx = mouse.x - center.x;
+        const float dy = mouse.y - center.y;
+        const bool over = dx * dx + dy * dy <= radius * radius;
+        const bool hovered = ImGui::IsItemHovered() && over;
+        const bool pressed = hovered && ImGui::IsMouseDown(ImGuiMouseButton_Left);
+        // Two independent animations: hover grows the disc, press dips it.
+        const float hover = ui::anim(0x5717a001u, hovered, 22.0f);
+        const float press = ui::anim(0x5717a002u, pressed, 30.0f);
+        storyui::skipKey(dl, c, center, hover, press, storyui::skipIcon());
+        if (hovered && ImGui::IsItemClicked())
         {
             ui::se(ui::SeClick);
             finish();
+            // `step` points into gCur, which finish() just released: do not fall
+            // through to the advance handler below. The window still has to be
+            // closed properly - ImGui asserts "Missing End()" otherwise.
+            ImGui::End();
+            ImGui::PopStyleColor();
+            ImGui::PopStyleVar();
+            return;
         }
     }
 
