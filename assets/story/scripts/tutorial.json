@@ -1,0 +1,313 @@
+{
+  "version": 1,
+  "scripts": [
+    {
+      "id": "tutorial",
+      "steps": [
+        {
+          "id": "open",
+          "type": "scene",
+          "text": "第一次启动\nCppSekai",
+          "hold": 1.7
+        },
+        {
+          "id": "intro1",
+          "who": "助手",
+          "text": "欢迎来到 CppSekai！这是一个 Project SEKAI 风格的谱面游玩器：把 .sus 谱面放进 charts 文件夹，就能在这里打歌。",
+          "hold": 0
+        },
+        {
+          "who": "助手",
+          "text": "判定、连击、结算、多人游玩都尽量照着原作做了。接下来花两分钟，我带你把该设置的东西过一遍。"
+        },
+        {
+          "id": "ask_start",
+          "type": "choice",
+          "who": "助手",
+          "text": "要现在开始吗？",
+          "options": [
+            {
+              "text": "开始吧",
+              "goto": "settings"
+            },
+            {
+              "text": "我自己先逛逛",
+              "goto": "bye"
+            }
+          ]
+        },
+        {
+          "id": "settings",
+          "who": "助手",
+          "text": "先调音符速度：设置 → 演奏 → 音符速度。新手推荐 7~9，太快看不清，太慢会挤成一团。",
+          "do": "openSettings",
+          "highlight": "settings.speed",
+          "tip": "音符速度，先调到 7~9",
+          "passthrough": true,
+          "wait": "settingsClosed"
+        },
+        {
+          "id": "after_settings",
+          "who": "助手",
+          "text": "顺便也可以看看「延迟」：总觉得按早或按晚，就在那里微调。其它保持默认就行。"
+        },
+        {
+          "id": "ask_charts",
+          "type": "choice",
+          "who": "助手",
+          "text": "你的 charts 文件夹里有谱面了吗？",
+          "options": [
+            {
+              "text": "还没有，教我下载",
+              "goto": "dl_intro"
+            },
+            {
+              "text": "已经有了",
+              "goto": "device"
+            }
+          ]
+        },
+        {
+          "id": "dl_intro",
+          "who": "助手",
+          "text": "先点选曲界面右上角的「下载谱面」，会打开官谱下载器。",
+          "highlight": "store",
+          "tip": "点这里，打开下载器",
+          "wait": "chartdlOpen",
+          "timeout": 30,
+          "onTimeout": "dl_offer"
+        },
+        {
+          "id": "dl_offer",
+          "type": "choice",
+          "who": "助手",
+          "text": "没找到那个按钮？要我帮你打开吗？",
+          "options": [
+            {
+              "text": "帮我打开",
+              "goto": "dl_launch"
+            },
+            {
+              "text": "先跳过下载",
+              "goto": "device"
+            }
+          ]
+        },
+        {
+          "id": "dl_launch",
+          "who": "助手",
+          "text": "好，下载器起来了。",
+          "do": "launchChartdl",
+          "wait": "chartdlOpen",
+          "timeout": 25,
+          "onTimeout": "dl_failed"
+        },
+        {
+          "id": "dl_search",
+          "who": "助手",
+          "text": "在「搜索」框里打歌名。中文、日文、罗马音都认，比如 Hype Dive。",
+          "wait": "chartdlSearch",
+          "timeout": 120,
+          "onTimeout": "dl_slow",
+          "onClose": "dl_closed",
+          "guide": "search",
+          "tip": "在这里输入歌名"
+        },
+        {
+          "id": "dl_pick",
+          "who": "助手",
+          "text": "在左边列表里点一首你想打的歌。",
+          "wait": "chartdlSong",
+          "timeout": 120,
+          "onTimeout": "dl_slow",
+          "onClose": "dl_closed",
+          "guide": "list",
+          "tip": "点一下你要的那首"
+        },
+        {
+          "id": "dl_easy",
+          "who": "助手",
+          "text": "右边把 EASY 勾上（绿色的那个），其它难度先不用。",
+          "guide": "easy",
+          "tip": "勾上 EASY",
+          "wait": "chartdlEasy",
+          "timeout": 180,
+          "onTimeout": "dl_slow",
+          "onClose": "dl_closed"
+        },
+        {
+          "id": "dl_go",
+          "who": "助手",
+          "text": "都勾好了就按「下载勾选的歌曲」，等进度条走完。",
+          "wait": "chartdlDone",
+          "timeout": 300,
+          "onTimeout": "dl_slow",
+          "onClose": "dl_closed",
+          "guide": "queue",
+          "tip": "按这里开始下载"
+        },
+        {
+          "id": "dl_close",
+          "who": "助手",
+          "text": "下好了。把下载器关掉，回到游戏，谱面会自动出现在列表里。",
+          "wait": "chartdlClosed",
+          "timeout": 300,
+          "onTimeout": "dl_after"
+        },
+        {
+          "id": "dl_after",
+          "who": "助手",
+          "text": "谱面已经扫进来了，继续。",
+          "goto": "device"
+        },
+        {
+          "id": "dl_closed",
+          "type": "choice",
+          "who": "助手",
+          "text": "下载器被关掉了 —— 还没下完也没关系，要我重新打开吗？",
+          "options": [
+            {
+              "text": "重新打开",
+              "goto": "dl_launch"
+            },
+            {
+              "text": "先跳过下载",
+              "goto": "device"
+            }
+          ]
+        },
+        {
+          "id": "dl_slow",
+          "type": "choice",
+          "who": "助手",
+          "text": "这一步卡了挺久。慢慢来也行，或者先跳过，之后自己再试。",
+          "options": [
+            {
+              "text": "我自己再试试",
+              "goto": "dl_intro"
+            },
+            {
+              "text": "先跳过下载",
+              "goto": "device"
+            }
+          ]
+        },
+        {
+          "id": "dl_failed",
+          "type": "choice",
+          "who": "助手",
+          "text": "下载器没能启动。可能是 chartdl.exe 不在游戏目录里。",
+          "options": [
+            {
+              "text": "再试一次",
+              "goto": "dl_launch"
+            },
+            {
+              "text": "先跳过下载",
+              "goto": "device"
+            }
+          ]
+        },
+        {
+          "id": "device",
+          "type": "cards",
+          "who": "助手",
+          "text": "先问一句：你主要用什么设备打歌？",
+          "subtitles": [
+            "白板 / 平板 / 触屏笔记本",
+            "12 键，或者鼠标点"
+          ],
+          "options": [
+            {
+              "text": "触摸屏",
+              "image": "seewo_small.png",
+              "goto": "touch_hit"
+            },
+            {
+              "text": "键盘 / 鼠标",
+              "image": "kb_mouse.jpg",
+              "goto": "kb_hit"
+            }
+          ]
+        },
+        {
+          "id": "touch_hit",
+          "type": "image",
+          "image": "seewo_small.png",
+          "caption": "一块屏幕特别小、边框特别宽的 seewo —— 现实里它可比这个宽多了",
+          "who": "助手",
+          "text": "触摸屏就三件事：蓝点是 Tap，手指落下去；长条要按住，尾巴到线再松；带箭头的往箭头方向划。"
+        },
+        {
+          "id": "touch_hit2",
+          "who": "助手",
+          "text": "绿条中途松手会断连，所以先慢一点，别急着追速度。"
+        },
+        {
+          "id": "kb_hit",
+          "type": "image",
+          "image": "kb_mouse.jpg",
+          "caption": "键盘 / 鼠标：默认 12 键 Z S X D C V G B H N J M",
+          "who": "助手",
+          "text": "默认键位从左到右是 Z S X D C V G B H N J M。蓝点按一下，长条按住不放，Flick 按对应的键就算向上划。"
+        },
+        {
+          "id": "kb_hit2",
+          "who": "助手",
+          "text": "鼠标也能点音符；设置 → 演奏 → 按键映射 可以改成自己顺手的键位。"
+        },
+        {
+          "id": "play",
+          "who": "助手",
+          "text": "现在找一首 EASY（绿色难度）的歌：列表里点歌，点绿色的难度圈，再按「确定」。",
+          "box": "left"
+        },
+        {
+          "id": "play_wait",
+          "who": "助手",
+          "text": "打完之后回来，我再跟你说说多人模式。",
+          "highlight": "diff0",
+          "tip": "先点绿色的 EASY",
+          "wait": "playStarted",
+          "box": "left"
+        },
+        {
+          "id": "after_play",
+          "who": "助手",
+          "text": "回来了。手感不对的话，回去把音符速度和延迟再调一调，这比硬练有用。"
+        },
+        {
+          "id": "mp_ask",
+          "type": "choice",
+          "who": "助手",
+          "text": "最后，想顺便了解一下多人游玩吗？",
+          "options": [
+            {
+              "text": "想了解",
+              "goto": "mp1"
+            },
+            {
+              "text": "不用了",
+              "goto": "bye"
+            }
+          ]
+        },
+        {
+          "id": "mp1",
+          "who": "助手",
+          "text": "多人游玩是同一台电脑开多个窗口：一个窗口当房主选歌，其它窗口各自选难度，然后一起开始。"
+        },
+        {
+          "id": "mp2",
+          "who": "助手",
+          "text": "到 设置 → 系统 打开「允许多开」，再打开「多人游玩」，重启游戏就能用。键盘和触摸屏混着玩也行。"
+        },
+        {
+          "id": "bye",
+          "who": "助手",
+          "text": "那就这样，玩得开心！想再看一遍，去 设置 → 关于 → 重新播放新手教学。"
+        }
+      ]
+    }
+  ]
+}

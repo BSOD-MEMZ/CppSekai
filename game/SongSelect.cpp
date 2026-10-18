@@ -1100,6 +1100,7 @@ void loadUserData(const std::string& path, UserSettings& settings,
             // Missing in an old profile: the ELUA shows once, which is exactly
             // what an existing install should see after this version lands.
             settings.eulaAccepted = s.value("eulaAccepted", settings.eulaAccepted);
+            settings.tutorialDone = s.value("tutorialDone", settings.tutorialDone);
         }
         if (wrapped && doc.contains("account") && doc["account"].is_object()) {
             const nlohmann::json& a = doc["account"];
@@ -1241,6 +1242,7 @@ void saveUserData(const std::string& path, const UserSettings& settings,
         {"groupMode", settings.groupMode},
         {"liveBonus", settings.liveBonus},
         {"eulaAccepted", settings.eulaAccepted},
+        {"tutorialDone", settings.tutorialDone},
     };
     doc["scores"] = scoreDoc;
     doc["account"] = {
@@ -3076,6 +3078,11 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         ImGui::SetCursorScreenPos(ImVec2(x, headerRowY));
         const bool clicked = ImGui::Button(id, ImVec2(w, rowH));
         const bool hovered = ImGui::IsItemHovered();
+        // Tutorial anchor: "##rescan" -> "rescan" (the button's own id carries
+        // the ## so ImGui keeps the label out of the id stack).
+        if (id != nullptr && id[0] == '#' && id[1] == '#') {
+            ui::setAnchor(id + 2, ImVec2(x, headerRowY), ImVec2(x + w, headerRowY + rowH));
+        }
         ImGui::PopStyleVar();
         ImGui::PopStyleColor(3);
         const ImU32 labelCol = hovered ? IM_COL32(38, 38, 58, 255) : IM_COL32(60, 60, 82, 255);
@@ -3195,6 +3202,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     const float cardH = 128.0f * k;    // expanded (selected) card height
     const float listY = listTop + searchH + 14.0f * k;
     const float listH = h - listY - 24.0f * k;
+    ui::setAnchor("songlist", ImVec2(listX, listY), ImVec2(listX + listW, listY + listH));
 
     static float scroll = 0.0f;       // content y that sits at the view centre
     static float scrollTarget = 0.0f; // where the view is heading
@@ -3355,7 +3363,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     // and the panel's press handling would both act on one click - a header tap
     // would open the panel AND pick a letter in the same gesture.
     static bool indexOpenAtPress = false;
-    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+    if (ui::mouseClicked(ImGuiMouseButton_Left)) {
         indexOpenAtPress = indexOpen;
     }
 
@@ -3395,7 +3403,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         }
         // Double click / double tap: play the row straight away.
         if (listHovered && hoverRow >= 0 && !rows[static_cast<size_t>(hoverRow)].header
-            && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+            && ui::mouseDoubleClicked(ImGuiMouseButton_Left)) {
             const SongGroup& g = groups[static_cast<size_t>(rows[static_cast<size_t>(hoverRow)].group)];
             if (g.idx[diffIndex] >= 0) {
                 ui::se(ui::SeClick);
@@ -3406,7 +3414,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         // 做成菜单而不是直接切换：长按的误触概率比鼠标高，多一步确认更稳。
         static int menuGroup = -1;
         if (listHovered && hoverRow >= 0 && !rows[static_cast<size_t>(hoverRow)].header
-            && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+            && ui::mouseClicked(ImGuiMouseButton_Right)) {
             menuGroup = rows[static_cast<size_t>(hoverRow)].group;
             ImGui::OpenPopup("##songmenu");
         }
@@ -3453,7 +3461,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         }
         // Press starts a drag. The row is only committed on release, and only
         // when the gesture did not travel - dragging never selects.
-        if (listHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        if (listHovered && ui::mouseClicked(ImGuiMouseButton_Left)) {
             dragging = true;
             dragDistance = 0.0f;
             dragVel = 0.0f;
@@ -3838,7 +3846,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         // through to the list instead of picking a letter that is flying in.
         const bool interactive = indexOpenAtPress && indexAnim > 0.65f;
         const ImVec2 mousePos = ImGui::GetIO().MousePos;
-        const bool clicked = interactive && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
+        const bool clicked = interactive && ui::mouseClicked(ImGuiMouseButton_Left);
         bool hitLetter = false;
 
         // Which section the list is sitting on, so its letter can be marked.
@@ -3957,17 +3965,17 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             lastInputTime = timeSec;
         };
         if (!partyReadOnly
-            && (ImGui::IsKeyPressed(ImGuiKey_DownArrow)
-                || ImGui::IsKeyPressed(ImGuiKey_GamepadDpadDown))) {
+            && (ui::keyPressed(ImGuiKey_DownArrow)
+                || ui::keyPressed(ImGuiKey_GamepadDpadDown))) {
             ui::se(ui::SeSelect);
             moveTo(1);
         }
         if (!partyReadOnly
-            && (ImGui::IsKeyPressed(ImGuiKey_UpArrow) || ImGui::IsKeyPressed(ImGuiKey_GamepadDpadUp))) {
+            && (ui::keyPressed(ImGuiKey_UpArrow) || ui::keyPressed(ImGuiKey_GamepadDpadUp))) {
             ui::se(ui::SeSelect);
             moveTo(-1);
         }
-        if (ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter)) {
+        if (ui::keyPressed(ImGuiKey_Enter) || ui::keyPressed(ImGuiKey_KeypadEnter)) {
             if (partyReadOnly) {
                 if (partyOut != nullptr) {
                     partyOut->confirm = true;
@@ -4193,6 +4201,12 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
                 ImGui::Dummy(ImVec2(dcD, dcD));
             }
             ImGui::PopID();
+            {
+                char anchor[24];
+                std::snprintf(anchor, sizeof(anchor), "diff%d", d);
+                ui::setAnchor(anchor, ImVec2(dx - dcD * 0.5f, dcY - dcD * 0.5f),
+                    ImVec2(dx + dcD * 0.5f, dcY + dcD * 0.5f + 22.0f * k));
+            }
 
             if (active) {
                 // Glow first, so the solid disc and its white rim sit on top of
@@ -4241,6 +4255,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             ImGui::InvisibleButton("ok", ImVec2(okW, okH));
         }
         const bool okHovered = !vocalPanelUp && ImGui::IsItemHovered();
+        ui::setAnchor("confirm", okA, okB);
         const bool okPressed = !vocalPanelUp && ImGui::IsItemClicked();
         ImGui::PopID();
         // Outline only: the capsule keeps the phone panel's own background (the
@@ -4404,10 +4419,10 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         }
     };
     if (!groups.empty() && selected >= 0 && (!partyReadOnly || partyPickable)) {
-        if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow)) {
+        if (ui::keyPressed(ImGuiKey_LeftArrow)) {
             nudgeDifficulty(-1);
         }
-        if (ImGui::IsKeyPressed(ImGuiKey_RightArrow)) {
+        if (ui::keyPressed(ImGuiKey_RightArrow)) {
             nudgeDifficulty(1);
         }
     }
@@ -4436,7 +4451,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             dl->AddRect(ImVec2(chip.x - 2.0f, chip.y - 2.0f),
                 ImVec2(chip.x + chip.z + 2.0f, chip.y + chip.w + 2.0f), IM_COL32(255, 255, 255, 120),
                 (chip.w + 4.0f) * 0.5f, 0, 2.0f * k);
-            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+            if (ui::mouseClicked(ImGuiMouseButton_Left)) {
                 profileOpen = true;
                 ui::se(ui::SeClick);
             }
@@ -4463,7 +4478,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         // card, the X, the scrollbar strip) never also counts as "outside".
         {
             const ImVec2 vpMouse = ImGui::GetIO().MousePos;
-            if (vpMouse.x < vocalPX0 && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+            if (vpMouse.x < vocalPX0 && ui::mouseClicked(ImGuiMouseButton_Left)) {
                 ui::se(ui::SeWindowClose);
                 gVocalPanelOpen = false;
             }
@@ -4871,17 +4886,17 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
                 static const ImGuiKey kOptionKeys[4] = {
                     ImGuiKey_1, ImGuiKey_2, ImGuiKey_3, ImGuiKey_4};
                 for (int i = 0; i < 4; ++i) {
-                    if (ImGui::IsKeyPressed(kOptionKeys[i], false)) {
+                    if (ui::keyPressed(kOptionKeys[i], false)) {
                         pickOption(i);
                     }
                 }
                 // Enter does the job of the button under the grid: 下一题 once
                 // answered, 跳过 before that.
-                if (ImGui::IsKeyPressed(ImGuiKey_Enter, false)
-                    || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false)) {
+                if (ui::keyPressed(ImGuiKey_Enter, false)
+                    || ui::keyPressed(ImGuiKey_KeypadEnter, false)) {
                     newGuessQuestion();
                 }
-                if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+                if (ui::keyPressed(ImGuiKey_Escape, false)) {
                     gGuess.open = false;
                 }
                 // A keyboard answer landed in this very frame, above the

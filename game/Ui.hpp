@@ -301,6 +301,33 @@ float anim(ImGuiID id, bool target, float rate = 18.0f);
 void dropShadow(ImDrawList* dl, const ImVec2& lo, const ImVec2& hi, float rounding, float s,
     float strength = 1.0f, float spreadScale = 1.0f);
 
+// ---- Story / tutorial anchors ------------------------------------------
+// A screen that wants to be pointed at by the tutorial reports the rect of the
+// widget it just drew. Coordinates are *window pixels* (the same space ImGui
+// draws in), not the 1920x1080 virtual units: the story layer converts nothing
+// and simply rings whatever it is handed. The table is cleared once per frame
+// by anchorsFrame(), so an anchor only exists on frames the widget was drawn -
+// a missing anchor makes the tutorial degrade to text, never to a stale ring.
+void setAnchor(const char* id, const ImVec2& lo, const ImVec2& hi);
+bool anchorRect(const char* id, ImVec2* lo, ImVec2* hi);
+void anchorsFrame();
+
+// Pointer gate. The story layer is an ordinary fullscreen ImGui window, which
+// stops ImGui buttons from hovering anything behind it - but the song select
+// hit-tests its own list with raw IsMouseClicked, and that ignores z-order.
+// Screens that click without an item check this first.
+void setInputBlocked(bool on);
+bool inputBlocked();
+// Raw-click helpers for screens that hit-test by hand (the song list does).
+// They answer false while the story layer owns the pointer, which a fullscreen
+// ImGui window alone cannot enforce: those clicks never consult the hovered
+// window.
+bool mouseClicked(ImGuiMouseButton button);
+bool mouseDoubleClicked(ImGuiMouseButton button);
+// Same idea for keys: the song list answers Enter/arrows through ImGui's global
+// key state, which does not care which window is up.
+bool keyPressed(ImGuiKey key, bool repeat = true);
+
 // ---- Game controller focus ---------------------------------------------
 // A pad has no pointer, so everything that is clicked rather than typed -
 // sliders, checkboxes, steppers, combos, capsules - used to be unreachable

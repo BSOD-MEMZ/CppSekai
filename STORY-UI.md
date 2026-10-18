@@ -5,6 +5,9 @@
 >
 > 资源已落地：`assets/story/ui/`（12 张，全部来自 sekai-stories.pages.dev 的 `/img/`）。
 > 版式示意见 `docs/story-ui-mock.png`（用真实资源 + 真实坐标合的，不是效果图）。
+>
+> **2026-10-18：已实现**。模块、脚本、触发、chartdl 外部引导都在跑，实机截图见
+> `.workbuddy/shots/story_*.png`；实现细节与踩到的坑在文末「实现记录」一节。
 
 ## 0. 结论
 
@@ -235,3 +238,95 @@ CLI 加 `--story-test <id>`（无头开），和 `--drop-test` / `--chartdl-test
 6. **窗口缩放**：所有坐标必须过 `Canvas`（`Result.cpp:183`），直接写像素的话 4:3 窗口会错位。
 7. **字体**：继续用 `game::bodyFont()`；站点那套 FOT-Rodin 是 Fontworks 商业字体，别顺手抄。
 8. **Release 打包**：`assets/story/` 不能进 `dist`（`COPYRIGHT.md` 第 31 行的口径）。
+
+
+---
+
+## 9. 实现记录（2026-10-18）
+
+### 9.1 文件
+
+| 文件 | 作用 |
+|---|---|
+| `game/StoryUi.*` | 组件层：对话框 / 场景标题 / 选项 / 设备卡片 / 图片卡 / 聚光灯。无状态 |
+| `game/Story.*` | 运行时：JSON 脚本、分支、打字机、等待条件、手柄焦点 |
+| `platform/ChartDlGuide.*` | Win32：找 chartdl 窗口、读控件矩形与状态、置顶点击穿透的圈选浮层 |
+| `assets/story/scripts/tutorial.json` | 31 步教学脚本（含分支与异常分支） |
+| `assets/story/img/` | `seewo_small.png`（改小的 seewo）、`kb_mouse.jpg`（键鼠） |
+| `.workbuddy/tools/seewo_shrink.py` | 把 seewo 的屏幕剪窄、外框尺寸不变的复现脚本 |
+
+### 9.2 渲染上有两个必须知道的坑
+
+1. **视觉必须画在前景 draw list。** 这个项目把 HUD、淡入淡出、打击特效画在
+   `ImGui::GetForegroundDrawList()`（渲染在**所有窗口之上**）。剧情层如果画自己窗口的
+   draw list，会被整个盖住 —— 表现是「日志有顶点、代码在跑、屏幕什么都没有」。所以
+   `Story::draw` 的窗口只用来 `Begin` + 摆 `InvisibleButton`，所有图形走前景层。
+2. **窗口/画布用 `io.DisplaySize`，不是 `windowW/windowH`。** 后者是渲染目标尺寸，
+   开了 renderScale 或截图分辨率不同时，虚拟画布会被缩放两次（文字跑到屏幕外）。
+
+### 9.3 脚本字段
+
+```jsonc
+{
+  "id": "dl_search",        // 跳转标签
+  "type": "say",            // say | scene | image | cards | choice
+  "who": "助手",             // 空 = 旁白（不画名牌）
+  "text": "……",
+  "image": "seewo_small.png",
+  "caption": "图片下面那行",
+  "do": "openSettings",     // openSettings / launchChartdl
+  "wait": "chartdlSearch",  // 见下表
+  "onClose": "dl_closed",   // chartdl 被关掉时跳这里
+  "timeout": 120, "onTimeout": "dl_slow",
+  "goto": "device",         // 本步结束后无条件跳
+  "highlight": "settings.speed", "tip": "音符速度，先调到 7~9",
+  "guide": "search",        // 指向 chartdl 的控件：search/list/easy/queue
+  "passthrough": true,      // 只画不挡输入（设置卡片那一步）
+  "box": "left",            // 左下紧凑框，把右侧手机面板让出来
+  "set": { "device": "touch" },
+  "options": [ { "text": "触摸屏", "image": "seewo_small.png", "goto": "touch_hit" } ],
+  "subtitles": ["白板 / 平板 / 触屏笔记本", "12 键，或者鼠标点"]
+}
+```
+
+等待条件：`seconds` / `settingsOpen` / `settingsClosed` / `chartdlOpen` / `chartdlSearch` /
+`chartdlSong` / `chartdlEasy` / `chartdlDone` / `chartdlClosed` / `playStarted`。
+
+`playStarted` 是**锁存**的：进游戏时剧情层挂起（不 update），所以回来时 `inPlay` 已经是
+false —— 不锁存的话会永远等一局已经打完的歌。
+
+### 9.4 chartdl 的外部引导
+
+- 窗口类名 `CppSekaiChartDl`（`main.cpp` 里原来写成 `#32770`，那是对话框类，永远找不到，
+  顺手修了 —— 「已经开着就提到前面」以前其实没生效）。
+- 控件 ID（`downloader/chartdl.cpp`）：搜索 1000、列表 1007、下载 1004、EASY 1100、状态 1009。
+- 跨进程读状态：`WM_GETTEXT`（编辑框/状态栏）、`LVM_GETSELECTEDCOUNT`、`BM_GETCHECK`、
+  `PBM_GETPOS`。都只传标量，不需要跨进程指针封送。
+- 浮层：`WS_EX_LAYERED | TOPMOST | TRANSPARENT | NOACTIVATE` 的 popup，GDI 画薄荷圆环 +
+  深色标签，`UpdateLayeredWindow`。**GDI 不写 alpha**，所以画完把「非黑像素」的 alpha 一律
+  置 255 —— 圈和标签因此是不透明、背景完全透明的，且永远不会吃掉点击。
+- 第一次进入引导时把下载器摆到桌面右上角（`chartDlArrange`），避开剧情框。
+- 下载器被关掉：3 秒后仍找不到窗口 → 跳 `onClose`（实测跳到「重新打开 / 先跳过」那一步）。
+
+### 9.5 触发与存档
+
+- `userdata.json` → `settings.tutorialDone`；`SongSelect.cpp` 的 `loadUserData` / `saveUserData`
+  **两处都改**（老规矩，漏一处静默丢设置）。
+- 首启条件：`!tutorialDone && !eulaAlive && (eulaDismissedThisRun || eulaAccepted)
+  && state == Select && !party.active()`，再等 1.2 秒让选曲入场动画走完。
+- 重播：设置 → 关于 → 「重播新手教学」。
+- 教学期间把 `nativeMenuBar` 临时关掉（顶栏按钮才在），结束时恢复；**不落盘**，
+  中途崩溃不会把用户设置改掉。
+- 演奏中挂起剧情层：`story::setSuspended(state != AppState::Select)` 必须放在
+  `ImGui::NewFrame()` 之后、Select 分支**之外** —— 放进 Select 分支的话，整首歌里
+  剧情层都处于「active 且未挂起」，会把手柄的 A 全吞掉。
+
+### 9.6 验证
+
+```bash
+./build/cppsekai.exe --story-test --story-step N     --screenshot .workbuddy/shots/x.png --screenshot-time 4 --no-party
+```
+
+`N` 是 0 基下标，常用的几页：0 场景标题 / 1 对话 / 3 选项 / 4 设置聚光灯 / 19 设备卡片 /
+20 触摸图 / 25 绿谱高亮。chartdl 浮层是独立窗口，要抓**整个桌面**才看得到（游戏的
+`--screenshot` 只拍自己）。

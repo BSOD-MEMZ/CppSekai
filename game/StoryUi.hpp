@@ -1,0 +1,122 @@
+// CppSekai - story UI (see STORY-UI.md).
+//
+// The drawing half of the tutorial / story layer: a pjsk-style dialogue box,
+// scene title, choice pills, device cards, picture cards and a spotlight ring.
+// No state, no input decisions - game/Story.* owns those and calls in here.
+//
+// The art is 1920x1080 full-frame PNGs (assets/story/ui), drawn whole at the
+// native canvas coordinates measured off the files. Do not slice them: the
+// rounded corners and the soft shadow live in the alpha channel and a 9-slice
+// would smear both.
+#pragma once
+
+#include "imgui.h"
+
+#include <cstddef>
+#include <string>
+#include <vector>
+
+namespace platform
+{
+class Renderer;
+}
+
+namespace storyui
+{
+// Virtual 1920x1080 canvas -> window pixels, letterboxed. Same shape as
+// game/Result.cpp's Canvas; each screen keeps its own copy, and this one is
+// shared by the whole story layer.
+struct Canvas
+{
+    float scale = 1.0f;
+    float ox = 0.0f;
+    float oy = 0.0f;
+
+    [[nodiscard]] float x(float v) const { return ox + v * scale; }
+    [[nodiscard]] float y(float v) const { return oy + v * scale; }
+    [[nodiscard]] float s(float v) const { return v * scale; }
+    [[nodiscard]] ImVec2 p(float vx, float vy) const { return ImVec2(x(vx), y(vy)); }
+};
+
+Canvas makeCanvas(float windowW, float windowH);
+
+// A loaded picture. `w`/`h` are the file's pixels, used for cover-cropping.
+struct Image
+{
+    ImTextureID tex = 0;
+    int w = 0;
+    int h = 0;
+    bool valid() const { return tex != 0 && w > 0 && h > 0; }
+};
+
+// Loads the three UI frames next to assets/story/ui. Missing files are not
+// fatal: the matching draw call falls back to a plain shape (headless runs and
+// a half-copied build still work).
+bool loadTextures(platform::Renderer& renderer, const std::string& assetDir, std::string& err);
+Image loadImage(platform::Renderer& renderer, const std::string& path);
+
+// ---- text --------------------------------------------------------------
+struct Line
+{
+    std::size_t begin = 0; // byte offset into the UTF-8 text
+    std::size_t end = 0;
+    float width = 0.0f;
+};
+
+struct TextLayout
+{
+    std::vector<Line> lines;
+    // Byte offset of every UTF-8 code point, plus one sentinel at the end.
+    // The typewriter reveals by index into this, because cutting a multi-byte
+    // character in half is how Chinese text turns into question marks.
+    std::vector<std::size_t> codepoints;
+};
+
+// Wraps UTF-8 into lines no wider than `width`.
+//
+// ImGui's own word wrap only breaks at spaces (imgui_draw.cpp calls it
+// "simple word-wrapping for English"), so a Chinese paragraph is one giant
+// "word" and the wrap lands wherever the width overflows - which puts 。、」
+// at the start of the next line. This adds the line-start ban on top. The
+// layout is computed once per line of dialogue and then cached by the caller:
+// wrapping every frame would also make the typewriter's line count jump.
+TextLayout layoutText(ImFont* font, float size, const std::string& utf8, float width);
+
+// ---- frames ------------------------------------------------------------
+// Fullscreen 45% black. Drawn before the box.
+void dim(ImDrawList* dl, float alpha = 0.45f);
+
+// The dialogue box, name plate and ▼. `revealBytes` clips the body at a byte
+// offset; pass layout.codepoints.back() to show everything.
+// `compact` draws a smaller white card instead of the shipped 16:9 frame: that
+// is the shape used while a settings card is open (bottom-right, clear of the
+// card) or while the song-select phone has to stay visible (bottom-left).
+void dialogue(const Canvas& c, ImFont* font, const std::string& name, const std::string& body,
+    const TextLayout& layout, std::size_t revealBytes, float time, bool showArrow,
+    bool compact = false, bool left = false);
+
+// Two-line black-out card ("19:30 / 教室"); `alpha` fades the whole thing.
+void sceneTitle(const Canvas& c, ImFont* font, const std::string& text, float alpha);
+
+// The two pjsk choice pills. Returns the clicked index, or -1.
+int choices(const Canvas& c, ImFont* font, const std::vector<std::string>& options, float time,
+    int focus = -1);
+
+// Image + title + subtitle cards, side by side. Returns clicked index or -1.
+// `images` must be the same length as `titles`; an invalid image is drawn as a
+// mint placeholder so a missing file still lays out.
+int cards(const Canvas& c, ImFont* font, const std::vector<Image>& images,
+    const std::vector<std::string>& titles, const std::vector<std::string>& subtitles,
+    float time, int focus = -1);
+
+// A picture above the dialogue box (rounded, white rim). `caption` may be empty.
+void imageCard(const Canvas& c, ImFont* font, const Image& img, const std::string& caption);
+
+// Spotlight: dims everything except `lo..hi` and rings it. Coordinates are
+// window pixels (what ui::anchorRect hands back), not virtual units.
+void spotlight(ImDrawList* dl, const ImVec2& lo, const ImVec2& hi, float time,
+    const std::string& label);
+
+// Small dark pill of text, screen-pixel coordinates, anchored above `lo`.
+void tip(ImDrawList* dl, ImFont* font, const ImVec2& center, const std::string& text);
+} // namespace storyui

@@ -315,6 +315,10 @@ struct UserSettings
     // dismissed to keep playing), so it lives per profile, like the settings it
     // is part of: a second user gets told once as well.
     bool eulaAccepted = false;
+    // 新手教学看过没有（第一次启动自动播一遍；设置 > 关于 可以重播）。
+    // 跳过 / 中途关掉也算看过 —— 反复弹一个玩家明确关掉的窗口是最烦人的事。
+    // 和 eulaAccepted 一样按 profile 存，第二个玩家还会被教一次。
+    bool tutorialDone = false;
 };
 
 // Path of userdata.json: <exeDir>\.. \userdata.json when a charts\ folder sits

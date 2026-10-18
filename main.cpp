@@ -18,12 +18,14 @@
 #include "platform/ShellIntegration.hpp"
 #include "platform/Renderer.hpp"
 #include "platform/SystemMedia.hpp"
+#include "platform/ChartDlGuide.hpp"
 #include "game/Intro.hpp"
 #include "game/Judgement.hpp"
 #include "game/Hud.hpp"
 #include "game/PartyScreen.hpp"
 #include "game/Result.hpp"
 #include "game/SongSelect.hpp"
+#include "game/Story.hpp"
 #include "game/StageBackground.hpp"
 #include "game/Ui.hpp"
 #include "game/TapEffect.hpp"
@@ -619,6 +621,8 @@ namespace
             "                下载谱面 button from the log (a posted click cannot\n"
             "                reach that screen), so the chartdl launch and the\n"
             "                re-scan on its exit can be checked headlessly.\n"
+            "--story-test [<id>] / --story-step <n>: debug - play the tutorial\n"
+            "                (assets/story/scripts/tutorial.json) from step n, 0-based.\n"
             "--party-auto [<difficulty 0-6>]: drive a room round without touching\n"
             "                the window: the host presses 确定 on whatever chart the\n"
             "                list is sitting on, a member picks that difficulty in\n"
@@ -833,8 +837,7 @@ namespace
         // Debug (--dump-events <n>): print the first n packed HitEvents. Each
         // event is 7 floats: time, center, width, kind, flags, endTime,
         // volume. kind 0 tap / 1 critical / 2 flick / 3 trace / 4 hold tick /
-        // 5 hold marker (endTime valid). Invaluable when a chart "looks
-        // wrong": it separates what the parser produced from what the
+        // 5 hold marker (endTime valid). Invaluable when a chart "looks\n        // wrong": it separates what the parser produced from what the
         // renderer did with it.
         if (dumpEvents > 0) {
             std::printf("[events] %d total, first %d:\n", count, std::min(dumpEvents, count));
@@ -1307,6 +1310,11 @@ int main(int argc, char** argv)
     // an interactive session to be driven by PostMessage), so the launch path
     // gets its own switch.
     double chartDlTestAtSec = -1.0;
+    // --story-test [id]: boot straight into the tutorial script (headless
+    // checks: --screenshot can then photograph any step).
+    std::string storyTestId;
+    int storyTestStep = -1; // --story-step N: jump to step N (0-based) on start
+
     // --drop-test <path> [sec]: 合成一个 SDL_DROPFILE（真实拖放没法从脚本驱动，
     // WM_DROPFILES 里的 HDROP 属于"放"的那个进程）。用法见 CLI.md。
     std::string dropTestPath;
@@ -1557,6 +1565,13 @@ int main(int argc, char** argv)
             if (i + 1 < utf8Argc && utf8Argv[i + 1][0] != '-') {
                 chartDlTestAtSec = std::atof(utf8Argv[++i]);
             }
+        } else if (arg == "--story-test") {
+            storyTestId = "tutorial";
+            if (i + 1 < utf8Argc && utf8Argv[i + 1][0] != '-') {
+                storyTestId = utf8Argv[++i];
+            }
+        } else if (arg == "--story-step" && i + 1 < utf8Argc) {
+            storyTestStep = std::atoi(utf8Argv[++i]);
         } else if (arg == "--title" && i + 1 < utf8Argc) {
             gCardMetadata.title = utf8Argv[++i];
         } else if (arg == "--lyricist" && i + 1 < utf8Argc) {
@@ -1934,8 +1949,7 @@ int main(int argc, char** argv)
                 party.isHost() ? "host" : "member", label.c_str(), party.playerCount(),
                 (!partyWanted && roomOpen) ? " [joined a room this profile has switched off]"
                                            : "");
-            // Nothing on this machine has a touchscreen-friendly answer to "the
-            // first tap on a background window is swallowed": SDL ignores the
+            // Nothing on this machine has a touchscreen-friendly answer to "the\n            // first tap on a background window is swallowed": SDL ignores the
             // click that activates a window by default, so the first tap of a
             // note in the window that is not in front would simply vanish.
             SDL_SetHint(SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH, "1");
@@ -2080,8 +2094,7 @@ int main(int argc, char** argv)
     if (userSettings.bgStyle != 2) {
         glassMode = 0;
     }
-    // What the subclassed window procedure needs to know: 1 = "treat this window
-    // as frameless right now" (WM_NCCALCSIZE -> 0, WM_NCHITTEST does the rest).
+    // What the subclassed window procedure needs to know: 1 = "treat this window\n    // as frameless right now" (WM_NCCALCSIZE -> 0, WM_NCHITTEST does the rest).
     // Kept separate from glassMode because fullscreen must stay out of it: with the
     // non-client area gone, a window covering the screen would also cover the
     // taskbar.
@@ -2604,8 +2617,7 @@ int main(int argc, char** argv)
         judgement.setWindows(windows);
         judgement.setStrictFlick(userSettings.strictFlick);
         judgement.setFlickAsTap(flickAsTapGiven || userSettings.flickAsTap);
-        // One line that says exactly what is in force, so a "the judgement feels
-        // wrong" report can be checked against the numbers without opening the
+        // One line that says exactly what is in force, so a "the judgement feels\n        // wrong" report can be checked against the numbers without opening the
         // dialog. missAfter is what an untouched note waits for.
         std::printf("[settings] windows perfect=%.0f great=%.0f good=%.0f bad=%.0f missAfter=%.0f "
                     "holdTail=%.0f holdStart=%.0f linked=%d\n",
@@ -2622,6 +2634,17 @@ int main(int argc, char** argv)
     // setSelectAssetDir expects the assets root; SongSelect appends "select\\".
     // `scores` was already loaded from userdata.json near the top of main().
     game::setSelectAssetDir(baseDir + "assets");
+
+    // Story layer: frames + tutorial script. A missing/malformed script is a
+    // warning, not a failed launch - the game has to be playable without it.
+    {
+        std::string storyError;
+        if (!story::load(renderer, baseDir + "assets", storyError))
+        {
+            std::printf("[story] disabled: %s\n", storyError.c_str());
+            std::fflush(stdout);
+        }
+    }
 
     // Player level chip glyph (assets/select/level.png). Missing is harmless:
     // the chip falls back to a drawn note.
@@ -3074,8 +3097,7 @@ int main(int argc, char** argv)
         perfStart = at != 0 ? at : SDL_GetPerformanceCounter();
         audio.start(leadInSec);
         // 设置 > 演奏 > 开始游戏时切换到英文输入法. Hooked here rather than at
-        // each caller because this is the single place that means "a live is
-        // starting" - the song list, a room round and a retry all reach it, and
+        // each caller because this is the single place that means "a live is\n        // starting" - the song list, a room round and a retry all reach it, and
         // none of the previews do.
         if (userSettings.switchImeOnStart) {
             switchImeToAscii(window);
@@ -3171,9 +3193,14 @@ int main(int argc, char** argv)
 
     auto chartDlWindow = []() -> HWND {
 #ifdef _WIN32
-        // The downloader's window title is a fixed string (chartdl.cpp), which
-        // is the only handle we have without a process -> window enumeration.
-        return FindWindowW(L"#32770", L"CppSekai 谱面下载器");
+        // chartdl.cpp registers the window class "CppSekaiChartDl" and gives it
+        // a fixed title. The class was "#32770" here for a while - that is the
+        // *dialog* class, so this lookup never found anything and "bring the\n        // open downloader to the front" silently did nothing.
+        HWND window = FindWindowW(L"CppSekaiChartDl", L"CppSekai 谱面下载器");
+        if (window == nullptr) {
+            window = FindWindowW(nullptr, L"CppSekai 谱面下载器");
+        }
+        return window;
 #else
         return nullptr;
 #endif
@@ -3541,6 +3568,14 @@ int main(int argc, char** argv)
         game::saveUserData(userDataFile, userSettings, scores, account);
     };
 
+    // ---- tutorial ---------------------------------------------------------
+    // First launch: the profile has not seen it. The settings card's 关于 page
+    // sets tutorialReplay. Both funnel into the same start below.
+    bool tutorialWanted = !userSettings.tutorialDone;
+    bool tutorialReplay = false;
+    bool tutorialMenuBarWasOn = false;
+    bool tutorialAutoStarted = false;
+
     // HUD / hit feedback state (shared with the input handlers below).
     game::HudState hudState;
     float lastSeenJudgeTime = -100.0f;
@@ -3797,6 +3832,30 @@ int main(int argc, char** argv)
     int eulaPadChoice = -1;
     bool eulaAlive = false;
     bool eulaDismissedThisRun = false;
+
+    // ---- tutorial host ----------------------------------------------------
+    // The runtime never touches main's locals: it asks these questions.
+    {
+        story::Host host;
+        host.settingsOpen = [&]() { return showDebug; };
+        host.chartdlOpen = [&]() { return chartDlWindow() != nullptr; };
+        host.chartdlSearch = [&]() { return platform::chartDlSearchHasText(); };
+        host.chartdlSong = [&]() { return platform::chartDlSongSelected(); };
+        host.chartdlDone = [&]() { return platform::chartDlDownloadDone(); };
+        host.inPlay = [&]() { return state == AppState::Play; };
+        host.startedDifficulty = [&]() { return -1; };
+        host.command = [&](const std::string& command) {
+            if (command == "openSettings") {
+                showDebug = true;
+                settingsTab = 0;
+                std::printf("[story] open settings (tab 0)\n");
+                std::fflush(stdout);
+            } else if (command == "launchChartdl") {
+                launchChartDownloader();
+            }
+        };
+        story::setHost(std::move(host));
+    }
     // Opens a URL in the user's default browser (settings > 关于). Same call
     // chartdl uses to reveal its output folder, and shell32 is already on the
     // link line; the URLs are literals, never anything the user typed.
@@ -4186,6 +4245,9 @@ int main(int argc, char** argv)
                             noteSpeed = speed;
                             core_api::setPreviewConfig(0, 1, 1, 1, 0, 0, noteSpeed, 1.0f, 0.6f, 0.0f, 1.0f, 0.85f);
                         }
+                        // Tutorial anchor (设置 > 演奏 > 音符速度): the ring is
+                        // drawn by game/Story.cpp, in window pixels.
+                        ui::setAnchor("settings.speed", ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
                     });
                 twoCols(
                     [&](float w) {
@@ -4667,8 +4729,7 @@ int main(int argc, char** argv)
                 static bool linkBadMiss = true;
                 // The working copy is rebuilt on the first frame this page is
                 // drawn in a card session, and never in the middle of a drag
-                // (it is redrawn every frame then). Gating on "the card just
-                // opened" instead - which is what this used to do - silently
+                // (it is redrawn every frame then). Gating on "the card just\n                // opened" instead - which is what this used to do - silently
                 // missed the common case of a card opened on 演奏 and switched
                 // to 判定 later, and it left 账户 > 导入 (which replaces the
                 // profile under the card) pushing its pre-import numbers back
@@ -5273,8 +5334,7 @@ int main(int argc, char** argv)
                 ui::infoRows(accRows, interior);
 
                 // 导入 / 导出. One profile file carries everything this account
-                // owns (settings + scores + 资料), so "backup" and "move to
-                // another machine" are the same operation - and a reinstall can
+                // owns (settings + scores + 资料), so "backup" and "move to\n                // another machine" are the same operation - and a reinstall can
                 // be undone. Both go through the native picker.
                 contentLeft();
                 ui::sectionLabel("数据", interior);
@@ -5313,8 +5373,7 @@ int main(int argc, char** argv)
                             const std::string path = pickUserDataFile(false, std::string());
                             if (!path.empty()) {
                                 // Screened *before* the confirmation card: a file
-                                // that is not user data must not get a "we are about
-                                // to replace your scores" prompt.
+                                // that is not user data must not get a "we are about\n                                // to replace your scores" prompt.
                                 if (game::isUserDataFile(path)) {
                                     game::UserSettings probeSettings;
                                     std::map<std::string, game::ScoreRecord> probeScores;
@@ -5375,7 +5434,6 @@ int main(int argc, char** argv)
                 aboutLine("测试");
                 aboutLine("Shitakara4banme");
                 aboutGap();
-                aboutLine("");
                 aboutLine("株洲市南方中学");
                 aboutLine("2026年9月");
                 ImGui::PopFont();
@@ -5412,12 +5470,26 @@ int main(int argc, char** argv)
                 ImGui::PopFont();
                 aboutGap();
                 contentLeft();
-                if (ui::capsuleButton("许可与免责声明", ImVec2(interior, 44.0f * s), false)) {
-                    // Raises the first-run card again - see the eula state up with
-                    // the settings tab.
-                    eulaAlive = true;
-                    eulaDismissedThisRun = false;
-                    eulaPadChoice = -1;
+                {
+                    // Two half-width pills: the licence card on the left, and the
+                    // way back into the tutorial on the right. The tutorial can be
+                    // replayed any time - the first-run flag only decides whether
+                    // it opens by itself.
+                    const float rowW = (interior - 8.0f * s) * 0.5f;
+                    if (ui::capsuleButton("许可与免责声明", ImVec2(rowW, 44.0f * s), false)) {
+                        // Raises the first-run card again - see the eula state up
+                        // with the settings tab.
+                        eulaAlive = true;
+                        eulaDismissedThisRun = false;
+                        eulaPadChoice = -1;
+                    }
+                    ImGui::SameLine();
+                    if (ui::capsuleButton("重播新手教学", ImVec2(rowW, 44.0f * s), true)) {
+                        tutorialReplay = true;
+                        showDebug = false;
+                        std::printf("[story] replay requested from settings\n");
+                        std::fflush(stdout);
+                    }
                 }
             }
             // End on an item: the checkbox helper leaves the cursor at the row
@@ -5673,8 +5745,7 @@ int main(int argc, char** argv)
     // 本来也是"一首歌"（一个分组），用户要的就是"删干净"。
     //
     // **共用的文件不能连带删**：一张曲绘、一个 mp3 常常被同一首歌的几个难度同时用着。
-    // 所以最后拿"没被删的那些谱面还认得哪些文件"过一遍筛子 —— 这样"删掉最后一个
-    // 难度"和"只删其中一个难度"都自动落到对的行为上，不用分情况写。
+    // 所以最后拿"没被删的那些谱面还认得哪些文件"过一遍筛子 —— 这样"删掉最后一个\n    // 难度"和"只删其中一个难度"都自动落到对的行为上，不用分情况写。
     //
     // 认不出 musicId 的（文件名开头没编号）就只删它自己一个，绝不猜。
     // ------------------------------------------------------------------
@@ -6389,8 +6460,7 @@ int main(int argc, char** argv)
                     }
                     // 30 frames down, 30 up; every further entry is offset by
                     // half a cycle. Two buttons in one list must never fire on
-                    // the same frame, or "START opens the pause dialog, X picks
-                    // 重试" cannot be checked - START would win the frame and
+                    // the same frame, or "START opens the pause dialog, X picks\n                    // 重试" cannot be checked - START would win the frame and
                     // just resume.
                     //
                     // Stops after kFakePadCycles cycles: an endless press/release
@@ -6625,8 +6695,7 @@ int main(int argc, char** argv)
     // chart forward over a stretch of notes that had never been on screen.
     //
     // The one-shot `for` around the body is load-bearing: the body uses
-    // `continue` and `break`, and the compiler reads those as "next round of this
-    // loop" / "leave this loop". With a loop that runs exactly once, `continue`
+    // `continue` and `break`, and the compiler reads those as "next round of this\n    // loop" / "leave this loop". With a loop that runs exactly once, `continue`
     // leaves the wrapper - which is what it used to do to the main loop - and so
     // does `break`; the three places that end the loop all set `running = false`
     // first and the condition is checked right after the call. That is why the
@@ -6662,8 +6731,7 @@ int main(int argc, char** argv)
 #endif
         // ------------------------------------------------------------------
         // Frame-rate sampler. Quiet while nothing interesting happens, and it
-        // needs no environment variable - a "the window's picture does not
-        // refresh while dragging" report has to be answerable from the log alone,
+        // needs no environment variable - a "the window's picture does not\n        // refresh while dragging" report has to be answerable from the log alone,
         // because the one thing the user cannot be asked to remember is a flag.
         //
         // Two situations print a line, both of them worth knowing about:
@@ -7134,14 +7202,15 @@ int main(int argc, char** argv)
                             SDL_SetWindowBordered(window, windowMode == 1 ? SDL_TRUE : SDL_FALSE);
                             SDL_SetWindowResizable(window, SDL_TRUE);
                         }
-                    } else if (!typingText && event.key.keysym.sym == SDLK_h) {
+                    } else if (!typingText && event.key.keysym.sym == SDLK_h && !story::blocksInput()) {
                         showDebug = !showDebug;
                     } else if (event.key.keysym.sym == SDLK_o
                         && (event.key.keysym.mod & KMOD_CTRL) != 0) {
                         // Ctrl+O = 文件 > 打开谱面…（菜单项上那个 "	Ctrl+O" 只是提示：
                         // 这里没有加速键表，SDL 的泵不调 TranslateAccelerator）。
                         openChartRequested = true;
-                    } else if (event.key.keysym.sym == SDLK_F5 && state == AppState::Select) {
+                    } else if (event.key.keysym.sym == SDLK_F5 && state == AppState::Select
+                        && !story::blocksInput()) {
                         // The chart folder is scanned once at startup; this lets
                         // the player drop a new .sus in and pick it up without
                         // restarting (the empty-state hint promises F5).
@@ -7725,8 +7794,7 @@ int main(int argc, char** argv)
             // FALSE，无害。
             //
             // ⚠ 这一句**只能放在这个分支里**（即"确实消费了一条命令"）。放到分支外
-            // 就是每帧一次 —— 菜单一打开，下一帧就被自己关掉，表现成"鼠标点一下菜单栏
-            // 闪一下就没了"（2026-10-06 真踩到过）。
+            // 就是每帧一次 —— 菜单一打开，下一帧就被自己关掉，表现成"鼠标点一下菜单栏\n            // 闪一下就没了"（2026-10-06 真踩到过）。
             if (menuIsOpen) {
                 EndMenu();
             }
@@ -7741,7 +7809,7 @@ int main(int argc, char** argv)
         }
 #endif
 
-        if (escapePressed && !game::guessDialogOpen()) {
+        if (escapePressed && !game::guessDialogOpen() && !story::blocksInput()) {
             countdownActive = false; // leaving / continuing cancels any countdown
             if (keymapCardAlive) {
                 // 「按键映射」卡片（2026-10-11）：ESC = 关掉它。改键位等待中
@@ -7991,7 +8059,15 @@ int main(int argc, char** argv)
                     // First repeat is slow, the ones after it fast - the usual
                     // keyboard feel for a list that can hold hundreds of songs.
                     if (!padDirHeld[i] || nowMs >= padDirNext[i]) {
-                        if (padFocusMode) {
+                        if (story::blocksInput()) {
+                            // Tutorial: left/right walk the option cards. Up and
+                            // down do nothing - there is only one row.
+                            if (i == 2) {
+                                story::padMove(-1);
+                            } else if (i == 3) {
+                                story::padMove(1);
+                            }
+                        } else if (padFocusMode) {
                             ui::padNav(dirFocus[i]);
                         } else {
                             pulse(dirKey[i]);
@@ -8037,7 +8113,14 @@ int main(int argc, char** argv)
             // a START that slipped through to "open the settings card" behind
             // them would leave two cards fighting over the same input.
             const bool padModalCard = multiInstanceAsk || eulaAlive || closeAsk || deleteAsk;
-            if (padModalCard) {
+            if (story::blocksInput()) {
+                // Nothing behind the tutorial may react to the pad: a stray A
+                // used to start the selected song. A / START advance the story
+                // (or press the focused option), everything else is dropped.
+                if (padA || padStart) {
+                    story::padAccept();
+                }
+            } else if (padModalCard) {
                 if (deleteAsk) {
                     // 左/上 = 取消（默认那一边），右/下 = 删除。
                     if (deleteAskPadChoice < 0) {
@@ -8141,8 +8224,7 @@ int main(int argc, char** argv)
         // Fixed render mode: ImGui has to lay out in the *render* size (it draws
         // into the same offscreen buffer as the scene) instead of the window's.
         // FramebufferScale 1.0 also means the atlas is rasterised at that size
-        // and then scaled up with everything else, which is exactly what "只渲染
-        // 这个分辨率" means. Mouse positions arrive already mapped by
+        // and then scaled up with everything else, which is exactly what "只渲染\n        // 这个分辨率" means. Mouse positions arrive already mapped by
         // mapPointerEvent(); the backend's own fallback path (mouse outside the
         // window) is left alone - ImGui has nothing hovered there anyway.
         if (renderer.offscreen()) {
@@ -8150,6 +8232,13 @@ int main(int argc, char** argv)
             ImGui::GetIO().DisplayFramebufferScale = ImVec2(1.0f, 1.0f);
         }
         ImGui::NewFrame();
+        // Tutorial plumbing: anchors are per-frame (a widget that was not drawn
+        // has no rect this frame), and the pointer gate follows the story layer.
+        // Parking has to happen here rather than inside the select branch: while
+        // a live runs that branch is skipped, and a story left "active and not\n        // suspended" would swallow the pad for the whole song.
+        story::setSuspended(state != AppState::Select);
+        ui::anchorsFrame();
+        ui::setInputBlocked(story::blocksInput());
 
         // Windows IME: SDL only hands the composition / candidate window to the
         // app while a text input is *active*, and ImGui's SDL2 backend stopped
@@ -8293,8 +8382,7 @@ int main(int argc, char** argv)
 
             // Host: put the song this window is sitting on into the room. The
             // members' phone panels follow it, so this runs on every move of the
-            // list cursor - the lock's epoch is what tells them "new song, pick
-            // again". Nothing is published while a charge is armed: the round is
+            // list cursor - the lock's epoch is what tells them "new song, pick\n            // again". Nothing is published while a charge is armed: the round is
             // already loaded on the old song.
             auto publishHostSong = [&]() {
                 if (!party.active() || !party.isHost() || mpStartPending) {
@@ -8341,28 +8429,27 @@ int main(int argc, char** argv)
                 const bool partySolo = party.playerCount() <= 1;
                 if (party.isHost()) {
                     if (selected < 0 || selected >= static_cast<int>(entries.size())) {
-                        mpStatus = partySolo ? std::string() : "选一首曲子";
+                        mpStatus = partySolo ? std::string() : "请选择歌曲";
                     } else if (!mpConfirmed) {
-                        mpStatus = partySolo ? std::string() : "点确定开始（其他玩家在手机上选难度）";
+                        mpStatus = partySolo ? std::string() : "准备好的话就开始吧";
                     } else if (party.allReady()) {
-                        mpStatus = partySolo ? std::string() : "全员确定 · 即将开始";
+                        mpStatus = partySolo ? std::string() : "即将开始";
                     } else {
-                        mpStatus = partySolo ? std::string() : "已确定 · 等待其他玩家";
+                        mpStatus = partySolo ? std::string() : "等待其他玩家";
                     }
                 } else if (mpSnap.phase == platform::PartyLobby) {
                     mpStatus = "等待房主选曲";
                 } else if (mpLocked < 0) {
-                    // Named out loud, because "房主选了一首这台机器上没有的
-                    // 曲子" is otherwise invisible: this window would just sit
+                    // Named out loud, because "房主选了一首这台机器上没有的\n                    // 曲子" is otherwise invisible: this window would just sit
                     // there while the others ready up.
                     mpStatus = "本窗口没有" + (mpSnap.songTitle.empty() ? mpSnap.songKey : mpSnap.songTitle)
                         + "，无法参加本曲";
                 } else if (mpMyDifficulty < 0) {
-                    mpStatus = "在手机上选择难度";
+                    mpStatus = "请选择难度";
                 } else if (!mpConfirmed) {
-                    mpStatus = "点确定加入本曲";
+                    mpStatus = "准备好的话就开始吧";
                 } else {
-                    mpStatus = "已确定 · 等待其他玩家";
+                    mpStatus = "等待其他玩家";
                 }
                 // The charge is on: say which half it is in. No numbers - the
                 // loading phase is as long as the slowest window's load (under a
@@ -8401,6 +8488,79 @@ int main(int argc, char** argv)
             // 曲目右键 > 删除谱面文件…：跟菜单 编辑 > 删除谱面文件 汇到同一处
             // （deleteAsk 那张确认卡），选曲界面自己不碰磁盘。
             int deleteRequest = -1;
+            // ---- tutorial ----------------------------------------------------
+            // Starts once the first-run EULA is out of the way and the select
+            // screen is actually up. --story-test skips both gates and jumps to
+            // --story-step, which is how the headless screenshot check works.
+            {
+                const bool testing = !storyTestId.empty();
+                const bool eulaSettled = !eulaAlive
+                    && (eulaDismissedThisRun || userSettings.eulaAccepted || testing);
+                const bool wantStart = testing || tutorialWanted || tutorialReplay;
+                if (!story::active() && wantStart && state == AppState::Select && !party.active()
+                    && eulaSettled && (!showDebug || testing) && uiClock > (testing ? 0.4 : 1.2)) {
+                    // The tutorial points at the song select's own header
+                    // buttons, which only exist in the normal (non-menu-bar)
+                    // layout. Remember what it was so the menu comes back.
+                    tutorialMenuBarWasOn = userSettings.nativeMenuBar;
+                    if (userSettings.nativeMenuBar) {
+                        userSettings.nativeMenuBar = false;
+                    }
+                    const char* id = testing ? storyTestId.c_str() : "tutorial";
+                    if (story::start(id)) {
+                        if (storyTestStep >= 0) {
+                            story::debugJump(storyTestStep);
+                        }
+                        tutorialAutoStarted = true;
+                        std::printf("[story] started '%s'%s\n", id,
+                            tutorialMenuBarWasOn ? " (menu bar off for the tutorial)" : "");
+                        std::fflush(stdout);
+                    } else {
+                        tutorialMenuBarWasOn = false;
+                    }
+                    tutorialWanted = false;
+                    tutorialReplay = false;
+                }
+            }
+            // While a live runs the story is parked: its clock stops, nothing is
+            // drawn, and the step that was waiting for "the live started" is
+            // resolved the moment the player is back on this screen.
+            story::update(ImGui::GetIO().DeltaTime);
+
+            // ---- chartdl guidance -------------------------------------------
+            // The downloader is another process: the only way to point at a
+            // control is a topmost click-through ring over its real HWND rect.
+#ifdef _WIN32
+            {
+                const std::string& key = story::guideKey();
+                const bool open = chartDlWindow() != nullptr;
+                static bool chartDlArranged = false;
+                if (!open) {
+                    chartDlArranged = false;
+                } else if (story::active() && !chartDlArranged) {
+                    platform::chartDlArrange();
+                    chartDlArranged = true;
+                }
+                int control = 0;
+                if (key == "search") {
+                    control = platform::ChartDlSearch;
+                } else if (key == "list") {
+                    control = platform::ChartDlList;
+                } else if (key == "easy") {
+                    control = platform::ChartDlEasy;
+                } else if (key == "queue") {
+                    control = platform::ChartDlQueue;
+                }
+                RECT target{};
+                if (control != 0 && open && platform::chartDlRect(nullptr, control, &target)) {
+                    const std::wstring label = path_utf8::widen(story::guideLabel());
+                    platform::guideShow(&target, label.c_str());
+                } else {
+                    platform::guideHide();
+                }
+            }
+#endif
+
             int action = game::drawSongSelect(renderer, entries, selected, windowW, windowH,
                 static_cast<float>(uiClock), userSettings.sortMode, userSettings.groupMode,
                 selectedVocal, userSettings.uiScale, &selectConfirmCenter, &account,
@@ -8547,8 +8707,7 @@ int main(int argc, char** argv)
             // ---- 确定: the room's one button --------------------------------
             // The host locks the song with it, a member marks itself ready with
             // it, and the live starts the moment *every* player in the round has
-            // pressed it (see the charge block below). There is no "press again
-            // to force it": a straggler is waited for, on purpose.
+            // pressed it (see the charge block below). There is no "press again\n            // to force it": a straggler is waited for, on purpose.
             if (party.active()) {
                 const bool host = party.isHost();
                 if (!host && selPartyOut.difficulty >= 0) {
@@ -10049,6 +10208,23 @@ int main(int argc, char** argv)
         // frame was drawn, resolve them now (a dialog opening swallows the
         // click that opened it).
         ui::flushSe();
+        // Story layer last: it has to sit above every card (settings, pause,
+        // the EULA), because it dims whatever it is not pointing at. The click
+        // that finishes the script also happens in here.
+        if (state == AppState::Select && story::active()) {
+            story::draw(static_cast<float>(windowW), static_cast<float>(windowH));
+        }
+        if (story::consumeFinished()) {
+            platform::guideHide();
+            userSettings.tutorialDone = true;
+            if (tutorialMenuBarWasOn) {
+                userSettings.nativeMenuBar = true;
+                tutorialMenuBarWasOn = false;
+            }
+            persistUserData();
+            std::printf("[story] marked seen; profile saved\n");
+            std::fflush(stdout);
+        }
         ImGui::Render();
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
         // Presents the offscreen buffer into the window (letterboxed). No-op
@@ -10210,8 +10386,7 @@ int main(int argc, char** argv)
                     // ------------------------------------------------------
                     // Alt / F10：菜单的访问键（mnemonic）。
                     //
-                    // "按 Alt 进菜单模式、把访问键的**下划线**显示出来、Alt+字母打开
-                    // 对应菜单"这几件事全是 DefWindowProc 做的 —— 而 SDL 的窗口过程
+                    // "按 Alt 进菜单模式、把访问键的**下划线**显示出来、Alt+字母打开\n                    // 对应菜单"这几件事全是 DefWindowProc 做的 —— 而 SDL 的窗口过程
                     // 把 WM_SYSKEYDOWN 当普通按键吃了（它要靠这个喂 SDL_KEYDOWN），
                     // 于是 DefWindowProc 永远收不到，菜单栏就成了一块只能拿鼠标点的
                     // 装饰。菜单挂着的时候把这一族消息直接转给 DefWindowProc。
@@ -10221,8 +10396,7 @@ int main(int argc, char** argv)
                     // 免得菜单项的高亮 / 状态我们自己维护一半。
                     //
                     // Alt+F4 也走这条路（它本来就是 WM_SYSKEYDOWN）：DefWindowProc 会
-                    // 发 WM_CLOSE，而 WM_CLOSE 上面那段已经拦下来了，所以"演奏中先问
-                    // 一句"照样成立。
+                    // 发 WM_CLOSE，而 WM_CLOSE 上面那段已经拦下来了，所以"演奏中先问\n                    // 一句"照样成立。
                     // ------------------------------------------------------
                     if (platform::menu::attached(hwnd)
                         && (message == WM_SYSKEYDOWN || message == WM_SYSKEYUP
@@ -10259,8 +10433,7 @@ int main(int argc, char** argv)
                     // dragging 置上、起 WM_TIMER，由下面的喂帧分支出画面。
                     //
                     // 命令本身不在这里执行：只把 id 记进信箱，让主循环在**帧内**处理。
-                    // 在窗口过程里直接改游戏状态，会撞上"这个 WM_TIMER 可能正落在某个
-                    // 帧的中间"（喂帧是递归的），状态改到一半就出事。
+                    // 在窗口过程里直接改游戏状态，会撞上"这个 WM_TIMER 可能正落在某个\n                    // 帧的中间"（喂帧是递归的），状态改到一半就出事。
                     // ------------------------------------------------------
                     if (message == WM_COMMAND && HIWORD(wParam) == 0
                         && LOWORD(wParam) >= static_cast<UINT>(platform::menu::CmdSettings)
@@ -10329,9 +10502,7 @@ int main(int argc, char** argv)
                     // 玻璃实现 = 「自绘无框」: the recipe from Microsoft's
                     // "Custom Window Frame Using DWM" - hand the whole window to
                     // the client (WM_NCCALCSIZE -> 0) and then put moving and
-                    // resizing back by hand (WM_NCHITTEST), because "a side effect
-                    // of removing the standard frame is the loss of the default
-                    // resizing and moving behavior". Both messages do reach a window
+                    // resizing back by hand (WM_NCHITTEST), because "a side effect\n                    // of removing the standard frame is the loss of the default\n                    // resizing and moving behavior". Both messages do reach a window
                     // whose non-client area is zero (the doc says so for the hit
                     // test), and they are the only way to keep a frameless window
                     // draggable without giving up the native drag loop, Aero Snap
@@ -10442,8 +10613,7 @@ int main(int argc, char** argv)
                             // which used to leave the timer running and vsync off
                             // forever. The button state is the ground truth, so
                             // check it here and clean up if the drag is over.
-                            // 菜单开着的时候这个判断必须让路：菜单是"点一下开、
-                            // 松开之后还开着"，左键此刻必然是抬起的，照判会把喂帧
+                            // 菜单开着的时候这个判断必须让路：菜单是"点一下开、\n                            // 松开之后还开着"，左键此刻必然是抬起的，照判会把喂帧
                             // 的定时器当场杀掉（画面在菜单展开期间冻住）。
                             if (!st->menuOpen && (GetAsyncKeyState(VK_LBUTTON) & 0x8000) == 0) {
                                 KillTimer(hwnd, kDragTimerId);

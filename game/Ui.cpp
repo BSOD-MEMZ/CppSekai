@@ -2051,4 +2051,80 @@ void expBar(ImDrawList* dl, ImVec2 pos, float width, float unit, float ratio)
     }
 }
 
+// ----------------------------------------------------------------------
+// Story anchors + pointer gate (see Ui.hpp). Two tiny pieces of global state:
+// the anchors live for exactly one frame, the gate for as long as the story
+// layer wants it.
+// ----------------------------------------------------------------------
+namespace
+{
+    struct AnchorRect
+    {
+        ImVec2 lo;
+        ImVec2 hi;
+    };
+    std::unordered_map<std::string, AnchorRect>& anchorTable()
+    {
+        static std::unordered_map<std::string, AnchorRect> table;
+        return table;
+    }
+    bool gInputBlocked = false;
+} // namespace
+
+void setAnchor(const char* id, const ImVec2& lo, const ImVec2& hi)
+{
+    if (id == nullptr || id[0] == '\0') {
+        return;
+    }
+    anchorTable()[id] = AnchorRect{lo, hi};
+}
+
+bool anchorRect(const char* id, ImVec2* lo, ImVec2* hi)
+{
+    if (id == nullptr) {
+        return false;
+    }
+    const auto it = anchorTable().find(id);
+    if (it == anchorTable().end()) {
+        return false;
+    }
+    if (lo != nullptr) {
+        *lo = it->second.lo;
+    }
+    if (hi != nullptr) {
+        *hi = it->second.hi;
+    }
+    return true;
+}
+
+void anchorsFrame()
+{
+    anchorTable().clear();
+}
+
+void setInputBlocked(bool on)
+{
+    gInputBlocked = on;
+}
+
+bool inputBlocked()
+{
+    return gInputBlocked;
+}
+
+bool mouseClicked(ImGuiMouseButton button)
+{
+    return !gInputBlocked && ImGui::IsMouseClicked(button);
+}
+
+bool mouseDoubleClicked(ImGuiMouseButton button)
+{
+    return !gInputBlocked && ImGui::IsMouseDoubleClicked(button);
+}
+
+bool keyPressed(ImGuiKey key, bool repeat)
+{
+    return !gInputBlocked && ImGui::IsKeyPressed(key, repeat);
+}
+
 } // namespace ui

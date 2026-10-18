@@ -119,6 +119,14 @@ CppSekai (AGPL-3.0-only)  ← 本仓库        加平台层、判定引擎、UI�
 
 `assets/se/**`、`charts/**`、`toolchain/` 等确实不在库里（gitignore 生效）。
 
+**2026-10-18 新增（新手教学用）**
+
+| 路径 | 数量 | 内容 | 被 git 跟踪？ |
+|---|---|---|---|
+| `assets/story/ui/**` | 12 | 剧情界面框：对话 / 选项 / 场景标题 / 暗角，取自 [SEKAI-Stories](https://sekai-stories.pages.dev/)（其 LICENSE 明确写：**图片不在 GPL 内，仅限个人或教育用途**） | **是** |
+| `assets/story/img/seewo_small.png` | 1 | 从 `Drafts/seewo.png` 裁的：屏幕改窄、外框尺寸不变（`Drafts/` 是作者自己的实拍图） | **是** |
+| `assets/story/img/kb_mouse.jpg` | 1 | 键鼠照片，Wikimedia Commons **公有领域**：`A computer mouse, black and white, retouched, keyboard visible in background.jpg`（已缩放为 960×720） | **是** |
+
 > **为什么这是问题**：官方素材的复制权在权利人手里。免费、非商业、写了「版权归官方」
 > —— 都**不改变「未经许可再分发即侵权」**这个事实。GitHub 上同类项目活着是因为
 > 权利人没执法，不是因为合法。详见 `COPYRIGHT.md` 第四节风险矩阵。
