@@ -208,9 +208,33 @@ bool chartDlSearchHasText()
     return !text.empty();
 }
 
+int chartDlCheckedCount()
+{
+    const HWND list = findControl(chartDlWindowRaw(), ChartDlList);
+    if (list == nullptr)
+    {
+        return 0;
+    }
+    const int count = static_cast<int>(SendMessageW(list, LVM_GETITEMCOUNT, 0, 0));
+    int checked = 0;
+    for (int i = 0; i < count; ++i)
+    {
+        const auto state = static_cast<UINT_PTR>(
+            SendMessageW(list, LVM_GETITEMSTATE, static_cast<WPARAM>(i), LVIS_STATEIMAGEMASK));
+        if ((state >> 12) == 2) // index 2 = checked (1 = unchecked, 3 = indeterminate)
+        {
+            ++checked;
+        }
+    }
+    return checked;
+}
+
 bool chartDlSongSelected()
 {
-    return chartDlSelectedCount() > 0;
+    // Ticking the box is the actual "I want this one" action - the queue button
+    // downloads *checked* songs, and clicking a row only previews it. Either one
+    // counts, so the tutorial never waits for a click the player does not need.
+    return chartDlSelectedCount() > 0 || chartDlCheckedCount() > 0;
 }
 
 bool chartDlEasyChecked()

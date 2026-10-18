@@ -3292,6 +3292,25 @@ int main(int argc, char** argv)
         return false;
 #endif
     };
+    // "Is the downloader open?" has two sources because either one alone lies:
+    // the window lookup misses while the window is still being created (and if
+    // the player started chartdl.exe by hand, the title/class could be anything),
+    // while the process handle only exists for a copy *we* launched. Whoever
+    // opened it counts - this is what the tutorial's `chartdlOpen` wait reads.
+    auto chartDownloaderOpen = [&]() -> bool {
+#ifdef _WIN32
+        if (chartDlProcess != nullptr) {
+            HANDLE process = static_cast<HANDLE>(chartDlProcess);
+            if (WaitForSingleObject(process, 0) != WAIT_OBJECT_0) {
+                return true; // still running
+            }
+        }
+        return chartDlWindow() != nullptr;
+#else
+        return false;
+#endif
+    };
+
     // frame: following the host involves a correction step, and applying that
     // step several times per frame would speed it up.
     auto resolveSongClock = [&]() -> double {
@@ -3877,7 +3896,7 @@ int main(int argc, char** argv)
     {
         story::Host host;
         host.settingsOpen = [&]() { return showDebug; };
-        host.chartdlOpen = [&]() { return chartDlWindow() != nullptr; };
+        host.chartdlOpen = [&]() { return chartDownloaderOpen(); };
         host.chartdlSearch = [&]() { return platform::chartDlSearchHasText(); };
         host.chartdlSong = [&]() { return platform::chartDlSongSelected(); };
         host.chartdlDone = [&]() { return platform::chartDlDownloadDone(); };
@@ -8341,7 +8360,12 @@ int main(int argc, char** argv)
         // a live runs that branch is skipped, and a story left "active and not
         // suspended" would swallow the pad for the whole song.
         const bool storyPlayTestSuspend = storyPlayTest && uiClock > 5.0 && uiClock < 7.0;
-        story::setSuspended(state != AppState::Select || storyPlayTestSuspend);
+        // The keymap card is a card of its own: while it is up the story parks
+        // (no dim, no dialogue, no skip key) so the player can actually see the
+        // grid they are editing. It resumes when the card closes.
+        const bool storyCoveredByCard = keymapCardOpen;
+        story::setSuspended(
+            state != AppState::Select || storyPlayTestSuspend || storyCoveredByCard);
         ui::anchorsFrame();
         ui::setInputBlocked(story::blocksInput());
 
@@ -8648,7 +8672,7 @@ int main(int argc, char** argv)
 #ifdef _WIN32
             {
                 const std::string& key = story::guideKey();
-                const bool open = chartDlWindow() != nullptr;
+                const bool open = chartDownloaderOpen();
                 static bool chartDlArranged = false;
                 if (!open) {
                     chartDlArranged = false;

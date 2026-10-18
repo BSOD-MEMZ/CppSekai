@@ -31,10 +31,11 @@ enum ChartDlControl
 bool chartDlWindow(void** outHwnd);
 bool chartDlRect(void** outHwnd, int controlId, void* outRect); // RECT*, screen pixels
 std::wstring chartDlText(int controlId);                        // WM_GETTEXT, "" if gone
-int chartDlSelectedCount();
+int chartDlSelectedCount(); // rows highlighted in the list
+int chartDlCheckedCount();  // rows ticked in the list
 int chartDlProgress(); // 0..1000, -1 when unavailable
 bool chartDlSearchHasText();
-bool chartDlSongSelected();
+bool chartDlSongSelected(); // a row is selected or ticked
 bool chartDlEasyChecked(); // the EASY tick box in the right-hand panel
 bool chartDlDownloadDone(); // status says a job finished / nothing to do
 

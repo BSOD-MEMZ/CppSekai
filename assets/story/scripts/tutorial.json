@@ -75,10 +75,10 @@
           "highlight": "store",
           "tip": "点这里打开下载器～",
           "wait": "chartdlOpen",
-          "timeout": 30,
+          "timeout": 45,
           "onTimeout": "dl_offer",
           "passthrough": true,
-          "target": "dl_launch"
+          "goto": "dl_launch"
         },
         {
           "id": "dl_offer",
@@ -94,7 +94,8 @@
               "text": "先跳过下载",
               "goto": "device"
             }
-          ]
+          ],
+          "wait": "chartdlOpen"
         },
         {
           "id": "dl_launch",
@@ -106,42 +107,21 @@
           "onTimeout": "dl_failed"
         },
         {
-          "id": "dl_search",
+          "id": "dl_list",
           "who": "初音未来",
-          "text": "在「搜索」框里打歌名就好～中文、日文、罗马音都认得，比如 Hype Dive！",
-          "wait": "chartdlSearch",
-          "timeout": 120,
-          "onTimeout": "dl_slow",
-          "onClose": "dl_closed",
-          "guide": "search",
-          "tip": "这里输入歌名"
-        },
-        {
-          "id": "dl_pick",
-          "who": "初音未来",
-          "text": "然后在这边的列表里，点一首你想打的歌～",
+          "text": "左边这一列就是曲库～勾上想打的歌就行，可以多选哦。",
           "wait": "chartdlSong",
-          "timeout": 120,
+          "timeout": 180,
           "onTimeout": "dl_slow",
           "onClose": "dl_closed",
           "guide": "list",
-          "tip": "点一下你要的那首"
-        },
-        {
-          "id": "dl_easy",
-          "who": "初音未来",
-          "text": "右边把 EASY 勾上（绿色那个）！其它难度……先不用啦。",
-          "guide": "easy",
-          "tip": "勾上 EASY",
-          "wait": "chartdlEasy",
-          "timeout": 180,
-          "onTimeout": "dl_slow",
-          "onClose": "dl_closed"
+          "tip": "勾上你要的歌",
+          "goto": "dl_go"
         },
         {
           "id": "dl_go",
           "who": "初音未来",
-          "text": "都勾好了，就按「下载勾选的歌曲」，等进度条走完～",
+          "text": "勾好之后按「下载勾选的歌曲」，等进度条走完就好啦～",
           "wait": "chartdlDone",
           "timeout": 300,
           "onTimeout": "dl_slow",

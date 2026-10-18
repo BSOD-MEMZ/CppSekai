@@ -674,14 +674,18 @@ void update(float dt)
         jump(step.onClose);
         return;
     }
-    if (step.timeout > 0.0f && gStepTime > step.timeout && !step.onTimeout.empty())
-    {
-        jump(step.onTimeout);
-        return;
-    }
+    // Satisfied beats timed out. The other order meant: the player opens the
+    // downloader at second 31 of a 30s step, and the step has already branched
+    // to "no, you didn't open it" on the same tick - which is exactly how the
+    // tutorial came to argue with a downloader that was open on screen.
     if (waitSatisfied(step))
     {
         next();
+        return;
+    }
+    if (step.timeout > 0.0f && gStepTime > step.timeout && !step.onTimeout.empty())
+    {
+        jump(step.onTimeout);
     }
 }
 

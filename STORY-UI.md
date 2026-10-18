@@ -234,7 +234,13 @@ void beginFrame();                                     // 主循环每帧清表
 `dl_intro`（"点右上角的音乐商店"）另外还要 `passthrough`：那一步在请求玩家点它，
 不放开输入等于让人点空气。
 
-### 5.3.3 「完成」按钮
+### 5.3.3 按键映射卡片要盖在教学层之上
+
+「修改键位」打开的是设置页那张独立卡片。教学层画在**前景 draw list**上，会把卡片整个压暗，
+所以卡片一开就把剧情**挂起**（`story::setSuspended(... || keymapCardOpen)`）：压暗、对话框、
+跳过键全都不画，关掉卡片后从原来的步骤继续。别想着只把 dim 关掉——对话条也会盖住卡片下半。
+
+### 5.3.4 「完成」按钮
 
 `"done": true` 的步骤会在提示条右边挂一颗薄荷胶囊。它和设置卡片里的按钮**同一套绘制**
 （`ui::capsuleDraw`，`capsuleButton` 内部也调它，不是另写一份），按下去会顺手发
@@ -353,7 +359,8 @@ CLI 加 `--story-test <id>`（无头开），和 `--drop-test` / `--chartdl-test
   "wait": "chartdlSearch",  // 见下表
   "onClose": "dl_closed",   // chartdl 被关掉时跳这里
   "timeout": 120, "onTimeout": "dl_slow",
-  "goto": "device",         // 本步结束后无条件跳
+  "goto": "device",         // 本步结束后无条件跳（**C++ 里这个字段叫 target**，
+                            //  写成 "target" 会被静默忽略——踩过一次）
   "highlight": "settings.speed", "tip": "音符速度，先调到 7~9",
   "done": true,             // 提示条右边挂一颗「完成」胶囊（推进 + 关掉卡片）
   "guide": "search",        // 指向 chartdl 的控件：search/list/easy/queue
@@ -380,11 +387,23 @@ false —— 不锁存的话会永远等一局已经打完的歌。锁存点不�
 - 窗口类名 `CppSekaiChartDl`（`main.cpp` 里原来写成 `#32770`，那是对话框类，永远找不到，
   顺手修了 —— 「已经开着就提到前面」以前其实没生效）。
 - 控件 ID（`downloader/chartdl.cpp`）：搜索 1000、列表 1007、下载 1004、EASY 1100、状态 1009。
-- 跨进程读状态：`WM_GETTEXT`（编辑框/状态栏）、`LVM_GETSELECTEDCOUNT`、`BM_GETCHECK`、
-  `PBM_GETPOS`。都只传标量，不需要跨进程指针封送。
+- 跨进程读状态：`WM_GETTEXT`（编辑框/状态栏）、`LVM_GETSELECTEDCOUNT` / `LVM_GETITEMSTATE`、
+  `BM_GETCHECK`、`PBM_GETPOS`。都只传标量，不需要跨进程指针封送 —— **带指针的
+  `LVM_SETITEMSTATE` 千万别从外面发**：控件会在自己的进程里读你那个指针，直接把下载器打崩
+  （实测过一次，`chartdl.exe` 当场消失，教程就跳去「下载器被关掉了」）。
+- **"下载器开没开"看两处**：我们拉起的进程还活着（`WaitForSingleObject`），**或者**
+  `FindWindowW` 找得到窗口。只查窗口会在窗口还没建好的那几帧骗人，只查进程则漏掉玩家自己
+  双击 chartdl.exe 的情况；两处都算（`chartDownloaderOpen`）。
+- 判定的顺序是「**先看条件满足、再看超时**」。反过来的话：玩家在第 31 秒打开下载器，
+  而 30 秒的超时在同一帧已经跳去「诶？没找到那个按钮吗」—— 教程就会睁眼说瞎话
+  （2026-10-18 实际发生过）。
 - 浮层：`WS_EX_LAYERED | TOPMOST | TRANSPARENT | NOACTIVATE` 的 popup，GDI 画薄荷圆环 +
   深色标签，`UpdateLayeredWindow`。**GDI 不写 alpha**，所以画完把「非黑像素」的 alpha 一律
   置 255 —— 圈和标签因此是不透明、背景完全透明的，且永远不会吃掉点击。
+- **引导顺序是「列表 → 下载」，不强制搜索、也不强制勾 EASY**：`dl_list` 指向左侧列表
+  （`guide: "list"`，等 `chartdlSong` = 选中任意一行**或**勾了任意一个复选框），
+  然后 `dl_go` 指向「下载勾选的歌曲」（`guide: "queue"`，等 `chartdlDone`）。
+  搜索框和难度都是可选路径，脚本里不再出现。
 - 第一次进入引导时把下载器摆到桌面右上角（`chartDlArrange`），避开剧情框。
 - 下载器被关掉：3 秒后仍找不到窗口 → 跳 `onClose`（实测跳到「重新打开 / 先跳过」那一步）。
 
