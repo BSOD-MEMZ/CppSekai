@@ -22,6 +22,9 @@ namespace
     ImTextureID gChoices = 0;
     ImTextureID gSceneText = 0;
     ImTextureID gSkipIcon = 0;
+    // stage.png, the playfield itself: the keyboard step crops it to the half
+    // below the judgement line instead of shipping a picture of a keyboard.
+    ImTextureID gLane = 0;
     float gSkipAspect = 28.0f / 44.0f;
 
 
@@ -89,16 +92,6 @@ namespace
         return 1;
     }
 
-    void textAt(ImDrawList* dl, ImFont* font, float size, const ImVec2& pos, ImU32 col,
-        const std::string& s, std::size_t begin, std::size_t end)
-    {
-        if (end <= begin || dl == nullptr || font == nullptr)
-        {
-            return;
-        }
-        dl->AddText(font, size, pos, col, s.data() + begin, s.data() + end);
-    }
-
     void shadowedText(ImDrawList* dl, ImFont* font, float size, const ImVec2& pos, ImU32 col,
         const char* s)
     {
@@ -157,6 +150,10 @@ bool loadTextures(platform::Renderer& renderer, const std::string& assetDir, std
         skip != nullptr && skip->id != 0 && skip->width > 0) {
         gSkipIcon = reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(skip->id));
         gSkipAspect = static_cast<float>(skip->height) / static_cast<float>(skip->width);
+    }
+    if (const GLuint lane = renderer.loadUiTexture(assetDir + "/mmw/stage.png", localError);
+        lane != 0) {
+        gLane = reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(lane));
     }
     if (gDialogue == 0 && gChoices == 0 && gSceneText == 0)
     {
@@ -304,8 +301,6 @@ void dialogue(const Canvas& c, ImFont* font, const std::string& name, const std:
     //   body : (245,845) 44px  fill #FFFFFF  lineHeight 55  wrap 1300
     // The hairline under the name in the reference is *the band's own rule* at
     // y~840, not something the UI draws - so there is no underline here.
-    float clipL = 0.0f;
-    float clipR = 1920.0f;
     float textL = 245.0f;
     float nameL = 225.0f;
     float size = 44.0f;
@@ -314,7 +309,6 @@ void dialogue(const Canvas& c, ImFont* font, const std::string& name, const std:
     {
         // The song-select phone panel is in the way: narrower column, but the
         // vertical rhythm (name 775 / body 845) stays identical.
-        clipR = 780.0f;
         textL = 120.0f;
         nameL = 100.0f;
         size = 38.0f;
@@ -388,12 +382,14 @@ namespace
 {
     // Dark pill under a picture: wraps at 1180 so a long sentence never runs off
     // the right edge, and stays centred on `cxVirtual`.
-    void drawCaption(const Canvas& c, ImFont* font, const std::string& caption, float cxVirtual,
+    // Returns the bottom edge in pixels so the caller can hang something under
+    // the pill (the keyboard step's 修改键位 button does).
+    float drawCaption(const Canvas& c, ImFont* font, const std::string& caption, float cxVirtual,
         float topPixel)
     {
         if (caption.empty() || font == nullptr)
         {
-            return;
+            return topPixel;
         }
         ImDrawList* dl = ImGui::GetForegroundDrawList();
         const float size = c.s(22.0f);
@@ -422,16 +418,17 @@ namespace
                 IM_COL32(232, 232, 242, 245), caption.data() + line.begin, caption.data() + line.end);
             ty += lineH;
         }
+        return phi.y;
     }
 } // namespace
 
-void keypad(const Canvas& c, ImFont* font, const std::vector<std::string>& keysIn,
-    const std::string& caption)
+bool keypad(const Canvas& c, ImFont* font, const std::vector<std::string>& keysIn,
+    const std::string& caption, const std::string& actionLabel)
 {
     ImDrawList* dl = ImGui::GetForegroundDrawList();
     if (dl == nullptr)
     {
-        return;
+        return false;
     }
     // The shipped default row, only used when the host has no bindings to hand
     // over (headless runs). Real runs always pass the player's own keys.
@@ -447,35 +444,59 @@ void keypad(const Canvas& c, ImFont* font, const std::vector<std::string>& keysI
         }
     }
 
-    constexpr float kKeyW = 118.0f;
-    constexpr float kKeyH = 118.0f;
-    constexpr float kGap = 16.0f;
-    constexpr float kMouseW = 106.0f;
-    constexpr float kMouseH = 174.0f;
-    constexpr float kMouseGap = 46.0f;
-    const float gridW = 6.0f * kKeyW + 5.0f * kGap;
-    const float gridH = 2.0f * kKeyH + kGap;
-    const float totalW = gridW + kMouseGap + kMouseW;
-    const float cx = std::min(960.0f, 1352.0f - totalW * 0.5f);
-    const float cy = 176.0f + gridH * 0.5f;
-    const float x0 = cx - totalW * 0.5f;
-    const float y0 = cy - gridH * 0.5f;
+    // The playfield itself, cropped to everything below the judgement line
+    // (stage.png is 1024x588, lanes run from y~294 to y~575). Showing the real
+    // lane strip means the picture can never disagree with the game, and a key
+    // cap sitting in a lane is the most direct "this key plays this lane" there
+    // is. The crop lands in a 880x242 box; wide pictures slide left so they do
+    // not run under the song-select phone panel (same rule as imageCard).
+    constexpr float kTexW = 1024.0f;
+    constexpr float kTexH = 588.0f;
+    constexpr float kCropTop = 294.0f;
+    constexpr float kCropBot = 575.0f;
+    const float destW = 880.0f;
+    const float destH = destW * (kCropBot - kCropTop) / kTexW;
+    const float cx = std::min(960.0f, 1352.0f - destW * 0.5f);
+    const float top = 208.0f;
+    const ImVec2 lo = c.p(cx - destW * 0.5f, top);
+    const ImVec2 hi = c.p(cx + destW * 0.5f, top + destH);
     const float s = c.scale;
 
     // Same soft plate the picture cards use, so the two read as one family.
-    dl->AddRectFilled(c.p(x0 - 26.0f, y0 - 22.0f), c.p(x0 + totalW + 26.0f, y0 + gridH + 22.0f),
-        IM_COL32(8, 8, 16, 92), c.s(26.0f));
+    dl->AddRectFilled(ImVec2(lo.x - 26.0f * s, lo.y - 18.0f * s),
+        ImVec2(hi.x + 26.0f * s, hi.y + 26.0f * s), IM_COL32(8, 8, 16, 92), c.s(26.0f));
+    // stage.png is a translucent white plate: the game lays it over a bright
+    // stage backdrop, so on this dimmed song list alone the lanes came out
+    // almost black. A light plate under it restores the in-game reading (and
+    // doubles as the "screen" the strip is a crop of).
+    dl->AddRectFilled(lo, hi, IM_COL32(228, 232, 243, 236), c.s(14.0f));
+    if (gLane != 0)
+    {
+        dl->AddImage(gLane, lo, hi, ImVec2(0.0f, kCropTop / kTexH),
+            ImVec2(1.0f, kCropBot / kTexH));
+    }
 
+    // Lane edges are linear in y (fake perspective): left/right measured off the
+    // texture at y=300 and y=560. One key cap per lane, all on the same row.
+    constexpr float kRow = 462.0f;
+    const float edgeT = (kRow - 300.0f) * 0.8346f;
+    const float laneLeft = 240.0f - edgeT;
+    const float laneRight = 783.0f + edgeT;
+    const float laneW = (laneRight - laneLeft) / 12.0f;
+    const float texToDest = destW / kTexW;
+    const float chipW = laneW * texToDest * 0.78f;
+    const float chipH = 52.0f;
     for (int i = 0; i < 12; ++i)
     {
-        const float kx = x0 + static_cast<float>(i % 6) * (kKeyW + kGap);
-        const float ky = y0 + static_cast<float>(i / 6) * (kKeyH + kGap);
-        const ImVec2 lo = c.p(kx, ky);
-        const ImVec2 hi = c.p(kx + kKeyW, ky + kKeyH);
-        dl->AddRectFilled(ImVec2(lo.x + 3.0f * s, lo.y + 7.0f * s),
-            ImVec2(hi.x + 3.0f * s, hi.y + 7.0f * s), IM_COL32(18, 20, 38, 60), c.s(16.0f));
-        dl->AddRectFilled(lo, hi, IM_COL32(238, 240, 249, 255), c.s(16.0f));
-        dl->AddRect(lo, hi, IM_COL32(169, 173, 198, 255), c.s(16.0f), 0, std::max(1.5f, c.s(2.5f)));
+        const float laneCx = laneLeft + (static_cast<float>(i) + 0.5f) * laneW;
+        const float vx = cx - destW * 0.5f + laneCx * texToDest;
+        const float vy = top + (kRow - kCropTop) * (destH / (kCropBot - kCropTop));
+        const ImVec2 a = c.p(vx - chipW * 0.5f, vy - chipH * 0.5f);
+        const ImVec2 b = c.p(vx + chipW * 0.5f, vy + chipH * 0.5f);
+        dl->AddRectFilled(ImVec2(a.x + 2.0f * s, a.y + 4.0f * s), ImVec2(b.x + 2.0f * s, b.y + 4.0f * s),
+            IM_COL32(12, 14, 30, 90), c.s(12.0f));
+        dl->AddRectFilled(a, b, IM_COL32(246, 247, 252, 242), c.s(12.0f));
+        dl->AddRect(a, b, IM_COL32(178, 182, 206, 235), c.s(12.0f), 0, std::max(1.0f, c.s(1.5f)));
         if (font == nullptr)
         {
             continue;
@@ -483,38 +504,43 @@ void keypad(const Canvas& c, ImFont* font, const std::vector<std::string>& keysI
         const char* label = keys[static_cast<std::size_t>(i)].c_str();
         // SDL names can be long ("Left Ctrl"): shrink until it fits rather than
         // clipping the one thing the player has to read.
-        float size = c.s(42.0f);
-        const float room = (hi.x - lo.x) - c.s(18.0f);
-        while (size > c.s(16.0f) && font->CalcTextSizeA(size, FLT_MAX, 0.0f, label).x > room)
+        float size = c.s(28.0f);
+        const float room = (b.x - a.x) - c.s(10.0f);
+        while (size > c.s(12.0f) && font->CalcTextSizeA(size, FLT_MAX, 0.0f, label).x > room)
         {
             size *= 0.9f;
         }
         const ImVec2 ts = font->CalcTextSizeA(size, FLT_MAX, 0.0f, label);
-        dl->AddText(font, size, ImVec2((lo.x + hi.x - ts.x) * 0.5f, (lo.y + hi.y - ts.y) * 0.5f),
-            IM_COL32(60, 60, 90, 255), label);
+        dl->AddText(font, size, ImVec2((a.x + b.x - ts.x) * 0.5f, (a.y + b.y - ts.y) * 0.5f),
+            IM_COL32(61, 60, 92, 255), label);
     }
 
-    // Mouse: same outline and shadow as the keycaps.
-    const float mx = x0 + gridW + kMouseGap;
-    const float my = cy - kMouseH * 0.5f;
-    const ImVec2 mlo = c.p(mx, my);
-    const ImVec2 mhi = c.p(mx + kMouseW, my + kMouseH);
-    dl->AddRectFilled(ImVec2(mlo.x + 3.0f * s, mlo.y + 7.0f * s),
-        ImVec2(mhi.x + 3.0f * s, mhi.y + 7.0f * s), IM_COL32(18, 20, 38, 60), c.s(52.0f));
-    dl->AddRectFilled(mlo, mhi, IM_COL32(238, 240, 249, 255), c.s(52.0f));
-    dl->AddRect(mlo, mhi, IM_COL32(169, 173, 198, 255), c.s(52.0f), 0, std::max(1.5f, c.s(2.5f)));
-    const float third = (mhi.y - mlo.y) * 0.34f;
-    dl->AddLine(ImVec2(mlo.x + c.s(16.0f), mlo.y + third), ImVec2(mhi.x - c.s(16.0f), mlo.y + third),
-        IM_COL32(169, 173, 198, 255), std::max(1.5f, c.s(2.5f)));
-    dl->AddLine(ImVec2((mlo.x + mhi.x) * 0.5f, mlo.y + c.s(10.0f)),
-        ImVec2((mlo.x + mhi.x) * 0.5f, mlo.y + third), IM_COL32(169, 173, 198, 255),
-        std::max(1.5f, c.s(2.5f)));
-    dl->AddRectFilled(ImVec2((mlo.x + mhi.x) * 0.5f - c.s(10.0f), mlo.y + c.s(14.0f)),
-        ImVec2((mlo.x + mhi.x) * 0.5f + c.s(10.0f), mlo.y + c.s(34.0f)),
-        IM_COL32(150, 154, 182, 255), c.s(10.0f));
+    const float capBottom = drawCaption(c, font, caption, cx, c.y(top + destH));
+    if (actionLabel.empty())
+    {
+        return false;
+    }
 
-    drawCaption(c, font, caption, cx, c.y(y0 + gridH));
+    // A real capsule under the caption, in the settings card's own painting
+    // (ui::capsuleDraw): this is the only place in the tutorial that changes a
+    // setting the player can see, so it needs the same affordance a button has.
+    const float btnW = 176.0f * s;
+    const float btnH = 48.0f * s;
+    const ImVec2 blo(c.x(cx) - btnW * 0.5f, capBottom + 18.0f * s);
+    const ImVec2 bhi(blo.x + btnW, blo.y + btnH);
+    ImGui::SetCursorScreenPos(blo);
+    ImGui::PushID("story-keys-action");
+    ImGui::InvisibleButton("b", ImVec2(btnW, btnH));
+    const bool hovered = ImGui::IsItemHovered();
+    const bool held = ImGui::IsItemActive();
+    const bool clicked = ImGui::IsItemClicked();
+    ImGui::PopID();
+    const float hover = ui::anim(0x5717d001u, hovered, 22.0f);
+    const float press = ui::anim(0x5717d002u, held, 30.0f);
+    ui::capsuleDraw(dl, blo, bhi, actionLabel.c_str(), false, hover, press);
+    return clicked;
 }
+
 
 void sceneTitle(const Canvas& c, ImFont* font, const std::string& text, float alpha)
 {
@@ -570,13 +596,11 @@ int choices(const Canvas& c, ImFont* font, const std::vector<std::string>& optio
     }
     int clicked = -1;
 
-    // Two options: the shipped frame is exactly two pills (239..760 and
-    // 1159..1680 at y 489..586), so it can be drawn whole. Any other count is
-    // laid out by hand in the same style rather than stretching the art.
-    if (options.size() == 2 && gChoices != 0)
-    {
-        dl->AddImage(gChoices, c.p(0.0f, 0.0f), c.p(1920.0f, 1080.0f));
-    }
+    // Painted with ui::capsuleDraw - the same function the settings card's own
+    // buttons use - instead of tinting the shipped pill art mint on hover. The
+    // art and a hand-rolled hover treatment drifted from the rest of the UI
+    // (green glow the player had never seen anywhere else); a capsule is a
+    // capsule, so both surfaces now share one painting.
     const float pillW = 522.0f;
     const float pillH = 98.0f;
     for (int i = 0; i < static_cast<int>(options.size()); ++i)
@@ -593,11 +617,6 @@ int choices(const Canvas& c, ImFont* font, const std::vector<std::string>& optio
         }
         ImVec2 lo = c.p(cx - pillW * 0.5f, cy - pillH * 0.5f);
         ImVec2 hi = c.p(cx + pillW * 0.5f, cy + pillH * 0.5f);
-        if (options.size() != 2 || gChoices == 0)
-        {
-            dl->AddRectFilled(lo, hi, IM_COL32(255, 255, 255, 246), c.s(pillH * 0.5f));
-            dl->AddRect(lo, hi, IM_COL32(185, 185, 207, 255), c.s(pillH * 0.5f), 0, c.s(2.0f));
-        }
         ImGui::SetCursorScreenPos(lo);
         ImGui::PushID(i);
         ImGui::InvisibleButton("choice", ImVec2(hi.x - lo.x, hi.y - lo.y));
@@ -611,26 +630,25 @@ int choices(const Canvas& c, ImFont* font, const std::vector<std::string>& optio
             std::fflush(stdout);
         }
         ImGui::PopID();
-        if (hovered)
-        {
-            dl->AddRectFilled(lo, hi,
-                held ? IM_COL32(119, 238, 221, 110) : IM_COL32(119, 238, 221, 46), c.s(pillH * 0.5f));
-            dl->AddRect(lo, hi, IM_COL32(119, 238, 221, 255), c.s(pillH * 0.5f), 0, c.s(2.5f));
-        }
+        // Hover and press are the settings capsule's own curve: a hair of
+        // growth and #f3f3f9, then the inverted mint on press. Nothing here
+        // invents a colour the rest of the UI does not use.
+        const float hover = ui::anim(0x5717c001u + static_cast<unsigned>(i), hovered, 22.0f);
+        const float press = ui::anim(0x5717c021u + static_cast<unsigned>(i), held, 30.0f);
+        ui::capsuleDraw(dl, lo, hi, options[static_cast<std::size_t>(i)].c_str(), false, hover,
+            press, c.s(32.0f));
         if (i == focus)
         {
-            // Gamepad focus ring: the pad has no pointer, so the option it is
-            // on has to be visible without hover.
-            dl->AddRect(ImVec2(lo.x - 5.0f, lo.y - 5.0f), ImVec2(hi.x + 5.0f, hi.y + 5.0f),
-                IM_COL32(119, 238, 221, 255), c.s(pillH * 0.5f + 4.0f), 0, c.s(3.0f));
-        }
-        if (font != nullptr)
-        {
-            const float size = c.s(32.0f);
-            const ImVec2 ts = font->CalcTextSizeA(size, FLT_MAX, 0.0f, options[static_cast<std::size_t>(i)].c_str());
-            dl->AddText(font, size, ImVec2(lo.x + (hi.x - lo.x - ts.x) * 0.5f,
-                            lo.y + (hi.y - lo.y - ts.y) * 0.5f),
-                ui::kText, options[static_cast<std::size_t>(i)].c_str());
+            // Gamepad focus: the same ring the settings card draws around the
+            // row the pad is on (ui::PadScope), not a thicker custom one.
+            const float glow = ui::anim(0x5717c041u + static_cast<unsigned>(i), true, 22.0f);
+            const float r = c.s(pillH * 0.5f + 3.0f);
+            dl->AddRectFilled(ImVec2(lo.x - 4.0f * c.scale, lo.y - 4.0f * c.scale),
+                ImVec2(hi.x + 4.0f * c.scale, hi.y + 4.0f * c.scale),
+                IM_COL32(106, 232, 208, static_cast<int>(46.0f * glow)), r);
+            dl->AddRect(ImVec2(lo.x - 4.0f * c.scale, lo.y - 4.0f * c.scale),
+                ImVec2(hi.x + 4.0f * c.scale, hi.y + 4.0f * c.scale),
+                IM_COL32(46, 186, 164, static_cast<int>(225.0f * glow)), r, 0, c.s(2.0f));
         }
         if (hit)
         {

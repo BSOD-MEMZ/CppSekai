@@ -110,12 +110,16 @@
 - 淡入 0.35s → 停 1.6s → 淡出 0.35s；期间吞掉推进输入（pjsk 就是这么干的）。
 - 左上的 `SceneText_TopLeft` 只在「章节名」场合用，教学先不接。
 
-### 3.3 选项 `choiceRow`
+### 3.3 选项 `choices`
 
-- 整张 `Choices_Background.png` 画上去就是两个 522×98 的胶囊；文字中心分别是
-  **(500, 537) / (1420, 537)**，字号 **32**、`#444466`（站点：`choicesTextsSetupData.default`）。
-- **只支持 2 个**。真需要 3 个以上：自己在 489 起往下堆 120 间距的行，别去拉伸这张图。
-- hover → `kPrimaryHover`，按下 → 反白（`kPrimaryPress` + 薄荷字），和 `ui::capsuleButton` 同一套手感。
+- 位置抄站点（`choicesTextsSetupData.default`）：两个 **522×98** 的胶囊，中心
+  **(500, 537) / (1420, 537)**，文字 32px、`#444466`。**只支持 2 个**；3 个以上自己在
+  489 起往下堆 120 间距。
+- **画法用 `ui::capsuleDraw`**（设置卡片里 `capsuleButton` 内部调的同一个函数），不再贴
+  `Choices_Background.png` 再自己叠一层薄荷色。之前 hover 是「薄荷色填充 + 薄荷描边」，
+  整套 UI 里没有第二个控件长那样，玩家一眼就看出是另写的。
+  现在 hover = 白→`#f3f3f9` + 放大 2%，按下 = 反白 + 薄荷字，和设置页完全一致；
+  手柄焦点也照抄 `ui::PadScope` 的那个环（46,186,164 / 2px）。
 
 ### 3.4 压暗与高亮 `dim` / `highlight`
 
@@ -215,7 +219,22 @@ void beginFrame();                                     // 主循环每帧清表
 `NoInputs`），走的是 `MousePos + IsMouseClicked` 的全局判定。
 两个地方的手感参数要一起改，别只改一边。
 
-### 5.3.2 「完成」按钮
+### 5.3.2 顶栏要一直能用
+
+教学层是全屏窗口，**默认会把选曲界面顶栏（刷新 / 音乐商店 / 猜歌 / 设置）的点击吃掉** ——
+玩家点「音乐商店」没反应，十有八九就是这一层还在。两件事一起做才通：
+
+1. `ImGui::SetWindowHitTestHole(win, (0,0), (displayW, c.y(76)))`：把顶栏那条带挖成
+   **命中孔**，鼠标落到那里时 ImGui 会把 hover 交给下面的选曲窗口
+   （`ImGuiWindow::HitTestHoleSize`，只有 `imgui_internal.h` 里能碰，没有公开 setter）。
+2. 鼠标在顶栏带里时**不要** `SetNextWindowFocus()`：每帧抢焦点会在玩家按下按钮的那一帧
+   把 press 取消掉，表现就是「按钮亮着但点不动」。
+3. 顶栏带里的点击也不当「推进台词」（`inHeaderBand`）。
+
+`dl_intro`（"点右上角的音乐商店"）另外还要 `passthrough`：那一步在请求玩家点它，
+不放开输入等于让人点空气。
+
+### 5.3.3 「完成」按钮
 
 `"done": true` 的步骤会在提示条右边挂一颗薄荷胶囊。它和设置卡片里的按钮**同一套绘制**
 （`ui::capsuleDraw`，`capsuleButton` 内部也调它，不是另写一份），按下去会顺手发
@@ -297,7 +316,7 @@ CLI 加 `--story-test <id>`（无头开），和 `--drop-test` / `--chartdl-test
 | `game/Story.*` | 运行时：JSON 脚本、分支、打字机、等待条件、手柄焦点 |
 | `platform/ChartDlGuide.*` | Win32：找 chartdl 窗口、读控件矩形与状态、置顶点击穿透的圈选浮层 |
 | `assets/story/scripts/tutorial.json` | 31 步教学脚本（含分支与异常分支） |
-| `assets/story/img/` | `seewo_small.png`（改小的 seewo，透明底）、`kb_mouse.png`（12 键示意图，透明底） |
+| `assets/story/img/` | **已删**：教学不再用图片（键位页画的是 `assets/mmw/stage.png` 的裁剪） |
 | `.workbuddy/tools/story_assets.py` | 两张卡片的生成脚本：seewo 剪屏幕（保留原图 alpha）+ 12 键示意图 |
 
 ### 9.2 渲染/坐标上的坑（都是实测踩过的）
@@ -323,11 +342,13 @@ CLI 加 `--story-test <id>`（无头开），和 `--drop-test` / `--chartdl-test
 ```jsonc
 {
   "id": "dl_search",        // 跳转标签
-  "type": "say",            // say | scene | image | cards | choice
-  "who": "助手",             // 空 = 旁白（不画名牌）
+  "type": "say",            // say | scene | image | keys | choice
+  "who": "初音未来",         // 空 = 旁白（不画名牌）
   "text": "……",
-  "image": "seewo_small.png",
-  "caption": "图片下面那行",
+  "image": "xxx.png",       // 已不再使用（assets/story/img 空了）
+  "caption": "图片 / 键位图下面那行",
+  "action": "openKeymap",   // keys 页那颗胶囊按下去执行的宿主命令
+  "actionLabel": "修改键位", // 它的文案（空 = 不画按钮）
   "do": "openSettings",     // openSettings / launchChartdl
   "wait": "chartdlSearch",  // 见下表
   "onClose": "dl_closed",   // chartdl 被关掉时跳这里
@@ -339,7 +360,7 @@ CLI 加 `--story-test <id>`（无头开），和 `--drop-test` / `--chartdl-test
   "passthrough": true,      // 只画不挡输入（设置卡片那一步）
   "box": "left",            // 左下紧凑框，把右侧手机面板让出来
   "set": { "device": "touch" },
-  "options": [ { "text": "触摸屏", "image": "seewo_small.png", "goto": "touch_hit" } ],
+  "options": [ { "text": "触摸屏", "goto": "touch_hit" } ],
   "subtitles": ["白板 / 平板 / 触屏笔记本", "12 键，或者鼠标点"]
 }
 ```
@@ -351,7 +372,8 @@ CLI 加 `--story-test <id>`（无头开），和 `--drop-test` / `--chartdl-test
 **不要给场景卡写 `wait`**，写了反而会绕开这条；`hold` 是唯一的时间来源。
 
 `playStarted` 是**锁存**的：进游戏时剧情层挂起（不 update），所以回来时 `inPlay` 已经是
-false —— 不锁存的话会永远等一局已经打完的歌。
+false —— 不锁存的话会永远等一局已经打完的歌。锁存点不只在 `wait == "playStarted"`，
+**当前步骤是 `play` 也算**（玩家是在那一页按的开始），详见 9.7。
 
 ### 9.4 chartdl 的外部引导
 
@@ -385,21 +407,34 @@ false —— 不锁存的话会永远等一局已经打完的歌。
   `ImGui::NewFrame()` 之后、Select 分支**之外** —— 放进 Select 分支的话，整首歌里
   剧情层都处于「active 且未挂起」，会把手柄的 A 全吞掉。
 
-### 9.6 教学插图
+### 9.6 教学插图 / 键位页
 
-- **不再用实拍/商品图**。那张 seewo 无论怎么改，读者看到的都是「一台显示器」，跟「怎么打音符」
-  没关系；而且为了它写的那套「屏幕缩窄、外框不变」每次都在边框上翻车。已经删掉，连同
-  `kb_mouse.png`（静态 12 键图）一起。
-- `notes_touch.png`：从 `assets/mmw/notes_01.png` 裁 tap / hold / flick 三颗，各垫一块浅色
-  圆角托盘（**精灵自带白色投影，直接放深色板上是一坨灰块**），下面写 Tap/Hold/Flick + 一句解释。
-  生成脚本 `.workbuddy/tools/story_assets.py`，改文案改 `LABELS` 重跑即可。
-- 键盘页**不画图**：`type: "keys"` 走 `storyui::keypad`，键帽上的字来自
-  `host.laneKeys()`（main 里 `SDL_GetKeyName(laneKeys[i])`），所以显示的永远是玩家当前绑定。
-  写死 `Z S X D C V` 曾误导过一次——那既不是默认值，也不是用户设的。
-- 图片卡/键位卡共用 1040x420 的版心；太宽会往左让（`cx = min(960, 1352 - w/2)`），否则会钻到
-  选曲界面的手机面板底下。
+- **教学里不再有任何图片素材**：`seewo_small.png`、`kb_mouse.png`、`notes_touch.png` 全部删了
+  （`assets/story/img/` 目录都不存在了，`.workbuddy/tools/story_assets.py` 一并删除）。
+  实拍设备图读者看不出跟「怎么打音符」的关系，音符拼图又不如直接讲——删掉之后台词反而更集中。
+- **键位页用游戏自己的轨道图**：`type: "keys"` 走 `storyui::keypad`，底图是
+  `assets/mmw/stage.png`（1024×588）**裁下半部分**（y 294..575，即判定线以下），
+  等比放进 880×242 的框，底下一层浅色板（stage 本身是半透明白，直接压在压暗的选曲界面上
+  会黑成一团）。
+- 12 个键帽按**轨道的透视**摆：轨道左右边界随 y 线性变化（实测 y=300 是 240..783、
+  y=560 是 23..1000，斜率 0.8346），所以第 i 条轨的中心 = 左边界 + (i+0.5)×轨宽，
+  换算到贴图坐标后再乘 `880/1024`。改 `kRow`（键帽所在的行）会同时改字号可用宽度。
+- 键帽上的字来自 `host.laneKeys()`（main 里 `SDL_GetKeyName(laneKeys[i])`），
+  永远跟着玩家的实际绑定；写死 `Z S X D C V` 曾误导过一次——那既不是默认值，也不是他设的。
+- 图下面那颗 **「修改键位」** 是 `"action": "openKeymap"` + `"actionLabel": "修改键位"`：
+  键位页 → `gHost.command("openKeymap")` → main 立 `keymapCardOpen`。
+  它和选项一样用 `ui::capsuleDraw`；命中用 `InvisibleButton`（这一步不是 passthrough），
+  并且**点中它不再顺带推进台词**（`keysActionClicked`）。
+### 9.7 打完一首歌之后
 
-### 9.7 文案
+`play` / `play_wait` 两步是「去打一首」和「等你回来」。挂起（进入演奏）时如果当前步骤是
+其中任意一步，就把 `gPlaySeen` **锁存**并置 `gResumeAdvance`；回到选曲后 `update()` 里
+把这两步一起跳过。原来只在 `wait == "playStarted"` 时锁存，而玩家是在 `play` 那一页点的
+开始——于是回来还停在「来试试吧」，看着像教程死了。
+无头验证：`CPSEKAI_STORY_PLAYTEST=1` 会在 5~7 秒假装去演奏了一趟（走的是 main 里那次
+`story::setSuspended()` 调用，不是另写一条路径）。
+
+### 9.8 文案
 
 讲解人是**初音未来**（`who: "初音未来"`），语气按 pjsk 里那个 16 岁的 Miku 来：明亮、
 爱用「～」和短句、会「哇——！」「诶嘿嘿」，鼓励为主，不说教。写新台词时注意：
@@ -409,7 +444,7 @@ false —— 不锁存的话会永远等一局已经打完的歌。
   不在里面**，会渲染成「?」——第一版就踩了。真要音符，得给 atlas 加自定义 range。
 - 长句会换行成三行，1300 宽 / 44px 大约 29 个汉字一行，超过约 85 字就会挤到框外。
 
-### 9.8 验证
+### 9.9 验证
 
 ```bash
 ./build/cppsekai.exe --story-test --story-step N     --screenshot .workbuddy/shots/x.png --screenshot-time 4 --no-party

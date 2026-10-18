@@ -3577,6 +3577,11 @@ int main(int argc, char** argv)
     // Debug: simulate the 关于 page's replay button at 2s without a click
     // (input injection does not reach the window in a headless session).
     bool replayTest = std::getenv("CPSEKAI_STORY_REPLAY") != nullptr;
+    // Debug (CPSEKAI_STORY_PLAYTEST=1): pretend the player left for a live at 5s
+    // and came back at 7s. It drives the same setSuspended() call the state
+    // machine does, so the "played" latch and the resume skip can be checked
+    // without sitting through a chart.
+    const bool storyPlayTest = std::getenv("CPSEKAI_STORY_PLAYTEST") != nullptr;
     // One place for "start the tutorial again": the 关于 page's button and the
     // debug hook both go through it, so the headless check exercises the same
     // code the click does.
@@ -3866,6 +3871,9 @@ int main(int argc, char** argv)
 
     // ---- tutorial host ----------------------------------------------------
     // The runtime never touches main's locals: it asks these questions.
+    // Set by the keyboard step's 修改键位 button, consumed further down (the
+    // keymap card's own flag is declared after this lambda).
+    bool storyKeymapRequest = false;
     {
         story::Host host;
         host.settingsOpen = [&]() { return showDebug; };
@@ -3891,6 +3899,8 @@ int main(int argc, char** argv)
                 std::fflush(stdout);
             } else if (command == "closeSettings") {
                 showDebug = false;
+            } else if (command == "openKeymap") {
+                storyKeymapRequest = true;
             } else if (command == "launchChartdl") {
                 launchChartDownloader();
             }
@@ -5597,6 +5607,15 @@ int main(int argc, char** argv)
     // 分支的话，改键位时按 ESC 会直接退出游戏（见那个 else if）。
     // ------------------------------------------------------------------
     auto drawKeymapCard = [&]() {
+        // The tutorial's keyboard step asks for this card (修改键位). Consumed
+        // here, in the frame, because that is where the card is drawn.
+        if (storyKeymapRequest) {
+            storyKeymapRequest = false;
+            keymapCardOpen = true;
+            std::printf("[story] keymap card opened from the tutorial");
+            std::fflush(stdout);
+            std::puts("");
+        }
         if (keymapCardOpen) {
             keymapCardAlive = true;
         } else {
@@ -8308,8 +8327,8 @@ int main(int argc, char** argv)
         // Fixed render mode: ImGui has to lay out in the *render* size (it draws
         // into the same offscreen buffer as the scene) instead of the window's.
         // FramebufferScale 1.0 also means the atlas is rasterised at that size
-        // and then scaled up with everything else, which is exactly what "只渲染\n        // 这个分辨率" means. Mouse positions arrive already mapped by
-        // mapPointerEvent(); the backend's own fallback path (mouse outside the
+        // and then scaled up with everything else, which is exactly what "只渲染
+        // 这个分辨率" means. Mouse positions arrive already mapped by
         // window) is left alone - ImGui has nothing hovered there anyway.
         if (renderer.offscreen()) {
             ImGui::GetIO().DisplaySize = ImVec2(static_cast<float>(windowW), static_cast<float>(windowH));
@@ -8319,8 +8338,10 @@ int main(int argc, char** argv)
         // Tutorial plumbing: anchors are per-frame (a widget that was not drawn
         // has no rect this frame), and the pointer gate follows the story layer.
         // Parking has to happen here rather than inside the select branch: while
-        // a live runs that branch is skipped, and a story left "active and not\n        // suspended" would swallow the pad for the whole song.
-        story::setSuspended(state != AppState::Select);
+        // a live runs that branch is skipped, and a story left "active and not
+        // suspended" would swallow the pad for the whole song.
+        const bool storyPlayTestSuspend = storyPlayTest && uiClock > 5.0 && uiClock < 7.0;
+        story::setSuspended(state != AppState::Select || storyPlayTestSuspend);
         ui::anchorsFrame();
         ui::setInputBlocked(story::blocksInput());
 

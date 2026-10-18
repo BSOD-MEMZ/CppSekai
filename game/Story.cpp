@@ -10,6 +10,10 @@
 // over a closed window is worse than no tutorial:
 //   * `onClose`   - the downloader window vanished while we were pointing at it
 //   * `timeout` / `onTimeout` - the player wandered off for two minutes
+// imgui_internal.h: the toolbar hit-test hole is a window field
+// (HitTestHoleSize / HitTestHoleOffset) and has no public setter.
+#include "imgui_internal.h"
+
 #include "Story.hpp"
 
 #include "Intro.hpp"
@@ -44,6 +48,8 @@ namespace
         std::string image;
         std::string caption;
         std::string doThis;   // run once on entry
+        std::string action;   // host command behind the step's action capsule
+        std::string actionLabel; // its label (empty: no capsule)
         std::string wait;     // gate before advancing
         std::string onClose;  // branch when the downloader disappears
         std::string onTimeout;
@@ -87,7 +93,10 @@ namespace
     float gReveal = 0.0f;   // characters revealed
     int gPadFocus = 0;      // which option the pad is on
     bool gPadUsed = false;  // the pad moved the focus -> draw the ring
-    bool gPlaySeen = false; // the live started while a step was waiting for it
+    bool gPlaySeen = false;
+    // The live started while the layer was on the play prompt: on resume, skip
+    // past that pair of steps instead of showing them again.
+    bool gResumeAdvance = false;
 
     float revealSpeed()
     {
@@ -373,6 +382,8 @@ bool load(platform::Renderer& renderer, const std::string& assetDir, std::string
                 step.passthrough = j.value("passthrough", false);
                 step.boxLeft = j.value("box", std::string{}) == "left";
                 step.done = j.value("done", false);
+                step.action = j.value("action", std::string{});
+                step.actionLabel = j.value("actionLabel", std::string{});
                 step.hold = j.value("hold", 1.8f);
                 step.timeout = j.value("timeout", 0.0f);
                 if (j.contains("set"))
@@ -488,10 +499,20 @@ bool suspended()
 
 void setSuspended(bool on)
 {
-    if (on && !gSuspended && gActive && gCur != nullptr && gIndex < gCur->steps.size()
-        && gCur->steps[gIndex].wait == "playStarted")
+    if (on && !gSuspended && gActive && gCur != nullptr && gIndex < gCur->steps.size())
     {
-        gPlaySeen = true;
+        // Entering a live counts as "the player went to play" from either of the
+        // two steps that own it: the one that tells them to pick a song (id
+        // "play") and the one waiting for the play (wait "playStarted"). Missing
+        // the first case is why finishing a song dropped the player back on
+        // 「来试试吧」 with no way forward: the latch never fired, so the wait
+        // could never be satisfied.
+        const Step& step = gCur->steps[gIndex];
+        if (step.id == "play" || step.wait == "playStarted")
+        {
+            gPlaySeen = true;
+            gResumeAdvance = true;
+        }
     }
     gSuspended = on;
 }
@@ -616,6 +637,24 @@ void update(float dt)
     }
     gTime += dt;
     gStepTime += dt;
+    if (gResumeAdvance)
+    {
+        gResumeAdvance = false;
+        // Both steps of the play prompt are spent: the player already played.
+        while (gActive && gCur != nullptr && gIndex < gCur->steps.size())
+        {
+            const Step& cur = gCur->steps[gIndex];
+            if (cur.id != "play" && cur.wait != "playStarted")
+            {
+                break;
+            }
+            next();
+        }
+        if (!gActive || gCur == nullptr || gIndex >= gCur->steps.size())
+        {
+            return;
+        }
+    }
     Step& step = gCur->steps[gIndex];
 
     const int chars = totalChars(step);
@@ -655,10 +694,14 @@ void draw(float windowW, float windowH)
         return;
     }
     Step& step = gCur->steps[gIndex];
+    bool keysActionClicked = false;
     // Skip key centre, in 1920x1080 virtual units (top-right, clear of the
     // song-select header row).
     constexpr float kSkipX = 1830.0f;
     constexpr float kSkipY = 126.0f;
+    // Toolbar band (virtual units) that clicks pass through, see the hit-test
+    // hole below. 76 covers the 42px-tall buttons plus a little air.
+    constexpr float kHeaderBand = 76.0f;
     // ImGui's display size, not the render size: with renderScale on (or in a
     // screenshot run at a different resolution) windowW/windowH are the
     // offscreen buffer's pixels, and the virtual canvas would be scaled twice.
@@ -686,7 +729,14 @@ void draw(float windowW, float windowH)
         // and the skip button never registered a hover: the whole tutorial was
         // click-through while the dialogue still advanced (that path asks for
         // IsMouseClicked globally, not for a hovered item).
-        ImGui::SetNextWindowFocus();
+        // ... except while the pointer is on the toolbar: taking focus back on
+        // the very frame the player presses 音乐商店 cancels that press, which is
+        // why the button looked dead behind a line of dialogue.
+        const bool mouseOnToolbar = ImGui::GetIO().MousePos.y < c.y(kHeaderBand);
+        if (!mouseOnToolbar)
+        {
+            ImGui::SetNextWindowFocus();
+        }
     }
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
     ImGui::PushStyleColor(ImGuiCol_WindowBg, IM_COL32(0, 0, 0, 0));
@@ -699,6 +749,18 @@ void draw(float windowW, float windowH)
         ImGui::PopStyleColor();
         ImGui::PopStyleVar();
         return;
+    }
+
+    // The song list's toolbar (刷新 / 音乐商店 / 猜歌 / 设置) stays usable even on
+    // a step that owns the screen: ImGui lets a window declare one rectangular
+    // hit-test hole, so clicks over that band fall through to the window below
+    // instead of being eaten by this layer. "I clicked 音乐商店 and nothing
+    // happened" is what a full-screen input surface looks like from outside.
+    if (!step.passthrough)
+    {
+        ImGuiWindow* win = ImGui::GetCurrentWindow();
+        ImGui::SetWindowHitTestHole(win, ImVec2(0.0f, 0.0f),
+            ImVec2(display.x, c.y(kHeaderBand)));
     }
 
     // The game paints its HUD / fades on the *foreground* draw list, which is
@@ -778,7 +840,20 @@ void draw(float windowW, float windowH)
         {
             keys = gHost.laneKeys();
         }
-        storyui::keypad(c, font, keys, step.caption);
+        if (storyui::keypad(c, font, keys, step.caption, step.actionLabel))
+        {
+            // Same click that pressed the capsule would otherwise also advance
+            // the dialogue (the advance below is a global IsMouseClicked).
+            keysActionClicked = true;
+            if (!step.action.empty())
+            {
+                ui::se(ui::SeClick);
+                if (gHost.command)
+                {
+                    gHost.command(step.action);
+                }
+            }
+        }
     }
     else if (step.type == "cards")
     {
@@ -890,7 +965,10 @@ void draw(float windowW, float windowH)
     // fall through to here.
     if (!step.passthrough && step.options.empty() && step.wait.empty() && step.type != "scene")
     {
-        bool advance = ImGui::IsMouseClicked(ImGuiMouseButton_Left);
+        // A click in the toolbar band belongs to the toolbar, not to the line.
+        const bool inHeaderBand = ImGui::GetIO().MousePos.y < c.y(kHeaderBand);
+        bool advance = !keysActionClicked && !inHeaderBand
+            && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
         advance = advance || ImGui::IsKeyPressed(ImGuiKey_Space, false)
             || ImGui::IsKeyPressed(ImGuiKey_Enter, false)
             || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false)

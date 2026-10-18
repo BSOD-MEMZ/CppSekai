@@ -985,7 +985,7 @@ void infoRows(const std::vector<std::pair<std::string, std::string>>& rows, floa
 }
 
 void capsuleDraw(ImDrawList* dl, const ImVec2& loIn, const ImVec2& hiIn, const char* label,
-    bool primary, float hover, float press)
+    bool primary, float hover, float press, float labelSize)
 {
     if (dl == nullptr || label == nullptr) {
         return;
@@ -1017,7 +1017,10 @@ void capsuleDraw(ImDrawList* dl, const ImVec2& loIn, const ImVec2& hiIn, const c
     dl->AddRectFilled(lo, hi, fill, radius);
 
     ImFont* font = game::bodyFont();
-    const float fontSize = std::min(27.0f * s, (hiIn.y - loIn.y) * 0.48f);
+    // `labelSize` is for callers that draw on the story layer and follow the
+    // reference's own type scale (choice pills are 32px there, not 27).
+    const float fontSize = labelSize > 0.0f ? labelSize
+                                            : std::min(27.0f * s, (hiIn.y - loIn.y) * 0.48f);
     // The label follows the press: mint-on-pale / white-on-mint, as above.
     const ImU32 labelColor = mixColor(kBtnText, primary ? kPrimaryPressText : kWhitePressText, press);
     const ImVec2 textSize = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, label);

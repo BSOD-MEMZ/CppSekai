@@ -327,6 +327,10 @@ cppsekai [--sus <file.sus>] [--bgm <audio>] [--charts <dir>] [--cover <image>]
   合成的 SDL 事件也会被 `mapPointerEvent` 按 0 尺寸重算。调试用两个环境变量：
   `CPSEKAI_UI_TRACE=1` 打印关键控件的矩形和当前鼠标位置，`CPSEKAI_FAKE_CLICK=x,y`
   在 ImGui 坐标 (x,y) 注入一次按下/抬起（各占一帧），可以不靠人手验证按钮到底有没有接上。
+  **注意**：靠 hover 判定的控件（选项胶囊、故事层里的按钮）必须把**真实光标**移到窗口里
+  （`SetCursorPos` + `SetForegroundWindow`）再 `PostMessage` 点击，否则 ImGui 报告的鼠标位置
+  永远是系统光标那个点。
+  `CPSEKAI_STORY_PLAYTEST=1` 在 5~7 秒假装去演奏了一趟，用来验证「打完回来」的教程恢复。
 - **别在 D 盘跑 zig 编译**（缓存必须放 C 盘，`build.sh` 已经处理）；这条只影响编译，不影响运行。
 
 ---

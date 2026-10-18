@@ -127,8 +127,11 @@ void imageCard(const Canvas& c, ImFont* font, const Image& img, const std::strin
 // shipped as a picture so it can never show a stale default. `keys` is already
 // human readable (SDL_GetKeyName); an empty vector falls back to the built-in
 // default row.
-void keypad(const Canvas& c, ImFont* font, const std::vector<std::string>& keys,
-    const std::string& caption);
+// The real playfield (stage.png) cropped to the half below the judgement line,
+// with the player's key in each of the 12 lanes. Returns true when the optional
+// action capsule under the caption was clicked.
+bool keypad(const Canvas& c, ImFont* font, const std::vector<std::string>& keys,
+    const std::string& caption, const std::string& actionLabel);
 
 // pjsk's round skip key (white disc + soft shadow + navy ">>"), the same key
 // the opening card draws before a live starts. `hover` / `press` are 0..1 eased

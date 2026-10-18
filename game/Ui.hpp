@@ -218,7 +218,7 @@ bool capsuleButton(const char* label, const ImVec2& size, bool primary);
 // by the host's own overlays - but the look has to stay identical, so the
 // painting lives here and capsuleButton() calls it as well.
 void capsuleDraw(ImDrawList* dl, const ImVec2& lo, const ImVec2& hi, const char* label,
-    bool primary, float hover, float press);
+    bool primary, float hover, float press, float labelSize = 0.0f);
 
 // Centered one-line text advanced by one row. rowWidth <= 0 uses the
 // remaining width at the cursor (pass the card interior width to center

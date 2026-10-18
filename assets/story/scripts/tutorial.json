@@ -71,12 +71,14 @@
         {
           "id": "dl_intro",
           "who": "初音未来",
-          "text": "那就先点右上角的「下载谱面」吧！会打开官谱下载器哦。",
+          "text": "那就先点右上角的「音乐商店」吧！会打开官谱下载器哦。",
           "highlight": "store",
           "tip": "点这里打开下载器～",
           "wait": "chartdlOpen",
           "timeout": 30,
-          "onTimeout": "dl_offer"
+          "onTimeout": "dl_offer",
+          "passthrough": true,
+          "target": "dl_launch"
         },
         {
           "id": "dl_offer",
@@ -227,9 +229,7 @@
         },
         {
           "id": "touch_hit",
-          "type": "image",
-          "image": "notes_touch.png",
-          "caption": "这三种就是你按下的东西：Tap 点、Hold 按住、Flick 划。",
+          "type": "say",
           "who": "初音未来",
           "text": "触摸屏其实就三件事！蓝点轻轻点一下；长条要按住，尾巴到线再松手；带箭头的，就顺着箭头方向划～"
         },
@@ -241,9 +241,11 @@
         {
           "id": "kb_hit",
           "type": "keys",
-          "caption": "上面就是你现在的键位（设置 → 演奏 → 按键映射 可以改）",
+          "caption": "这 12 条轨就是屏幕上从左到右的 12 条，键帽上写着你现在绑的键",
           "who": "初音未来",
-          "text": "键盘这边，你现在绑的 12 个键就是屏幕上这些。蓝点按一下，长条按住不放，Flick 按对应的键就算向上划哦！"
+          "text": "键盘这边，每条轨对的就是上面写的那个键。蓝点按一下，长条按住不放，Flick 按对应的键就算向上划哦！",
+          "action": "openKeymap",
+          "actionLabel": "修改键位"
         },
         {
           "id": "kb_hit2",
