@@ -145,7 +145,7 @@ void drawPartyBadge(const std::vector<platform::PartyPlayer>& players, int mySlo
     c.dl = ImGui::GetForegroundDrawList();
 
     ImFont* body = bodyFont() != nullptr ? bodyFont() : ImGui::GetFont();
-    std::string text = "多人房间 " + std::to_string(players.size()) + "/"
+    std::string text = "多人演出 " + std::to_string(players.size()) + "/"
         + std::to_string(platform::kPartyMaxSlots) + "  ";
     for (std::size_t i = 0; i < players.size(); ++i) {
         if (i > 0) {
