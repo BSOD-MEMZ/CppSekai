@@ -339,7 +339,10 @@ false —— 不锁存的话会永远等一局已经打完的歌。
 - `userdata.json` → `settings.tutorialDone`；`SongSelect.cpp` 的 `loadUserData` / `saveUserData`
   **两处都改**（老规矩，漏一处静默丢设置）。
 - 首启条件：`!tutorialDone && !eulaAlive && (eulaDismissedThisRun || eulaAccepted)
-  && state == Select && !party.active()`，再等 1.2 秒让选曲入场动画走完。
+  && state == Select && 房间里只有自己`，再等 1.2 秒让选曲入场动画走完。
+  **别用 `party.active()` 当"没开多人"**：`PartyLink::init()` 一启动就映射共享块并占 seat 0，
+  单人时它也是 true。用它做闸门 = 教学永远不启动、重播按钮永远没反应（2026-10-18 就是这么
+  翻车的）。判断"房间里是否还有别人"要用 `party.playerCount() <= 1`。
 - 重播：设置 → 关于 → 「重播新手教学」。**必须就地 `story::stop()` 再 `story::start()`**：
   这张卡片能被点到的时候，教学通常正开着（速度那一步就是教学自己打开的设置卡片，且
   `passthrough` 所以点击能落进来），而选曲界面的启动闸门有 `!story::active()` ——

@@ -3593,7 +3593,10 @@ int main(int argc, char** argv)
             userSettings.nativeMenuBar = false;
         }
         showDebug = false;
-        if (state == AppState::Select && !party.active() && story::start("tutorial")) {
+        // No `party.active()` here: the party mapping is up even in single
+        // player (one seat claimed), so that test is always true and turned
+        // this button into a no-op. An explicit replay is the player's call.
+        if (state == AppState::Select && story::start("tutorial")) {
             std::printf("[story] replayed\n");
             std::fflush(stdout);
             return true;
@@ -5524,7 +5527,10 @@ int main(int argc, char** argv)
                     if (std::getenv("CPSEKAI_UI_TRACE") != nullptr) {
                         const ImVec2 lo = ImGui::GetItemRectMin();
                         const ImVec2 hi = ImGui::GetItemRectMax();
-                        std::printf("[ui] replay pill %.0f,%.0f..%.0f,%.0f\n", lo.x, lo.y, hi.x, hi.y);
+                        const ImVec2 mp = ImGui::GetIO().MousePos;
+                        const ImVec2 ds = ImGui::GetIO().DisplaySize;
+                        std::printf("[ui] replay pill %.0f,%.0f..%.0f,%.0f mouse=%.0f,%.0f display=%.0fx%.0f\n",
+                            lo.x, lo.y, hi.x, hi.y, mp.x, mp.y, ds.x, ds.y);
                         std::fflush(stdout);
                     }
                     if (std::getenv("CPSEKAI_UI_TRACE") != nullptr && ImGui::IsItemHovered()) {
@@ -7015,6 +7021,33 @@ int main(int argc, char** argv)
     bool mediaNextRequested = false;
     bool mediaPrevRequested = false;
     bool mediaConfirmRequested = false;
+            // Debug click injection (CPSEKAI_FAKE_CLICK=x,y), in ImGui's own
+            // coordinate space. Feeding SDL events would not work in a headless
+            // session: the window is 0x0, so mapPointerEvent rewrites the coords.
+            // Statics: this sits in the frame loop.
+            static const std::pair<int, int> fakeClick = [] {
+                std::pair<int, int> out{-1, -1};
+                if (const char* fake = std::getenv("CPSEKAI_FAKE_CLICK"); fake != nullptr) {
+                    std::sscanf(fake, "%d,%d", &out.first, &out.second);
+                }
+                return out;
+            }();
+            static int fakeClickStage = 0;
+            if (fakeClick.first >= 0 && fakeClickStage < 3 && uiClock > 3.0) {
+                ImGuiIO& io = ImGui::GetIO();
+                if (fakeClickStage == 0) {
+                    io.AddMousePosEvent(static_cast<float>(fakeClick.first),
+                        static_cast<float>(fakeClick.second));
+                    io.AddMouseButtonEvent(0, true);
+                    std::printf("[debug] fake click down at %d,%d\n", fakeClick.first, fakeClick.second);
+                    std::fflush(stdout);
+                } else if (fakeClickStage == 1) {
+                    io.AddMouseButtonEvent(0, false);
+                    std::printf("[debug] fake click up\n");
+                    std::fflush(stdout);
+                }
+                ++fakeClickStage;
+            }
             while (SDL_PollEvent(&event) != 0) {
                 // 窗口被要求关闭：窗口过程拦下 WM_CLOSE 之后塞进来的自定义事件
                 // （见窗口过程那段 —— 直接让 SDL 处理的话窗口当场就销毁了）。
@@ -8551,7 +8584,12 @@ int main(int argc, char** argv)
                 const bool eulaSettled = !eulaAlive
                     && (eulaDismissedThisRun || userSettings.eulaAccepted || testing);
                 const bool wantStart = testing || tutorialWanted || tutorialReplay;
-                if (!story::active() && wantStart && state == AppState::Select && !party.active()
+                // `party.active()` is true the moment the shared block maps,
+                // which is every launch - solo included. What must not happen is
+                // a tutorial barging in on a *room*, so the test is on the
+                // player count, not on the link being up.
+                const bool alone = !party.active() || party.playerCount() <= 1;
+                if (!story::active() && wantStart && state == AppState::Select && alone
                     && eulaSettled && (!showDebug || testing) && uiClock > (testing ? 0.4 : 1.2)) {
                     // The tutorial points at the song select's own header
                     // buttons, which only exist in the normal (non-menu-bar)
