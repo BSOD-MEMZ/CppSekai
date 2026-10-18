@@ -3881,6 +3881,8 @@ int main(int argc, char** argv)
                 settingsTab = 0;
                 std::printf("[story] open settings (tab 0)\n");
                 std::fflush(stdout);
+            } else if (command == "closeSettings") {
+                showDebug = false;
             } else if (command == "launchChartdl") {
                 launchChartDownloader();
             }
@@ -4272,21 +4274,14 @@ int main(int argc, char** argv)
                         ImGui::Text("音符速度");
                         float speed = noteSpeed;
                         colSet(1);
-                        // The anchor has to be captured around the whole slider,
-                        // not from GetItemRectMin/Max after the call: the custom
-                        // slider's last ImGui item is the + button, so the
-                        // spotlight ring used to circle just that plus sign.
-                        const float speedS = ui::scale();
-                        const ImVec2 speedLo = ImGui::GetCursorScreenPos();
-                        if (ui::slider("speed", &speed, 1.0f, 12.0f, 0.1f, "%.1f", w)) {
+                        // The slider publishes its own row rect (anchor id):
+                        // only it knows where the -/+ buttons end, and guessing
+                        // left the spotlight ring cutting through them.
+                        if (ui::slider("speed", &speed, 1.0f, 12.0f, 0.1f, "%.1f", w, true,
+                                "settings.speed")) {
                             noteSpeed = speed;
                             core_api::setPreviewConfig(0, 1, 1, 1, 0, 0, noteSpeed, 1.0f, 0.6f, 0.0f, 1.0f, 0.85f);
                         }
-                        // Tutorial anchor (设置 > 演奏 > 音符速度): the ring is
-                        // drawn by game/Story.cpp, in window pixels.
-                        ui::setAnchor("settings.speed",
-                            ImVec2(speedLo.x - 6.0f * speedS, speedLo.y + 2.0f * speedS),
-                            ImVec2(speedLo.x + w + 6.0f * speedS, speedLo.y + 40.0f * speedS));
                     });
                 twoCols(
                     [&](float w) {

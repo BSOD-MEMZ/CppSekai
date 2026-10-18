@@ -319,33 +319,15 @@ void dialogue(const Canvas& c, ImFont* font, const std::string& name, const std:
         nameL = 100.0f;
         size = 38.0f;
     }
-    else if (box == Box::Right)
-    {
-        clipL = 944.0f;
-        textL = 1000.0f;
-        nameL = 980.0f;
-        size = 38.0f;
-    }
     const float lineH = size * lineGap;
 
     // The band is drawn whole, at every layout: clipping it left a hard seam
     // across the gradient's hairline, and the settings card ends above it
     // anyway (the card is 780 tall, the band starts at 771).
-    float rightPanelBottom = 0.0f;
-    if (box == Box::Right)
-    {
-        // Settings card is open on the left. The band's hairline would run right
-        // under the card's bottom edge and read as "the card is cut", so this
-        // one uses a self-contained panel instead - and the panel hugs the text:
-        // a fixed 748..1070 rectangle left a 300px empty slab under two lines.
-        const float lines = static_cast<float>(std::max<std::size_t>(layout.lines.size(), 1));
-        rightPanelBottom = 862.0f + lineH * lines + 18.0f;
-        dl->AddRectFilled(c.p(962.0f, 748.0f), c.p(1904.0f, rightPanelBottom),
-            IM_COL32(18, 18, 30, 210), c.s(22.0f));
-        dl->AddRect(c.p(962.0f, 748.0f), c.p(1904.0f, rightPanelBottom),
-            IM_COL32(140, 140, 175, 90), c.s(22.0f), 0, c.s(2.0f));
-    }
-    else if (gDialogue != 0)
+    // Every layout uses the shipped band. An earlier version drew a bespoke
+    // dark panel for the settings step; that read as "some other UI" next to
+    // the reference, so it is gone - the band is the dialogue box, full stop.
+    if (gDialogue != 0)
     {
         // Twice on purpose: the band is only 50% at its densest (2,0,32,128),
         // which is right over the bright story backgrounds the art was made for
@@ -358,15 +340,12 @@ void dialogue(const Canvas& c, ImFont* font, const std::string& name, const std:
     {
         // Fallback: the same vertical fade, drawn by hand (headless runs with a
         // half-copied build still get readable text).
-        if (box != Box::Right)
+        for (int i = 0; i < 20; ++i)
         {
-            for (int i = 0; i < 20; ++i)
-            {
-                const float t = static_cast<float>(i) / 19.0f;
-                const float y0 = 760.0f + t * 320.0f;
-                dl->AddRectFilled(c.p(0.0f, y0), c.p(1920.0f, y0 + 20.0f),
-                    IM_COL32(10, 10, 20, static_cast<int>(t * 165.0f)));
-            }
+            const float t = static_cast<float>(i) / 19.0f;
+            const float y0 = 760.0f + t * 320.0f;
+            dl->AddRectFilled(c.p(0.0f, y0), c.p(1920.0f, y0 + 20.0f),
+                IM_COL32(10, 10, 20, static_cast<int>(t * 165.0f)));
         }
     }
 
@@ -404,7 +383,7 @@ void dialogue(const Canvas& c, ImFont* font, const std::string& name, const std:
     {
         const float bob = std::sin(time * 4.2f) * 3.0f * c.scale;
         const float ax = c.x(clipR - 26.0f);
-        const float ay = (box == Box::Right ? c.y(rightPanelBottom - 40.0f) : c.y(1030.0f)) + bob;
+        const float ay = c.y(1030.0f) + bob;
         dl->AddTriangleFilled(ImVec2(ax - 11.0f * c.scale, ay - 6.0f * c.scale),
             ImVec2(ax + 11.0f * c.scale, ay - 6.0f * c.scale),
             ImVec2(ax, ay + 9.0f * c.scale), IM_COL32(0, 0, 0, 190));
@@ -759,19 +738,20 @@ void skipKey(ImDrawList* dl, const Canvas& c, const ImVec2& center, float hover,
     }
 }
 
-void spotlight(ImDrawList* dl, const ImVec2& lo, const ImVec2& hi, float time,
+SpotlightLabel spotlight(ImDrawList* dl, const ImVec2& lo, const ImVec2& hi, float time,
     const std::string& label, int dimAlpha)
 {
+    SpotlightLabel out;
     if (dl == nullptr)
     {
-        return;
+        return out;
     }
     const ImVec2 screen = ImGui::GetIO().DisplaySize;
     const ImVec2 a(std::clamp(lo.x, 0.0f, screen.x), std::clamp(lo.y, 0.0f, screen.y));
     const ImVec2 b(std::clamp(hi.x, 0.0f, screen.x), std::clamp(hi.y, 0.0f, screen.y));
     if (b.x <= a.x || b.y <= a.y)
     {
-        return;
+        return out;
     }
     const ImU32 dimCol = IM_COL32(0, 0, 0, std::clamp(dimAlpha, 0, 255));
     // Four rectangles around the hole rather than a clip: an AddRectFilled
@@ -782,12 +762,30 @@ void spotlight(ImDrawList* dl, const ImVec2& lo, const ImVec2& hi, float time,
     dl->AddRectFilled(ImVec2(0.0f, a.y), ImVec2(a.x, b.y), dimCol);
     dl->AddRectFilled(ImVec2(b.x, a.y), ImVec2(screen.x, b.y), dimCol);
 
-    const float pulse = 0.72f + 0.28f * std::sin(time * 3.4f);
-    const ImU32 ring = IM_COL32(119, 238, 221, static_cast<int>(255.0f * pulse));
     const float pad = 6.0f;
-    dl->AddRect(ImVec2(a.x - pad, a.y - pad), ImVec2(b.x + pad, b.y + pad), ring, 12.0f, 0, 3.0f);
-    dl->AddRect(ImVec2(a.x - pad - 4.0f, a.y - pad - 4.0f), ImVec2(b.x + pad + 4.0f, b.y + pad + 4.0f),
-        IM_COL32(119, 238, 221, 55), 15.0f, 0, 2.0f);
+    const auto ring = [&](float grow, int alpha, float thick, float radius) {
+        dl->AddRect(ImVec2(a.x - pad - grow, a.y - pad - grow),
+            ImVec2(b.x + pad + grow, b.y + pad + grow),
+            IM_COL32(119, 238, 221, std::clamp(alpha, 0, 255)), radius, 0, thick);
+    };
+    // Soft halo hugging the hole: three stacked outlines, each wider and fainter.
+    ring(2.0f, 60, 9.0f, 15.0f);
+    ring(1.0f, 95, 5.0f, 13.5f);
+    // Water ripples: three rings that leave the hole every 1.8s, 1/3 phase
+    // apart, fading quadratically as they travel. The old version just pulsed
+    // the keyline's alpha, which read as a blink rather than a wave.
+    for (int i = 0; i < 3; ++i)
+    {
+        const float phase = std::fmod(time * 0.55f + static_cast<float>(i) / 3.0f, 1.0f);
+        const float grow = phase * 56.0f;
+        const float fade = 1.0f - phase;
+        // A wide, faint halo under a thin bright crest: one line alone reads as
+        // a hard stroke (and it cut across the labels it passed).
+        ring(grow, static_cast<int>(fade * 36.0f), 8.0f, 12.0f + grow * 0.5f);
+        ring(grow, static_cast<int>(fade * 120.0f), 2.0f, 12.0f + grow * 0.5f);
+    }
+    // The steady keyline on the hole itself.
+    ring(0.0f, 232, 3.0f, 12.0f);
 
     if (!label.empty())
     {
@@ -797,7 +795,7 @@ void spotlight(ImDrawList* dl, const ImVec2& lo, const ImVec2& hi, float time,
         ImFont* font = game::bodyFont();
         if (font == nullptr)
         {
-            return;
+            return out;
         }
         const float size = 22.0f;
         const ImVec2 ts = font->CalcTextSizeA(size, FLT_MAX, 0.0f, label.c_str());
@@ -805,17 +803,26 @@ void spotlight(ImDrawList* dl, const ImVec2& lo, const ImVec2& hi, float time,
         const float h = 38.0f;
         float x = (a.x + b.x) * 0.5f - w * 0.5f;
         float y = a.y - pad - h - 12.0f;
+        bool above = true;
         if (y < 8.0f)
         {
             y = b.y + pad + 12.0f;
+            above = false;
         }
         x = std::clamp(x, 8.0f, screen.x - w - 8.0f);
         dl->AddRectFilled(ImVec2(x, y), ImVec2(x + w, y + h), IM_COL32(38, 38, 58, 242), h * 0.5f);
-        dl->AddTriangleFilled(ImVec2(x + w * 0.5f - 7.0f, y + h), ImVec2(x + w * 0.5f + 7.0f, y + h),
-            ImVec2(x + w * 0.5f, y + h + 9.0f), IM_COL32(38, 38, 58, 242));
+        if (above)
+        {
+            dl->AddTriangleFilled(ImVec2(x + w * 0.5f - 7.0f, y + h), ImVec2(x + w * 0.5f + 7.0f, y + h),
+                ImVec2(x + w * 0.5f, y + h + 9.0f), IM_COL32(38, 38, 58, 242));
+        }
         dl->AddText(font, size, ImVec2(x + 14.0f, y + (h - ts.y) * 0.5f), IM_COL32(255, 255, 255, 255),
             label.c_str());
+        out.lo = ImVec2(x, y);
+        out.hi = ImVec2(x + w, y + h);
+        out.shown = true;
     }
+    return out;
 }
 
 void tip(ImDrawList* dl, ImFont* font, const ImVec2& center, const std::string& text)

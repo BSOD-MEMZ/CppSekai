@@ -53,6 +53,7 @@ namespace
         std::string guide;     // points into chartdl ("search" / "list" / ...)
         bool passthrough = false;
         bool boxLeft = false; // compact box on the left (phone panel stays visible)
+        bool done = false;     // "done": true - the spotlight label gets a 完成 button
         float hold = 1.8f;
         float timeout = 0.0f;
         std::vector<Option> options;
@@ -157,8 +158,8 @@ namespace
             // Wrap widths follow the editor's setup table: the full box wraps at
             // 1300 from x=245. The two narrowed layouts (settings card / phone
             // panel) use the space they actually have.
-            const float width = step.passthrough ? 860.0f : (step.boxLeft ? 640.0f : 1300.0f);
-            const float size = (step.passthrough || step.boxLeft) ? 38.0f : 44.0f;
+            const float width = step.boxLeft ? 640.0f : 1300.0f;
+            const float size = step.boxLeft ? 38.0f : 44.0f;
             step.layout = storyui::layoutText(font, size, step.text, width);
         }
         step.revealBytes = 0;
@@ -371,6 +372,7 @@ bool load(platform::Renderer& renderer, const std::string& assetDir, std::string
                 step.guide = j.value("guide", std::string{});
                 step.passthrough = j.value("passthrough", false);
                 step.boxLeft = j.value("box", std::string{}) == "left";
+                step.done = j.value("done", false);
                 step.hold = j.value("hold", 1.8f);
                 step.timeout = j.value("timeout", 0.0f);
                 if (j.contains("set"))
@@ -712,7 +714,39 @@ void draw(float windowW, float windowH)
     const bool hasAnchor = !step.highlight.empty() && ui::anchorRect(step.highlight.c_str(), &anchorLo, &anchorHi);
     if (hasAnchor)
     {
-        storyui::spotlight(dl, anchorLo, anchorHi, gTime, step.tip, step.passthrough ? 95 : 120);
+        const storyui::SpotlightLabel lbl =
+            storyui::spotlight(dl, anchorLo, anchorHi, gTime, step.tip, step.passthrough ? 95 : 120);
+        // A passthrough step leaves the tutorial sitting over a live card with
+        // no way forward ("I moved the slider, now what?"). The label gets a
+        // 完成 capsule right after it: same painting as ui::capsuleButton, hit
+        // tested with a raw click because this step's window is NoInputs.
+        if (step.done && lbl.shown)
+        {
+            const float s = c.scale;
+            const ImVec2 lo(lbl.hi.x + 10.0f * s, lbl.lo.y);
+            const ImVec2 hi(lo.x + 132.0f * s, lbl.hi.y);
+            const ImVec2 mouse = ImGui::GetIO().MousePos;
+            const bool over = mouse.x >= lo.x && mouse.x <= hi.x && mouse.y >= lo.y && mouse.y <= hi.y;
+            const bool held = over && ImGui::IsMouseDown(ImGuiMouseButton_Left);
+            const float hover = ui::anim(0x5717b001u, over, 22.0f);
+            const float press = ui::anim(0x5717b002u, held, 30.0f);
+            ui::capsuleDraw(dl, lo, hi, "完成", true, hover, press);
+            if (over && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+            {
+                ui::se(ui::SeClick);
+                // The step above waits for the card to close; 完成 means "done\n                // with this card", so close it instead of leaving the player
+                // inside a card the tutorial has moved past.
+                if (gHost.command) {
+                    gHost.command("closeSettings");
+                }
+                revealAll(step);
+                next();
+                ImGui::End();
+                ImGui::PopStyleColor();
+                ImGui::PopStyleVar();
+                return;
+            }
+        }
     }
     else
     {
@@ -772,8 +806,7 @@ void draw(float windowW, float windowH)
     {
         // Compact box while a settings card is open: the full-width frame would
         // cover the card's bottom rows.
-        const storyui::Box box = step.passthrough ? storyui::Box::Right
-            : (step.boxLeft ? storyui::Box::Left : storyui::Box::Full);
+        const storyui::Box box = step.boxLeft ? storyui::Box::Left : storyui::Box::Full;
         storyui::dialogue(c, font, step.who, step.text, step.layout, step.revealBytes, gTime,
             ready && step.options.empty(), box);
     }
@@ -805,25 +838,29 @@ void draw(float windowW, float windowH)
 
     // Skip: pjsk's round key in the top-right - the same white disc the opening
     // card draws before a live (game/Intro.cpp / storyui::skipKey), so the two
-    // read as one control. Draw-only: the hit test is a disc, and a hit ends the
-    // tutorial (main marks it seen when consumeFinished() fires).
-    if (!step.passthrough)
+    // read as one control. Always on screen, including on passthrough steps: it
+    // is the one way out of a step that is waiting on something else (a card, a
+    // download), and hiding it there was exactly when it was needed.
     {
         const ImVec2 center = c.p(kSkipX, kSkipY);
         const float radius = c.s(40.0f) + c.s(6.0f);
-        ImGui::SetCursorScreenPos(ImVec2(center.x - radius, center.y - radius));
-        ImGui::InvisibleButton("##story-skip", ImVec2(radius * 2.0f, radius * 2.0f));
+        // Raw hit test rather than an InvisibleButton: passthrough steps mark the
+        // window NoInputs, and this button has to keep working there.
         const ImVec2 mouse = ImGui::GetIO().MousePos;
         const float dx = mouse.x - center.x;
         const float dy = mouse.y - center.y;
         const bool over = dx * dx + dy * dy <= radius * radius;
-        const bool hovered = ImGui::IsItemHovered() && over;
-        const bool pressed = hovered && ImGui::IsMouseDown(ImGuiMouseButton_Left);
+        const bool held = over && ImGui::IsMouseDown(ImGuiMouseButton_Left);
         // Two independent animations: hover grows the disc, press dips it.
-        const float hover = ui::anim(0x5717a001u, hovered, 22.0f);
-        const float press = ui::anim(0x5717a002u, pressed, 30.0f);
+        const float hover = ui::anim(0x5717a001u, over, 22.0f);
+        const float press = ui::anim(0x5717a002u, held, 30.0f);
         storyui::skipKey(dl, c, center, hover, press, storyui::skipIcon());
-        if (hovered && ImGui::IsItemClicked())
+        if (std::getenv("CPSEKAI_UI_TRACE") != nullptr && (over || ImGui::IsMouseClicked(0))) {
+            std::printf("[story] skip over=%d clicked=%d mouse=%.0f,%.0f center=%.0f,%.0f\n",
+                over ? 1 : 0, ImGui::IsMouseClicked(0) ? 1 : 0, mouse.x, mouse.y, center.x, center.y);
+            std::fflush(stdout);
+        }
+        if (over && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
         {
             ui::se(ui::SeClick);
             finish();
@@ -845,7 +882,11 @@ void draw(float windowW, float windowH)
         bool advance = ImGui::IsMouseClicked(ImGuiMouseButton_Left);
         advance = advance || ImGui::IsKeyPressed(ImGuiKey_Space, false)
             || ImGui::IsKeyPressed(ImGuiKey_Enter, false)
-            || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false);
+            || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false)
+            // Ctrl as well: rhythm players keep their free hand on Ctrl after a
+            // live, and Space is the pause key in this game.
+            || ImGui::IsKeyPressed(ImGuiKey_LeftCtrl, false)
+            || ImGui::IsKeyPressed(ImGuiKey_RightCtrl, false);
         if (advance)
         {
             if (!ready)

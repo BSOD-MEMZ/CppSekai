@@ -763,7 +763,7 @@ int tabBar(const char* id, const std::vector<std::string>& tabs, int* active, fl
 }
 
 bool slider(const char* id, float* value, float minV, float maxV, float step, const char* fmt,
-    float width, bool enabled)
+    float width, bool enabled, const char* anchorId)
 {
     if (value == nullptr) {
         return false;
@@ -779,6 +779,15 @@ bool slider(const char* id, float* value, float minV, float maxV, float step, co
     const float rowH = 62.0f * s; // value text + track row (was 96/80/72/64)
 
     const ImVec2 pos = ImGui::GetCursorScreenPos();
+    // Tutorial anchor: the row's real box, published here because only this
+    // function knows it. Callers used to guess "pos.y + 40" and the ring cut
+    // through the -/+ buttons (they end at trackY + btnSize/2 = pos.y + 57.7).
+    if (anchorId != nullptr) {
+        const float trackY = pos.y + rowH * 0.68f;
+        setAnchor(anchorId, ImVec2(pos.x - 3.0f * s, pos.y - 3.0f * s),
+            ImVec2(pos.x + (width > 0.0f ? width : ImGui::GetContentRegionAvail().x) + 3.0f * s,
+                trackY + btnSize * 0.5f + 3.0f * s));
+    }
     const float rowW = width > 0.0f ? width : ImGui::GetContentRegionAvail().x;
     // Which step slot the value sits in. A slider is dragged freely, so "play a
     // tick" cannot mean "the value changed" - that is every frame - it means the
@@ -975,6 +984,47 @@ void infoRows(const std::vector<std::pair<std::string, std::string>>& rows, floa
     }
 }
 
+void capsuleDraw(ImDrawList* dl, const ImVec2& loIn, const ImVec2& hiIn, const char* label,
+    bool primary, float hover, float press)
+{
+    if (dl == nullptr || label == nullptr) {
+        return;
+    }
+    const float s = scale();
+    ImVec2 lo = loIn;
+    ImVec2 hi = hiIn;
+    // Hover grows the capsule a hair. Press does NOT shrink it: the reference
+    // changes colour only (`:active` leaves transform at none, opacity at 1).
+    const float grow = 1.0f + 0.02f * hover;
+    if (grow != 1.0f) {
+        const ImVec2 mid((lo.x + hi.x) * 0.5f, (lo.y + hi.y) * 0.5f);
+        const float hw = (hi.x - lo.x) * 0.5f * grow;
+        const float hh = (hi.y - lo.y) * 0.5f * grow;
+        lo = ImVec2(mid.x - hw, mid.y - hh);
+        hi = ImVec2(mid.x + hw, mid.y + hh);
+    }
+    const float radius = (hi.y - lo.y) * 0.5f;
+    ImU32 fill = primary ? kPrimary : kWhiteBtn;
+    fill = mixColor(fill, primary ? kPrimaryHover : kWhiteHover, hover);
+    // Pressing *inverts* the capsule rather than darkening it (see kPrimaryPress
+    // in the header): the mint one turns pale with mint text, the white one turns
+    // mint with white text. Applied after the hover blend, so a held hovered
+    // button still ends up exactly on the pressed colour.
+    fill = mixColor(fill, primary ? kPrimaryPress : kWhitePress, press);
+    // The reference's halo, not a drop: `0 0 8px rgba(68,68,102,.5)`, so centred
+    // on the capsule and as strong as the one under its native controls.
+    dropShadow(dl, lo, hi, radius, s);
+    dl->AddRectFilled(lo, hi, fill, radius);
+
+    ImFont* font = game::bodyFont();
+    const float fontSize = std::min(27.0f * s, (hiIn.y - loIn.y) * 0.48f);
+    // The label follows the press: mint-on-pale / white-on-mint, as above.
+    const ImU32 labelColor = mixColor(kBtnText, primary ? kPrimaryPressText : kWhitePressText, press);
+    const ImVec2 textSize = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, label);
+    dl->AddText(font, fontSize,
+        ImVec2((lo.x + hi.x - textSize.x) * 0.5f, (lo.y + hi.y - textSize.y) * 0.5f), labelColor, label);
+}
+
 bool capsuleButton(const char* label, const ImVec2& sizeIn, bool primary)
 {
     const float s = scale();
@@ -1014,26 +1064,7 @@ bool capsuleButton(const char* label, const ImVec2& sizeIn, bool primary)
         lo = ImVec2(mid.x - hw, mid.y - hh);
         hi = ImVec2(mid.x + hw, mid.y + hh);
     }
-    const float radius = (hi.y - lo.y) * 0.5f;
-    ImU32 fill = primary ? kPrimary : kWhiteBtn;
-    fill = mixColor(fill, primary ? kPrimaryHover : kWhiteHover, hov);
-    // Pressing *inverts* the capsule rather than darkening it (see kPrimaryPress
-    // in the header): the mint one turns pale with mint text, the white one turns
-    // mint with white text. Applied after the hover blend, so a held hovered
-    // button still ends up exactly on the pressed colour.
-    fill = mixColor(fill, primary ? kPrimaryPress : kWhitePress, press);
-    // The reference's halo, not a drop: `0 0 8px rgba(68,68,102,.5)`, so centred
-    // on the capsule and as strong as the one under its native controls.
-    dropShadow(dl, lo, hi, radius, s);
-    dl->AddRectFilled(lo, hi, fill, radius);
-
-    ImFont* font = game::bodyFont();
-    const float fontSize = std::min(27.0f * s, size.y * 0.48f);
-    // The label follows the press: mint-on-pale / white-on-mint, as above.
-    const ImU32 labelColor = mixColor(kBtnText, primary ? kPrimaryPressText : kWhitePressText, press);
-    const ImVec2 textSize = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, label);
-    dl->AddText(font, fontSize,
-        ImVec2((lo.x + hi.x - textSize.x) * 0.5f, (lo.y + hi.y - textSize.y) * 0.5f), labelColor, label);
+    capsuleDraw(dl, lo, hi, label, primary, hov, press);
     return clicked || pad.pressed;
 }
 

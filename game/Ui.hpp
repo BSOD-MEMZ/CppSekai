@@ -198,7 +198,7 @@ float tabRowHeight();
 // `enabled = false` greys the whole row out and swallows every click - for a
 // value that is currently derived from another setting.
 bool slider(const char* id, float* value, float minV, float maxV, float step, const char* fmt,
-    float width, bool enabled = true);
+    float width, bool enabled = true, const char* anchorId = nullptr);
 
 // Gray rounded box of "label | value" rows, the value in pink, each row with
 // its own thin vertical divider. rowWidth <= 0 uses the remaining width.
@@ -211,6 +211,14 @@ void infoRows(const std::vector<std::pair<std::string, std::string>>& rows, floa
 // this build is played with a mouse, so a capsule under the pointer lightens and
 // grows 2%.
 bool capsuleButton(const char* label, const ImVec2& size, bool primary);
+
+// Draw-only twin of capsuleButton: same fill colours, halo, hover growth and
+// press inversion, driven by caller-supplied 0..1 eased values. The tutorial
+// paints on the foreground draw list, where a normal ImGui item would be covered
+// by the host's own overlays - but the look has to stay identical, so the
+// painting lives here and capsuleButton() calls it as well.
+void capsuleDraw(ImDrawList* dl, const ImVec2& lo, const ImVec2& hi, const char* label,
+    bool primary, float hover, float press);
 
 // Centered one-line text advanced by one row. rowWidth <= 0 uses the
 // remaining width at the cursor (pass the card interior width to center

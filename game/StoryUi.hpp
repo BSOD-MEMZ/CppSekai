@@ -95,7 +95,6 @@ enum class Box
 {
     Full,
     Left,
-    Right,
 };
 
 // pjsk story dialogue: the translucent band from Dialogue_Background.png, the
@@ -134,7 +133,17 @@ void skipKey(ImDrawList* dl, const Canvas& c, const ImVec2& center, float hover,
 // is missing (then the disc draws without its glyph).
 ImTextureID skipIcon();
 
-void spotlight(ImDrawList* dl, const ImVec2& lo, const ImVec2& hi, float time,
+struct SpotlightLabel
+{
+    ImVec2 lo{0.0f, 0.0f};
+    ImVec2 hi{0.0f, 0.0f};
+    bool shown = false;
+};
+
+// Dims everything except `lo..hi`, rings the hole with an expanding ripple and
+// (optionally) floats a label above it. Returns where that label landed, so the
+// caller can hang a button off it.
+SpotlightLabel spotlight(ImDrawList* dl, const ImVec2& lo, const ImVec2& hi, float time,
     const std::string& label, int dimAlpha = 120);
 
 // Small dark pill of text, screen-pixel coordinates, anchored above `lo`.
