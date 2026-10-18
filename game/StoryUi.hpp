@@ -88,12 +88,22 @@ void dim(ImDrawList* dl, float alpha = 0.45f);
 
 // The dialogue box, name plate and ▼. `revealBytes` clips the body at a byte
 // offset; pass layout.codepoints.back() to show everything.
-// `compact` draws a smaller white card instead of the shipped 16:9 frame: that
-// is the shape used while a settings card is open (bottom-right, clear of the
-// card) or while the song-select phone has to stay visible (bottom-left).
+// Which slice of the bottom band to draw. The band is a full-width gradient, so
+// clipping it left/right keeps the art intact while leaving the settings card
+// (left) or the song-select phone (right) uncovered.
+enum class Box
+{
+    Full,
+    Left,
+    Right,
+};
+
+// pjsk story dialogue: the translucent band from Dialogue_Background.png, the
+// speaker name just above its top rule, and white body text with a dark
+// outline (the reference has no white card - see .workbuddy/shots/preview1.png).
 void dialogue(const Canvas& c, ImFont* font, const std::string& name, const std::string& body,
     const TextLayout& layout, std::size_t revealBytes, float time, bool showArrow,
-    bool compact = false, bool left = false);
+    Box box = Box::Full);
 
 // Two-line black-out card ("19:30 / 教室"); `alpha` fades the whole thing.
 void sceneTitle(const Canvas& c, ImFont* font, const std::string& text, float alpha);
@@ -115,7 +125,7 @@ void imageCard(const Canvas& c, ImFont* font, const Image& img, const std::strin
 // Spotlight: dims everything except `lo..hi` and rings it. Coordinates are
 // window pixels (what ui::anchorRect hands back), not virtual units.
 void spotlight(ImDrawList* dl, const ImVec2& lo, const ImVec2& hi, float time,
-    const std::string& label);
+    const std::string& label, int dimAlpha = 120);
 
 // Small dark pill of text, screen-pixel coordinates, anchored above `lo`.
 void tip(ImDrawList* dl, ImFont* font, const ImVec2& center, const std::string& text);

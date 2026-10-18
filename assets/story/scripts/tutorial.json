@@ -225,7 +225,7 @@
             },
             {
               "text": "键盘 / 鼠标",
-              "image": "kb_mouse.jpg",
+              "image": "kb_mouse.png",
               "goto": "kb_hit"
             }
           ]
@@ -246,7 +246,7 @@
         {
           "id": "kb_hit",
           "type": "image",
-          "image": "kb_mouse.jpg",
+          "image": "kb_mouse.png",
           "caption": "键盘 / 鼠标：默认 12 键 Z S X D C V G B H N J M",
           "who": "助手",
           "text": "默认键位从左到右是 Z S X D C V G B H N J M。蓝点按一下，长条按住不放，Flick 按对应的键就算向上划。"

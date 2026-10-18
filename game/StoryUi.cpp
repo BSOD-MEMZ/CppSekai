@@ -21,15 +21,6 @@ namespace
     ImTextureID gChoices = 0;
     ImTextureID gSceneText = 0;
 
-    // Measured off Dialogue_Background_Classic.png (see STORY-UI.md):
-    // the box, the baked-in name plate, and where text starts inside it.
-    constexpr float kBoxL = 154.0f, kBoxT = 734.0f, kBoxR = 1766.0f, kBoxB = 1053.0f;
-    // The name plate's right edge (888) is not used: the label is drawn
-    // left-aligned and long names shrink rather than overflow.
-    constexpr float kNameL = 220.0f, kNameT = 742.0f, kNameB = 814.0f;
-    constexpr float kTextL = 206.0f, kTextT = 838.0f;
-    constexpr float kTextSize = 34.0f;
-    constexpr float kLineGap = 1.35f;
 
     bool isNoLineStart(unsigned int cp)
     {
@@ -112,25 +103,29 @@ namespace
         dl->AddText(font, size, pos, col, s);
     }
 
-    // Cover-crop UVs: the picture fills `box` without stretching, the excess is
-    // cropped evenly on both sides (same rule CSS object-fit: cover uses).
-    void coverUv(const Image& img, float boxW, float boxH, ImVec2* uv0, ImVec2* uv1)
+    // Pixi's `strokeThickness: 8` is a stroke centred on the glyph outline, so
+    // it reaches 4px past the glyph. ImDrawList has no stroke, so the same ring
+    // is approximated with 16 offset copies. `radius` is that 4px.
+    void outlineText(ImDrawList* dl, ImFont* font, float size, const ImVec2& pos, ImU32 fill,
+        const char* begin, const char* end, float radius, ImU32 stroke)
     {
-        const float srcAspect = static_cast<float>(img.w) / static_cast<float>(img.h);
-        const float boxAspect = boxW / boxH;
-        if (srcAspect > boxAspect)
+        constexpr int kSteps = 16;
+        for (int i = 0; i < kSteps; ++i)
         {
-            const float keep = boxAspect / srcAspect;
-            *uv0 = ImVec2((1.0f - keep) * 0.5f, 0.0f);
-            *uv1 = ImVec2(1.0f - (1.0f - keep) * 0.5f, 1.0f);
+            const float a = 6.28318530718f * static_cast<float>(i) / static_cast<float>(kSteps);
+            dl->AddText(font, size, ImVec2(pos.x + std::cos(a) * radius, pos.y + std::sin(a) * radius),
+                stroke, begin, end);
         }
-        else
-        {
-            const float keep = srcAspect / boxAspect;
-            *uv0 = ImVec2(0.0f, (1.0f - keep) * 0.5f);
-            *uv1 = ImVec2(1.0f, 1.0f - (1.0f - keep) * 0.5f);
-        }
+        dl->AddText(font, size, pos, fill, begin, end);
     }
+
+    void outlineText(ImDrawList* dl, ImFont* font, float size, const ImVec2& pos, ImU32 fill,
+        const char* text, float radius, ImU32 stroke)
+    {
+        outlineText(dl, font, size, pos, fill, text, text + std::strlen(text), radius, stroke);
+    }
+
+
 
 } // namespace
 
@@ -147,7 +142,7 @@ bool loadTextures(platform::Renderer& renderer, const std::string& assetDir, std
 {
     const std::string base = assetDir + "\\story\\ui\\";
     std::string localError;
-    const GLuint dialogue = renderer.loadUiTexture(base + "Dialogue_Background_Classic.png", localError);
+    const GLuint dialogue = renderer.loadUiTexture(base + "Dialogue_Background.png", localError);
     const GLuint choices = renderer.loadUiTexture(base + "Choices_Background.png", localError);
     const GLuint sceneText = renderer.loadUiTexture(base + "SceneText_Background.png", localError);
     std::printf("[story] textures dialogue=%u choices=%u scene=%u\n", dialogue, choices, sceneText);
@@ -283,89 +278,107 @@ void dim(ImDrawList* dl, float alpha)
 }
 
 void dialogue(const Canvas& c, ImFont* font, const std::string& name, const std::string& body,
-    const TextLayout& layout, std::size_t revealBytes, float time, bool showArrow, bool compact,
-    bool left)
+    const TextLayout& layout, std::size_t revealBytes, float time, bool showArrow, Box box)
 {
     ImDrawList* dl = ImGui::GetForegroundDrawList();
     if (dl == nullptr)
     {
         return;
     }
-    const float s = c.scale;
-    if (compact)
-    {
-        // Right: clear of the settings card (which ends at x 938).
-        // Left: clear of the song select's phone panel (which starts at ~780).
-        const float boxL = left ? 142.0f : 952.0f;
-        const float boxR = left ? 930.0f : 1790.0f;
-        const ImVec2 lo = c.p(boxL, 772.0f);
-        const ImVec2 hi = c.p(boxR, 1054.0f);
-        dl->AddRectFilled(ImVec2(lo.x + 4.0f * s, lo.y + 8.0f * s), ImVec2(hi.x + 4.0f * s, hi.y + 8.0f * s),
-            IM_COL32(0, 0, 0, 55), c.s(22.0f));
-        dl->AddRectFilled(lo, hi, IM_COL32(235, 235, 242, 248), c.s(22.0f));
-        dl->AddRect(lo, hi, IM_COL32(196, 196, 214, 255), c.s(22.0f), 0, c.s(2.0f));
-        if (!name.empty() && font != nullptr)
-        {
-            const float nameSize = c.s(25.0f);
-            const ImVec2 ts = font->CalcTextSizeA(nameSize, FLT_MAX, 0.0f, name.c_str());
-            const float nameX = left ? 156.0f : 966.0f;
-            const ImVec2 plo = c.p(nameX, 784.0f);
-            const ImVec2 phi = c.p(nameX + 190.0f, 784.0f + 40.0f);
-            dl->AddRectFilled(plo, phi, IM_COL32(90, 90, 120, 255), c.s(20.0f));
-            dl->AddText(font, nameSize,
-                ImVec2(plo.x + 22.0f * s, (plo.y + phi.y - ts.y) * 0.5f), IM_COL32(255, 255, 255, 255),
-                name.c_str());
-        }
-        const float size = c.s(27.0f);
-        const float lineH = size * 1.36f;
-        float y = c.y(846.0f);
-        for (const Line& line : layout.lines)
-        {
-            if (line.begin >= revealBytes)
-            {
-                break;
-            }
-            textAt(dl, font, size, ImVec2(c.x(left ? 166.0f : 978.0f), y), ui::kText, body,
-                line.begin, std::min(line.end, revealBytes));
-            y += lineH;
-        }
-        if (showArrow)
-        {
-            const float bob = std::sin(time * 4.2f) * 3.0f * s;
-            const float ax = left ? 884.0f : 1730.0f;
-            dl->AddTriangleFilled(c.p(ax, 1010.0f + bob), c.p(ax + 22.0f, 1010.0f + bob),
-                c.p(ax + 11.0f, 1026.0f + bob), IM_COL32(119, 238, 221, 255));
-        }
-        return;
-    }
-    const ImVec2 boxLo = c.p(kBoxL, kBoxT);
-    const ImVec2 boxHi = c.p(kBoxR, kBoxB);
 
-    // The asset's fill is translucent white; over a dark song-select it eats
-    // the text. Lay the card colour down first, then let the frame's border,
-    // texture and shadow sit on top of it (see STORY-UI.md section 3.1).
-    dl->AddRectFilled(boxLo, boxHi, IM_COL32(235, 235, 242, 244), c.s(46.0f));
-    if (gDialogue != 0)
+    // The band spans the full width at y 771..1080; `box` picks which slice to
+    // paint. Clipping is why this is not three different layouts: the gradient
+    // is horizontally uniform, so a clipped band still looks like a band, while
+    // the settings card (left) or the phone panel (right) stays uncovered.
+    // Numbers below are the editor's own setup table, copied 1:1 (1920x1080
+    // canvas, Pixi top-left anchored text):
+    //   name : (225,775) 44px  fill #EBEBEF  stroke #5D5D79 / 8
+    //   body : (245,845) 44px  fill #FFFFFF  lineHeight 55  wrap 1300
+    // The hairline under the name in the reference is *the band's own rule* at
+    // y~840, not something the UI draws - so there is no underline here.
+    float clipL = 0.0f;
+    float clipR = 1920.0f;
+    float textL = 245.0f;
+    float nameL = 225.0f;
+    float size = 44.0f;
+    float lineGap = 55.0f / 44.0f;
+    if (box == Box::Left)
     {
+        // The song-select phone panel is in the way: narrower column, but the
+        // vertical rhythm (name 775 / body 845) stays identical.
+        clipR = 780.0f;
+        textL = 120.0f;
+        nameL = 100.0f;
+        size = 38.0f;
+    }
+    else if (box == Box::Right)
+    {
+        clipL = 944.0f;
+        textL = 1000.0f;
+        nameL = 980.0f;
+        size = 38.0f;
+    }
+    const float lineH = size * lineGap;
+
+    // The band is drawn whole, at every layout: clipping it left a hard seam
+    // across the gradient's hairline, and the settings card ends above it
+    // anyway (the card is 780 tall, the band starts at 771).
+    float rightPanelBottom = 0.0f;
+    if (box == Box::Right)
+    {
+        // Settings card is open on the left. The band's hairline would run right
+        // under the card's bottom edge and read as "the card is cut", so this
+        // one uses a self-contained panel instead - and the panel hugs the text:
+        // a fixed 748..1070 rectangle left a 300px empty slab under two lines.
+        const float lines = static_cast<float>(std::max<std::size_t>(layout.lines.size(), 1));
+        rightPanelBottom = 862.0f + lineH * lines + 18.0f;
+        dl->AddRectFilled(c.p(962.0f, 748.0f), c.p(1904.0f, rightPanelBottom),
+            IM_COL32(18, 18, 30, 210), c.s(22.0f));
+        dl->AddRect(c.p(962.0f, 748.0f), c.p(1904.0f, rightPanelBottom),
+            IM_COL32(140, 140, 175, 90), c.s(22.0f), 0, c.s(2.0f));
+    }
+    else if (gDialogue != 0)
+    {
+        // Twice on purpose: the band is only 50% at its densest (2,0,32,128),
+        // which is right over the bright story backgrounds the art was made for
+        // but nearly invisible over this game's dark song list. Stacking keeps
+        // the same shape and colour while landing at ~75% at the bottom.
+        dl->AddImage(gDialogue, c.p(0.0f, 0.0f), c.p(1920.0f, 1080.0f));
         dl->AddImage(gDialogue, c.p(0.0f, 0.0f), c.p(1920.0f, 1080.0f));
     }
     else
     {
-        dl->AddRect(boxLo, boxHi, IM_COL32(190, 190, 210, 255), c.s(46.0f), 0, c.s(2.0f));
+        // Fallback: the same vertical fade, drawn by hand (headless runs with a
+        // half-copied build still get readable text).
+        if (box != Box::Right)
+        {
+            for (int i = 0; i < 20; ++i)
+            {
+                const float t = static_cast<float>(i) / 19.0f;
+                const float y0 = 760.0f + t * 320.0f;
+                dl->AddRectFilled(c.p(0.0f, y0), c.p(1920.0f, y0 + 20.0f),
+                    IM_COL32(10, 10, 20, static_cast<int>(t * 165.0f)));
+            }
+        }
     }
 
-    if (!name.empty() && font != nullptr)
+    if (font != nullptr && !name.empty())
     {
-        const float nameSize = c.s(31.0f);
-        const ImVec2 ts = font->CalcTextSizeA(nameSize, FLT_MAX, 0.0f, name.c_str());
-        const float cy = c.y((kNameT + kNameB) * 0.5f);
-        dl->AddText(font, nameSize, ImVec2(c.x(kNameL + 52.0f), cy - ts.y * 0.5f),
-            IM_COL32(255, 255, 255, 255), name.c_str());
+        // The name sits just above the band's hairline rule (y ~840), exactly
+        // where the reference puts it, in the heavier face when the system has
+        // one (boldFont falls back to the body face).
+        ImFont* nameFont = game::boldFont();
+        if (nameFont == nullptr)
+        {
+            nameFont = font;
+        }
+        const float nameSize = c.s(size);
+        const float nameY = box == Box::Full ? 775.0f : 782.0f;
+        outlineText(dl, nameFont, nameSize, ImVec2(c.x(nameL), c.y(nameY)),
+            IM_COL32(235, 235, 239, 255), name.c_str(), nameSize * 0.09f,
+            IM_COL32(93, 93, 121, 255));
     }
 
-    const float size = c.s(kTextSize);
-    const float lineH = size * kLineGap;
-    float y = c.y(kTextT);
     for (const Line& line : layout.lines)
     {
         if (line.begin >= revealBytes)
@@ -373,19 +386,23 @@ void dialogue(const Canvas& c, ImFont* font, const std::string& name, const std:
             break;
         }
         const std::size_t end = std::min(line.end, revealBytes);
-        textAt(dl, font, size, ImVec2(c.x(kTextL), y), ui::kText, body, line.begin, end);
-        y += lineH;
+        const ImVec2 pos(c.x(textL), c.y(845.0f) + static_cast<float>(&line - layout.lines.data()) * c.s(lineH));
+        outlineText(dl, font, c.s(size), pos, IM_COL32(255, 255, 255, 255),
+            body.data() + line.begin, body.data() + end, c.s(size) * 0.09f,
+            IM_COL32(93, 93, 121, 255));
     }
 
     if (showArrow)
     {
-        const float bob = std::sin(time * 4.2f) * 3.0f * s;
-        const ImVec2 t(1701.0f, 1014.0f + bob);
-        const float r = c.s(9.0f);
-        const ImU32 col = IM_COL32(119, 238, 221, 255);
-        dl->AddTriangleFilled(c.p(t.x - r, t.y - r * 0.6f), c.p(t.x + r, t.y - r * 0.6f),
-            c.p(t.x, t.y + r * 0.9f), col);
-        dl->AddCircleFilled(c.p(t.x - r * 1.9f, t.y - r * 0.1f), c.s(3.2f), col, 12);
+        const float bob = std::sin(time * 4.2f) * 3.0f * c.scale;
+        const float ax = c.x(clipR - 26.0f);
+        const float ay = (box == Box::Right ? c.y(rightPanelBottom - 40.0f) : c.y(1030.0f)) + bob;
+        dl->AddTriangleFilled(ImVec2(ax - 11.0f * c.scale, ay - 6.0f * c.scale),
+            ImVec2(ax + 11.0f * c.scale, ay - 6.0f * c.scale),
+            ImVec2(ax, ay + 9.0f * c.scale), IM_COL32(0, 0, 0, 190));
+        dl->AddTriangleFilled(ImVec2(ax - 9.0f * c.scale, ay - 7.0f * c.scale),
+            ImVec2(ax + 9.0f * c.scale, ay - 7.0f * c.scale),
+            ImVec2(ax, ay + 7.0f * c.scale), IM_COL32(255, 255, 255, 235));
     }
 }
 
@@ -406,7 +423,8 @@ void sceneTitle(const Canvas& c, ImFont* font, const std::string& text, float al
     {
         return;
     }
-    const float size = c.s(31.0f);
+    // SceneText_Background spec: 44px, centred on (960,540).
+    const float size = c.s(44.0f);
     std::vector<std::string> lines;
     std::size_t begin = 0;
     while (true)
@@ -419,7 +437,9 @@ void sceneTitle(const Canvas& c, ImFont* font, const std::string& text, float al
         }
         begin = nl + 1;
     }
-    const float lineH = size * 1.5f;
+    // The band is only 120 virtual units tall (y 480..600): 1.5x on 44px would
+    // push a two-line title outside it, so the scene title leads tighter.
+    const float lineH = size * 1.2f;
     float y = c.y(540.0f) - static_cast<float>(lines.size()) * lineH * 0.5f;
     for (const std::string& line : lines)
     {
@@ -490,7 +510,7 @@ int choices(const Canvas& c, ImFont* font, const std::vector<std::string>& optio
         }
         if (font != nullptr)
         {
-            const float size = c.s(30.0f);
+            const float size = c.s(32.0f);
             const ImVec2 ts = font->CalcTextSizeA(size, FLT_MAX, 0.0f, options[static_cast<std::size_t>(i)].c_str());
             dl->AddText(font, size, ImVec2(lo.x + (hi.x - lo.x - ts.x) * 0.5f,
                             lo.y + (hi.y - lo.y - ts.y) * 0.5f),
@@ -552,11 +572,18 @@ int cards(const Canvas& c, ImFont* font, const std::vector<Image>& images,
         const ImVec2 imgHi(hi.x - 14.0f * s, lo.y + 344.0f * s);
         if (i < static_cast<int>(images.size()) && images[static_cast<std::size_t>(i)].valid())
         {
+            // The pictures are transparent cut-outs, so they are fitted inside
+            // the slot instead of cover-cropped: cropping a keyboard would cut
+            // keys off, and there is no background rectangle to trim.
             const Image& img = images[static_cast<std::size_t>(i)];
-            ImVec2 uv0;
-            ImVec2 uv1;
-            coverUv(img, imgHi.x - imgLo.x, imgHi.y - imgLo.y, &uv0, &uv1);
-            dl->AddImageRounded(img.tex, imgLo, imgHi, uv0, uv1, IM_COL32_WHITE, c.s(12.0f));
+            const float areaW = imgHi.x - imgLo.x;
+            const float areaH = imgHi.y - imgLo.y;
+            const float fit = std::min(areaW / static_cast<float>(img.w),
+                areaH / static_cast<float>(img.h));
+            const float dw = static_cast<float>(img.w) * fit;
+            const float dh = static_cast<float>(img.h) * fit;
+            const ImVec2 at((imgLo.x + imgHi.x - dw) * 0.5f, (imgLo.y + imgHi.y - dh) * 0.5f);
+            dl->AddImage(img.tex, at, ImVec2(at.x + dw, at.y + dh));
         }
         else
         {
@@ -600,8 +627,8 @@ void imageCard(const Canvas& c, ImFont* font, const Image& img, const std::strin
     const float s = c.scale;
     // Fit inside 1000x450 without distortion; the box's centre is fixed so the
     // picture never jumps between steps.
-    const float maxW = 1120.0f;
-    const float maxH = 430.0f;
+    const float maxW = 1040.0f;
+    const float maxH = 420.0f;
     float w = maxW;
     float h = maxH;
     if (img.valid())
@@ -618,18 +645,21 @@ void imageCard(const Canvas& c, ImFont* font, const Image& img, const std::strin
             w = maxH * aspect;
         }
     }
-    const float cx = 960.0f;
+    // Centre unless the picture would run under the song-select phone panel on
+    // the right (it starts at ~1383): a wide picture slides left instead of
+    // being half-covered by it.
+    const float cx = std::min(960.0f, 1352.0f - w * 0.5f);
     const float cy = 176.0f + h * 0.5f;
     ImVec2 lo = c.p(cx - w * 0.5f, cy - h * 0.5f);
     ImVec2 hi = c.p(cx + w * 0.5f, cy + h * 0.5f);
 
-    dl->AddRectFilled(ImVec2(lo.x + 5.0f * s, lo.y + 12.0f * s), ImVec2(hi.x + 5.0f * s, hi.y + 12.0f * s),
-        IM_COL32(0, 0, 0, 55), c.s(16.0f));
+    // A very soft plate instead of a photo frame: both pictures are cut-outs now,
+    // so a white rim would just be a rectangle around a transparent PNG.
+    dl->AddRectFilled(ImVec2(lo.x - 26.0f * s, lo.y - 18.0f * s), ImVec2(hi.x + 26.0f * s, hi.y + 26.0f * s),
+        IM_COL32(8, 8, 16, 92), c.s(26.0f));
     if (img.valid())
     {
-        dl->AddImageRounded(img.tex, lo, hi, ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), IM_COL32_WHITE,
-            c.s(16.0f));
-        dl->AddRect(lo, hi, IM_COL32(255, 255, 255, 230), c.s(16.0f), 0, c.s(3.0f));
+        dl->AddImage(img.tex, lo, hi);
     }
     else
     {
@@ -661,13 +691,16 @@ void imageCard(const Canvas& c, ImFont* font, const Image& img, const std::strin
         const float pillW = std::min(widest + c.s(40.0f), maxTextW + c.s(40.0f));
         const float pillH = lineH * static_cast<float>(lineCount) + c.s(16.0f);
         const float top = hi.y + 14.0f * s;
-        const ImVec2 plo(cx - pillW * 0.5f, top);
-        const ImVec2 phi(cx + pillW * 0.5f, top + pillH);
+        // cx is a virtual unit, top/pillW are already pixels: mixing the two put
+        // the caption ~400px to the right of the picture.
+        const float ccx = c.x(cx);
+        const ImVec2 plo(ccx - pillW * 0.5f, top);
+        const ImVec2 phi(ccx + pillW * 0.5f, top + pillH);
         dl->AddRectFilled(plo, phi, IM_COL32(20, 20, 32, 165), c.s(14.0f));
         float ty = top + c.s(8.0f);
         for (const Line& line : wrap.lines)
         {
-            dl->AddText(font, size, ImVec2(cx - line.width * 0.5f, ty),
+            dl->AddText(font, size, ImVec2(ccx - line.width * 0.5f, ty),
                 IM_COL32(232, 232, 242, 245), caption.data() + line.begin, caption.data() + line.end);
             ty += lineH;
         }
@@ -675,7 +708,7 @@ void imageCard(const Canvas& c, ImFont* font, const Image& img, const std::strin
 }
 
 void spotlight(ImDrawList* dl, const ImVec2& lo, const ImVec2& hi, float time,
-    const std::string& label)
+    const std::string& label, int dimAlpha)
 {
     if (dl == nullptr)
     {
@@ -688,7 +721,7 @@ void spotlight(ImDrawList* dl, const ImVec2& lo, const ImVec2& hi, float time,
     {
         return;
     }
-    const ImU32 dimCol = IM_COL32(0, 0, 0, 120);
+    const ImU32 dimCol = IM_COL32(0, 0, 0, std::clamp(dimAlpha, 0, 255));
     // Four rectangles around the hole rather than a clip: an AddRectFilled
     // with a hole needs a stencil, and four quads also let the hole keep its
     // rounded corners on the ring.

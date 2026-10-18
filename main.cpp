@@ -3574,7 +3574,35 @@ int main(int argc, char** argv)
     bool tutorialWanted = !userSettings.tutorialDone;
     bool tutorialReplay = false;
     bool tutorialMenuBarWasOn = false;
-    bool tutorialAutoStarted = false;
+    // Debug: simulate the 关于 page's replay button at 2s without a click
+    // (input injection does not reach the window in a headless session).
+    bool replayTest = std::getenv("CPSEKAI_STORY_REPLAY") != nullptr;
+    // One place for "start the tutorial again": the 关于 page's button and the
+    // debug hook both go through it, so the headless check exercises the same
+    // code the click does.
+    auto restartTutorial = [&]() {
+        // A running script has to be torn down first. The old flow only raised
+        // a flag and let the select screen's trigger start it, but that trigger
+        // refuses while a script is active - and the tutorial *is* active every
+        // time this card can be clicked (it opens the card itself on the speed
+        // step, and that step is passthrough, so the click lands). The result
+        // was a button that visibly did nothing.
+        story::stop();
+        tutorialMenuBarWasOn = userSettings.nativeMenuBar;
+        if (userSettings.nativeMenuBar) {
+            userSettings.nativeMenuBar = false;
+        }
+        showDebug = false;
+        if (state == AppState::Select && !party.active() && story::start("tutorial")) {
+            std::printf("[story] replayed\n");
+            std::fflush(stdout);
+            return true;
+        }
+        // Opened from the pause card or a room: the deferred path starts once
+        // the select screen is up again.
+        tutorialReplay = true;
+        return false;
+    };
 
     // HUD / hit feedback state (shared with the input handlers below).
     game::HudState hudState;
@@ -4241,13 +4269,21 @@ int main(int argc, char** argv)
                         ImGui::Text("音符速度");
                         float speed = noteSpeed;
                         colSet(1);
+                        // The anchor has to be captured around the whole slider,
+                        // not from GetItemRectMin/Max after the call: the custom
+                        // slider's last ImGui item is the + button, so the
+                        // spotlight ring used to circle just that plus sign.
+                        const float speedS = ui::scale();
+                        const ImVec2 speedLo = ImGui::GetCursorScreenPos();
                         if (ui::slider("speed", &speed, 1.0f, 12.0f, 0.1f, "%.1f", w)) {
                             noteSpeed = speed;
                             core_api::setPreviewConfig(0, 1, 1, 1, 0, 0, noteSpeed, 1.0f, 0.6f, 0.0f, 1.0f, 0.85f);
                         }
                         // Tutorial anchor (设置 > 演奏 > 音符速度): the ring is
                         // drawn by game/Story.cpp, in window pixels.
-                        ui::setAnchor("settings.speed", ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+                        ui::setAnchor("settings.speed",
+                            ImVec2(speedLo.x - 6.0f * speedS, speedLo.y + 2.0f * speedS),
+                            ImVec2(speedLo.x + w + 6.0f * speedS, speedLo.y + 40.0f * speedS));
                     });
                 twoCols(
                     [&](float w) {
@@ -5484,11 +5520,23 @@ int main(int argc, char** argv)
                         eulaPadChoice = -1;
                     }
                     ImGui::SameLine();
-                    if (ui::capsuleButton("重播新手教学", ImVec2(rowW, 44.0f * s), true)) {
-                        tutorialReplay = true;
-                        showDebug = false;
-                        std::printf("[story] replay requested from settings\n");
+                    const bool replayHit = ui::capsuleButton("重播新手教学", ImVec2(rowW, 44.0f * s), true);
+                    if (std::getenv("CPSEKAI_UI_TRACE") != nullptr) {
+                        const ImVec2 lo = ImGui::GetItemRectMin();
+                        const ImVec2 hi = ImGui::GetItemRectMax();
+                        std::printf("[ui] replay pill %.0f,%.0f..%.0f,%.0f\n", lo.x, lo.y, hi.x, hi.y);
                         std::fflush(stdout);
+                    }
+                    if (std::getenv("CPSEKAI_UI_TRACE") != nullptr && ImGui::IsItemHovered()) {
+                        static int hovLogs = 0;
+                        if (hovLogs < 3) {
+                            ++hovLogs;
+                            std::printf("[ui] replay pill hovered\n");
+                            std::fflush(stdout);
+                        }
+                    }
+                    if (replayHit) {
+                        restartTutorial();
                     }
                 }
             }
@@ -8494,6 +8542,12 @@ int main(int argc, char** argv)
             // --story-step, which is how the headless screenshot check works.
             {
                 const bool testing = !storyTestId.empty();
+                if (replayTest && uiClock > 2.0 && showDebug) {
+                    replayTest = false;
+                    std::printf("[story] replay simulated\n");
+                    std::fflush(stdout);
+                    restartTutorial();
+                }
                 const bool eulaSettled = !eulaAlive
                     && (eulaDismissedThisRun || userSettings.eulaAccepted || testing);
                 const bool wantStart = testing || tutorialWanted || tutorialReplay;
@@ -8511,7 +8565,6 @@ int main(int argc, char** argv)
                         if (storyTestStep >= 0) {
                             story::debugJump(storyTestStep);
                         }
-                        tutorialAutoStarted = true;
                         std::printf("[story] started '%s'%s\n", id,
                             tutorialMenuBarWasOn ? " (menu bar off for the tutorial)" : "");
                         std::fflush(stdout);

@@ -154,8 +154,11 @@ namespace
         }
         if (ImFont* font = game::bodyFont(); font != nullptr)
         {
-            const float width = step.passthrough ? 780.0f : (step.boxLeft ? 740.0f : 1510.0f);
-            const float size = step.passthrough ? 27.0f : (step.boxLeft ? 27.0f : 34.0f);
+            // Wrap widths follow the editor's setup table: the full box wraps at
+            // 1300 from x=245. The two narrowed layouts (settings card / phone
+            // panel) use the space they actually have.
+            const float width = step.passthrough ? 860.0f : (step.boxLeft ? 640.0f : 1300.0f);
+            const float size = (step.passthrough || step.boxLeft) ? 38.0f : 44.0f;
             step.layout = storyui::layoutText(font, size, step.text, width);
         }
         step.revealBytes = 0;
@@ -687,11 +690,16 @@ void draw(float windowW, float windowH)
     const bool hasAnchor = !step.highlight.empty() && ui::anchorRect(step.highlight.c_str(), &anchorLo, &anchorHi);
     if (hasAnchor)
     {
-        storyui::spotlight(dl, anchorLo, anchorHi, gTime, step.tip);
+        storyui::spotlight(dl, anchorLo, anchorHi, gTime, step.tip, step.passthrough ? 95 : 120);
     }
     else
     {
-        storyui::dim(dl, step.passthrough ? 0.42f : 0.5f);
+        // Image steps dim harder: the picture is the subject, and whatever is
+        // behind it (the select screen's phone panel) must not compete with it.
+        // 0.62 over the select screen: the dialogue's 44px white-on-#5D5D79 text
+        // is meant for a story background, and the song list behind it is far
+        // brighter than anything pjsk ever puts under a dialogue.
+        storyui::dim(dl, step.passthrough ? 0.42f : (step.type == "image" ? 0.66f : 0.62f));
     }
 
     if (step.type == "scene")
@@ -742,8 +750,10 @@ void draw(float windowW, float windowH)
     {
         // Compact box while a settings card is open: the full-width frame would
         // cover the card's bottom rows.
+        const storyui::Box box = step.passthrough ? storyui::Box::Right
+            : (step.boxLeft ? storyui::Box::Left : storyui::Box::Full);
         storyui::dialogue(c, font, step.who, step.text, step.layout, step.revealBytes, gTime,
-            ready && step.options.empty(), step.passthrough || step.boxLeft, step.boxLeft);
+            ready && step.options.empty(), box);
     }
 
     if (step.type == "choice" && ready)

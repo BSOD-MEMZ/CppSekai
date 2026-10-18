@@ -15,7 +15,7 @@
 2. **资源全是 1920x1080 满幅 PNG，整张画，别切九宫格**。切了圆角和投影会糊，而项目本来就有 1920 虚拟画布（`game/Result.cpp:183` 的 `Canvas`）。
 3. **两个新模块就够**：`game/StoryUi.*`（纯绘制）+ `game/Story.*`（脚本运行时）。
    教学触发/存档先塞在 `Story.cpp` 里，等真有第二个消费者再拆 `Tutorial.*`。
-4. **先做 P0**：Classic 对话框 + 打字机 + 点击推进 + 压暗。一天能看到东西，再谈选项和高亮。
+4. **先做 P0**：对话渐变条 + 打字机 + 点击推进 + 压暗。一天能看到东西，再谈选项和高亮。
 5. 真正的难点不是画框，是**中文排版**：ImGui 自带换行是给英文写的（`third_party/imgui/imgui_draw.cpp:5387` 自己写着
    "Simple word-wrapping for English, not full-featured"），标点会落到行首；而且打字机**必须先折行再逐字显示**，
    否则每滚一个字整段重排，文字会跨行跳。
@@ -24,8 +24,8 @@
 
 | 文件 | 尺寸 | 实际内容 bbox | 用途 | 用不用 |
 |---|---|---|---|---|
-| `Dialogue_Background_Classic.png` | 1920×1080 | 盒 154,734 – 1766,1053；名牌 220,742 – 888,814 | 圆角白框 + 烤进图里的深色名牌 | **默认用这个** |
-| `Dialogue_Background.png` | 1920×1080 | 全宽渐变带 0,771 – 1920,1080 | 新式底部渐变条，名牌得自己画 | 备选 |
+| `Dialogue_Background.png` | 1920×1080 | 全宽渐变带 0,771 – 1920,1080（上沿细线 y≈840） | 新式底部渐变条 + 白字描边（参考站成品就是这个） | **默认用这个** |
+| `Dialogue_Background_Classic.png` | 1920×1080 | 盒 154,734 – 1766,1053；名牌 220,742 – 888,814 | 旧版圆角白框 + 烤进图里的名牌 | 备用（复刻旧 UI 才用） |
 | `Dialogue_Background_MYSEKAI.png` | 1920×1080 | 160,705 – 1761,1016 | 烤森风 | 不用 |
 | `Choices_Background.png` | 1920×1080 | **左右两个** 522×98 胶囊：239–760 / 1159–1680，y 489–586 | 两选一（正好是教学最常见的形态） | 用 |
 | `Choices_Background_Classic.png` | 1920×1080 | 满幅不透明 | 旧版整块底 | 不用 |
@@ -74,29 +74,45 @@
 
 ## 3. 组件规格（1920×1080 虚拟坐标）
 
-### 3.1 对话框 `dialogueBox`
+### 3.1 对话框 `dialogue`
 
-```
-盒：    154,734 → 1766,1053     圆角 46
-正文：  x 206 → 1722           首行 y 838，行高 46，字号 34
-名牌：  220,742 → 888,814       字号 31，左边距 50（让开青色菱形）
-▼：     1690,1008 附近，1.6s 一个上下浮动周期
-```
+**用 `Dialogue_Background.png`（底部半透明渐变条），不是 Classic 白框。** 参考站的成品图
+（`.workbuddy/shots/preview1.png`）里没有白框：名字在渐变条上沿之上，正文是白字 + 深色描边。
 
-- **必须先铺一层不透明底**：这张图的盒内是半透明白，直接叠在选曲/演奏的暗画面上字会糊。
-  先画 `kCardBg`（#ebebf2，alpha 242）圆角矩形，再叠图。版式图就是这么合出来的。
-- 文字色用现有的 `ui::kText`（#444466），和设置卡片、选曲完全同源。
-- 名字超过名牌宽度（668px，去掉菱形后约 19 个 31px 汉字）→ **缩字号，别缩牌**。
+以下数字不是量出来的，是**从站点 JS 里抄的**（`ss.js` 的 `dialogueBoxesSetupData.default`，
+1920x1080 画布，Pixi 文本左上角对齐）：
+
+| 元素 | 位置 | 字号 | 填充 | 描边 |
+|---|---|---|---|---|
+| 名字 | (225, 775) | 44 | `#EBEBEF` | `#5D5D79`，thickness 8 |
+| 正文 | (245, 845) | 44 | `#FFFFFF` | `#5D5D79`，thickness 8，行高 55，换行宽 1300 |
+
+- Pixi 的 `strokeThickness: 8` 是**以字形轮廓为中心**的描边，往外只溢 4px；ImGui 没有描边，
+  用 16 个方向各偏 4px 的副本叠出来（`outlineText`）。
+- 参考图里名字下面那条横线**不是 UI 画的**，是渐变条自己在 y≈840 的上沿细线 —— 别多加一条
+  下划线（我加过，明显是两回事）。
+- 渐变条整张 1920x1080 直接画。它最深只有 **50%**（`2,0,32,128`），那是为明亮的剧情背景
+  设计的；选曲界面太暗，所以叠两层（≈75%）并且对话页压暗到 0.62。
+- 三个布局共用同一张图、同一条垂直节奏（名字 775 / 正文 845），只改 x、宽度和字号：
+  `Full`（245 / 1300 / 44）、`Left`（120 / 640 / 38，右侧手机面板要让出来）、
+  `Right`（1000 / 860 / 38，设置卡片开着时用右下角独立深色面板 —— 渐变条的上沿细线会横穿
+  卡片底边，看着像卡片被切了一刀）。
+- **不要给渐变条垫白色不透明底**：它是半透明设计，垫了底就变成一块死白。
+- 名字用 `game::boldFont()`（系统没有粗体时回退到正文）。
+- Classic 那张白框（`Dialogue_Background_Classic.png`）保留在库里，留给以后真要复刻旧版 UI
+  的场合，教学不用它。
 
 ### 3.2 场景标题 `sceneTitle`
 
-- `SceneText_Background.png` 居中，两行分别画在 y≈510 / 560，字号 30，白色 + 一点投影。
+- `SceneText_Background.png` 居中，文字锚点 (960, 540)，**字号 44**、白色、行距 1.2
+  （站点：`sceneCenterTextsSetupData.default`）。行距不能再大：那块色带只有 y 480..600。
 - 淡入 0.35s → 停 1.6s → 淡出 0.35s；期间吞掉推进输入（pjsk 就是这么干的）。
 - 左上的 `SceneText_TopLeft` 只在「章节名」场合用，教学先不接。
 
 ### 3.3 选项 `choiceRow`
 
-- 整张 `Choices_Background.png` 画上去就是两个 522×98 的胶囊，标签居中，字号 30。
+- 整张 `Choices_Background.png` 画上去就是两个 522×98 的胶囊；文字中心分别是
+  **(500, 537) / (1420, 537)**，字号 **32**、`#444466`（站点：`choicesTextsSetupData.default`）。
 - **只支持 2 个**。真需要 3 个以上：自己在 489 起往下堆 120 间距的行，别去拉伸这张图。
 - hover → `kPrimaryHover`，按下 → 反白（`kPrimaryPress` + 薄荷字），和 `ui::capsuleButton` 同一套手感。
 
@@ -230,10 +246,12 @@ CLI 加 `--story-test <id>`（无头开），和 `--drop-test` / `--chartdl-test
 
 ## 8. 坑（按踩到的概率排）
 
-1. **半透明白盒**：不铺不透明底，暗画面上字直接糊（`docs/story-ui-mock.png` 是铺了底的版本）。
+1. **白字在亮背景上会糊**：正文必须带深色描边（八方向 2px），渐变条本身只压暗一点点 ——
+   参考站的场景图都很暗，选曲界面不是。
 2. **中文折行**：ImGui 只会「超宽硬切」，标点会跑到行首；且打字机不能边打边重排。
-3. **显存**：每张 1080p RGBA 约 8MB。只加载 Classic 那一版，别把 default/mysekai 一起读进来。
-4. **名字牌宽度固定 668px**：长英文名会溢出，缩字号。
+3. **显存**：每张 1080p RGBA 约 8MB。只加载实际用到的三张（Dialogue/Choices/SceneText），
+   别把 Classic / MYSEKAI / TopLeft 一起读进来。
+4. **名字没有牌**（渐变条版）：直接左对齐写在横线上方，别再按 Classic 的名牌去算宽度。
 5. **`Choices_Background.png` 只有两个坑**：第三个选项自己画，别拉伸。
 6. **窗口缩放**：所有坐标必须过 `Canvas`（`Result.cpp:183`），直接写像素的话 4:3 窗口会错位。
 7. **字体**：继续用 `game::bodyFont()`；站点那套 FOT-Rodin 是 Fontworks 商业字体，别顺手抄。
@@ -252,10 +270,10 @@ CLI 加 `--story-test <id>`（无头开），和 `--drop-test` / `--chartdl-test
 | `game/Story.*` | 运行时：JSON 脚本、分支、打字机、等待条件、手柄焦点 |
 | `platform/ChartDlGuide.*` | Win32：找 chartdl 窗口、读控件矩形与状态、置顶点击穿透的圈选浮层 |
 | `assets/story/scripts/tutorial.json` | 31 步教学脚本（含分支与异常分支） |
-| `assets/story/img/` | `seewo_small.png`（改小的 seewo）、`kb_mouse.jpg`（键鼠） |
-| `.workbuddy/tools/seewo_shrink.py` | 把 seewo 的屏幕剪窄、外框尺寸不变的复现脚本 |
+| `assets/story/img/` | `seewo_small.png`（改小的 seewo，透明底）、`kb_mouse.png`（12 键示意图，透明底） |
+| `.workbuddy/tools/story_assets.py` | 两张卡片的生成脚本：seewo 剪屏幕（保留原图 alpha）+ 12 键示意图 |
 
-### 9.2 渲染上有两个必须知道的坑
+### 9.2 渲染/坐标上的坑（都是实测踩过的）
 
 1. **视觉必须画在前景 draw list。** 这个项目把 HUD、淡入淡出、打击特效画在
    `ImGui::GetForegroundDrawList()`（渲染在**所有窗口之上**）。剧情层如果画自己窗口的
@@ -263,6 +281,14 @@ CLI 加 `--story-test <id>`（无头开），和 `--drop-test` / `--chartdl-test
    `Story::draw` 的窗口只用来 `Begin` + 摆 `InvisibleButton`，所有图形走前景层。
 2. **窗口/画布用 `io.DisplaySize`，不是 `windowW/windowH`。** 后者是渲染目标尺寸，
    开了 renderScale 或截图分辨率不同时，虚拟画布会被缩放两次（文字跑到屏幕外）。
+3. **虚拟单位和像素不能混着用。** `storyui::imageCard` 的说明文字一开始把虚拟的
+   `cx = 960` 直接当屏幕 x 用（`top` 却已经是像素），结果说明条整体偏到右边 ~400px。
+   规律：`c.p()/c.x()/c.y()` 的输出是像素，`layoutText/font->CalcTextSizeA` 的返回值
+   也是像素，只有**画布坐标**是虚拟单位。
+4. **自定义控件的 item rect 不等于控件本身。** `ui::slider` 内部是一串 InvisibleButton，
+   调用后 `GetItemRectMin/Max` 拿到的是最后一个 **+ 按钮**，所以聚光灯只圈住了加号。
+   要在调用**前**存 `GetCursorScreenPos()`，用列宽和行高自己算矩形。
+5. **spotlight 的洞会外扩 6px**（`pad`），锚点别贴着标签下沿，否则圆环会切到上一行的字。
 
 ### 9.3 脚本字段
 
@@ -314,14 +340,31 @@ false —— 不锁存的话会永远等一局已经打完的歌。
   **两处都改**（老规矩，漏一处静默丢设置）。
 - 首启条件：`!tutorialDone && !eulaAlive && (eulaDismissedThisRun || eulaAccepted)
   && state == Select && !party.active()`，再等 1.2 秒让选曲入场动画走完。
-- 重播：设置 → 关于 → 「重播新手教学」。
+- 重播：设置 → 关于 → 「重播新手教学」。**必须就地 `story::stop()` 再 `story::start()`**：
+  这张卡片能被点到的时候，教学通常正开着（速度那一步就是教学自己打开的设置卡片，且
+  `passthrough` 所以点击能落进来），而选曲界面的启动闸门有 `!story::active()` ——
+  老实现只举了个 `tutorialReplay` 标志，于是按钮看起来完全没反应。
 - 教学期间把 `nativeMenuBar` 临时关掉（顶栏按钮才在），结束时恢复；**不落盘**，
   中途崩溃不会把用户设置改掉。
 - 演奏中挂起剧情层：`story::setSuspended(state != AppState::Select)` 必须放在
   `ImGui::NewFrame()` 之后、Select 分支**之外** —— 放进 Select 分支的话，整首歌里
   剧情层都处于「active 且未挂起」，会把手柄的 A 全吞掉。
 
-### 9.6 验证
+### 9.6 两张卡片图
+
+- **都必须是透明底**：卡片本身就是白色圆角块，图片再垫白底就变成「白底上的白图」。
+- `seewo_small.png`：`Drafts/seewo.png` **自带 alpha**（商品图，不是白底实拍），设备
+  30,22–765,461、屏幕 43,35–750,434。做法是删掉屏幕上 logo 两侧各一条纯蓝、把三段拼回去
+  （屏幕 → 58%），两侧空出来的地方用**原图这一行的边框色平铺**、外缘 3px 与内侧亮边原样
+  保留 —— 整条剖面拉宽会把 x=37 的内阴影拉成几十像素的黑带（第一版就是这样）。
+  外框尺寸一分不变，底部长条 / `seewo` 印字 / 右下三颗指示灯全留着。
+- `kb_mouse.png`：12 键按默认键位（Z S X D C V / G B H N J M）画成两排键帽 + 一只鼠标，
+  透明底、2 倍尺寸画再缩一半。用照片抠图效果都不好（桌面有纹理、设备是白色），
+  示意图反而和教学文案（「从左到右是 …」）对得上。
+- 图片卡布局：等比 fit 进 1040×420；**太宽的图会往左让**（`cx = min(960, 1352 - w/2)`），
+  否则会钻到选曲界面的手机面板底下。图片步骤的压暗更重（0.66），并垫一层深色板。
+
+### 9.7 验证
 
 ```bash
 ./build/cppsekai.exe --story-test --story-step N     --screenshot .workbuddy/shots/x.png --screenshot-time 4 --no-party
