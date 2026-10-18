@@ -3996,14 +3996,6 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         const ImVec2 v0(rowX, viewPos.y);
         const ImVec2 v1(rowX + listW + 24.0f * k, viewBottom);
         listDl->AddRectFilled(v0, v1, IM_COL32(8, 10, 22, 130));
-        const float chipH = 30.0f * k;
-        const float chipW = 150.0f * k;
-        const ImVec2 c0((v0.x + v1.x) * 0.5f - chipW * 0.5f, v0.y + 14.0f * k);
-        const ImVec2 c1(c0.x + chipW, c0.y + chipH);
-        listDl->AddRectFilled(c0, c1, IM_COL32(14, 16, 30, 210), chipH * 0.5f);
-        listDl->AddRect(c0, c1, IM_COL32(255, 255, 255, 40), chipH * 0.5f, 0, 1.5f * k);
-        addTextCentered(listDl, body, 15.0f * k, ImVec2((c0.x + c1.x) * 0.5f, (c0.y + c1.y) * 0.5f),
-            IM_COL32(200, 204, 224, 255), "只读 · 由房主选曲");
     }
     ImGui::EndChild();
 
@@ -4024,6 +4016,11 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     // bottom of the screen (its home bar is never visible), which also buys
     // the content room for the vocal chip row.
     const float phoneY = (h - phoneH) * 0.5f + 78.0f * k;
+    // Tutorial anchor: the phone panel is the "pick a song here" surface, and a
+    // spotlight around the whole panel reads far better than one around the
+    // EASY circle (which also used to dim 确定).
+    ui::setAnchor("phone", ImVec2(phoneX - 10.0f * k, phoneY - 10.0f * k),
+        ImVec2(phoneX + phoneW + 10.0f * k, phoneY + phoneH + 10.0f * k));
 
     // Tilt: +5 degrees, i.e. the left edge rides up and the phone leans right
     // (screen y grows down).

@@ -769,6 +769,17 @@ void draw(float windowW, float windowH)
         const auto it = gImages.find(step.image);
         storyui::imageCard(c, font, it == gImages.end() ? storyui::Image{} : it->second, step.caption);
     }
+    else if (step.type == "keys")
+    {
+        // Drawn from the player's live bindings: the copy used to name a default
+        // row (Z S X D C V ...) that is neither the default nor what they set.
+        std::vector<std::string> keys;
+        if (gHost.laneKeys)
+        {
+            keys = gHost.laneKeys();
+        }
+        storyui::keypad(c, font, keys, step.caption);
+    }
     else if (step.type == "cards")
     {
         std::vector<storyui::Image> images;

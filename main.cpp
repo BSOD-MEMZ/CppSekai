@@ -3873,6 +3873,14 @@ int main(int argc, char** argv)
         host.chartdlSearch = [&]() { return platform::chartDlSearchHasText(); };
         host.chartdlSong = [&]() { return platform::chartDlSongSelected(); };
         host.chartdlDone = [&]() { return platform::chartDlDownloadDone(); };
+        host.laneKeys = [&]() {
+            std::vector<std::string> out;
+            out.reserve(12);
+            for (int i = 0; i < 12; ++i) {
+                out.emplace_back(SDL_GetKeyName(laneKeys[i]));
+            }
+            return out;
+        };
         host.inPlay = [&]() { return state == AppState::Play; };
         host.startedDifficulty = [&]() { return -1; };
         host.command = [&](const std::string& command) {
@@ -8756,6 +8764,10 @@ int main(int argc, char** argv)
                 if (!launchChartDownloader()) {
                     std::printf("[chartdl] could not start the downloader\n");
                     std::fflush(stdout);
+                    // Say it on screen too: "I clicked 音乐商店 and nothing
+                    // happened" is what a silent failure looks like.
+                    loadFailStatus = "没能打开谱面下载器：chartdl.exe 不在游戏目录里";
+                    loadFailStatusFrames = 240;
                 }
             }
             // Debug (--chartdl-test): press the empty-list button from the log,

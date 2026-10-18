@@ -379,18 +379,141 @@ void dialogue(const Canvas& c, ImFont* font, const std::string& name, const std:
             IM_COL32(93, 93, 121, 255));
     }
 
-    if (showArrow)
+    // No ▼ prompt: the band already reads as "there is more", and the arrow
+    // sat right on top of the last line of text on short boxes.
+    (void)showArrow;
+}
+
+namespace
+{
+    // Dark pill under a picture: wraps at 1180 so a long sentence never runs off
+    // the right edge, and stays centred on `cxVirtual`.
+    void drawCaption(const Canvas& c, ImFont* font, const std::string& caption, float cxVirtual,
+        float topPixel)
     {
-        const float bob = std::sin(time * 4.2f) * 3.0f * c.scale;
-        const float ax = c.x(clipR - 26.0f);
-        const float ay = c.y(1030.0f) + bob;
-        dl->AddTriangleFilled(ImVec2(ax - 11.0f * c.scale, ay - 6.0f * c.scale),
-            ImVec2(ax + 11.0f * c.scale, ay - 6.0f * c.scale),
-            ImVec2(ax, ay + 9.0f * c.scale), IM_COL32(0, 0, 0, 190));
-        dl->AddTriangleFilled(ImVec2(ax - 9.0f * c.scale, ay - 7.0f * c.scale),
-            ImVec2(ax + 9.0f * c.scale, ay - 7.0f * c.scale),
-            ImVec2(ax, ay + 7.0f * c.scale), IM_COL32(255, 255, 255, 235));
+        if (caption.empty() || font == nullptr)
+        {
+            return;
+        }
+        ImDrawList* dl = ImGui::GetForegroundDrawList();
+        const float size = c.s(22.0f);
+        const float maxTextW = c.s(1180.0f);
+        const TextLayout wrap = layoutText(font, size, caption, maxTextW);
+        const std::size_t lineCount = std::max<std::size_t>(wrap.lines.size(), 1);
+        float widest = 0.0f;
+        for (const Line& line : wrap.lines)
+        {
+            widest = std::max(widest, line.width);
+        }
+        const float lineH = size * 1.35f;
+        const float pillW = std::min(widest + c.s(40.0f), maxTextW + c.s(40.0f));
+        const float pillH = lineH * static_cast<float>(lineCount) + c.s(16.0f);
+        const float top = topPixel + 14.0f * c.scale;
+        // cx is a virtual unit, top/pillW are already pixels: mixing the two put
+        // the caption ~400px to the right of the picture.
+        const float ccx = c.x(cxVirtual);
+        const ImVec2 plo(ccx - pillW * 0.5f, top);
+        const ImVec2 phi(ccx + pillW * 0.5f, top + pillH);
+        dl->AddRectFilled(plo, phi, IM_COL32(20, 20, 32, 165), c.s(14.0f));
+        float ty = top + c.s(8.0f);
+        for (const Line& line : wrap.lines)
+        {
+            dl->AddText(font, size, ImVec2(ccx - line.width * 0.5f, ty),
+                IM_COL32(232, 232, 242, 245), caption.data() + line.begin, caption.data() + line.end);
+            ty += lineH;
+        }
     }
+} // namespace
+
+void keypad(const Canvas& c, ImFont* font, const std::vector<std::string>& keysIn,
+    const std::string& caption)
+{
+    ImDrawList* dl = ImGui::GetForegroundDrawList();
+    if (dl == nullptr)
+    {
+        return;
+    }
+    // The shipped default row, only used when the host has no bindings to hand
+    // over (headless runs). Real runs always pass the player's own keys.
+    static const char* const kDefault[12] = {
+        "Z", "S", "X", "D", "C", "V", "G", "B", "H", "N", "J", "M"};
+    std::vector<std::string> keys = keysIn;
+    if (keys.size() != 12)
+    {
+        keys.clear();
+        for (const char* key : kDefault)
+        {
+            keys.emplace_back(key);
+        }
+    }
+
+    constexpr float kKeyW = 118.0f;
+    constexpr float kKeyH = 118.0f;
+    constexpr float kGap = 16.0f;
+    constexpr float kMouseW = 106.0f;
+    constexpr float kMouseH = 174.0f;
+    constexpr float kMouseGap = 46.0f;
+    const float gridW = 6.0f * kKeyW + 5.0f * kGap;
+    const float gridH = 2.0f * kKeyH + kGap;
+    const float totalW = gridW + kMouseGap + kMouseW;
+    const float cx = std::min(960.0f, 1352.0f - totalW * 0.5f);
+    const float cy = 176.0f + gridH * 0.5f;
+    const float x0 = cx - totalW * 0.5f;
+    const float y0 = cy - gridH * 0.5f;
+    const float s = c.scale;
+
+    // Same soft plate the picture cards use, so the two read as one family.
+    dl->AddRectFilled(c.p(x0 - 26.0f, y0 - 22.0f), c.p(x0 + totalW + 26.0f, y0 + gridH + 22.0f),
+        IM_COL32(8, 8, 16, 92), c.s(26.0f));
+
+    for (int i = 0; i < 12; ++i)
+    {
+        const float kx = x0 + static_cast<float>(i % 6) * (kKeyW + kGap);
+        const float ky = y0 + static_cast<float>(i / 6) * (kKeyH + kGap);
+        const ImVec2 lo = c.p(kx, ky);
+        const ImVec2 hi = c.p(kx + kKeyW, ky + kKeyH);
+        dl->AddRectFilled(ImVec2(lo.x + 3.0f * s, lo.y + 7.0f * s),
+            ImVec2(hi.x + 3.0f * s, hi.y + 7.0f * s), IM_COL32(18, 20, 38, 60), c.s(16.0f));
+        dl->AddRectFilled(lo, hi, IM_COL32(238, 240, 249, 255), c.s(16.0f));
+        dl->AddRect(lo, hi, IM_COL32(169, 173, 198, 255), c.s(16.0f), 0, std::max(1.5f, c.s(2.5f)));
+        if (font == nullptr)
+        {
+            continue;
+        }
+        const char* label = keys[static_cast<std::size_t>(i)].c_str();
+        // SDL names can be long ("Left Ctrl"): shrink until it fits rather than
+        // clipping the one thing the player has to read.
+        float size = c.s(42.0f);
+        const float room = (hi.x - lo.x) - c.s(18.0f);
+        while (size > c.s(16.0f) && font->CalcTextSizeA(size, FLT_MAX, 0.0f, label).x > room)
+        {
+            size *= 0.9f;
+        }
+        const ImVec2 ts = font->CalcTextSizeA(size, FLT_MAX, 0.0f, label);
+        dl->AddText(font, size, ImVec2((lo.x + hi.x - ts.x) * 0.5f, (lo.y + hi.y - ts.y) * 0.5f),
+            IM_COL32(60, 60, 90, 255), label);
+    }
+
+    // Mouse: same outline and shadow as the keycaps.
+    const float mx = x0 + gridW + kMouseGap;
+    const float my = cy - kMouseH * 0.5f;
+    const ImVec2 mlo = c.p(mx, my);
+    const ImVec2 mhi = c.p(mx + kMouseW, my + kMouseH);
+    dl->AddRectFilled(ImVec2(mlo.x + 3.0f * s, mlo.y + 7.0f * s),
+        ImVec2(mhi.x + 3.0f * s, mhi.y + 7.0f * s), IM_COL32(18, 20, 38, 60), c.s(52.0f));
+    dl->AddRectFilled(mlo, mhi, IM_COL32(238, 240, 249, 255), c.s(52.0f));
+    dl->AddRect(mlo, mhi, IM_COL32(169, 173, 198, 255), c.s(52.0f), 0, std::max(1.5f, c.s(2.5f)));
+    const float third = (mhi.y - mlo.y) * 0.34f;
+    dl->AddLine(ImVec2(mlo.x + c.s(16.0f), mlo.y + third), ImVec2(mhi.x - c.s(16.0f), mlo.y + third),
+        IM_COL32(169, 173, 198, 255), std::max(1.5f, c.s(2.5f)));
+    dl->AddLine(ImVec2((mlo.x + mhi.x) * 0.5f, mlo.y + c.s(10.0f)),
+        ImVec2((mlo.x + mhi.x) * 0.5f, mlo.y + third), IM_COL32(169, 173, 198, 255),
+        std::max(1.5f, c.s(2.5f)));
+    dl->AddRectFilled(ImVec2((mlo.x + mhi.x) * 0.5f - c.s(10.0f), mlo.y + c.s(14.0f)),
+        ImVec2((mlo.x + mhi.x) * 0.5f + c.s(10.0f), mlo.y + c.s(34.0f)),
+        IM_COL32(150, 154, 182, 255), c.s(10.0f));
+
+    drawCaption(c, font, caption, cx, c.y(y0 + gridH));
 }
 
 void sceneTitle(const Canvas& c, ImFont* font, const std::string& text, float alpha)
@@ -666,38 +789,7 @@ void imageCard(const Canvas& c, ImFont* font, const Image& img, const std::strin
                 IM_COL32(230, 230, 240, 255), missing);
         }
     }
-    if (!caption.empty() && font != nullptr)
-    {
-        // The caption sits over whatever is behind the layer (the song list's
-        // phone panel here), so it gets its own dark pill and wraps instead of
-        // running off the right edge.
-        float size = c.s(22.0f);
-        const float maxTextW = c.s(1180.0f);
-        const TextLayout wrap = layoutText(font, size, caption, maxTextW);
-        const std::size_t lineCount = std::max<std::size_t>(wrap.lines.size(), 1);
-        float widest = 0.0f;
-        for (const Line& line : wrap.lines)
-        {
-            widest = std::max(widest, line.width);
-        }
-        const float lineH = size * 1.35f;
-        const float pillW = std::min(widest + c.s(40.0f), maxTextW + c.s(40.0f));
-        const float pillH = lineH * static_cast<float>(lineCount) + c.s(16.0f);
-        const float top = hi.y + 14.0f * s;
-        // cx is a virtual unit, top/pillW are already pixels: mixing the two put
-        // the caption ~400px to the right of the picture.
-        const float ccx = c.x(cx);
-        const ImVec2 plo(ccx - pillW * 0.5f, top);
-        const ImVec2 phi(ccx + pillW * 0.5f, top + pillH);
-        dl->AddRectFilled(plo, phi, IM_COL32(20, 20, 32, 165), c.s(14.0f));
-        float ty = top + c.s(8.0f);
-        for (const Line& line : wrap.lines)
-        {
-            dl->AddText(font, size, ImVec2(ccx - line.width * 0.5f, ty),
-                IM_COL32(232, 232, 242, 245), caption.data() + line.begin, caption.data() + line.end);
-            ty += lineH;
-        }
-    }
+    drawCaption(c, font, caption, cx, hi.y);
 }
 
 ImTextureID skipIcon()
@@ -774,15 +866,15 @@ SpotlightLabel spotlight(ImDrawList* dl, const ImVec2& lo, const ImVec2& hi, flo
     // Water ripples: three rings that leave the hole every 1.8s, 1/3 phase
     // apart, fading quadratically as they travel. The old version just pulsed
     // the keyline's alpha, which read as a blink rather than a wave.
-    for (int i = 0; i < 3; ++i)
+    for (int i = 0; i < 2; ++i)
     {
-        const float phase = std::fmod(time * 0.55f + static_cast<float>(i) / 3.0f, 1.0f);
-        const float grow = phase * 56.0f;
+        const float phase = std::fmod(time * 0.42f + static_cast<float>(i) * 0.5f, 1.0f);
+        const float grow = phase * 26.0f;
         const float fade = 1.0f - phase;
-        // A wide, faint halo under a thin bright crest: one line alone reads as
-        // a hard stroke (and it cut across the labels it passed).
-        ring(grow, static_cast<int>(fade * 36.0f), 8.0f, 12.0f + grow * 0.5f);
-        ring(grow, static_cast<int>(fade * 120.0f), 2.0f, 12.0f + grow * 0.5f);
+        // Subtle on purpose: this sits on top of a live settings card, so it
+        // has to read as a highlight, not as an effect over the UI.
+        ring(grow, static_cast<int>(fade * 26.0f), 8.0f, 12.0f + grow * 0.5f);
+        ring(grow, static_cast<int>(fade * 74.0f), 1.8f, 12.0f + grow * 0.5f);
     }
     // The steady keyline on the hole itself.
     ring(0.0f, 232, 3.0f, 12.0f);

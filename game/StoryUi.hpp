@@ -123,6 +123,13 @@ void imageCard(const Canvas& c, ImFont* font, const Image& img, const std::strin
 
 // Spotlight: dims everything except `lo..hi` and rings it. Coordinates are
 // window pixels (what ui::anchorRect hands back), not virtual units.
+// The player's 12 lane bindings as 6x2 keycaps plus a mouse, drawn instead of
+// shipped as a picture so it can never show a stale default. `keys` is already
+// human readable (SDL_GetKeyName); an empty vector falls back to the built-in
+// default row.
+void keypad(const Canvas& c, ImFont* font, const std::vector<std::string>& keys,
+    const std::string& caption);
+
 // pjsk's round skip key (white disc + soft shadow + navy ">>"), the same key
 // the opening card draws before a live starts. `hover` / `press` are 0..1 eased
 // values; `icon` is the ui_skip HUD sprite (0 falls back to a plain disc).

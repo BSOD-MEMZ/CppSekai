@@ -124,8 +124,7 @@ CppSekai (AGPL-3.0-only)  ← 本仓库        加平台层、判定引擎、UI�
 | 路径 | 数量 | 内容 | 被 git 跟踪？ |
 |---|---|---|---|
 | `assets/story/ui/**` | 12 | 剧情界面框：对话 / 选项 / 场景标题 / 暗角，取自 [SEKAI-Stories](https://sekai-stories.pages.dev/)（其 LICENSE 明确写：**图片不在 GPL 内，仅限个人或教育用途**） | **是** |
-| `assets/story/img/seewo_small.png` | 1 | 从 `Drafts/seewo.png` 改的：屏幕横向缩到 58%、外框尺寸不动（两侧边框按原边框剖面重建），保留 seewo 底部长条 / 印字 / 右下指示灯。生成脚本 `.workbuddy/tools/story_assets.py` | **是** |
-| `assets/story/img/kb_mouse.png` | 1 | **本项目自绘**的 12 键示意图（Z S X D C V / G B H N J M + 鼠标），透明底，无第三方素材（脚本同上） | **是** |
+| `assets/story/img/notes_touch.png` | 1 | 教学用音符示意图：从 `assets/mmw/notes_01.png`（官方 UI 贴图，已在上面计入）裁出 tap / hold / flick 三颗音符，拼成一张图。生成脚本 `.workbuddy/tools/story_assets.py` | **是** |
 
 > **为什么这是问题**：官方素材的复制权在权利人手里。免费、非商业、写了「版权归官方」
 > —— 都**不改变「未经许可再分发即侵权」**这个事实。GitHub 上同类项目活着是因为

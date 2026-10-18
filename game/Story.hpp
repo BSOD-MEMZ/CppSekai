@@ -25,6 +25,10 @@ struct Host
     std::function<bool()> chartdlSong;   // a row is selected in the list
     std::function<bool()> chartdlDone;   // the downloader reported a finished job
     std::function<bool()> chartdlEasy;   // EASY is ticked in the downloader
+    // The player's current 12 lane bindings, already turned into key names
+    // ("Z", "Left Ctrl", ...). The keyboard step draws these, never a hard-coded
+    // default: the old copy said Z S X D C V to everybody.
+    std::function<std::vector<std::string>()> laneKeys;
     std::function<bool()> inPlay;
     std::function<int()> startedDifficulty; // 0 = EASY, -1 unknown
     std::function<void(const std::string&)> command; // "openSettings" / "launchChartdl" ...
