@@ -87,6 +87,10 @@
   （项目 HUD 也在那儿，画窗口自己的会被盖住）；chartdl 靠 Win32 读控件矩形 +
   置顶穿透浮层画圈；`playStarted` 要锁存；挂起要放在 Select 分支外。
   `--story-test/--story-step` 可无头截任意一页。细节见 `STORY-UI.md` 第 9 节。
+- 10-18 夜：教学层是全屏 ImGui 窗口，会**吃掉选曲顶栏的点击**（音乐商店点不动）。
+  两件事一起做：`SetWindowHitTestHole` 挖顶栏命中孔 + 鼠标在顶栏带里时**别**
+  `SetNextWindowFocus()`（抢焦点会取消按下那一帧的 press）。故事层所有按钮用
+  `ui::capsuleDraw`，别再手搓薄荷 hover。键位页画 `assets/mmw/stage.png` 的下半部分。
 - 10-18 晚：对话/选项/场景字幕的位置字号**从站点 `ss.js` 的 `*SetupData` 里抄**
   （名字 225,775/44px、正文 245,845/44px、行高 55、换行 1300、描边 #5D5D79）。
   名字下那条线是渐变条自带细线，别自己画。重播按钮要就地 stop()+start()。
