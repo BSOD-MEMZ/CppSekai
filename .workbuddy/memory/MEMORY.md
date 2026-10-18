@@ -82,9 +82,11 @@
   **「repo 404」不能归因**，别拿别人 repo 的状态当决策依据。
 
 ## 最近工作
-- 10-18：剧情风格 UI 只做了**规划 + 素材**（`STORY-UI.md`、`assets/story/ui/` 12 张、
-  `docs/story-ui-mock.png`），代码一行没动。要点：Classic 框是半透明白、要垫 `kCardBg`；
-  ImGui 换行只认空格，中文禁则 + 「先折行再打字」得自己做。
+- 10-18：**新手教学已落地**（`game/Story*`、`platform/ChartDlGuide*`、
+  `assets/story/scripts/tutorial.json`）。要点：剧情层必须画在**前景 draw list**
+  （项目 HUD 也在那儿，画窗口自己的会被盖住）；chartdl 靠 Win32 读控件矩形 +
+  置顶穿透浮层画圈；`playStarted` 要锁存；挂起要放在 Select 分支外。
+  `--story-test/--story-step` 可无头截任意一页。细节见 `STORY-UI.md` 第 9 节。
 - 10-17：多人游玩收尾（不再有「强制开始」/ 旁观；成员顶栏工具不禁用，只禁列表；
   多人里的「跳过」改成房主代执行，`Party` 映射 v3）。
 - 10-06：原生菜单栏 + 「与 Windows 融合」四批（防休眠/拖放/媒体键、窗口位置/标题/关窗确认、
