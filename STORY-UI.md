@@ -318,6 +318,9 @@ CLI 加 `--story-test <id>`（无头开），和 `--drop-test` / `--chartdl-test
 等待条件：`seconds` / `settingsOpen` / `settingsClosed` / `chartdlOpen` / `chartdlSearch` /
 `chartdlSong` / `chartdlEasy` / `chartdlDone` / `chartdlClosed` / `playStarted`。
 
+`type: "scene"` 的卡片不看 `wait`：它按自己的 `hold` 自动推进（+0.35s 淡出）。脚本里
+**不要给场景卡写 `wait`**，写了反而会绕开这条；`hold` 是唯一的时间来源。
+
 `playStarted` 是**锁存**的：进游戏时剧情层挂起（不 update），所以回来时 `inPlay` 已经是
 false —— 不锁存的话会永远等一局已经打完的歌。
 

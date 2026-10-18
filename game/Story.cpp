@@ -230,6 +230,14 @@ namespace
         const std::string& w = step.wait;
         if (w.empty())
         {
+            // A scene card is timed by its own `hold`: it has no click prompt
+            // and no wait key in the script, so without this it sat there
+            // forever (the card even faded out, leaving a dimmed screen with
+            // nothing on it - exactly what "the tutorial hangs" looked like).
+            if (step.type == "scene" && step.hold > 0.0f)
+            {
+                return gStepTime >= step.hold + 0.35f; // + the fade-out
+            }
             return false;
         }
         // The command that a step fires (open the settings card, start the
