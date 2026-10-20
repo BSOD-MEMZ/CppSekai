@@ -166,6 +166,17 @@ class AudioEngine
     void stopResultBgm();
     bool resultBgmActive() const { return mResultBgmActive; }
 
+    // ---- Tutorial / story BGM -------------------------------------------
+    // The tutorial owns the soundtrack while it runs: the select screen's
+    // preview is silenced and assets/ost/TUTORIAL.mp3 loops instead. Its own
+    // voice, not a reuse of the result track, because the two can overlap for a
+    // frame (the result screen appears with the story still parked, and the
+    // story picks the loop back up when the player returns to the list).
+    // Safe to call every frame with the same path: a path change reloads.
+    bool startTutorialBgm(const std::string& path, float volume, std::string& outError);
+    void stopTutorialBgm();
+    bool tutorialBgmActive() const { return mTutorialBgmActive; }
+
     // Hold loop SE: starts a looping voice while a hold is active, stops it
     // (with a short fade handled by calling code each frame) when not. Uses
     // the last pooled voice of the two hold-loop kinds, so one-shots are
@@ -202,6 +213,12 @@ class AudioEngine
     bool mResultBgmLoaded = false;
     std::string mResultBgmPath;
     ma_sound mResultBgm{}; // streaming, looping
+
+    bool mTutorialBgmActive = false;
+    bool mTutorialBgmLoaded = false;
+    std::string mTutorialBgmPath;
+    ma_sound mTutorialBgm{}; // streaming, looping
+    float mTutorialBgmGain = 0.7f; // base gain (master volume is applied on top)
 
     bool mStarted = false;
     bool mMusicStarted = false;

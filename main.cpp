@@ -2444,6 +2444,10 @@ int main(int argc, char** argv)
     const std::string seDir = baseDir + "assets\\se";
     // The result screen loops the game's own result track (see game/Result.cpp).
     const std::string resultBgmPath = baseDir + "assets\\ost\\BGM_LIVE_RESULT_2.mp3";
+    // The tutorial's own track: it loops for as long as the story layer is on
+    // screen, and the song-select preview is silenced meanwhile (see the
+    // preview block further down).
+    const std::string tutorialBgmPath = baseDir + "assets\\ost\\TUTORIAL.mp3";
     const std::string fxDir = baseDir + "assets\\fx";
     // Where the charts live: next to the exe when packaged, otherwise the
     // project's charts/ one level up (the usual build/ layout).
@@ -3910,6 +3914,36 @@ int main(int argc, char** argv)
         };
         host.inPlay = [&]() { return state == AppState::Play; };
         host.startedDifficulty = [&]() { return -1; };
+        host.playerName = [&]() { return account.name; };
+        host.commitName = [&](const std::string& name) {
+            // The tutorial's name card. Same follow-up as the 账户 page's
+            // 昵称 field: the profile label (which the 用户 combobox lists), the
+            // room name and the window title all show this string, so write all
+            // of them and persist before the dialogue moves on.
+            if (name.empty())
+            {
+                return;
+            }
+            account.name = name;
+            for (game::UserProfile& user : profiles)
+            {
+                if (user.id != activeProfileId || user.name == account.name)
+                {
+                    continue;
+                }
+                user.name = account.name;
+                game::saveProfiles(userDataDir, profiles, activeProfileId);
+                break;
+            }
+            if (party.active())
+            {
+                party.setName(account.name.empty() ? partyLabel : account.name);
+            }
+            syncWindowTitle();
+            persistUserData();
+            std::printf("[story] nickname set to '%s'\n", account.name.c_str());
+            std::fflush(stdout);
+        };
         host.command = [&](const std::string& command) {
             if (command == "openSettings") {
                 showDebug = true;
@@ -8468,7 +8502,11 @@ int main(int argc, char** argv)
             // BGM already loaded*, so a preview that kept restarting here mixed
             // the song-select clip into the running track (the "有概率混一起"
             // report: it depended on which frame the charge landed in).
-            const bool playPreviewHere = (!party.active() || party.isHost()) && !mpStartPending;
+            // The tutorial owns the audio while it is up (TUTORIAL.mp3, see the
+            // block that starts it), so the preview stays off under it.
+            const bool tutorialAudio = story::active() && !story::suspended();
+            const bool playPreviewHere
+                = (!party.active() || party.isHost()) && !mpStartPending && !tutorialAudio;
             if (playPreviewHere && selected >= 0 && selected < static_cast<int>(entries.size())) {
                 const game::ChartEntry& playing = entries[static_cast<size_t>(selected)];
                 std::string previewPath = game::vocalAudioPath(playing, selectedVocal);
@@ -10351,6 +10389,25 @@ int main(int argc, char** argv)
         // frame was drawn, resolve them now (a dialog opening swallows the
         // click that opened it).
         ui::flushSe();
+        // Tutorial soundtrack: TUTORIAL.mp3 loops for as long as the layer is on
+        // screen, and everything else that makes noise on this screen is already
+        // off (the preview block skips it while the story owns the audio; chart
+        // music only exists in a live, where the story is parked). Driven from
+        // here rather than from the select branch because that branch is skipped
+        // the moment a live starts - the loop has to stop there.
+        {
+            const bool tutorialAudio = story::active() && !story::suspended();
+            if (tutorialAudio) {
+                std::string bgmError;
+                audio.startTutorialBgm(tutorialBgmPath, 0.7f, bgmError);
+                if (!bgmError.empty() && std::getenv("CPSEKAI_AUDIO_TRACE") != nullptr) {
+                    std::printf("[audio] %s\n", bgmError.c_str());
+                    std::fflush(stdout);
+                }
+            } else {
+                audio.stopTutorialBgm();
+            }
+        }
         // Story layer last: it has to sit above every card (settings, pause,
         // the EULA), because it dims whatever it is not pointing at. The click
         // that finishes the script also happens in here.

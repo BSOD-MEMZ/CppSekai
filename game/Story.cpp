@@ -57,6 +57,13 @@ namespace
         std::string highlight; // ui anchor id
         std::string tip;       // label next to the spotlight ring
         std::string guide;     // points into chartdl ("search" / "list" / ...)
+        // The name step's card. Defaults follow the reference screenshot; the
+        // script only has to say `"type": "name"` and the character limit.
+        std::string title;   // "名字最多可输入10个字符。" (empty: built from maxLen)
+        std::string note = "*之后也可更改。";
+        std::string hint = "「世界」的居民"; // empty field text + fallback name
+        std::string confirmLabel = "确定";
+        int maxLen = 10;      // UTF-8 code points
         bool passthrough = false;
         bool boxLeft = false; // compact box on the left (phone panel stays visible)
         bool done = false;     // "done": true - the spotlight label gets a 完成 button
@@ -94,6 +101,12 @@ namespace
     int gPadFocus = 0;      // which option the pad is on
     bool gPadUsed = false;  // the pad moved the focus -> draw the ring
     bool gPlaySeen = false;
+    // The name card's live text and whether the caret still has to be put in it.
+    // The buffer outlives the step (it sits in a static) because ImGui's input
+    // holds a pointer to it for as long as the field is active.
+    char gNameBuf[256] = {};
+    bool gNameFocus = false;
+    bool gNamePadConfirm = false;
     // The live started while the layer was on the play prompt: on resume, skip
     // past that pair of steps instead of showing them again.
     bool gResumeAdvance = false;
@@ -161,6 +174,20 @@ namespace
         if (!step.image.empty())
         {
             ensureImage(step.image);
+        }
+        if (step.type == "name")
+        {
+            // Start on the nickname the player already has (or the default name
+            // the reference shows) so 确定 without typing is never "clear my
+            // name" - pjsk pre-fills that field the same way.
+            std::string current = gHost.playerName ? gHost.playerName() : std::string();
+            if (current.empty())
+            {
+                current = step.hint;
+            }
+            std::snprintf(gNameBuf, sizeof(gNameBuf), "%s", current.c_str());
+            gNameFocus = true;
+            gNamePadConfirm = false;
         }
         if (ImFont* font = game::bodyFont(); font != nullptr)
         {
@@ -379,6 +406,11 @@ bool load(platform::Renderer& renderer, const std::string& assetDir, std::string
                 step.highlight = j.value("highlight", std::string{});
                 step.tip = j.value("tip", std::string{});
                 step.guide = j.value("guide", std::string{});
+                step.title = j.value("title", std::string{});
+                step.note = j.value("note", step.note);
+                step.hint = j.value("hint", step.hint);
+                step.confirmLabel = j.value("confirm", step.confirmLabel);
+                step.maxLen = j.value("maxLen", step.maxLen);
                 step.passthrough = j.value("passthrough", false);
                 step.boxLeft = j.value("box", std::string{}) == "left";
                 step.done = j.value("done", false);
@@ -596,6 +628,13 @@ void padAccept()
         }
         return;
     }
+    if (step.type == "name")
+    {
+        // A / Enter confirms the card - the one thing the pad can do here.
+        // Typing is still the keyboard's job.
+        gNamePadConfirm = true;
+        return;
+    }
     if (step.wait.empty() && !step.passthrough)
     {
         if (!ready)
@@ -760,7 +799,7 @@ void draw(float windowW, float windowH)
     // hit-test hole, so clicks over that band fall through to the window below
     // instead of being eaten by this layer. "I clicked 音乐商店 and nothing
     // happened" is what a full-screen input surface looks like from outside.
-    if (!step.passthrough)
+    if (!step.passthrough && step.type != "name")
     {
         ImGuiWindow* win = ImGui::GetCurrentWindow();
         ImGui::SetWindowHitTestHole(win, ImVec2(0.0f, 0.0f),
@@ -821,7 +860,12 @@ void draw(float windowW, float windowH)
         // 0.62 over the select screen: the dialogue's 44px white-on-#5D5D79 text
         // is meant for a story background, and the song list behind it is far
         // brighter than anything pjsk ever puts under a dialogue.
-        storyui::dim(dl, step.passthrough ? 0.42f : (step.type == "image" ? 0.66f : 0.62f));
+        // The name card paints its own backdrop (its plate lives on the window
+        // draw list, see storyui::nameCard), so dimming here would double it.
+        if (step.type != "name")
+        {
+            storyui::dim(dl, step.passthrough ? 0.42f : (step.type == "image" ? 0.66f : 0.62f));
+        }
     }
 
     if (step.type == "scene")
@@ -859,6 +903,39 @@ void draw(float windowW, float windowH)
             }
         }
     }
+    else if (step.type == "name")
+    {
+        const std::string title = step.title.empty()
+            ? "名字最多可输入" + std::to_string(step.maxLen) + "个字符。"
+            : step.title;
+        const bool confirmed = storyui::nameCard(c, font, title, step.note, step.hint,
+            step.confirmLabel, gNameBuf, static_cast<int>(sizeof(gNameBuf)), step.maxLen, gStepTime,
+            gNameFocus, gNamePadConfirm);
+        // Both are one-shot: the caret is asked for on the frame after the step
+        // appears (or after a jump into it), and a pad press only counts once.
+        gNameFocus = false;
+        gNamePadConfirm = false;
+        if (confirmed)
+        {
+            ui::se(ui::SeClick);
+            std::string picked = gNameBuf;
+            if (picked.empty())
+            {
+                picked = step.hint; // 10 characters of nothing is still a name
+            }
+            if (gHost.commitName)
+            {
+                gHost.commitName(picked);
+            }
+            std::printf("[story] name='%s'\n", picked.c_str());
+            std::fflush(stdout);
+            next();
+            ImGui::End();
+            ImGui::PopStyleColor();
+            ImGui::PopStyleVar();
+            return;
+        }
+    }
     else if (step.type == "cards")
     {
         std::vector<storyui::Image> images;
@@ -892,7 +969,7 @@ void draw(float windowW, float windowH)
         }
     }
 
-    if (step.type != "scene")
+    if (step.type != "scene" && step.type != "name")
     {
         // Compact box while a settings card is open: the full-width frame would
         // cover the card's bottom rows.
@@ -967,7 +1044,8 @@ void draw(float windowW, float windowH)
     // Advance on click / Space / Enter, but only on steps that are waiting for
     // the player rather than for the game. Choices are handled above and never
     // fall through to here.
-    if (!step.passthrough && step.options.empty() && step.wait.empty() && step.type != "scene")
+    if (!step.passthrough && step.options.empty() && step.wait.empty() && step.type != "scene"
+        && step.type != "name")
     {
         // A click in the toolbar band belongs to the toolbar, not to the line.
         const bool inHeaderBand = ImGui::GetIO().MousePos.y < c.y(kHeaderBand);

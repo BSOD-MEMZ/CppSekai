@@ -101,6 +101,17 @@ game/Ui.*         # pjsk 风格弹窗组件库：beginCard（缩放入/出场动
                   # `ui::dropShadow(dl, lo, hi, rounding, s)` 是共用的那层投影（三层同心
                   # 形状叠出软边），自绘面板也可以用；这版 ImGui 没有 AddShadowRect /
                   # ImGuiCol_WindowShadow。
+game/Story.*      # 新手教学的运行时（脚本 assets/story/scripts/tutorial.json，细节全在
+                  # STORY-UI.md）：say / scene / image / keys / cards / choice / **name**。
+                  # `name` 是 2026-10-20 加的用户名卡片（`storyui::nameCard`）：进这一步先把
+                  # 档案里的昵称填进输入框，`确定` 走 Host::commitName 写回 account + 档案
+                  # label + 窗口标题，然后才 next()。它和其他步骤不一样的三处：**不画对话框、
+                  # 不压暗（卡片自己画 backdrop）、不响应「点哪都推进」**，并且要挡住顶栏的
+                  # 命中孔（模态）。卡片画在**窗口** draw list 上而不是前景层 —— 输入框文字是
+                  # ImGui item，画在前景会把字盖住。
+                  # 教学期间的 BGM：main 每帧按 `story::active() && !story::suspended()` 调
+                  # `audio.startTutorialBgm(assets/ost/TUTORIAL.mp3)`，选曲预览同时关掉；
+                  # 进演奏/结算（挂起）自动停，回来接着放。
 game/Result.*     # 结算画面（PRESENT/RESULT）：参考原版截图 1:1 复刻，全部画在 ImGui
                   # background draw list 上的 1920x1080 虚拟画布（和 HUD 同一套 px/py/ps 变换）。
                   # 左半边（RESULT 水印、曲目卡、得分、判定行）用参考截图的绝对 x；

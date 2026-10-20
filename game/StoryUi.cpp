@@ -1,6 +1,10 @@
 // CppSekai - story UI drawing (see StoryUi.hpp / STORY-UI.md).
 #include "StoryUi.hpp"
 
+// The name card needs ImGuiInputTextState to drop the select-all that ImGui
+// applies when an input is activated by code (see nameCard).
+#include "imgui_internal.h"
+
 #include "Ui.hpp"
 #include "Intro.hpp"
 #include "platform/Renderer.hpp"
@@ -808,6 +812,223 @@ void imageCard(const Canvas& c, ImFont* font, const Image& img, const std::strin
         }
     }
     drawCaption(c, font, caption, cx, hi.y);
+}
+
+namespace
+{
+    struct NameEditLimit
+    {
+        int maxLen = 10;
+    };
+
+    // InputText filter for the name field: counts UTF-8 code points (10 Chinese
+    // characters is 30 bytes, a byte limit would cut it to three) and drops
+    // whatever lands past the limit. CallbackAlways, so it also trims a paste.
+    int nameLimitCallback(ImGuiInputTextCallbackData* data)
+    {
+        auto* limit = static_cast<NameEditLimit*>(data->UserData);
+        if (limit == nullptr || limit->maxLen <= 0 || data->BufTextLen <= 0)
+        {
+            return 0;
+        }
+        int count = 0;
+        int cut = -1;
+        for (int i = 0; i < data->BufTextLen;)
+        {
+            if (count >= limit->maxLen)
+            {
+                cut = i;
+                break;
+            }
+            int len = utf8Len(static_cast<unsigned char>(data->Buf[i]));
+            if (len <= 0 || i + len > data->BufTextLen)
+            {
+                len = data->BufTextLen - i;
+            }
+            i += len;
+            ++count;
+        }
+        if (cut >= 0 && cut < data->BufTextLen)
+        {
+            data->DeleteChars(cut, data->BufTextLen - cut);
+        }
+        return 0;
+    }
+
+    // The little pencil at the right end of the field. Drawn rather than shipped
+    // as a sprite: the reference's icon is a 22px glyph that would blur at this
+    // canvas size, and a shape has no file to go missing.
+    void pencilIcon(ImDrawList* dl, const ImVec2& center, float size, ImU32 body, ImU32 tip)
+    {
+        constexpr float k = 0.70710678f;
+        const float half = size * 0.5f;
+        const float wide = size * 0.13f;
+        const float tipLen = size * 0.32f;
+        // u points at the eraser (up-right), n is across the pencil.
+        const ImVec2 p0(center.x - k * half, center.y + k * half);              // writing tip
+        const ImVec2 p1(center.x + k * half, center.y - k * half);              // eraser end
+        const ImVec2 s0(center.x - k * (half - tipLen) + k * wide,
+            center.y + k * (half - tipLen) + k * wide);
+        const ImVec2 s1(center.x - k * (half - tipLen) - k * wide,
+            center.y + k * (half - tipLen) - k * wide);
+        const ImVec2 e0(p1.x + k * wide, p1.y + k * wide);
+        const ImVec2 e1(p1.x - k * wide, p1.y - k * wide);
+        dl->AddTriangleFilled(p0, s0, s1, tip);
+        dl->AddQuadFilled(s0, e0, e1, s1, body);
+    }
+} // namespace
+
+bool nameCard(const Canvas& c, ImFont* font, const std::string& title, const std::string& note,
+    const std::string& hint, const std::string& confirmLabel, char* buf, int bufSize, int maxLen,
+    float time, bool requestFocus, bool confirmRequested)
+{
+    if (buf == nullptr || bufSize <= 1)
+    {
+        return false;
+    }
+    // The window draw list, deliberately: the text field is a real ImGui item and
+    // its glyphs land on this same list. Painting the plate on the foreground
+    // list (what the dialogue box does) would cover the text with the card.
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    if (dl == nullptr)
+    {
+        return false;
+    }
+    const float s = c.scale;
+    const ImVec2 screen = ImGui::GetIO().DisplaySize;
+
+    // pjsk pops cards in: a 0.94 -> 1.0 grow over ~0.16s. Everything below is
+    // laid out off this rect, so the field and the button move with it.
+    const float t = std::clamp(time / 0.16f, 0.0f, 1.0f);
+    const float ease = t * t * (3.0f - 2.0f * t);
+    const float grow = 0.94f + 0.06f * ease;
+    constexpr float kCardW = 1080.0f;
+    constexpr float kCardH = 600.0f;
+    const float w = kCardW * grow;
+    const float h = kCardH * grow;
+    const ImVec2 lo = c.p(960.0f - w * 0.5f, 540.0f - h * 0.5f);
+    const ImVec2 hi = c.p(960.0f + w * 0.5f, 540.0f + h * 0.5f);
+    const float radius = c.s(18.0f);
+
+    dl->AddRectFilled(ImVec2(0.0f, 0.0f), screen, IM_COL32(0, 0, 0, 150));
+    ui::dropShadow(dl, lo, hi, radius, s);
+    dl->AddRectFilled(lo, hi, ui::kCardBg, radius);
+
+    ImU32 textCol = ui::kBodyText;
+
+    // ---- hint line ----
+    if (font != nullptr && !title.empty())
+    {
+        const float size = c.s(40.0f);
+        const ImVec2 ts = font->CalcTextSizeA(size, FLT_MAX, 0.0f, title.c_str());
+        dl->AddText(font, size, ImVec2((lo.x + hi.x - ts.x) * 0.5f, lo.y + h * 0.19f * s),
+            textCol, title.c_str());
+    }
+
+    // ---- the field ----
+    const float fieldW = w * 0.46f * s;
+    const float fieldH = h * 0.13f * s;
+    const ImVec2 fLo((lo.x + hi.x - fieldW) * 0.5f, lo.y + h * 0.33f * s);
+    const ImVec2 fHi(fLo.x + fieldW, fLo.y + fieldH);
+    dl->AddRectFilled(fLo, fHi, ui::kRowsBg, c.s(12.0f));
+
+    // The caret's own text: 42px (the atlas size) times the canvas scale, so a
+    // small window keeps the field proportional instead of overflowing it.
+    const float fontSize = c.s(42.0f);
+    const ImVec2 textSize
+        = font != nullptr ? font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, buf) : ImVec2(0.0f, 0.0f);
+    // Centred like the reference, but never so far in that the pencil collides.
+    const float pencilRoom = c.s(56.0f);
+    const float padX = std::max((fieldW - textSize.x - pencilRoom) * 0.5f, c.s(18.0f));
+    const float padY = std::max((fieldH - fontSize) * 0.5f, 0.0f);
+
+    ImGui::PushID("story-name-field");
+    if (font != nullptr)
+    {
+        ImGui::PushFont(font, fontSize);
+    }
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(padX, padY));
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, c.s(12.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(0, 0, 0, 0));
+    ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, IM_COL32(0, 0, 0, 0));
+    ImGui::PushStyleColor(ImGuiCol_FrameBgActive, IM_COL32(0, 0, 0, 0));
+    ImGui::PushStyleColor(ImGuiCol_Text, textCol);
+    ImGui::PushStyleColor(ImGuiCol_TextDisabled, IM_COL32(150, 150, 178, 255));
+    ImGui::PushStyleColor(ImGuiCol_TextSelectedBg, IM_COL32(119, 238, 221, 110));
+    ImGui::SetCursorScreenPos(fLo);
+    ImGui::SetNextItemWidth(fieldW);
+    if (requestFocus)
+    {
+        ImGui::SetKeyboardFocusHere();
+    }
+    NameEditLimit limit;
+    limit.maxLen = maxLen;
+    const bool entered = ImGui::InputTextWithHint("##name", hint.c_str(), buf, static_cast<size_t>(bufSize),
+        ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackAlways,
+        nameLimitCallback, &limit);
+    // Taking focus by code makes ImGui select the whole text, which turned the
+    // prefilled name into a highlight - and the first keystroke would have wiped
+    // it. The selection only appears a frame *after* the focus request lands, so
+    // the step that clears it has to stay armed until it sees one: `requestFocus`
+    // arms it, the frame that finds a selection disarms it.
+    static ImGuiID sClearNameSelection = 0;
+    const ImGuiID fieldId = ImGui::GetItemID();
+    if (requestFocus)
+    {
+        sClearNameSelection = fieldId;
+    }
+    if (sClearNameSelection == fieldId && fieldId != 0)
+    {
+        if (ImGuiInputTextState* state = ImGui::GetInputTextState(fieldId))
+        {
+            if (state->HasSelection())
+            {
+                state->ClearSelection(); // caret stays at the end, like the reference
+                sClearNameSelection = 0;
+            }
+        }
+    }
+    ImGui::PopStyleColor(6);
+    ImGui::PopStyleVar(3);
+    if (font != nullptr)
+    {
+        ImGui::PopFont();
+    }
+    ImGui::PopID();
+
+    if (font != nullptr)
+    {
+        pencilIcon(dl, ImVec2(fHi.x - c.s(34.0f), (fLo.y + fHi.y) * 0.5f), c.s(30.0f), textCol,
+            IM_COL32(38, 38, 70, 255));
+    }
+
+    // ---- the pink note ----
+    if (font != nullptr && !note.empty())
+    {
+        const float size = c.s(30.0f);
+        const ImVec2 ts = font->CalcTextSizeA(size, FLT_MAX, 0.0f, note.c_str());
+        dl->AddText(font, size, ImVec2((lo.x + hi.x - ts.x) * 0.5f, lo.y + h * 0.55f * s),
+            ui::kNotePink, note.c_str());
+    }
+
+    // ---- 确定 ----
+    const float btnW = w * 0.26f * s;
+    const float btnH = h * 0.125f * s;
+    const ImVec2 bLo((lo.x + hi.x - btnW) * 0.5f, lo.y + h * 0.80f * s);
+    const ImVec2 bHi(bLo.x + btnW, bLo.y + btnH);
+    ImGui::PushID("story-name-ok");
+    ImGui::SetCursorScreenPos(bLo);
+    ImGui::InvisibleButton("ok", ImVec2(btnW, btnH));
+    const bool hovered = ImGui::IsItemHovered();
+    const bool held = ImGui::IsItemActive();
+    const bool clicked = ImGui::IsItemClicked();
+    ImGui::PopID();
+    const float hover = ui::anim(0x5717e001u, hovered, 22.0f);
+    const float press = ui::anim(0x5717e002u, held, 30.0f);
+    ui::capsuleDraw(dl, bLo, bHi, confirmLabel.c_str(), true, hover, press, c.s(34.0f));
+
+    return entered || clicked || confirmRequested;
 }
 
 ImTextureID skipIcon()

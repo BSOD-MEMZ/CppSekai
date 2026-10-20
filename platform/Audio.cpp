@@ -54,6 +54,7 @@ void AudioEngine::shutdown()
     }
     stopPreview();
     stopResultBgm();
+    stopTutorialBgm();
     if (mEngineInitialized) {
         ma_engine_uninit(&mEngine);
         mEngineInitialized = false;
@@ -100,6 +101,9 @@ void AudioEngine::setBgmVolume(float volume)
     }
     if (mResultBgmLoaded) {
         ma_sound_set_volume(&mResultBgm, 0.85f * mBgmVolume);
+    }
+    if (mTutorialBgmLoaded) {
+        ma_sound_set_volume(&mTutorialBgm, mTutorialBgmGain * mBgmVolume);
     }
 }
 
@@ -437,6 +441,47 @@ void AudioEngine::stopResultBgm()
     }
     mResultBgmActive = false;
     mResultBgmPath.clear();
+}
+
+bool AudioEngine::startTutorialBgm(const std::string& path, float volume, std::string& outError)
+{
+    if (mTutorialBgmActive && mTutorialBgmLoaded && mTutorialBgmPath == path) {
+        return true; // already looping exactly this track
+    }
+    stopTutorialBgm();
+    if (path.empty()) {
+        return true; // no tutorial track shipped: stay silent
+    }
+    // Stream, like the preview and the result track: the tutorial starts on the
+    // select screen and a full decode here would stall the first card.
+    if (ma_sound_init_from_file(&mEngine, path.c_str(), MA_SOUND_FLAG_STREAM, nullptr, nullptr,
+            &mTutorialBgm)
+        != MA_SUCCESS) {
+        outError = "failed to load tutorial bgm: " + path;
+        mTutorialBgmPath.clear();
+        return false;
+    }
+    mTutorialBgmLoaded = true;
+    mTutorialBgmPath = path;
+    mTutorialBgmGain = std::clamp(volume, 0.0f, 1.0f);
+    ma_sound_set_volume(&mTutorialBgm, mTutorialBgmGain * mBgmVolume);
+    ma_sound_set_looping(&mTutorialBgm, MA_TRUE);
+    ma_sound_start(&mTutorialBgm);
+    mTutorialBgmActive = true;
+    std::printf("[audio] tutorial bgm looping %s\n", path.c_str());
+    return true;
+}
+
+void AudioEngine::stopTutorialBgm()
+{
+    if (mTutorialBgmLoaded) {
+        ma_sound_stop(&mTutorialBgm);
+        ma_sound_uninit(&mTutorialBgm);
+        mTutorialBgmLoaded = false;
+        std::printf("[audio] tutorial bgm stopped\n");
+    }
+    mTutorialBgmActive = false;
+    mTutorialBgmPath.clear();
 }
 
 void AudioEngine::update()

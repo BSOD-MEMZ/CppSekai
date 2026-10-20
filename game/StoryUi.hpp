@@ -121,6 +121,20 @@ int cards(const Canvas& c, ImFont* font, const std::vector<Image>& images,
 // A picture above the dialogue box (rounded, white rim). `caption` may be empty.
 void imageCard(const Canvas& c, ImFont* font, const Image& img, const std::string& caption);
 
+// pjsk's name-entry card: the pale full-width plate with the hint line, the
+// rounded text field (with a pencil at its right end), the pink "later you can
+// change it" note and the mint 确定 capsule. `buf` is the live text and is
+// edited in place; `maxLen` counts UTF-8 code points, not bytes.
+//
+// Returns true on the frame 确定 / Enter was pressed. `requestFocus` puts the
+// caret in the field (the step's first frame), and `time` drives the card's
+// little scale-in. Drawing goes to the *window* draw list rather than the
+// foreground one - the field's text is an ImGui item, and anything painted on
+// the foreground list would cover it.
+bool nameCard(const Canvas& c, ImFont* font, const std::string& title, const std::string& note,
+    const std::string& hint, const std::string& confirmLabel, char* buf, int bufSize, int maxLen,
+    float time, bool requestFocus, bool confirmRequested);
+
 // Spotlight: dims everything except `lo..hi` and rings it. Coordinates are
 // window pixels (what ui::anchorRect hands back), not virtual units.
 // The player's 12 lane bindings as 6x2 keycaps plus a mouse, drawn instead of

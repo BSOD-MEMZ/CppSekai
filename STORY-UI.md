@@ -348,7 +348,7 @@ CLI 加 `--story-test <id>`（无头开），和 `--drop-test` / `--chartdl-test
 ```jsonc
 {
   "id": "dl_search",        // 跳转标签
-  "type": "say",            // say | scene | image | keys | choice
+  "type": "say",            // say | scene | image | keys | cards | choice | name
   "who": "初音未来",         // 空 = 旁白（不画名牌）
   "text": "……",
   "image": "xxx.png",       // 已不再使用（assets/story/img 空了）
@@ -368,7 +368,14 @@ CLI 加 `--story-test <id>`（无头开），和 `--drop-test` / `--chartdl-test
   "box": "left",            // 左下紧凑框，把右侧手机面板让出来
   "set": { "device": "touch" },
   "options": [ { "text": "触摸屏", "goto": "touch_hit" } ],
-  "subtitles": ["白板 / 平板 / 触屏笔记本", "12 键，或者鼠标点"]
+  "subtitles": ["白板 / 平板 / 触屏笔记本", "12 键，或者鼠标点"],
+
+  // type: "name" 专用（见 9.10），其余字段都不用写
+  "maxLen": 10,             // 按 UTF-8 码点算，不是字节
+  "title": "名字最多可输入10个字符。", // 空 = 由 maxLen 拼出来
+  "note": "*之后也可更改。",
+  "hint": "「世界」的居民",   // 空输入框时的灰字 + 名字为空时的兜底
+  "confirm": "确定"
 }
 ```
 
@@ -469,6 +476,34 @@ false —— 不锁存的话会永远等一局已经打完的歌。锁存点不�
 ./build/cppsekai.exe --story-test --story-step N     --screenshot .workbuddy/shots/x.png --screenshot-time 4 --no-party
 ```
 
-`N` 是 0 基下标，常用的几页：0 场景标题 / 1 对话 / 3 选项 / 4 设置聚光灯 / 19 设备卡片 /
-20 触摸图 / 25 绿谱高亮。chartdl 浮层是独立窗口，要抓**整个桌面**才看得到（游戏的
+`N` 是 0 基下标，常用的几页：0 场景标题 / 1 对话 / **3 用户名卡片** / 6 选项 /
+20 设置聚光灯 / 32 设备卡片 / 33 触摸图 / 35 键位页（2026-10-20 起，`name` 步插在 3，
+后面全部 +1）。chartdl 浮层是独立窗口，要抓**整个桌面**才看得到（游戏的
 `--screenshot` 只拍自己）。
+
+### 9.10 用户名卡片 + 教学 BGM（2026-10-20）
+
+台词「你叫什么名字？」之后插了一步 `{ "type": "name", "maxLen": 10 }`，弹出的是照
+pjsk 那张截图做的卡片（`storyui::nameCard`）：淡紫整块底板、说明行、圆角输入框（右端
+一支自绘铅笔）、粉色「*之后也可更改。」、薄荷胶囊「确定」。
+
+- **进这一步就把档案里的昵称填进输入框**（`Host::playerName`），确定时走
+  `Host::commitName` 写回 `account.name` + 档案 label（`profiles/index.json`）+ 房间名 +
+  窗口标题，再 `persistUserData()`，然后才 `next()`。空输入按 `hint` 兜底，不会把名字清空。
+- **限长按码点算**：`InputText` 的 callback（`CallbackAlways`）自己数 UTF-8，超了
+  `DeleteChars`。按字节限长会把 10 个汉字砍成 3 个。
+- **不能画在前景 draw list**：输入框的文字是 ImGui item（落在窗口的 draw list 上），
+  卡片画在 `GetForegroundDrawList()` 会把字盖掉——所以这张卡片走**窗口** draw list，
+  压暗也一起画在那儿。代价是它会被主循环末尾的前景元素（转场白闪）盖住，但那些只在
+  离开选曲时出现。
+- 和其他步骤的三处不同（`Story.cpp` 里都各自有一条 `!= "name"`）：不画对话框、
+  不响应「点哪都推进」、不挖顶栏命中孔（模态）。手柄 A 走 `gNamePadConfirm` 当确定。
+- **选中态**：`SetKeyboardFocusHere` 触发的 focus-by-code 会让 ImGui 全选文本，第一下
+  打字就把预填的名字抹了。全选是**下一帧**才出现，所以 `nameCard` 里用一个静态
+  `ImGuiID` 记住「这个输入框还欠一次清选中」，看到 `HasSelection()` 就 `ClearSelection()`。
+- **BGM**：main 每帧（`story::draw` 之前）按 `story::active() && !story::suspended()` 调
+  `audio.startTutorialBgm(assets/ost/TUTORIAL.mp3, 0.7)`，同时选曲预览那一段的
+  `playPreviewHere` 多一个 `!tutorialAudio` 条件——否则预览会和教学曲叠在一起。
+  进演奏/结算时剧情层挂起，循环自动停，回选曲再起。验证看日志
+  `[audio] tutorial bgm looping ...` / `[audio] tutorial bgm stopped`。
+

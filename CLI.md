@@ -146,7 +146,7 @@ cppsekai [--sus <file.sus>] [--bgm <audio>] [--charts <dir>] [--cover <image>]
 | `--guess` | 启动即打开**猜歌**卡片（平时要点选曲界面头排的「猜歌」按钮），配合 `--screenshot` 截它 |
 | `--singer-panel` | 启动即打开**切换歌手**面板（平时要点手机面板底部那颗麦克风按钮），配合 `--select-id <音乐 id>` + `--screenshot` 截它 |
 | `--story-test [<id>]` | 启动即播放新手教学（默认脚本 id `tutorial`），跳过首启/EULA 判定。配合 `--screenshot` 截教学页；脚本在 `assets/story/scripts/tutorial.json`，字段见 `STORY-UI.md` |
-| `--story-step <n>` | 配合 `--story-test`：直接跳到第 n 步（0 基）。常用：0 场景标题 / 1 对话 / 3 选项 / 4 设置聚光灯 / 19 设备卡片 / 20 触摸图 / 25 绿谱高亮 |
+| `--story-step <n>` | 配合 `--story-test`：直接跳到第 n 步（0 基）。常用：0 场景标题 / 1 对话 / 3 用户名卡片 / 6 选项 / 20 设置聚光灯 / 32 设备卡片 / 33 触摸图 / 35 键位页 |
 | `--player <昵称[:组织]>` | 无头检查用：把账户的昵称 / 学校塞进内存（**不读也不写 userdata.json**），让资料卡和设置「账户」页有东西可看 |
 | `--player-rank <n>` | 同上，直接把等级设成 n（本级经验清零），用来对比不同等级下的等级牌 |
 | `--player-exp <0..1>` | 同上，把本级经验设成「升到下一级所需经验的这个比例」——等级牌左端那截绿色进度条就是它，`0.35` = 35% |

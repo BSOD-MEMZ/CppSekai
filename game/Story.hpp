@@ -32,6 +32,12 @@ struct Host
     std::function<bool()> inPlay;
     std::function<int()> startedDifficulty; // 0 = EASY, -1 unknown
     std::function<void(const std::string&)> command; // "openSettings" / "launchChartdl" ...
+    // The player's nickname, for the name step's card: the field starts on the
+    // name they already have, and 确定 writes the new one back before the story
+    // moves on. Both optional - a headless run without them still shows the
+    // card and simply keeps the typed text in memory.
+    std::function<std::string()> playerName;
+    std::function<void(const std::string&)> commitName;
 };
 
 void setHost(Host host);
