@@ -82,6 +82,10 @@
   **「repo 404」不能归因**，别拿别人 repo 的状态当决策依据。
 
 ## 最近工作
+- 10-20：教学加了 `type: "name"` 用户名卡片（`storyui::nameCard`，照用户给的 pjsk 截图做），
+  **画在窗口 draw list**（输入框文字是 ImGui item，前景层会盖住字）；限长按码点；
+  focus-by-code 的全选要等下一帧再 `ClearSelection()`。教学全程循环
+  `assets/ost/TUTORIAL.mp3`（`AudioEngine::startTutorialBgm`），选曲预览让位。
 - 10-18：**新手教学已落地**（`game/Story*`、`platform/ChartDlGuide*`、
   `assets/story/scripts/tutorial.json`）。要点：剧情层必须画在**前景 draw list**
   （项目 HUD 也在那儿，画窗口自己的会被盖住）；chartdl 靠 Win32 读控件矩形 +
