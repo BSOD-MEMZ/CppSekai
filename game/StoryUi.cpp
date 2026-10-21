@@ -31,6 +31,19 @@ namespace
     ImTextureID gLane = 0;
     float gSkipAspect = 28.0f / 44.0f;
 
+    // ---- the game's own parts (assets/story/ui/pjsk) ----------------------
+    // These are the client's UI sprites as they came out of the unpack, not
+    // redrawn in code: white masks that get their colour from `tint`, which is
+    // how the game itself paints them. Sizes and 9-slice borders are the ones
+    // in the client's Sprite table (m_Rect / m_Border), so anything drawn from
+    // them lands on the same pixels the game lands on.
+    Image gBand;  // bg_story_adv        4x399  alpha 1 -> 128, the dialogue band
+    Image gPill;  // btn_round_h80_wh    106x96 border 51/51, a capsule button
+    Image gGlow;  // eff_btn_round_a70   112x104 border 56/52, the button's halo
+    Image gArrow; // icon_pageForward_gn 50x44, the mint "there is more" arrow
+    Image gTri;   // icon_triangle_h22    28x22, the plain white triangle
+
+
 
     bool isNoLineStart(unsigned int cp)
     {
@@ -159,6 +172,17 @@ bool loadTextures(platform::Renderer& renderer, const std::string& assetDir, std
         lane != 0) {
         gLane = reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(lane));
     }
+    // The game's own UI parts. Missing ones are not fatal - every draw that
+    // uses them falls back to the old hand-drawn shape.
+    const std::string pjsk = base + "pjsk\\";
+    gBand = loadImage(renderer, pjsk + "bg_story_adv.png");
+    gPill = loadImage(renderer, pjsk + "btn_round_h80_wh.png");
+    gGlow = loadImage(renderer, pjsk + "eff_btn_round_h80_a70_wh.png");
+    gArrow = loadImage(renderer, pjsk + "icon_pageForward_gn.png");
+    gTri = loadImage(renderer, pjsk + "icon_triangle_h22_wh.png");
+    std::printf("[story] pjsk parts band=%d pill=%d glow=%d arrow=%d tri=%d\n", gBand.valid() ? 1 : 0,
+        gPill.valid() ? 1 : 0, gGlow.valid() ? 1 : 0, gArrow.valid() ? 1 : 0, gTri.valid() ? 1 : 0);
+    std::fflush(stdout);
     if (gDialogue == 0 && gChoices == 0 && gSceneText == 0)
     {
         err = "story ui textures missing under " + base;
@@ -286,6 +310,22 @@ void dim(ImDrawList* dl, float alpha)
         IM_COL32(0, 0, 0, static_cast<int>(std::clamp(alpha, 0.0f, 1.0f) * 255.0f)));
 }
 
+namespace
+{
+    // One sprite, drawn whole over [lo,hi]. `tint` multiplies the texture's own
+    // alpha, which is how the game's parts work: they are white masks and the
+    // colour is the caller's.
+    void sprite(ImDrawList* dl, const Image& img, const ImVec2& lo, const ImVec2& hi, ImU32 tint)
+    {
+        if (dl == nullptr || !img.valid())
+        {
+            return;
+        }
+        dl->AddImage(img.tex, lo, hi, ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), tint);
+    }
+
+}
+
 void dialogue(const Canvas& c, ImFont* font, const std::string& name, const std::string& body,
     const TextLayout& layout, std::size_t revealBytes, float time, bool showArrow, Box box)
 {
@@ -325,7 +365,21 @@ void dialogue(const Canvas& c, ImFont* font, const std::string& name, const std:
     // Every layout uses the shipped band. An earlier version drew a bespoke
     // dark panel for the settings step; that read as "some other UI" next to
     // the reference, so it is gone - the band is the dialogue box, full stop.
-    if (gDialogue != 0)
+    if (gBand.valid())
+    {
+        // The game's own band (assets/story/ui/pjsk/bg_story_adv.png): a 4x399
+        // white mask whose alpha ramps 1 -> 128 over its top 170px and holds at
+        // 50% after that. It is drawn at its native height, flush to the
+        // bottom, tinted the colour the client tints it - which is the same
+        // (2,0,32) the old full-frame PNG was baked with, so the shape is now
+        // the client's instead of an approximation of it.
+        // One flat layer under it, because this screen (a dimmed song list) is
+        // darker than the bright story art the 50% was tuned for.
+        const float bandTop = 1080.0f - static_cast<float>(gBand.h);
+        dl->AddRectFilled(c.p(0.0f, bandTop), c.p(1920.0f, 1080.0f), IM_COL32(2, 0, 32, 56));
+        sprite(dl, gBand, c.p(0.0f, bandTop), c.p(1920.0f, 1080.0f), IM_COL32(2, 0, 32, 255));
+    }
+    else if (gDialogue != 0)
     {
         // Twice on purpose: the band is only 50% at its densest (2,0,32,128),
         // which is right over the bright story backgrounds the art was made for
@@ -364,6 +418,17 @@ void dialogue(const Canvas& c, ImFont* font, const std::string& name, const std:
             IM_COL32(93, 93, 121, 255));
     }
 
+    // The rule between the name and the body. bg_story_adv has no sudden row
+    // in it, and the client does not ship a sprite for this either - the old
+    // full-frame PNG had the line baked in at y≈838, so it is drawn here to
+    // keep the reference's look. Spans the text column, not the screen: the
+    // compact box's line stops where its own text column does.
+    {
+        const float ruleL = box == Box::Full ? 225.0f : 100.0f;
+        const float ruleR = box == Box::Full ? 1695.0f : 760.0f;
+        dl->AddRectFilled(c.p(ruleL, 838.0f), c.p(ruleR, 840.0f), IM_COL32(255, 255, 255, 48));
+    }
+
     for (const Line& line : layout.lines)
     {
         if (line.begin >= revealBytes)
@@ -377,8 +442,20 @@ void dialogue(const Canvas& c, ImFont* font, const std::string& name, const std:
             IM_COL32(93, 93, 121, 255));
     }
 
-    // No ▼ prompt: the band already reads as "there is more", and the arrow
-    // sat right on top of the last line of text on short boxes.
+    // "There is more" arrow: the client's own mint pageForward icon. It pulses
+    // once the line is fully revealed and stays hidden while the typewriter is
+    // still running. Skipped in the compact box, which has no room for it.
+    if (box == Box::Full && showArrow && gArrow.valid() && revealBytes >= body.size())
+    {
+        const float pulse = 0.62f + 0.38f * std::sin(time * 5.0f);
+        const float w = c.s(46.0f);
+        const float h = w * (44.0f / 50.0f);
+        // Right end of the text column (245 + 1300), not the screen corner:
+        // the song-select phone panel sits over that corner.
+        const ImVec2 lo(c.x(1180.0f), c.y(1032.0f) - h);
+        sprite(dl, gArrow, lo, ImVec2(lo.x + w, lo.y + h),
+            IM_COL32(255, 255, 255, static_cast<int>(pulse * 235.0f)));
+    }
     (void)showArrow;
 }
 
@@ -639,6 +716,17 @@ int choices(const Canvas& c, ImFont* font, const std::vector<std::string>& optio
         // invents a colour the rest of the UI does not use.
         const float hover = ui::anim(0x5717c001u + static_cast<unsigned>(i), hovered, 22.0f);
         const float press = ui::anim(0x5717c021u + static_cast<unsigned>(i), held, 30.0f);
+        // Hover halo from the client's own sprite (eff_btn_round_h80_a70_wh:
+        // 112x104 for a 106x96 capsule, i.e. the button plus 3/4 of glow on
+        // every side). Drawn under capsuleDraw so the label stays crisp.
+        if (gGlow.valid() && hover > 0.01f)
+        {
+            const float kx = (hi.x - lo.x) / 106.0f;
+            const float ky = (hi.y - lo.y) / 96.0f;
+            sprite(dl, gGlow, ImVec2(lo.x - 3.0f * kx, lo.y - 4.0f * ky),
+                ImVec2(hi.x + 3.0f * kx, hi.y + 4.0f * ky),
+                IM_COL32(255, 255, 255, static_cast<int>(76.0f * hover)));
+        }
         ui::capsuleDraw(dl, lo, hi, options[static_cast<std::size_t>(i)].c_str(), false, hover,
             press, c.s(32.0f));
         if (i == focus)

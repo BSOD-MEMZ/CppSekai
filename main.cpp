@@ -10110,7 +10110,11 @@ int main(int argc, char** argv)
         // 复选框写入 eulaAccepted = false —— 于是关掉的下一帧又被打开，
         // 无限弹。「不再提示」的复选框是**下次启动**要不要再看到的记录，
         // 不是「能不能关掉这一张」的开关，两者必须分开。
-        if (state == AppState::Select && !userSettings.eulaAccepted && !eulaDismissedThisRun) {
+        // --story-test is a debug run: it must not be covered by the first-run
+        // card (the tutorial starts right away, and the card would sit on top
+        // of whatever --story-step asks us to look at).
+        if (state == AppState::Select && !userSettings.eulaAccepted && !eulaDismissedThisRun
+            && storyTestId.empty()) {
             eulaAlive = true;
         }
         if (eulaAlive) {
