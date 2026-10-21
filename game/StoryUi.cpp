@@ -148,6 +148,8 @@ Canvas makeCanvas(float windowW, float windowH)
     c.scale = std::min(windowW / 1920.0f, windowH / 1080.0f);
     c.ox = (windowW - 1920.0f * c.scale) * 0.5f;
     c.oy = (windowH - 1080.0f * c.scale) * 0.5f;
+    c.winW = windowW;
+    c.winH = windowH;
     return c;
 }
 
@@ -335,16 +337,18 @@ void dialogue(const Canvas& c, ImFont* font, const std::string& name, const std:
         return;
     }
 
-    // The band spans the full width at y 771..1080; `box` picks which slice to
-    // paint. Clipping is why this is not three different layouts: the gradient
-    // is horizontally uniform, so a clipped band still looks like a band, while
-    // the settings card (left) or the phone panel (right) stays uncovered.
     // Numbers below are the editor's own setup table, copied 1:1 (1920x1080
     // canvas, Pixi top-left anchored text):
     //   name : (225,775) 44px  fill #EBEBEF  stroke #5D5D79 / 8
     //   body : (245,845) 44px  fill #FFFFFF  lineHeight 55  wrap 1300
-    // The hairline under the name in the reference is *the band's own rule* at
-    // y~840, not something the UI draws - so there is no underline here.
+    //
+    // Vertical coordinates go through `fromBottom` instead of `y`: the band and
+    // everything on it hang off the *window's* bottom edge, because the song
+    // select behind is drawn edge to edge. On a 21:9 window the old letterboxed
+    // band covered only the middle 1920px and left the list showing either side
+    // (measured 2026-10-21 at 2560x1080); at 4:3 the same thing happened at the
+    // bottom edge. Horizontal text positions keep the 16:9 column, which is
+    // what you want - the text should not jump to the window edge.
     float textL = 245.0f;
     float nameL = 225.0f;
     float size = 44.0f;
@@ -370,23 +374,23 @@ void dialogue(const Canvas& c, ImFont* font, const std::string& name, const std:
         // The game's own band (assets/story/ui/pjsk/bg_story_adv.png): a 4x399
         // white mask whose alpha ramps 1 -> 128 over its top 170px and holds at
         // 50% after that. It is drawn at its native height, flush to the
-        // bottom, tinted the colour the client tints it - which is the same
-        // (2,0,32) the old full-frame PNG was baked with, so the shape is now
-        // the client's instead of an approximation of it.
+        // window's bottom edge and edge to edge, tinted the colour the client
+        // tints it - which is the same (2,0,32) the old full-frame PNG was
+        // baked with, so the shape is the client's instead of an approximation.
         // One flat layer under it, because this screen (a dimmed song list) is
         // darker than the bright story art the 50% was tuned for.
-        const float bandTop = 1080.0f - static_cast<float>(gBand.h);
-        dl->AddRectFilled(c.p(0.0f, bandTop), c.p(1920.0f, 1080.0f), IM_COL32(2, 0, 32, 56));
-        sprite(dl, gBand, c.p(0.0f, bandTop), c.p(1920.0f, 1080.0f), IM_COL32(2, 0, 32, 255));
+        const float bandTop = c.winH - static_cast<float>(gBand.h) * c.scale;
+        dl->AddRectFilled(ImVec2(0.0f, bandTop), ImVec2(c.winW, c.winH), IM_COL32(2, 0, 32, 56));
+        sprite(dl, gBand, ImVec2(0.0f, bandTop), ImVec2(c.winW, c.winH), IM_COL32(2, 0, 32, 255));
     }
     else if (gDialogue != 0)
     {
-        // Twice on purpose: the band is only 50% at its densest (2,0,32,128),
-        // which is right over the bright story backgrounds the art was made for
-        // but nearly invisible over this game's dark song list. Stacking keeps
-        // the same shape and colour while landing at ~75% at the bottom.
-        dl->AddImage(gDialogue, c.p(0.0f, 0.0f), c.p(1920.0f, 1080.0f));
-        dl->AddImage(gDialogue, c.p(0.0f, 0.0f), c.p(1920.0f, 1080.0f));
+        // The old full-frame art, also stretched to the window instead of the
+        // 1920 frame. Twice on purpose: it is only 50% at its densest
+        // (2,0,32,128), which is right over the bright story backgrounds it was
+        // made for but nearly invisible over this game's dark song list.
+        dl->AddImage(gDialogue, ImVec2(0.0f, 0.0f), ImVec2(c.winW, c.winH));
+        dl->AddImage(gDialogue, ImVec2(0.0f, 0.0f), ImVec2(c.winW, c.winH));
     }
     else
     {
@@ -395,8 +399,9 @@ void dialogue(const Canvas& c, ImFont* font, const std::string& name, const std:
         for (int i = 0; i < 20; ++i)
         {
             const float t = static_cast<float>(i) / 19.0f;
-            const float y0 = 760.0f + t * 320.0f;
-            dl->AddRectFilled(c.p(0.0f, y0), c.p(1920.0f, y0 + 20.0f),
+            const float y0 = c.fromBottom(760.0f + t * 320.0f);
+            const float y1 = c.fromBottom(780.0f + t * 320.0f);
+            dl->AddRectFilled(ImVec2(0.0f, y0), ImVec2(c.winW, y1),
                 IM_COL32(10, 10, 20, static_cast<int>(t * 165.0f)));
         }
     }
@@ -413,7 +418,7 @@ void dialogue(const Canvas& c, ImFont* font, const std::string& name, const std:
         }
         const float nameSize = c.s(size);
         const float nameY = box == Box::Full ? 775.0f : 782.0f;
-        outlineText(dl, nameFont, nameSize, ImVec2(c.x(nameL), c.y(nameY)),
+        outlineText(dl, nameFont, nameSize, ImVec2(c.x(nameL), c.fromBottom(nameY)),
             IM_COL32(235, 235, 239, 255), name.c_str(), nameSize * 0.09f,
             IM_COL32(93, 93, 121, 255));
     }
@@ -426,7 +431,8 @@ void dialogue(const Canvas& c, ImFont* font, const std::string& name, const std:
     {
         const float ruleL = box == Box::Full ? 225.0f : 100.0f;
         const float ruleR = box == Box::Full ? 1695.0f : 760.0f;
-        dl->AddRectFilled(c.p(ruleL, 838.0f), c.p(ruleR, 840.0f), IM_COL32(255, 255, 255, 48));
+        dl->AddRectFilled(ImVec2(c.x(ruleL), c.fromBottom(838.0f)),
+            ImVec2(c.x(ruleR), c.fromBottom(840.0f)), IM_COL32(255, 255, 255, 48));
     }
 
     for (const Line& line : layout.lines)
@@ -436,7 +442,8 @@ void dialogue(const Canvas& c, ImFont* font, const std::string& name, const std:
             break;
         }
         const std::size_t end = std::min(line.end, revealBytes);
-        const ImVec2 pos(c.x(textL), c.y(845.0f) + static_cast<float>(&line - layout.lines.data()) * c.s(lineH));
+        const ImVec2 pos(c.x(textL),
+            c.fromBottom(845.0f) + static_cast<float>(&line - layout.lines.data()) * c.s(lineH));
         outlineText(dl, font, c.s(size), pos, IM_COL32(255, 255, 255, 255),
             body.data() + line.begin, body.data() + end, c.s(size) * 0.09f,
             IM_COL32(93, 93, 121, 255));
@@ -447,12 +454,12 @@ void dialogue(const Canvas& c, ImFont* font, const std::string& name, const std:
     // still running. Skipped in the compact box, which has no room for it.
     if (box == Box::Full && showArrow && gArrow.valid() && revealBytes >= body.size())
     {
-        const float pulse = 0.62f + 0.38f * std::sin(time * 5.0f);
+        const float pulse = 0.72f + 0.28f * std::sin(time * 2.6f);
         const float w = c.s(46.0f);
         const float h = w * (44.0f / 50.0f);
         // Right end of the text column (245 + 1300), not the screen corner:
         // the song-select phone panel sits over that corner.
-        const ImVec2 lo(c.x(1180.0f), c.y(1032.0f) - h);
+        const ImVec2 lo(c.x(1180.0f), c.fromBottom(1032.0f) - h);
         sprite(dl, gArrow, lo, ImVec2(lo.x + w, lo.y + h),
             IM_COL32(255, 255, 255, static_cast<int>(pulse * 235.0f)));
     }
@@ -677,6 +684,13 @@ int choices(const Canvas& c, ImFont* font, const std::vector<std::string>& optio
     }
     int clicked = -1;
 
+    // Fade + lift into place over 180ms. The options used to appear in one
+    // frame once the line finished typing, which read as a glitch next to the
+    // typewriter; the reference opens its choice dialog the same way.
+    const float raw = std::clamp(time / 0.18f, 0.0f, 1.0f);
+    const float fadeIn = raw * raw * (3.0f - 2.0f * raw); // smoothstep
+    const float lift = (1.0f - fadeIn) * 10.0f;           // virtual px, from below
+
     // Painted with ui::capsuleDraw - the same function the settings card's own
     // buttons use - instead of tinting the shipped pill art mint on hover. The
     // art and a hand-rolled hover treatment drifted from the rest of the UI
@@ -696,6 +710,7 @@ int choices(const Canvas& c, ImFont* font, const std::vector<std::string>& optio
         {
             cy = 460.0f + static_cast<float>(i) * 116.0f;
         }
+        cy += lift;
         ImVec2 lo = c.p(cx - pillW * 0.5f, cy - pillH * 0.5f);
         ImVec2 hi = c.p(cx + pillW * 0.5f, cy + pillH * 0.5f);
         ImGui::SetCursorScreenPos(lo);
@@ -716,19 +731,12 @@ int choices(const Canvas& c, ImFont* font, const std::vector<std::string>& optio
         // invents a colour the rest of the UI does not use.
         const float hover = ui::anim(0x5717c001u + static_cast<unsigned>(i), hovered, 22.0f);
         const float press = ui::anim(0x5717c021u + static_cast<unsigned>(i), held, 30.0f);
-        // Hover halo from the client's own sprite (eff_btn_round_h80_a70_wh:
-        // 112x104 for a 106x96 capsule, i.e. the button plus 3/4 of glow on
-        // every side). Drawn under capsuleDraw so the label stays crisp.
-        if (gGlow.valid() && hover > 0.01f)
-        {
-            const float kx = (hi.x - lo.x) / 106.0f;
-            const float ky = (hi.y - lo.y) / 96.0f;
-            sprite(dl, gGlow, ImVec2(lo.x - 3.0f * kx, lo.y - 4.0f * ky),
-                ImVec2(hi.x + 3.0f * kx, hi.y + 4.0f * ky),
-                IM_COL32(255, 255, 255, static_cast<int>(76.0f * hover)));
-        }
+        // No client glow sprite here. eff_btn_round_h80_a70_wh is white, and the
+        // pill is white too, so tinting it in made a grey smudge rather than a
+        // halo - it read as "the button is dirty", not "the button is lit".
+        // capsuleDraw's own hair of growth is the whole hover treatment.
         ui::capsuleDraw(dl, lo, hi, options[static_cast<std::size_t>(i)].c_str(), false, hover,
-            press, c.s(32.0f));
+            press, c.s(32.0f), fadeIn);
         if (i == focus)
         {
             // Gamepad focus: the same ring the settings card draws around the
@@ -747,7 +755,6 @@ int choices(const Canvas& c, ImFont* font, const std::vector<std::string>& optio
             clicked = i;
         }
     }
-    (void)time;
     return clicked;
 }
 
@@ -843,7 +850,6 @@ int cards(const Canvas& c, ImFont* font, const std::vector<Image>& images,
             clicked = i;
         }
     }
-    (void)time;
     return clicked;
 }
 

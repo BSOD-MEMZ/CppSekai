@@ -167,6 +167,13 @@ namespace
         }
         Step& step = gCur->steps[gIndex];
         applyFlags(step.set);
+        // The options coming up has its own sound in the client (choice_open.wav,
+        // out of its UI kit, the same one its choice dialog uses). Taking one is
+        // a different sound, played at the press below.
+        if (step.type == "choice")
+        {
+            ui::se(ui::SeChoicesOpen);
+        }
         if (!step.doThis.empty() && gHost.command)
         {
             gHost.command(step.doThis);
@@ -951,7 +958,7 @@ void draw(float windowW, float windowH)
         if (clicked >= 0 && clicked < static_cast<int>(step.options.size()))
         {
             gPadUsed = false;
-            ui::se(ui::SeClick);
+            ui::se(ui::SeChoicesDecide);
             const Option& opt = step.options[static_cast<std::size_t>(clicked)];
             applyFlags(opt.set);
             if (!opt.target.empty())
@@ -985,11 +992,23 @@ void draw(float windowW, float windowH)
         {
             labels.push_back(opt.text);
         }
-        const int clicked = storyui::choices(c, font, labels, gTime, gPadUsed ? gPadFocus : -1);
+        // Age of this options block, not gTime: the options only start drawing
+        // once the line has finished typing, and by then "time since the step
+        // started" is already past the fade, so nothing would animate.
+        static std::size_t choiceStep = static_cast<std::size_t>(-1);
+        static float choiceAge = 0.0f;
+        if (choiceStep != gIndex)
+        {
+            choiceStep = gIndex;
+            choiceAge = 0.0f;
+        }
+        choiceAge += ImGui::GetIO().DeltaTime;
+        const int clicked =
+            storyui::choices(c, font, labels, choiceAge, gPadUsed ? gPadFocus : -1);
         if (clicked >= 0 && clicked < static_cast<int>(step.options.size()))
         {
             gPadUsed = false;
-            ui::se(ui::SeClick);
+            ui::se(ui::SeChoicesDecide);
             const Option& opt = step.options[static_cast<std::size_t>(clicked)];
             applyFlags(opt.set);
             if (!opt.target.empty())
@@ -1060,6 +1079,9 @@ void draw(float windowW, float windowH)
             || ImGui::IsKeyPressed(ImGuiKey_RightCtrl, false);
         if (advance)
         {
+            // Every line change clicks; the reference player is silent here, so
+            // this is this game's own UI click rather than a client sound.
+            ui::se(ui::SeClick);
             if (!ready)
             {
                 revealAll(step);

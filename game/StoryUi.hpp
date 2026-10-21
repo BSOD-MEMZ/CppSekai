@@ -26,16 +26,29 @@ namespace storyui
 // Virtual 1920x1080 canvas -> window pixels, letterboxed. Same shape as
 // game/Result.cpp's Canvas; each screen keeps its own copy, and this one is
 // shared by the whole story layer.
+//
+// The letterbox is right for *art* (a 16:9 picture has to keep its shape) but
+// wrong for the dialogue band: the song select underneath is drawn edge to
+// edge, so on a 21:9 window a band that stopped at the 1920 frame left the
+// list visible on both sides and read as "the box is floating in the middle".
+// `winW`/`winH` plus `fromBottom` let the band and everything anchored to it
+// sit flush against the real window edge while text keeps the 16:9 column.
 struct Canvas
 {
     float scale = 1.0f;
     float ox = 0.0f;
     float oy = 0.0f;
+    float winW = 1920.0f;
+    float winH = 1080.0f;
 
     [[nodiscard]] float x(float v) const { return ox + v * scale; }
     [[nodiscard]] float y(float v) const { return oy + v * scale; }
     [[nodiscard]] float s(float v) const { return v * scale; }
     [[nodiscard]] ImVec2 p(float vx, float vy) const { return ImVec2(x(vx), y(vy)); }
+    // A virtual y measured from the bottom of the 1080 frame, mapped to the
+    // real window bottom. `fromBottom(1080)` is the bottom edge, `(681)` the
+    // top of the dialogue band.
+    [[nodiscard]] float fromBottom(float v) const { return winH - (1080.0f - v) * scale; }
 };
 
 Canvas makeCanvas(float windowW, float windowH);

@@ -54,6 +54,12 @@ class AudioEngine
         UiSeWindowOpen,
         UiSeWindowClose,
         UiSeStart,
+        // The client's own story sounds (assets/se/choice_*.wav, out of its UI
+        // kit). The player plays nothing when a line is advanced - it only has
+        // these two plus the area transition - so the story layer uses the
+        // plain click for that (see story::UiSe).
+        UiSeChoicesOpen,
+        UiSeChoicesDecide,
         UiSeCount,
     };
     static constexpr int UI_SE_POOL = 3;

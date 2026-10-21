@@ -51,6 +51,11 @@ enum SeKind
     SeWindowOpen,  // a card / dialog appeared
     SeWindowClose, // a card / dialog started closing
     SeStart,       // the white burst when 确定 launches a live (start.mp3)
+    // The client's own story sounds (choice_*.wav, see platform/Audio.hpp). Last
+    // on purpose: the index is the file order there, so these have to line up
+    // with AudioEngine::UiSeChoicesOpen / UiSeChoicesDecide.
+    SeChoicesOpen,   // the story's options came up
+    SeChoicesDecide, // an option was taken
     // Sentinel: the number of real kinds. Keep it last, and let Ui.cpp size its
     // request array from it - a hand-written count there is what silently
     // dropped start.mp3 for a while.
@@ -218,7 +223,7 @@ bool capsuleButton(const char* label, const ImVec2& size, bool primary);
 // by the host's own overlays - but the look has to stay identical, so the
 // painting lives here and capsuleButton() calls it as well.
 void capsuleDraw(ImDrawList* dl, const ImVec2& lo, const ImVec2& hi, const char* label,
-    bool primary, float hover, float press, float labelSize = 0.0f);
+    bool primary, float hover, float press, float labelSize = 0.0f, float alpha = 1.0f);
 
 // Centered one-line text advanced by one row. rowWidth <= 0 uses the
 // remaining width at the cursor (pass the card interior width to center

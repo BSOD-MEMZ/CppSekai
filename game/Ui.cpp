@@ -37,7 +37,7 @@ namespace
     // start.mp3 was queued and dropped in the same frame, silently. Deriving it
     // from the enum keeps the two in step for good.
     constexpr int kSeRequestCount = static_cast<int>(SeKindCount);
-    static_assert(kSeRequestCount == 7, "ui::SeKind grew: check the priority order below");
+    static_assert(kSeRequestCount == 9, "ui::SeKind grew: check the priority order below");
     bool gSeRequest[kSeRequestCount] = {};
 } // namespace
 
@@ -74,7 +74,7 @@ void flushSe()
         // order in platform/Audio.cpp, so this is what a mismatch shows up as.
         if (std::getenv("CPSEKAI_SE_TRACE") != nullptr) {
             static const char* kNames[kSeRequestCount] = {"click", "select", "slide", "level_choose",
-                "window_open", "window_close", "start"};
+                "window_open", "window_close", "start", "choice_open", "choice_decide"};
             std::printf("[se] %s\n", kNames[pick]);
             std::fflush(stdout);
         }
@@ -985,7 +985,7 @@ void infoRows(const std::vector<std::pair<std::string, std::string>>& rows, floa
 }
 
 void capsuleDraw(ImDrawList* dl, const ImVec2& loIn, const ImVec2& hiIn, const char* label,
-    bool primary, float hover, float press, float labelSize)
+    bool primary, float hover, float press, float labelSize, float alpha)
 {
     if (dl == nullptr || label == nullptr) {
         return;
@@ -1011,6 +1011,11 @@ void capsuleDraw(ImDrawList* dl, const ImVec2& loIn, const ImVec2& hiIn, const c
     // mint with white text. Applied after the hover blend, so a held hovered
     // button still ends up exactly on the pressed colour.
     fill = mixColor(fill, primary ? kPrimaryPress : kWhitePress, press);
+    // `alpha` is for callers that fade the whole control in (the story's
+    // options). Only the fills and the label follow it; the halo is drawn by
+    // dropShadow, which has no alpha parameter - it pops in with the capsule,
+    // which is invisible at these sizes.
+    fill = withAlpha(fill, alpha);
     // The reference's halo, not a drop: `0 0 8px rgba(68,68,102,.5)`, so centred
     // on the capsule and as strong as the one under its native controls.
     dropShadow(dl, lo, hi, radius, s);
@@ -1022,7 +1027,8 @@ void capsuleDraw(ImDrawList* dl, const ImVec2& loIn, const ImVec2& hiIn, const c
     const float fontSize = labelSize > 0.0f ? labelSize
                                             : std::min(27.0f * s, (hiIn.y - loIn.y) * 0.48f);
     // The label follows the press: mint-on-pale / white-on-mint, as above.
-    const ImU32 labelColor = mixColor(kBtnText, primary ? kPrimaryPressText : kWhitePressText, press);
+    const ImU32 labelColor = withAlpha(
+        mixColor(kBtnText, primary ? kPrimaryPressText : kWhitePressText, press), alpha);
     const ImVec2 textSize = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, label);
     dl->AddText(font, fontSize,
         ImVec2((lo.x + hi.x - textSize.x) * 0.5f, (lo.y + hi.y - textSize.y) * 0.5f), labelColor, label);

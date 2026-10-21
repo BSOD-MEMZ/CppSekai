@@ -176,6 +176,8 @@ void AudioEngine::loadUiSe(const std::string& dir)
         "window_open.mp3",
         "window_close.mp3",
         "start.mp3",
+        "choice_open.wav",
+        "choice_decide.wav",
     };
     for (int kind = 0; kind < UiSeCount; ++kind) {
         const std::string path = dir + "/" + kFiles[kind];

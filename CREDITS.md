@@ -125,6 +125,7 @@ CppSekai (AGPL-3.0-only)  ← 本仓库        加平台层、判定引擎、UI�
 |---|---|---|---|
 | `assets/story/ui/**` | 12 | 剧情界面框：对话 / 选项 / 场景标题 / 暗角，取自 [SEKAI-Stories](https://sekai-stories.pages.dev/)（其 LICENSE 明确写：**图片不在 GPL 内，仅限个人或教育用途**） | **是** |
 | `assets/story/ui/pjsk/**` | 6 | **客户端解包原图**（2026-10-21）：`bg_story_adv`（4×399 白遮罩，对话框底）、`bg_base_round_h48_wh`、`btn_round_h80_wh`、`eff_btn_round_h80_a70_wh`、`icon_pageForward_gn`、`icon_triangle_h22_wh`。取自 Moesekai 的 UI 套件派生结果（`assets.pjsk.moe/.../inapp/cn-6.4.0/`），尺寸与九宫格参数照客户端 `Sprite.json` 的 `m_Rect`/`m_Border` | **是** |
+| `assets/se/choice_open.wav`、`choice_decide.wav` | 2 | **客户端解包音效**（2026-10-21）：剧情选项弹出 / 选定的提示音，44.1k 立体声 16bit，1.39s / 1.49s。同上来源 | **是** |
 
 > **为什么这是问题**：官方素材的复制权在权利人手里。免费、非商业、写了「版权归官方」
 > —— 都**不改变「未经许可再分发即侵权」**这个事实。GitHub 上同类项目活着是因为
