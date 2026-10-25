@@ -1310,6 +1310,9 @@ int main(int argc, char** argv)
     // an interactive session to be driven by PostMessage), so the launch path
     // gets its own switch.
     double chartDlTestAtSec = -1.0;
+    // Debug: freeze the tap ripple at four fixed ages so one --screenshot run
+    // shows the whole flipbook (the effect is otherwise driven by real clicks).
+    bool tapFxTest = false;
     // --story-test [id]: boot straight into the tutorial script (headless
     // checks: --screenshot can then photograph any step).
     std::string storyTestId;
@@ -1559,6 +1562,9 @@ int main(int argc, char** argv)
             if (i + 1 < utf8Argc && utf8Argv[i + 1][0] != '-') {
                 confirmFlashAtSec = std::atof(utf8Argv[++i]);
             }
+        } else if (arg == "--tap-fx-test") {
+            // Debug: freeze the tap ripple at fixed ages for headless checks.
+            tapFxTest = true;
         } else if (arg == "--chartdl-test") {
             // Debug: press 下载谱面 (the empty-list button) at this second.
             chartDlTestAtSec = 1.5;
@@ -2564,6 +2570,21 @@ int main(int argc, char** argv)
         std::fflush(stdout);
     };
     applyRenderMode();
+
+    if (tapFxTest) {
+        // Four bursts frozen at fixed ages: dot -> rings -> fade, all in one
+        // screenshot. Ages come from the measured 0.5s lifetime.
+        tapEffect.setFrozen(true);
+        const float ages[4] = {0.03f, 0.13f, 0.26f, 0.42f};
+        const float xs[4] = {0.20f, 0.40f, 0.60f, 0.80f};
+        for (int i = 0; i < 4; ++i) {
+            tapEffect.spawnAt(static_cast<float>(windowW) * xs[i],
+                static_cast<float>(windowH) * 0.42f, ages[i]);
+        }
+        std::printf("[tap-fx] test bursts spawned (frozen)\n");
+        std::fflush(stdout);
+    }
+
     // Player mode drives the core's hit effects from the judgement engine
     // instead of letting the chart timeline fire them (autoplay).
     core_api::setEffectAutoplay(autoPlay);
@@ -9195,11 +9216,11 @@ int main(int argc, char** argv)
             if (party.active() && party.playerCount() > 1 && !showDebug) {
                 std::string hint;
                 if (party.isHost()) {
-                    hint = mpConfirmed ? "已确定 · 等待其他玩家" : "选好歌按确定开始";
+                    hint = mpConfirmed ? "等待其他玩家" : "准备好的话就开始吧";
                 } else if (mpConfirmed) {
-                    hint = "已确定 · 等待其他玩家";
+                    hint = "等待其他玩家";
                 } else {
-                    hint = "在手机里选难度，然后按确定";
+                    hint = "请选择难度";
                 }
                 game::drawPartyBadge(party.players(), party.slot(), windowW, windowH,
                     userSettings.uiScale, hint);

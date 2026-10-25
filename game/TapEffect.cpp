@@ -1,17 +1,15 @@
-// CppSekai - PJSK style global tap feedback. See TapEffect.hpp.
+// CppSekai - PJSK style global tap feedback. See TapEffect.hpp for the
+// provenance of every number here (measured from pjsk 7.1.0's particle
+// systems, not eyeballed).
 //
-// Reproduces the pjsk button tap feedback: two staggered rings expand from the
-// press point while roughly ten gradient-filled irregular triangles fly
-// outward, spin down and fade. All pieces are white masks, so the color comes
-// from the tint tables below - the same textures serve every screen.
-//
-// NOTE: assets/fx/tap_tri_0.png is deliberately NOT loaded. It looks like a
-// single triangle but is actually a 10-sprite atlas; rendering it whole
-// stretches the entire sheet into one blob.
+// Draw order matters: the big soft flare goes underneath, then the thin ring,
+// then the main double ring, then the shards on top.
 #include "TapEffect.hpp"
 
 #include "Ui.hpp"
 #include "platform/Renderer.hpp"
+
+#include <GL/gl.h>
 
 #include <algorithm>
 #include <cmath>
@@ -20,26 +18,31 @@ namespace game
 {
 namespace
 {
-// Total life of the outer ring, in seconds. pjsk's ripple is quick and snappy.
-constexpr float kDuration = 0.32f;
-// Shards live shorter than the ring: they are gone while it still expands.
-constexpr float kTriangleDuration = 0.24f;
-// Outer ring diameter in design pixels at the end of the animation.
-constexpr float kRingDiameter = 140.0f;
-// How far the shards travel beyond their spawn radius, in design pixels.
-constexpr float kShardDistance = 46.0f;
-// Shards start slightly off the tap point, not dead centre.
-constexpr float kShardSpawnRadius = 14.0f;
-// Shard edge length in design pixels at spawn / at the end.
-constexpr float kShardSizeStart = 20.0f;
-constexpr float kShardSizeEnd = 12.0f;
+// --- measured constants -------------------------------------------------
+// PT_01 startLifetime = 0.5s (0.45s for the held variant).
+constexpr float kRingLife = 0.50f;
+constexpr float kThinLife = 0.45f;
+constexpr float kFlareLife = 0.50f;
+// Frame counts actually used inside each 4x4 sheet.
+constexpr int kMainFrames = 14;
+constexpr int kThinFrames = 16;
+// Quad diameter in design pixels. The original keeps startSize constant
+// (startSpeed 0, no size-over-lifetime curve): all growth is baked into the
+// art, so the quad never scales. 160/330/650 is the original ratio; 200 here
+// maps the main ring to roughly the size it reads on a 1920x1080 canvas.
+constexpr float kRingDiameter = 200.0f;
+constexpr float kThinDiameter = 250.0f;
+constexpr float kFlareDiameter = 520.0f;
+constexpr int kTiles = 4;
 
+// --- shards (mesh particles in the original) ----------------------------
+constexpr float kTriangleDuration = 0.30f;
+constexpr float kShardDistance = 38.0f;
+constexpr float kShardSpawnRadius = 12.0f;
+constexpr float kShardSizeStart = 18.0f;
+constexpr float kShardSizeEnd = 11.0f;
 constexpr int kShardCount = 10;
 
-// One flying shard: flight direction, total spin, fill vs outline mask,
-// distance and size jitter. Angles cover the full circle in 36 degree steps
-// with a wobble so the fan does not look like a clock face. Fixed values (no
-// RNG) so a screenshot is reproducible.
 constexpr TapEffect::Piece kPieces[kShardCount] = {
     {-90.0f, 210.0f, false, 1.00f, 1.15f},
     {-54.0f, -180.0f, true, 0.82f, 0.90f},
@@ -55,14 +58,12 @@ constexpr TapEffect::Piece kPieces[kShardCount] = {
 
 constexpr float kDegToRad = 3.14159265358979f / 180.0f;
 
-// Tap feedback tints, taken from the ui:: pjsk palette so the effect matches
-// the rest of the screens. The textures are white masks, so this is where the
-// color actually comes from - edit here to retune the whole effect.
-constexpr ImU32 kRingTint = IM_COL32(206, 250, 242, 255); // near-white mint
-constexpr ImU32 kFillTint = IM_COL32(106, 232, 208, 255); // ui::kPrimary mint
+// Tints for the legacy path and the shards. The sheets carry their own color,
+// so only the fallback ring and the masks get tinted.
+constexpr ImU32 kRingTint = IM_COL32(206, 250, 242, 255);    // near-white mint
+constexpr ImU32 kFillTint = IM_COL32(106, 232, 208, 255);    // ui::kPrimary mint
 constexpr ImU32 kOutlineTint = IM_COL32(255, 102, 158, 255); // ui::kCheckPink pink
 
-// Keeps the RGB of a pjsk palette color and swaps in the fade alpha.
 ImU32 withAlpha(ImU32 color, float alpha)
 {
     const auto a = static_cast<ImU32>(alpha * 255.0f + 0.5f);
@@ -72,7 +73,6 @@ ImU32 withAlpha(ImU32 color, float alpha)
 ImU32 fadeShadow(float alpha)
 {
     const int a = static_cast<int>(alpha * 255.0f + 0.5f);
-    // Dark blue-gray, close to the pjsk text shadow color.
     return IM_COL32(48, 52, 72, a);
 }
 
@@ -81,19 +81,30 @@ float clamp01(float v)
     return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
 }
 
-// Slow-out easing. Used for the ring scale (pops out, settles gently).
 float easeOutCubic(float t)
 {
     const float inv = 1.0f - t;
     return 1.0f - inv * inv * inv;
 }
 
-// Gentler slow-out. Shard travel and spin use this: cubic reaches full
-// distance at ~60% of the life and then freezes, which reads as mechanical.
 float easeOutQuad(float t)
 {
     const float inv = 1.0f - t;
     return 1.0f - inv * inv;
+}
+
+// pjsk draws the ripple with an additive blend (it glows on top of the
+// dimmed song-select backdrop). The ImGui GL3 backend sets blending once per
+// draw data, so a draw-list callback has to switch it and put it back.
+void beginAdditive(const ImDrawList*, const ImDrawCmd*)
+{
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+}
+
+void endAdditive(const ImDrawList*, const ImDrawCmd*)
+{
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 }
 
 } // namespace
@@ -104,11 +115,15 @@ bool TapEffect::load(platform::Renderer& renderer, const std::string& fxDir, std
     {
         const char* file;
         ImTextureID* out;
+        bool required;
     };
     const Entry entries[] = {
-        {"tap_ring.png", &mRing},
-        {"tap_tri_2.png", &mFill},    // gradient-filled irregular triangle
-        {"tap_tri_1.png", &mOutline}, // gradient-outlined irregular triangle
+        {"tap_sheet.png", &mSheetA, true},   // 4x4 main ripple, generated art
+        {"tap_sheet_1.png", &mSheetB, false}, // 4x4 thin ring
+        {"tap_flare.png", &mFlare, false},    // single radial glow
+        {"tap_ring.png", &mRing, false},      // legacy fallback ring
+        {"tap_tri_2.png", &mFill, false},     // gradient-filled triangle mask
+        {"tap_tri_1.png", &mOutline, false},  // gradient-outlined triangle mask
     };
 
     bool anyLoaded = false;
@@ -117,8 +132,9 @@ bool TapEffect::load(platform::Renderer& renderer, const std::string& fxDir, std
         std::string error;
         const GLuint id = renderer.loadUiTexture(path, error);
         if (id == 0) {
-            // Missing pieces are not fatal: the effect just skips that layer.
-            outError = error;
+            if (entry.required) {
+                outError = error;
+            }
             *entry.out = 0;
             continue;
         }
@@ -130,13 +146,18 @@ bool TapEffect::load(platform::Renderer& renderer, const std::string& fxDir, std
 
 void TapEffect::spawn(float x, float y)
 {
-    if (mRing == 0) {
+    spawnAt(x, y, 0.0f);
+}
+
+void TapEffect::spawnAt(float x, float y, float age)
+{
+    if (!loaded()) {
         return;
     }
     Instance instance;
     instance.x = x;
     instance.y = y;
-    instance.age = 0.0f;
+    instance.age = age;
     instance.seed = mNextSeed++;
     mActive.push_back(instance);
 
@@ -149,17 +170,27 @@ void TapEffect::spawn(float x, float y)
 
 void TapEffect::update(float dt)
 {
-    for (Instance& instance : mActive) {
-        instance.age += dt;
+    if (!mFrozen) {
+        for (Instance& instance : mActive) {
+            instance.age += dt;
+        }
     }
+    const float maxLife = std::max(kRingLife, std::max(kThinLife, kFlareLife));
     mActive.erase(std::remove_if(mActive.begin(), mActive.end(),
-                      [](const Instance& instance) { return instance.age >= kDuration; }),
+                      [maxLife](const Instance& instance) { return instance.age >= maxLife; }),
         mActive.end());
+}
+
+void TapEffect::layerList(FlipLayer (&out)[3]) const
+{
+    out[0] = FlipLayer{mFlare, 1, 1, kFlareLife, 0.0f, kFlareDiameter, 0.40f, true};
+    out[1] = FlipLayer{mSheetB, kTiles, kThinFrames, kThinLife, 0.0f, kThinDiameter, 0.80f, false};
+    out[2] = FlipLayer{mSheetA, kTiles, kMainFrames, kRingLife, 0.0f, kRingDiameter, 1.00f, false};
 }
 
 void TapEffect::draw()
 {
-    if (mActive.empty() || mRing == 0) {
+    if (mActive.empty()) {
         return;
     }
     ImDrawList* drawList = ImGui::GetForegroundDrawList();
@@ -167,50 +198,96 @@ void TapEffect::draw()
         return;
     }
     const float scale = ui::scale();
-    // Shadow pass first so the white pieces sit cleanly on light cards.
-    for (const Instance& instance : mActive) {
-        drawRing(drawList, instance, scale, 0.30f, true);
-        for (int i = 0; i < kShardCount; ++i) {
-            drawShard(drawList, instance, kPieces[i], scale, 0.30f, true);
+
+    FlipLayer layers[3];
+    layerList(layers);
+
+    if (mSheetA != 0) {
+        // Flipbook path: constant-size quads + per-frame UV, exactly like the
+        // original's Texture Sheet Animation module. Additive so the rings read
+        // as light on top of the blurred song-select backdrop.
+        drawList->AddCallback(&beginAdditive, nullptr);
+        for (const FlipLayer& layer : layers) {
+            for (const Instance& instance : mActive) {
+                drawFlip(drawList, instance, layer, scale);
+            }
+        }
+        drawList->AddCallback(&endAdditive, nullptr);
+    } else if (mRing != 0) {
+        // Legacy fallback: scaled ring sprite, keeps old installs working.
+        for (const Instance& instance : mActive) {
+            drawRingLegacy(drawList, instance, scale, 0.30f, true);
+        }
+        for (const Instance& instance : mActive) {
+            drawRingLegacy(drawList, instance, scale, 1.0f, false);
         }
     }
-    // Color pass.
+
+    // Shards on top of every ring layer.
     for (const Instance& instance : mActive) {
-        drawRing(drawList, instance, scale, 1.0f, false);
+        for (int i = 0; i < kShardCount; ++i) {
+            drawShard(drawList, instance, kPieces[i], scale, 0.25f, true);
+        }
+    }
+    for (const Instance& instance : mActive) {
         for (int i = 0; i < kShardCount; ++i) {
             drawShard(drawList, instance, kPieces[i], scale, 1.0f, false);
         }
     }
 }
 
-void TapEffect::drawRing(ImDrawList* drawList, const Instance& in, float scale, float alphaScale,
-    bool shadow) const
+void TapEffect::drawFlip(ImDrawList* drawList, const Instance& in, const FlipLayer& layer,
+    float scale) const
 {
-    // Outer ring first, then the tighter / fainter inner one a beat later.
-    const RingPhase phases[2] = {
-        {0.00f, 0.15f, 1.00f, 1.00f},
-        {0.05f, 0.10f, 0.70f, 0.55f},
-    };
-    for (const RingPhase& phase : phases) {
-        const float life = kDuration - phase.delay;
-        const float t = clamp01((in.age - phase.delay) / life);
-        if (t <= 0.0f) {
-            continue;
-        }
-        const float alpha = std::pow(1.0f - t, 1.5f) * phase.alphaScale * alphaScale;
-        if (alpha <= 0.004f) {
-            continue;
-        }
-        const float diameter =
-            kRingDiameter * scale * (phase.startScale + (phase.endScale - phase.startScale) * easeOutCubic(t));
-
-        // The shadow copy sits slightly down-right, like the pjsk text shadow.
-        const float offset = shadow ? 1.5f * scale : 0.0f;
-        const ImVec2 min(in.x - diameter * 0.5f + offset, in.y - diameter * 0.5f + offset);
-        const ImVec2 max(in.x + diameter * 0.5f + offset, in.y + diameter * 0.5f + offset);
-        drawList->AddImage(mRing, min, max, ImVec2(0, 0), ImVec2(1, 1),
-            shadow ? fadeShadow(alpha) : withAlpha(kRingTint, alpha));
+    if (layer.tex == 0) {
+        return;
     }
+    const float t = clamp01((in.age - layer.delay) / layer.life);
+    if (in.age < layer.delay || t >= 1.0f) {
+        return;
+    }
+
+    ImVec2 uv0(0.0f, 0.0f);
+    ImVec2 uv1(1.0f, 1.0f);
+    float alpha = layer.alpha;
+    if (layer.single) {
+        // The flare has no baked fade, so it fades here.
+        alpha *= std::pow(1.0f - t, 1.6f);
+    } else {
+        // frameOverTime is a linear 0 -> 1 ramp over the lifetime.
+        int frame = static_cast<int>(t * static_cast<float>(layer.frames));
+        frame = frame < 0 ? 0 : (frame >= layer.frames ? layer.frames - 1 : frame);
+        const int tiles = layer.tiles > 0 ? layer.tiles : 1;
+        const float tile = 1.0f / static_cast<float>(tiles);
+        const int col = frame % tiles;
+        const int row = frame / tiles;
+        uv0 = ImVec2(col * tile, row * tile);
+        uv1 = ImVec2((col + 1) * tile, (row + 1) * tile);
+    }
+    if (alpha <= 0.004f) {
+        return;
+    }
+
+    const float diameter = layer.diameter * scale;
+    const float half = diameter * 0.5f;
+    drawList->AddImage(layer.tex, ImVec2(in.x - half, in.y - half), ImVec2(in.x + half, in.y + half),
+        uv0, uv1, IM_COL32(255, 255, 255, static_cast<int>(alpha * 255.0f + 0.5f)));
+}
+
+void TapEffect::drawRingLegacy(ImDrawList* drawList, const Instance& in, float scale,
+    float alphaScale, bool shadow) const
+{
+    const float t = clamp01(in.age / kRingLife);
+    const float alpha = std::pow(1.0f - t, 1.5f) * alphaScale;
+    if (alpha <= 0.004f) {
+        return;
+    }
+    const float diameter = kRingDiameter * scale * (0.15f + 0.85f * easeOutCubic(t));
+    const float offset = shadow ? 1.5f * scale : 0.0f;
+    const ImVec2 min(in.x - diameter * 0.5f + offset, in.y - diameter * 0.5f + offset);
+    const ImVec2 max(in.x + diameter * 0.5f + offset, in.y + diameter * 0.5f + offset);
+    drawList->AddImage(mRing, min, max, ImVec2(0, 0), ImVec2(1, 1),
+        shadow ? fadeShadow(alpha) : withAlpha(kRingTint, alpha));
 }
 
 void TapEffect::drawShard(ImDrawList* drawList, const Instance& in, const Piece& piece, float scale,
@@ -220,8 +297,6 @@ void TapEffect::drawShard(ImDrawList* drawList, const Instance& in, const Piece&
     if (tex == 0) {
         return;
     }
-    // Shards fade on their own, shorter clock than the ring, and nearly linear
-    // so they are visible for most of their life instead of blinking.
     const float t = clamp01(in.age / kTriangleDuration);
     const float alpha = std::pow(1.0f - t, 1.1f) * alphaScale;
     if (alpha <= 0.004f) {
@@ -230,7 +305,6 @@ void TapEffect::drawShard(ImDrawList* drawList, const Instance& in, const Piece&
 
     const float travel = (kShardSpawnRadius + easeOutQuad(t) * kShardDistance * piece.distanceScale)
         * scale;
-    // The whole fan is rotated a little per burst so repeated clicks vary.
     const float fanRotation = (static_cast<float>(in.seed % 10) / 10.0f) * 360.0f
         + static_cast<float>(in.seed % 7) * 5.0f;
     const float angle = (piece.angleDeg + fanRotation) * kDegToRad;
@@ -241,13 +315,10 @@ void TapEffect::drawShard(ImDrawList* drawList, const Instance& in, const Piece&
 
     const float cx = in.x + std::cos(angle) * travel;
     const float cy = in.y + std::sin(angle) * travel;
-    // Spin decelerates along with the travel, not linear - a constant spin
-    // keeps rotating after the piece has visibly stopped and looks wrong.
     const float rotation = (piece.spinDeg * easeOutQuad(t) + fanRotation) * kDegToRad;
     const float c = std::cos(rotation);
     const float s = std::sin(rotation);
 
-    // Shadow copy drifts down-right, then the colored piece on top.
     const float offset = shadow ? 1.5f * scale : 0.0f;
 
     const ImVec2 local[4] = {
