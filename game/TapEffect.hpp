@@ -108,10 +108,9 @@ class TapEffect
         float life = 0.5f;   // seconds
         float diameter = 160.0f; // design px
         float alpha = 1.0f;
-        bool single = false; // true = single image, no UV tiling (the flare)
     };
 
-    void layerList(FlipLayer (&out)[2]) const;
+    void layerList(FlipLayer (&out)[1]) const;
     void buildShards(Instance& instance, unsigned& rng) const;
     void drawFlip(ImDrawList* dl, float cx, float cy, float t, const FlipLayer& layer,
         float scale) const;
@@ -120,7 +119,6 @@ class TapEffect
         bool shadow) const;
 
     ImTextureID mSheet = 0;    // 4x4 main ripple      (tex_tap_texturesheet)
-    ImTextureID mFlare = 0;    // single radial glow   (tex_tap_flare)
     ImTextureID mTri = 0;      // 2x2 colour triangles (tex_sekai_01_2)
     ImTextureID mRing = 0;     // legacy fallback ring
     std::vector<Instance> mActive;

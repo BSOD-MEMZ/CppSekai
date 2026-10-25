@@ -2579,14 +2579,17 @@ int main(int argc, char** argv)
     applyRenderMode();
 
     if (tapFxTest) {
-        // One real burst, frozen at --tap-fx-age (default 0.35s: the ring is
-        // mid-animation and most triangles have been born). A single burst is
-        // what one click actually looks like - spawning several at once makes
-        // the screen look far busier than the game ever does.
+        // Three real bursts side by side, all frozen at --tap-fx-age. The
+        // particle sizes are Random Between Two Curves, so one burst alone is
+        // not representative - three of them show the spread. Each burst gets
+        // its own seed because mNextSeed advances per spawn.
         tapEffect.setFrozen(true);
-        tapEffect.spawnAt(static_cast<float>(windowW) * 0.5f,
-            static_cast<float>(windowH) * 0.5f, tapFxAge);
-        std::printf("[tap-fx] single burst frozen at %.2fs\n", static_cast<double>(tapFxAge));
+        const float xs[3] = {0.22f, 0.50f, 0.78f};
+        for (int i = 0; i < 3; ++i) {
+            tapEffect.spawnAt(static_cast<float>(windowW) * xs[i],
+                static_cast<float>(windowH) * 0.5f, tapFxAge);
+        }
+        std::printf("[tap-fx] 3 bursts frozen at %.2fs\n", static_cast<double>(tapFxAge));
         std::fflush(stdout);
     }
 

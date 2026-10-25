@@ -3036,54 +3036,62 @@ UI 在 **设置 → 演奏 → 按键映射**（3 列 × 4 行，点一格再按
 
 ## 触摸特效（TapEffect）2026-10-25 —— 环是 flipbook，三角是粒子
 
-`game/TapEffect.*`：非演奏状态下点哪都会在点击点放一次特效。**所有参数都是从
-pjsk 日服 7.1.0 的 `ScreenLayerTouchEffect` 里读出来的**（prefab 走 AssetRipper 的
-本地 HTTP API 按路径单取 YAML；原始文件在 `D:\Tools\rea\work\jp\fx_touch\`，
-报告 `RE-report-jp.md` 第 9/10 节）。
+`game/TapEffect.*`：非演奏状态下点哪都会在点击点放一次特效。**参数全部来自
+pjsk 日服 7.1.0 的 `ScreenLayerTouchEffect`**（prefab 走 AssetRipper 本地 HTTP API
+按 PathID 单取 YAML；原始文件 `D:\Toolsea\work\jpx_touch\`，报告
+`RE-report-jp.md` 第 9/10/11 节）。
 
-prefab 结构（`Assets/Resources/screen/prefabs/ScreenLayerTouchEffect`）：
+### 先分清是哪个 fx
 
-```
-ComponentRoot → TouchEffect → fx_Tap_single / Follow(fx_Tap_loop) / fx_Tap_flick
-                                  └ root: PT_01 + PT_02 + SekaiEffect_2{particle1..3, particle2_1}
-```
+prefab 里 `TouchEffect` 下有 **fx_Tap_single / Follow(fx_Tap_loop) / fx_Tap_flick**
+三套，外加 `TouchEffect (1)`~`(4)` 四个额外实例。**参数完全不同**，早期把 loop 组
+（scale 210、rate 6/s、life 1.5s）当成单击，才是"三角形太大/太多"的根源。
 
-- **环 `PT_01`**：4x4 图集**16 帧全用**（`animationType` WholeSheet；`rowMode: 1` 在
-  WholeSheet 下无效，别被它误导）、life 0.5s、`startSpeed = 0`、`startSize = 160`、
-  `fps 30`（0.5s 扫完 16 帧 ≈ 32fps）、Transform scale = 1。**quad 尺寸恒定**，
-  扩张完全靠图本身逐帧变大——别去缩 quad，那就退回"缩放环"了。
-- **柔光 `PT_02`**：单张 `tex_tap_flare`、`startSize = 650`、0.5s、`rateOverTime 4/s`。
-- **三角 `particle1/2/3/2_1`**：都是 mesh `sekai_PT_05`（三角形，10x8.7）+ 贴图
-  `tex_sekai_01_2`（**2x2 四色**：粉/黄/绿/蓝，白描边 + 垂直渐变）。尺寸 =
-  `startSize x RectTransform.localScale`（scale 是 **210 / 157 / 210**，所以
-  42~147 / 14 / 2.1~10.5 px）；发射形状 `Circle(type 10)`，`radius x scale` 就是
-  出生环半径（210 / 157 px）；`startRotation ±2π`、`RotationOverLifetime = π rad/s`、
-  UV 用 `startFrame 0~0.9999` 随机取四格之一。
-- **`startSpeed` 沿圆盘法线（屏幕外）**，正交 2D 下看不见位移——所以三角形是
-  "原地出现 + 自转 + 淡入淡出"，`kRadialGain` 只是把它折成径向漂移的艺术补偿（0 = 严格照原样）。
-- **ColorOverLifetime 的坑（踩过）**：Unity 的 Gradient 把 8 个 key 塞进一个数组，
-  但**只有前 `m_NumColorKeys` 个的 RGB 算颜色**（走 ctime 轴）、**只有前 `m_NumAlphaKeys`
-  个的 A 算透明度**（走**另一条 atime 轴**）。剩下那些 key 的 rgb 是 `(0,0,0)` 占位，
-  当成颜色关键帧就会得出"三角中途变纯黑"的错误结论（第一版就是这么错的）。
-  实际：particle3 颜色只在 `t=0` 浅蓝灰 → `t=1` 深蓝灰之间变，alpha 是
-  `0 → 0.5(25%) → 0.5(70%) → 0`；particle2_1 颜色恒白，alpha 5% 就跳到 1。
-- **颜色是线性空间**：Unity 存的 `(0.138,0.175,0.302)` 直接当 sRGB 用会变近黑，
-  必须过 `srgbOf()`。
-- **混合**：环 + 柔光 additive（`AddCallback` 切 `glBlendFunc(SRC_ALPHA, ONE)`，
-  **画完必须恢复** `ONE_MINUS_SRC_ALPHA`，否则之后所有 UI 都发光）；
-  **三角走 alpha blend**（它们带白描边 + 渐变填充，是"贴纸"不是"光"）。这条是从
-  美术特征推断的，shader `sekaieffect` 没有源码可取。
-- **尺寸基准**：`PT_01`/`PT_02`/`root` 的 scale 都是 1，所以按 `1 world unit = 1 design px`
-  换算（这是唯一一个未经证实的假设，改了它就整体缩放）。
-- 贴图：`assets/fx/tap_sheet.png`（1024，4x4）、`tap_flare.png`（256）、
-  `tap_tri.png`（512，2x2，**已用 `.workbuddy/tools/strip_tri_background.py` 抹掉
-  三角形外面的 alpha=255 底色**——官方 mesh 本身是三角形所以从不采样那层底色，
-  我们拿正方形 quad 就会把底色画成方块）。
+GameObjects[] 在 prefab View 页面上是**深度优先**顺序，用它可以按区间切子树
+（脚本 `jp_fx_group.py`）。单击组（`fx_Tap_single`，PathID 98）只有 6 个粒子系统：
+
+| 节点 | length | life | startSize | speed | 备注 |
+|---|---|---|---|---|---|
+| `PT_01` | 1.0 | 0.5 | **160 const** | 0 | uv 4x4 16 帧 fps30，shape 关闭，rate 0 |
+| `particle3` | 0.5 | 0.3~0.7 | rand-curve ×1.5 | **35~100** | 2.5~235 px，ColorModule 4 个 alpha key |
+| `particle2` | 0.5 | 0.1~0.7 | rand-curve ×0.14 | 35~100 | 15.7~18.2 px |
+| `particle2_1` | 0.5 | 0.2~0.7 | rand-curve ×0.09 | 35~100 | 1.2~11.7 px |
+| `particle1` | 25 | 30~35 | 0.01~0.05 | 1~20 | shape 关闭；life 截到 2s |
+
+**没有 PT_02 柔光**——650px 的 flare 只存在于 loop / 额外实例里。
+
+### 尺寸怎么算
+
+- 四个粒子节点的 `RectTransform.localScale` **都是 157**（不是 210/0.1，那是 loop 组）。
+- `scalingMode` 0 = Hierarchy，所以世界尺寸 = `startSize × 157`。
+- **`startSize` 的 `minMaxState` 是 2 = Random Between Two Curves**，不是 Curve。
+  尺寸在 `minCurve × minScalar` 和 `maxCurve × scalar` 之间随机（particle3 就是
+  0.016~1.5 世界单位 = 2.5~235 px，跨度 100 倍）。取上限当成固定值就会得到
+  "一个巨大三角"，这是第二轮的错误。
+- `rateOverTime` 全是 1/s，`lengthInSec` 0.5，`looping` 0 → **一次点击每个系统最多
+  发一个粒子**，而且都在 t=0。所以单击是"一个环 + 偶尔一个大三角 + 两个小碎片"，
+  不是"一片三角"。
+
+### 其它踩过的坑
+
+- **`startSpeed` 沿圆盘法线（+Z，屏幕外）**，正交 2D 下没有位移。代码里用
+  `kRadialGain` 把它折算成径向漂移（0 = 严格照原样）。
+- **`ColorOverLifetime` 的 Gradient**：只有前 `m_NumColorKeys` 个 key 的 RGB 是颜色
+  （走 ctime 轴），前 `m_NumAlphaKeys` 个的 A 是 alpha（走**独立的 atime 轴**），
+  其余 key 的 rgb 是 `(0,0,0)` 占位。当成颜色关键帧会得出"三角中途变纯黑"的假结论。
+- **颜色是线性空间**，必须过 `srgbOf()`，否则是近黑色块。
+- **`tex_sekai_01_2` 每格三角形外面有 alpha=255 的底色**，官方 mesh 是三角形所以
+  从不采样；用正方形 quad 就会画成方块 → `strip_tri_background.py` 抹掉。
+- **混合**：环走 additive（`AddCallback` 切 `glBlendFunc(SRC_ALPHA, ONE)`，**画完
+  必须恢复** `ONE_MINUS_SRC_ALPHA`）；三角走 alpha blend（白描边 + 渐变填充 =
+  贴纸不是光）。这条是从美术特征推断的，shader `sekaieffect` 没源码。
+- **`kShardScale`（默认 0.55）是文件里唯一的非实测值**，只缩放三角直径。设 1.0
+  就是字面值（particle3 峰值 235px = 环的 1.5 倍，在浅色背景上像块大玻璃）。
+- 随机数用 **xorshift32**：原来的 LCG 前几个值挤在 0 附近，每次测试都抽到最小尺寸。
 - 缺 `tap_sheet.png` 时回退到老的 `tap_ring.png` 缩放路径（这条别删）。
-- 无头验证：`--tap-fx-test [秒]` 冻结**一个** burst（默认 0.35s）。别一次 spawn 多个
-  —— 一次点击只有 1 个 burst，叠 8 个会让画面看着比游戏里满得多。
-  截图用 `.workbuddy/tools/shot.sh`：项目自己的 `--screenshot` 偶尔会抓到还没画完的帧
-  （整张纯白、PNG 只有 ~35KB），那个脚本会检查大小并自动重试。
+- 无头验证：`--tap-fx-test [秒]` 冻结**三个** burst（尺寸是随机的，一个不代表分布）。
+  截图用 `.workbuddy/tools/shot.sh`：`--screenshot` 偶尔抓到没画完的帧（纯白、
+  ~35KB），脚本会检查大小并重试。
 
 ## 待办（按优先级）
 

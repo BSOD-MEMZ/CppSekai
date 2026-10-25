@@ -16,32 +16,40 @@ namespace game
 {
 namespace
 {
-// --- PT_01 main ripple / PT_02 glow -------------------------------------
-// Transform scale is 1 for both, so startSize is a design-pixel diameter.
+// --- PT_01 main ripple ---------------------------------------------------
+// Read out of fx_Tap_single's ParticleSystem_217: length 1.0s, looping 0,
+// scalingMode Hierarchy (0), Transform scale 1, so startSize 160 is a direct
+// design-pixel diameter. Its ShapeModule is disabled and rateOverTime is 0:
+// the ring is spawned by Play() alone.
 constexpr float kRingLife = 0.50f;
-constexpr float kFlareLife = 0.50f;
 constexpr float kRingDiameter = 160.0f;
-constexpr float kFlareDiameter = 650.0f;
 constexpr int kTiles = 4;
 constexpr int kFrames = 16; // WholeSheet: all 16 tiles, 30 fps ramp 0 -> 0.9999
 
-// --- mesh triangle particles -------------------------------------------
-// size = startSize * RectTransform.localScale, radius = shape radius * scale.
-// The original emits from a Circle shape with radiusThickness 0 (edge only) and
-// startSpeed along the disc normal. The normal points out of the screen, so in
-// an orthographic 2D view the particles do not travel at all - they appear on a
-// ring, spin and fade in. kRadialGain > 0 translates that speed into an outward
-// drift so the burst reads as "scattering" on a flat canvas; 0 = literal.
-constexpr float kRadialGain = 0.22f;
-constexpr float kSpinRate = 3.14159265f; // RotationOverLifetime: pi rad/s on X and Y
-
-// ColorOverLifetime, read key by key out of the YAML.
+// --- mesh triangle particles --------------------------------------------
+// fx_Tap_single carries FOUR particle systems under SekaiEffect_2, all with
+// Transform scale 157 and scalingMode Hierarchy, so the world size is
+//   size = startSize(curve peak) * scalar * 157
+// Every one of them emits at rateOverTime 1/s over a 0.5s system, i.e. one
+// particle at t=0, and every one has startSpeed 35..100 pointing along the
+// disc normal (+Z, out of the screen).
 //
-// Unity stores a Gradient as 8 keys sharing one array, but only the first
-// m_NumColorKeys of them drive RGB (on the ctime axis) and only the first
-// m_NumAlphaKeys drive alpha (on a SEPARATE atime axis). The leftover keys carry
-// rgb (0,0,0); treating those as colour keyframes is what makes these shards
-// look like they turn pure black halfway through, which they never do.
+//   node         life          curve peak  scalar   world size
+//   particle3    0.30..0.70    1.00        1.50     235
+//   particle2    0.10..0.70    0.83        0.14      18
+//   particle2_1  0.20..0.70    0.83        0.09      12
+//   particle1    30..35        0.05 const  -          1.6..7.9
+//
+// A tap therefore throws ONE big triangle plus a medium, a small and a couple
+// of flakes - not a swarm of mid-sized ones.
+// The ONLY non-measured number in this file. Everything above is read straight
+// out of the prefab; this multiplies the shard diameters to taste. Set it to
+// 1.0 for the literal values (particle3 then peaks at 235 px, i.e. 1.5x the
+// ring, which reads as a huge glass slab on a bright song-select backdrop).
+constexpr float kShardScale = 0.55f;
+constexpr float kRadialGain = 1.0f; // Z-axis speed reinterpreted as radial px/s
+constexpr float kSpinRate = 3.14159265f; // RotationOverLifetime: pi rad/s
+
 struct ColorKey
 {
     float t;
@@ -64,7 +72,7 @@ struct ShardGradient
     int alphaCount;
 };
 
-// particle3 (big): colour drifts pale slate -> deep slate across the whole life;
+// particle3: colour drifts pale slate -> deep slate across the whole life;
 // alpha jumps to 0.5 by 25%, holds, then fades out over the last 30%.
 constexpr ColorKey kBigColors[] = {
     {0.000f, 0.394f, 0.423f, 0.519f},
@@ -76,7 +84,7 @@ constexpr AlphaKey kBigAlphas[] = {
     {0.700f, 0.502f},
     {1.000f, 0.000f},
 };
-// particle2_1 (medium): plain white, snaps opaque in the first 5%, fades at end.
+// particle2 / particle2_1: plain white, snaps opaque in the first 5%, fades at end.
 constexpr ColorKey kMidColors[] = {
     {0.000f, 1.000f, 1.000f, 1.000f},
     {1.000f, 1.000f, 1.000f, 1.000f},
@@ -91,34 +99,40 @@ constexpr AlphaKey kMidAlphas[] = {
 
 struct TriSpec
 {
+    // startSize is Random Between Two Curves, so every particle rolls its own
+    // diameter between these two (minCurve*minScalar and maxCurve*scalar, both
+    // times the 157 Transform scale). The ranges are wide on purpose - that is
+    // how the original gets a mix of one big shard and a lot of small ones.
     float sizeMin;
     float sizeMax;
     float lifeMin;
     float lifeMax;
-    float radius;   // emission ring radius, design px
-    float speedMin; // startSpeed range (world units/s)
+    float radius;   // emission ring radius: shape radius 1 * scale 157
+    float speedMin; // startSpeed, world units/s (along +Z in the original)
     float speedMax;
-    int count;      // particles per tap
+    int count;
     const ShardGradient* grad; // nullptr = ColorModule disabled (keep startColor)
 };
 
 constexpr ShardGradient kGradBig = {kBigColors, 2, kBigAlphas, 4};
 constexpr ShardGradient kGradMid = {kMidColors, 2, kMidAlphas, 5};
 
-// particle3 / particle2_1 / particle1, in that order.
-constexpr int kTriSpecCount = 3;
+constexpr int kTriSpecCount = 4;
 constexpr TriSpec kTriSpecs[kTriSpecCount] = {
-    // big translucent triangles: 42..147 px, 6/s over a 1s system
-    {42.0f, 147.0f, 0.30f, 1.50f, 210.0f, 0.00f, 0.45f, 6, &kGradBig},
-    // medium: 14 px, one per tap
-    {14.0f, 14.0f, 0.20f, 0.70f, 157.0f, 35.0f, 100.0f, 1, &kGradMid},
-    // tiny flakes: 2.1..10.5 px (life clamped from the original 1..30s);
-    // ColorModule is disabled on these, so they stay white at alpha 1
-    {2.1f, 10.5f, 1.00f, 3.00f, 210.0f, 5.0f, 40.0f, 2, nullptr},
+    // particle3: the big shard, 2.5..235 px
+    {2.5f, 235.0f, 0.30f, 0.70f, 157.0f, 35.0f, 100.0f, 1, &kGradBig},
+    // particle2: 15.7..18.2 px
+    {15.7f, 18.2f, 0.10f, 0.70f, 157.0f, 35.0f, 100.0f, 1, &kGradMid},
+    // particle2_1: 1.2..11.7 px
+    {1.2f, 11.7f, 0.20f, 0.70f, 157.0f, 35.0f, 100.0f, 1, &kGradMid},
+    // particle1: 1.6..7.9 px. Original life is 30..35s, clamped here to 2s - a
+    // 35s speck is not tap feedback. ShapeModule is disabled on this one, so it
+    // emits at the tap point instead of on the ring.
+    {1.6f, 7.9f, 0.60f, 2.00f, 0.0f, 1.0f, 20.0f, 2, nullptr},
 };
 
-constexpr float kSpawnWindow = 0.90f; // system length is ~1.0s, spread births over it
-
+// ColorOverLifetime, read key by key out of the YAML.
+//
 constexpr float kTwoPi = 6.28318530717959f;
 
 constexpr ImU32 kRingTint = IM_COL32(255, 255, 255, 255);
@@ -198,16 +212,20 @@ void evalGradient(const ShardGradient& g, float t, float& r, float& gr, float& b
     }
 }
 
-// Deterministic PRNG so --tap-fx-test replays the exact same burst.
+// Deterministic PRNG so --tap-fx-test replays the exact same burst. xorshift32:
+// an LCG's low bits have a short period and the first few draws clustered near
+// zero, which made every test burst roll a tiny shard.
 unsigned nextRandom(unsigned& state)
 {
-    state = state * 1664525u + 1013904223u;
-    return state >> 8;
+    state ^= state << 13;
+    state ^= state >> 17;
+    state ^= state << 5;
+    return state;
 }
 
 float randomRange(unsigned& state, float lo, float hi)
 {
-    const float unit = static_cast<float>(nextRandom(state) & 0xFFFFFFu) / 16777215.0f;
+    const float unit = static_cast<float>(nextRandom(state)) / 4294967295.0f;
     return lo + (hi - lo) * unit;
 }
 
@@ -236,9 +254,8 @@ bool TapEffect::load(platform::Renderer& renderer, const std::string& fxDir, std
         bool required;
     };
     const Entry entries[] = {
-        {"tap_sheet.png", &mSheet, true},  // 4x4 main ripple (tex_tap_texturesheet)
-        {"tap_flare.png", &mFlare, false}, // single radial glow (tex_tap_flare)
-        {"tap_tri.png", &mTri, false},     // 2x2 colour triangles (tex_sekai_01_2)
+        {"tap_sheet.png", &mSheet, true}, // 4x4 main ripple (tex_tap_texturesheet)
+        {"tap_tri.png", &mTri, false},    // 2x2 colour triangles (tex_sekai_01_2)
         {"tap_ring.png", &mRing, false},   // legacy fallback ring
     };
 
@@ -287,21 +304,21 @@ void TapEffect::spawnAt(float x, float y, float age)
 
 void TapEffect::buildShards(Instance& instance, unsigned& rng) const
 {
-    // The original emits continuously (rateOverTime 6/s for particle3), so the
-    // particles are spread across the system's ~1s length instead of all being
-    // born at once.
+    // Every triangle system in fx_Tap_single runs rateOverTime 1/s over a 0.5s
+    // lifetime, so Unity emits exactly one particle at t=0. Nothing is staggered:
+    // the whole burst appears on the click.
     for (int specIndex = 0; specIndex < kTriSpecCount; ++specIndex) {
         const TriSpec& spec = kTriSpecs[specIndex];
         for (int i = 0; i < spec.count; ++i) {
             Shard shard;
-            shard.born = randomRange(rng, 0.0f, kSpawnWindow);
+            shard.born = 0.0f;
             shard.life = randomRange(rng, spec.lifeMin, spec.lifeMax);
-            // Circle shape with radiusThickness 0 emits from the edge; a little
-            // inward spread keeps the ring from looking like a perfect circle.
-            shard.radius = spec.radius * (0.55f + 0.45f * randomRange(rng, 0.0f, 1.0f));
+            // Circle shape, radiusThickness 0: emitted on the ring itself. A bit
+            // of inward tolerance keeps it from looking like a drawn circle.
+            shard.radius = spec.radius * (0.70f + 0.30f * randomRange(rng, 0.0f, 1.0f));
             shard.angle = randomRange(rng, 0.0f, kTwoPi);
             shard.speed = randomRange(rng, spec.speedMin, spec.speedMax) * kRadialGain;
-            shard.size = randomRange(rng, spec.sizeMin, spec.sizeMax);
+            shard.size = randomRange(rng, spec.sizeMin, spec.sizeMax) * kShardScale;
             shard.rot0 = randomRange(rng, -kTwoPi, kTwoPi); // startRotation +-2pi
             shard.spin = kSpinRate;                         // 180 deg/s, always positive
             shard.cell = static_cast<int>(nextRandom(rng) & 3u); // UV startFrame 0..0.9999
@@ -318,20 +335,21 @@ void TapEffect::update(float dt)
             instance.age += dt;
         }
     }
-    // Longest path through a burst: last birth + longest life.
-    float maxLife = std::max(kRingLife, kFlareLife);
+    float maxLife = kRingLife;
     for (const TriSpec& spec : kTriSpecs) {
-        maxLife = std::max(maxLife, kSpawnWindow + spec.lifeMax);
+        maxLife = std::max(maxLife, spec.lifeMax);
     }
     mActive.erase(std::remove_if(mActive.begin(), mActive.end(),
                       [maxLife](const Instance& instance) { return instance.age >= maxLife; }),
         mActive.end());
 }
 
-void TapEffect::layerList(FlipLayer (&out)[2]) const
+void TapEffect::layerList(FlipLayer (&out)[1]) const
 {
-    out[0] = FlipLayer{mFlare, 1, 1, kFlareLife, kFlareDiameter, 0.55f, true};
-    out[1] = FlipLayer{mSheet, kTiles, kFrames, kRingLife, kRingDiameter, 1.0f, false};
+    // fx_Tap_single has a single billboard system (PT_01). The 650px flare some
+    // earlier notes mention belongs to fx_Tap_loop / the extra TouchEffect
+    // instances, not to the click.
+    out[0] = FlipLayer{mSheet, kTiles, kFrames, kRingLife, kRingDiameter, 1.0f};
 }
 
 void TapEffect::draw()
@@ -345,7 +363,7 @@ void TapEffect::draw()
     }
     const float scale = ui::scale();
 
-    FlipLayer layers[2];
+    FlipLayer layers[1];
     layerList(layers);
 
     if (mSheet != 0) {
@@ -388,22 +406,17 @@ void TapEffect::drawFlip(ImDrawList* drawList, float cx, float cy, float t, cons
     }
     const float localT = clamp01(t / layer.life);
 
-    ImVec2 uv0(0.0f, 0.0f);
-    ImVec2 uv1(1.0f, 1.0f);
-    float alpha = layer.alpha;
-    if (layer.single) {
-        // The flare art carries no fade of its own.
-        alpha *= std::pow(1.0f - localT, 1.6f);
-    } else {
-        int frame = static_cast<int>(localT * static_cast<float>(layer.frames));
-        frame = frame < 0 ? 0 : (frame >= layer.frames ? layer.frames - 1 : frame);
-        const int tiles = layer.tiles > 0 ? layer.tiles : 1;
-        const float tile = 1.0f / static_cast<float>(tiles);
-        const int col = frame % tiles;
-        const int row = frame / tiles;
-        uv0 = ImVec2(col * tile, row * tile);
-        uv1 = ImVec2((col + 1) * tile, (row + 1) * tile);
-    }
+    // frameOverTime is a linear 0 -> 0.9999 ramp; 16 frames over a 0.5s life
+    // works out to the sheet's declared 30 fps.
+    int frame = static_cast<int>(localT * static_cast<float>(layer.frames));
+    frame = frame < 0 ? 0 : (frame >= layer.frames ? layer.frames - 1 : frame);
+    const int tiles = layer.tiles > 0 ? layer.tiles : 1;
+    const float tile = 1.0f / static_cast<float>(tiles);
+    const ImVec2 uv0(static_cast<float>(frame % tiles) * tile,
+        static_cast<float>(frame / tiles) * tile);
+    const ImVec2 uv1(uv0.x + tile, uv0.y + tile);
+
+    const float alpha = layer.alpha;
     if (alpha <= 0.004f) {
         return;
     }
