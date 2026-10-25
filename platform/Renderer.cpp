@@ -1055,10 +1055,20 @@ bool Renderer::setSongBackground(const std::uint8_t* rgba, int width, int height
     return true;
 }
 
-GLuint Renderer::loadUiTexture(const std::string& path, std::string& outError)
+GLuint Renderer::loadUiTexture(const std::string& path, std::string& outError, int maxDim)
 {
-    const Texture texture = loadTextureFromFile(path, outError);
+    const Texture texture = loadTextureFromFile(path, outError, maxDim);
     return texture.id;
+}
+
+void Renderer::releaseUiTexture(GLuint id)
+{
+    if (id != 0) {
+        // textureBytes() is a running total of what was ever handed to GL (it
+        // exists to make the boot-time size policy readable in the log), so it
+        // deliberately does not go back down here.
+        glDeleteTextures(1, &id);
+    }
 }
 
 void Renderer::clearCover()

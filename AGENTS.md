@@ -183,6 +183,54 @@ main.cpp          # SDL2 窗口、事件循环、输入映射、ImGui HUD、截�
 
 ---
 
+## 内存 / 显存（2026-10-25 实测审计）
+
+`build/cppsekai.exe --no-party`，1280x720，选曲界面，140 首谱面，Intel Iris Xe：
+
+| | 改之前 | 改之后 |
+|---|---|---|
+| 稳态（任务管理器「内存」） | 282.6 MB | **228.6 MB** |
+| 启动峰值 | 372.6 MB | **291.9 MB** |
+
+**峰值比稳态高的 60~90 MB 不是泄漏**：字体文件整读、贴图解码这些临时分配在 10~11 秒
+后被 Windows 归还（固定出现在 10.5~11.3s，跟切背景之类完全无关 —— 2026-09-19 就量过）。
+判断"是不是真涨了"只认稳态，或者用下面的工具连续采。
+
+### 已做的四项（都是常驻，别再改回去）
+
+1. **字体 oversample**：3 处硬写 `OversampleH/V = 2` → 删掉走 auto。详见「约定与坑 →
+   字体只用系统字体」那一节，实测算法与原因都在那儿。
+2. **字体只读一份 TTF**：`mergedBodyRanges()` 把 Japanese + 简中 ranges 并成一个数组，
+   只调一次 `AddFontFromFileTTF`。**1.92 的 `FontDataOwnedByAtlas=false` 是个陷阱** ——
+   它反而 `ImMemdup` 复制一份（`imgui_draw.cpp:3059`），共享 buffer 这条路根本不存在。
+3. **教学三张全帧图矢量化**（`game/StoryUi.cpp`）：Dialogue 只是 band 缺失时的 fallback、
+   Choices 加载了但从没被画过（选项早就改成 `ui::capsuleDraw`）、SceneText 是纯水平渐变
+   （x431..1489 / y480..599 / RGB(68,68,102) / alpha 峰值 204，竖直方向逐像素相同）→
+   `fadeBand()` 用 13 个 quad 画。三张 1920x1080 RGBA 各 7.9 MB，**共省 23.7 MB**。
+   源 PNG 还在 `assets/story/ui/`（只作参考，不进显存）。
+4. **选曲封面缩略图**（`game/SongSelect.cpp` 的 `thumbFor`）：原图 740×740 原来全尺寸
+   上传（2.09 MB/张，列表只画 60px、手机面板 200px），且 `static map` 永不释放 ——
+   **这是全程序唯一会"用越久越高"的一块**（29 首全看过一遍 +60 MB）。现在
+   `loadUiTexture(..., 256)` 整倍降到 370×370（0.55 MB）+ 64 张封顶 LRU
+   （`Renderer::releaseUiTexture` 删纹理）。上限必须大于「同屏张数」（十几行 + 面板），
+   否则会删掉正在画的那张。
+
+### 剩下的大头，不建议动
+
+- **窗口 + GL context + 显卡驱动 61 MB**：Intel 驱动自己映射的，换机器就变，动不了。
+- **音频设备 30 MB**：miniaudio / WASAPI 初始化。
+- **场景贴图 48 MB / HUD 精灵 31 MB**：2026-09-14 试过降采样，**精灵矩形是写死的像素坐标，
+  一缩就错位**（`Renderer::loadTextureFromFile` 的注释就是那次写的），别重试。
+
+### 工具
+
+`.workbuddy/tools/mem_trace.py` —— 把游戏的**日志行**和当时的 `WorkingSetSize` 对齐打印，
+直接看出「哪一行之前涨的」。stdout 走管道时游戏不往 stdout 说话（判断"没附加控制台"就
+改写 cwd 的 `cppsekai.log`），所以它跟的是日志文件。没有日志输出的空档每 250ms 补采一次
+（标 `·`）。老的 `mem_sample.py` 只按固定间隔采、看不出是哪一步。
+
+---
+
 ## 工具
 
 - `downloader/chartdl.cpp` → `build/chartdl.exe`：**独立的谱面下载器**（不算游戏的一部分，
@@ -698,6 +746,18 @@ bash build.sh          # 仅需 Git Bash；产物 build/cppsekai.exe + SDL2.dll 
   笔画细一档：CJK 字宽两套完全一致（全角 1 em，得分 84 / 最高得分 168 都一样），latin 差
   3-7%，且每处都是居中或左对齐的固定位置，布局不动。
   **COPYRIGHT.md 里那条"商业字体嵌入分发"的风险至此关闭**——别再往仓库里放字体文件。
+  **2026-10-25 同一段代码上又砍了两笔**（内存审计，`-- 18.6 MB` 稳态）：
+  - `OversampleH/V` 原来在 3 处硬写 `2`。1.92 的 auto 规则是
+    `raster_size > 36 ? 1 : 2`（`imgui_draw.cpp:3407`），本项目字号 **42px → auto 本来就选 1**；
+    `ImGui.h:3658` 还注明 OversampleV 在 Y 轴上没用。硬写 2 让每个字形位图的面积变成
+    必要的 **4 倍**（84×84 vs 42×42）。**默认 0 才对，别再写回去。**
+  - 同一个 TTF 原来调了**两次** `AddFontFromFileTTF`（一次 Japanese ranges、一次 MergeMode
+    简中）→ `msyh.ttc` 那 19.7 MB 常驻两份。**1.92 没法共享 buffer**：`AddFont` 里
+    `FontDataOwnedByAtlas == false` 会先 `ImMemdup` 复制一份、再把所有权设回 true
+    （`imgui_draw.cpp:3059`），传 false 只会多复制一次。正解是 `mergedBodyRanges()`
+    把两份 ranges 并成一个数组、只调一次 AddFont（字形集是同一个并集）。
+  - 实测：`[boot] fonts` 那一步 **100 MB → 32 MB**，稳态 282.6 → 264.0（差的那部分是
+    启动期临时分配，本来 10~11 秒后就会被归还，别拿峰值当泄漏）。
 - **字体候选表（2026-09-19 晚修 Win7 时扩的）**：`systemFontCandidates()` 现在三层，
   按顺序去重后逐个试：
   1. `SPI_GETNONCLIENTMETRICS` 的 `lfMessageFont`（跟随系统，首选）；

@@ -411,6 +411,57 @@ namespace
     }
 #endif
 
+// One combined glyph-range array for the body face.
+//
+// Why this exists (2026-10-25 memory audit): this used to add the same TTF
+// twice - once with GetGlyphRangesJapanese(), then again in MergeMode with
+// GetGlyphRangesChineseSimplifiedCommon() - because the UI draws Japanese song
+// titles and Simplified-Chinese labels. 1.92 gives every font *source* its own
+// full copy of the file bytes (imgui_draw.cpp:3059 duplicates the buffer even
+// when told not to own it), so that cost two copies of msyh.ttc: 19.7 MB x 2,
+// resident for the life of the process.
+//
+// Adding it once with the union of both ranges keeps the exact same glyph set
+// for one copy. The spans are sorted and overlapping ones collapsed so the
+// rasteriser is not handed the same block twice.
+//
+// The pointer has to outlive the atlas - AddFont keeps the pointer in its
+// source list, it does not copy it - hence the function-local static.
+const ImWchar* mergedBodyRanges(ImFontAtlas& atlas)
+{
+    static std::vector<ImWchar> merged;
+    if (merged.empty()) {
+        struct Span
+        {
+            ImWchar lo;
+            ImWchar hi;
+        };
+        std::vector<Span> spans;
+        for (const ImWchar* set :
+            {atlas.GetGlyphRangesJapanese(), atlas.GetGlyphRangesChineseSimplifiedCommon()}) {
+            for (int i = 0; set[i] != 0; i += 2) {
+                spans.push_back({set[i], set[i + 1]});
+            }
+        }
+        std::sort(spans.begin(), spans.end(),
+            [](const Span& a, const Span& b) { return a.lo != b.lo ? a.lo < b.lo : a.hi < b.hi; });
+        for (const Span& span : spans) {
+            // `merged` is a flat (lo, hi) list, so its last element is the open
+            // span's high end. ImWchar is unsigned: compare, do not add one.
+            if (!merged.empty() && span.lo <= merged.back()) {
+                if (span.hi > merged.back()) {
+                    merged.back() = span.hi;
+                }
+                continue;
+            }
+            merged.push_back(span.lo);
+            merged.push_back(span.hi);
+        }
+        merged.push_back(0);
+    }
+    return merged.data();
+}
+
 void loadIntroFonts()
 {
     ImGuiIO& io = ImGui::GetIO();
@@ -435,9 +486,11 @@ void loadIntroFonts()
                 return;
             }
             std::fclose(probe);
+            // No OversampleH/V here on purpose (2026-10-25): 1.92 defaults to
+            // `raster_size > 36 ? 1 : 2`, and this face is 42px, so the old
+            // hard-coded 2/2 was rasterising every glyph at four times the
+            // area it needed. See the note in loadIntroFonts below.
             ImFontConfig config;
-            config.OversampleH = 2;
-            config.OversampleV = 2;
             std::snprintf(config.Name, sizeof(config.Name), "%s", fileName);
             outFont = io.Fonts->AddFontFromFileTTF(path.c_str(), 42.0f, &config, ranges);
             if (outFont != nullptr) {
@@ -537,13 +590,17 @@ void loadIntroFonts()
             } else {
                 std::fclose(probe);
             }
+            // No OversampleH/V: 1.92's auto rule is `raster_size > 36 ? 1 : 2`
+            // (imgui_draw.cpp:3407) and this face is 42px, so the old 2/2 made
+            // every glyph bitmap four times the area it needed (84x84 instead
+            // of 42x42). ImGui.h:3658 also notes OversampleV buys nothing.
+            // Measured at ~40 MB of atlas on the 2999+2500-glyph CJK union.
             ImFontConfig config;
-            config.OversampleH = 2;
-            config.OversampleV = 2;
             std::snprintf(config.Name, sizeof(config.Name), "%s", candidate.face.c_str());
-            // Japanese first: it carries all the kanji song titles need.
+            // One add for one copy of the TTF - Japanese and simplified-Chinese
+            // glyphs as a single union (see mergedBodyRanges above).
             ImFont* font = io.Fonts->AddFontFromFileTTF(candidate.path.c_str(), 42.0f, &config,
-                io.Fonts->GetGlyphRangesJapanese());
+                mergedBodyRanges(*io.Fonts));
             if (font == nullptr) {
                 std::printf("[intro] system font %s rejected by the rasterizer\n", candidate.path.c_str());
                 continue;
@@ -554,13 +611,6 @@ void loadIntroFonts()
                     candidate.face.c_str(), static_cast<unsigned>(missing));
                 continue;
             }
-            // Merge the simplified-Chinese set the built-in UI draws.
-            ImFontConfig merge;
-            merge.MergeMode = true;
-            merge.OversampleH = 2;
-            merge.OversampleV = 2;
-            io.Fonts->AddFontFromFileTTF(candidate.path.c_str(), 42.0f, &merge,
-                io.Fonts->GetGlyphRangesChineseSimplifiedCommon());
             gBodyFont = font;
             gTitleFont = font;
             gDiffFont = font;

@@ -21,10 +21,13 @@ namespace storyui
 {
 namespace
 {
-    // The three frames, in window-pixel textures. 0 = not loaded.
-    ImTextureID gDialogue = 0;
-    ImTextureID gChoices = 0;
-    ImTextureID gSceneText = 0;
+    // The three full-frame story textures (Dialogue_ / Choices_ / SceneText_
+    // Background.png, 1920x1080 each) used to live here as window-pixel
+    // textures. They are gone as of 2026-10-25 - see the note in loadTextures
+    // for why each one could go. Nothing on screen came from them that is not
+    // now drawn: the dialogue band is the client's own bg_story_adv sprite, the
+    // choices are ui::capsuleDraw capsules, and the scene-title band is a
+    // horizontal fade painted by sceneTitle().
     ImTextureID gSkipIcon = 0;
     // stage.png, the playfield itself: the keyboard step crops it to the half
     // below the judgement line instead of shipping a picture of a keyboard.
@@ -155,16 +158,25 @@ Canvas makeCanvas(float windowW, float windowH)
 
 bool loadTextures(platform::Renderer& renderer, const std::string& assetDir, std::string& err)
 {
+    (void)err;
     const std::string base = assetDir + "\\story\\ui\\";
     std::string localError;
-    const GLuint dialogue = renderer.loadUiTexture(base + "Dialogue_Background.png", localError);
-    const GLuint choices = renderer.loadUiTexture(base + "Choices_Background.png", localError);
-    const GLuint sceneText = renderer.loadUiTexture(base + "SceneText_Background.png", localError);
-    std::printf("[story] textures dialogue=%u choices=%u scene=%u\n", dialogue, choices, sceneText);
-    std::fflush(stdout);
-    gDialogue = reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(dialogue));
-    gChoices = reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(choices));
-    gSceneText = reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(sceneText));
+    // 2026-10-25 memory audit: three full-frame PNGs used to be uploaded here.
+    // Each is 1920x1080 RGBA = 7.9 MB decoded, 23.7 MB together, and none of
+    // them was earning it:
+    //   • Choices_Background.png was never drawn. choices() has been painting
+    //     ui::capsuleDraw capsules for a while; that texture id was assigned and
+    //     never reached an AddImage. Dead weight.
+    //   • Dialogue_Background.png was only the fallback for a missing gBand
+    //     (pjsk/bg_story_adv.png, a 4x399 alpha mask). The band is present on
+    //     every build that ships the pjsk parts, and dialogue() already has a
+    //     hand-drawn gradient below that branch.
+    //   • SceneText_Background.png *is* used, but it is a pure horizontal fade:
+    //     inside 1920x1080 the whole picture is one bar at x 431..1489,
+    //     y 480..599, RGB(68,68,102) with alpha peaking at 204, and every
+    //     column is identical top to bottom. sceneTitle() paints it with
+    //     AddRectFilledMultiColor now (see fadeBand there).
+    // The PNGs are still in assets/story/ui/ - they just never reach the GPU.
     if (const platform::Renderer::HudSprite* skip = renderer.hud("ui_skip");
         skip != nullptr && skip->id != 0 && skip->width > 0) {
         gSkipIcon = reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(skip->id));
@@ -185,11 +197,9 @@ bool loadTextures(platform::Renderer& renderer, const std::string& assetDir, std
     std::printf("[story] pjsk parts band=%d pill=%d glow=%d arrow=%d tri=%d\n", gBand.valid() ? 1 : 0,
         gPill.valid() ? 1 : 0, gGlow.valid() ? 1 : 0, gArrow.valid() ? 1 : 0, gTri.valid() ? 1 : 0);
     std::fflush(stdout);
-    if (gDialogue == 0 && gChoices == 0 && gSceneText == 0)
-    {
-        err = "story ui textures missing under " + base;
-        return false;
-    }
+    // Nothing here is fatal: the band falls back to a hand-drawn gradient, the
+    // capsules are painted, and the scene-title fade is vector - so a missing
+    // pjsk sprite costs a look, not the tutorial.
     return true;
 }
 
@@ -383,19 +393,13 @@ void dialogue(const Canvas& c, ImFont* font, const std::string& name, const std:
         dl->AddRectFilled(ImVec2(0.0f, bandTop), ImVec2(c.winW, c.winH), IM_COL32(2, 0, 32, 56));
         sprite(dl, gBand, ImVec2(0.0f, bandTop), ImVec2(c.winW, c.winH), IM_COL32(2, 0, 32, 255));
     }
-    else if (gDialogue != 0)
-    {
-        // The old full-frame art, also stretched to the window instead of the
-        // 1920 frame. Twice on purpose: it is only 50% at its densest
-        // (2,0,32,128), which is right over the bright story backgrounds it was
-        // made for but nearly invisible over this game's dark song list.
-        dl->AddImage(gDialogue, ImVec2(0.0f, 0.0f), ImVec2(c.winW, c.winH));
-        dl->AddImage(gDialogue, ImVec2(0.0f, 0.0f), ImVec2(c.winW, c.winH));
-    }
     else
     {
-        // Fallback: the same vertical fade, drawn by hand (headless runs with a
-        // half-copied build still get readable text).
+        // Fallback when the client's band sprite is missing: the same vertical
+        // fade, drawn by hand (headless runs with a half-copied build still get
+        // readable text). This used to sit below a full-frame
+        // Dialogue_Background.png that cost 7.9 MB of texture for exactly this
+        // job - the 20-strip gradient below did it just as well.
         for (int i = 0; i < 20; ++i)
         {
             const float t = static_cast<float>(i) / 19.0f;
@@ -630,6 +634,53 @@ bool keypad(const Canvas& c, ImFont* font, const std::vector<std::string>& keysI
 }
 
 
+namespace
+{
+    // The scene-title band, vector instead of a texture.
+    //
+    // It used to be SceneText_Background.png: a 1920x1080 PNG whose entire
+    // content is one horizontal fade at x 431..1489, y 480..599 - RGB(68,68,102)
+    // all the way across, alpha peaking at 204, identical on every row. Measured
+    // off the file (2026-10-25): each end fades over ~265px and that ramp eases
+    // out rather than running straight - sampled every 50px the alpha reads
+    // 0 / 36 / 79 / 126 / 169 / 200 - so it is painted as those measured steps
+    // rather than one lerp. 7.9 MB of texture for thirteen quads.
+    void fadeBand(ImDrawList* dl, const Canvas& c, int alpha)
+    {
+        constexpr float kX0 = 431.0f;
+        constexpr float kX1 = 1489.0f;
+        constexpr float kY0 = 480.0f;
+        constexpr float kY1 = 600.0f;
+        constexpr unsigned char kPeak = 204;
+        // Distance into the fade, and the alpha measured there.
+        static constexpr float kAt[] = {0.0f, 50.0f, 100.0f, 150.0f, 200.0f, 250.0f, 265.0f};
+        static constexpr unsigned char kAlpha[] = {0, 36, 79, 126, 169, 200, 204};
+        constexpr int kSteps = static_cast<int>(sizeof(kAt) / sizeof(kAt[0]));
+
+        const float yTop = c.y(kY0);
+        const float yBot = c.y(kY1);
+        const float fade = kAt[kSteps - 1];
+        const float gain = static_cast<float>(alpha) / 255.0f;
+        auto shade = [gain](unsigned char a) { return static_cast<int>(static_cast<float>(a) * gain); };
+        auto span = [&](float xa, float xb, unsigned char aL, unsigned char aR) {
+            const int l = shade(aL);
+            const int r = shade(aR);
+            dl->AddRectFilledMultiColor(ImVec2(c.x(xa), yTop), ImVec2(c.x(xb), yBot),
+                IM_COL32(68, 68, 102, l), IM_COL32(68, 68, 102, r), IM_COL32(68, 68, 102, r),
+                IM_COL32(68, 68, 102, l));
+        };
+
+        // Left ramp, the solid middle, then the same ramp back down on the right.
+        for (int i = 0; i < kSteps - 1; ++i) {
+            span(kX0 + kAt[i], kX0 + kAt[i + 1], kAlpha[i], kAlpha[i + 1]);
+        }
+        span(kX0 + fade, kX1 - fade, kPeak, kPeak);
+        for (int i = kSteps - 1; i > 0; --i) {
+            span(kX1 - kAt[i], kX1 - kAt[i - 1], kAlpha[i], kAlpha[i - 1]);
+        }
+    }
+} // namespace
+
 void sceneTitle(const Canvas& c, ImFont* font, const std::string& text, float alpha)
 {
     if (alpha <= 0.001f)
@@ -638,11 +689,7 @@ void sceneTitle(const Canvas& c, ImFont* font, const std::string& text, float al
     }
     ImDrawList* dl = ImGui::GetForegroundDrawList();
     const int a = static_cast<int>(std::clamp(alpha, 0.0f, 1.0f) * 255.0f);
-    if (gSceneText != 0)
-    {
-        dl->AddImage(gSceneText, c.p(0.0f, 0.0f), c.p(1920.0f, 1080.0f), ImVec2(0.0f, 0.0f),
-            ImVec2(1.0f, 1.0f), IM_COL32(255, 255, 255, a));
-    }
+    fadeBand(dl, c, a);
     if (font == nullptr)
     {
         return;

@@ -143,7 +143,16 @@ class Renderer
 
     // Loads an arbitrary image for UI use (song list thumbnails). Returns the
     // GL texture id, 0 on failure. Not cached - the caller owns caching.
-    GLuint loadUiTexture(const std::string& path, std::string& outError);
+    //
+    // `maxDim` > 0 box-downscales by the largest whole power of two that still
+    // keeps the longer side at or above it - the same policy the renderer's own
+    // art uses. A list thumbnail is drawn at a fraction of its file size, so
+    // passing 0 (full size) there costs megabytes per cover for pixels that
+    // never reach the screen.
+    GLuint loadUiTexture(const std::string& path, std::string& outError, int maxDim = 0);
+
+    // Deletes a texture returned by loadUiTexture (or loadHud). Safe on 0.
+    void releaseUiTexture(GLuint id);
 
     // Same, but decodes at full size, box-downscales it and runs a blur, so a
     // desktop wallpaper can be used as a soft background. `blur01` is 0..1

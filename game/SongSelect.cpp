@@ -1915,19 +1915,55 @@ namespace
         return groups;
     }
 
+    // Song-list cover thumbnails.
+    //
+    // 2026-10-25 memory audit, two problems in one small function:
+    //   ① The cover files are 740x740, and this used to upload them at full
+    //     size: 2.09 MB of texture each. The row draws at 60*k px and the phone
+    //     panel's jacket at ~200 px, so most of that never reaches a pixel.
+    //     `maxDim` 256 box-downscales to 370x370 (0.55 MB) - still 1.8x the
+    //     largest place it is drawn.
+    //   ② The map only ever grew. Browsing a few hundred songs left every cover
+    //     resident for the rest of the session; this was the only part of the
+    //     process that kept climbing after boot. It is a capped LRU now.
+    //
+    // The cap only has to exceed "covers on screen at once" (about a dozen rows
+    // plus the phone panel), otherwise the eviction could delete a texture that
+    // is still being drawn this frame.
+    constexpr std::size_t kThumbCacheLimit = 64;
+    struct Thumb
+    {
+        GLuint id = 0;
+        unsigned long long used = 0;
+    };
+
     GLuint thumbFor(platform::Renderer& renderer, const std::string& path)
     {
-        static std::map<std::string, GLuint> cache;
+        static std::map<std::string, Thumb> cache;
+        static unsigned long long tick = 0;
         if (path.empty()) {
             return 0;
         }
-        auto it = cache.find(path);
-        if (it == cache.end()) {
-            std::string err;
-            const GLuint id = renderer.loadUiTexture(path, err);
-            it = cache.emplace(path, id).first;
+        ++tick;
+        const auto it = cache.find(path);
+        if (it != cache.end()) {
+            it->second.used = tick;
+            return it->second.id;
         }
-        return it->second;
+        if (cache.size() >= kThumbCacheLimit) {
+            auto oldest = cache.begin();
+            for (auto i = cache.begin(); i != cache.end(); ++i) {
+                if (i->second.used < oldest->second.used) {
+                    oldest = i;
+                }
+            }
+            renderer.releaseUiTexture(oldest->second.id);
+            cache.erase(oldest);
+        }
+        std::string err;
+        const GLuint id = renderer.loadUiTexture(path, err, 256);
+        cache.emplace(path, Thumb{id, tick});
+        return id;
     }
 
     void addDiamond(ImDrawList* dl, const ImVec2& c, float r, ImU32 fill)
@@ -2917,7 +2953,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         return 0;
     };
     ImGui::SetNextItemWidth(searchW);
-    ImGui::InputTextWithHint("##search", "根据歌曲名·作者名查找", searchBuf, sizeof(searchBuf),
+    ImGui::InputTextWithHint("##search", "搜索", searchBuf, sizeof(searchBuf),
         ImGuiInputTextFlags_CallbackAlways, searchEditCallback, &searchSel);
     const bool searchRightClicked = ImGui::IsItemClicked(ImGuiMouseButton_Right);
     ImGui::PopFont();

@@ -326,10 +326,13 @@ CLI 加 `--story-test <id>`（无头开），和 `--drop-test` / `--chartdl-test
 1. **白字在亮背景上会糊**：正文必须带深色描边（八方向 2px），渐变条本身只压暗一点点 ——
    参考站的场景图都很暗，选曲界面不是。
 2. **中文折行**：ImGui 只会「超宽硬切」，标点会跑到行首；且打字机不能边打边重排。
-3. **显存**：每张 1080p RGBA 约 8MB。只加载实际用到的三张（Dialogue/Choices/SceneText），
-   别把 Classic / MYSEKAI / TopLeft 一起读进来。
+3. **显存（2026-10-25 已清空）**：那三张 1080p RGBA 各 7.9MB 现在**一张都不加载** ——
+   Dialogue 只是 band 缺失时的 fallback，Choices 加载了但从来没被画过（选项是
+   `ui::capsuleDraw` 自绘的），SceneText 是纯水平渐变、已用 `AddRectFilledMultiColor`
+   矢量化（`StoryUi.cpp` 的 `fadeBand`）。实测省 23.7MB。别把它们加回 `loadTextures`。
+   以后加全帧图前先问一句：这张是不是纯色块 / 纯线性渐变？是就画，不要贴图。
 4. **名字没有牌**（渐变条版）：直接左对齐写在横线上方，别再按 Classic 的名牌去算宽度。
-5. **`Choices_Background.png` 只有两个坑**：第三个选项自己画，别拉伸。
+5. **选项胶囊**：第三个选项也走 `ui::capsuleDraw`，和另外两个同一套画法，别拉伸图。
 6. **窗口缩放**：所有坐标必须过 `Canvas`（`Result.cpp:183`），直接写像素的话 4:3 窗口会错位。
 7. **字体**：继续用 `game::bodyFont()`；站点那套 FOT-Rodin 是 Fontworks 商业字体，别顺手抄。
 8. **Release 打包**：`assets/story/` 不能进 `dist`（`COPYRIGHT.md` 第 31 行的口径）。

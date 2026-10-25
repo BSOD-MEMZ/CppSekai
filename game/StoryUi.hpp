@@ -4,10 +4,13 @@
 // scene title, choice pills, device cards, picture cards and a spotlight ring.
 // No state, no input decisions - game/Story.* owns those and calls in here.
 //
-// The art is 1920x1080 full-frame PNGs (assets/story/ui), drawn whole at the
-// native canvas coordinates measured off the files. Do not slice them: the
-// rounded corners and the soft shadow live in the alpha channel and a 9-slice
-// would smear both.
+// The frames are no longer full-frame 1920x1080 PNGs as of 2026-10-25: the
+// dialogue band is the client's own bg_story_adv sprite, the choice pills are
+// drawn by ui::capsuleDraw, and the scene-title band is a vector horizontal
+// fade. What is still loaded is the pjsk sprite set plus stage.png (the keys
+// step crops it) and whatever images a script names by `image`/`cards`. See
+// loadTextures in StoryUi.cpp for the per-file reasoning and the measured
+// numbers; the PNGs themselves are still in assets/story/ui as reference.
 #pragma once
 
 #include "imgui.h"
@@ -110,9 +113,10 @@ enum class Box
     Left,
 };
 
-// pjsk story dialogue: the translucent band from Dialogue_Background.png, the
-// speaker name just above its top rule, and white body text with a dark
-// outline (the reference has no white card - see .workbuddy/shots/preview1.png).
+// pjsk story dialogue: the translucent band (the client's bg_story_adv sprite,
+// a hand-drawn vertical fade if that sprite is missing), the speaker name just
+// above its top rule, and white body text with a dark outline (the reference
+// has no white card - see .workbuddy/shots/preview1.png).
 void dialogue(const Canvas& c, ImFont* font, const std::string& name, const std::string& body,
     const TextLayout& layout, std::size_t revealBytes, float time, bool showArrow,
     Box box = Box::Full);
