@@ -23,6 +23,11 @@ CppSekai：Project SEKAI 风格 SUS 谱面 Windows 原生游玩器。
 - `CLI.md` —— 命令行手册：参数、日志、无头自检、退出码，以及**谱面下载器 chartdl.exe** 的用法。
 - `CODE-REVIEW.md` —— **代码体检（2026-09-18）**：体量分布、巨型函数清单、
   按改动成本排的处置顺序。**动手前扫一眼第二节**，能省很多定位时间。
+- `SELECT-UI.md` —— **选曲界面对齐规格（2026-10-25）**：原作 prefab 的实测尺寸、
+  1334×750 → ×1.44 的换算基准、我们的现状对照表、A/B/C 三个方案与验收方法。
+  **动选曲布局前必读。**
+- `RE.md` —— **pjsk 解包产物与工具链**：日服/国服的差异、Il2CppDumper / AssetStudio /
+  AssetRipper 的用法与坑、产物索引（dump.cs、sprite 尺寸表、prefab 几何）。
 - `CREDITS.md` —— 借用清单：每个来源是谁的、什么许可、放在哪（含 Fontworks 字体这条独立风险）。
 - `COPYRIGHT.md` —— 版权与风险：什么能发、什么不能发。
 - `README.md` —— 面向玩家的说明（只放用户最需要的东西，技术细节一律挪到本文件，别往 README 加）。
@@ -597,6 +602,8 @@ bash build.sh          # 仅需 Git Bash；产物 build/cppsekai.exe + SDL2.dll 
   （`kDiffColors[diffIndex]`），不是固定粉色。五个难度格子是 `assets/select/indicate_back_new.png`
   并排（原图不染色，没有的难度调 84 透明度压暗），再按该难度唱片记录把 `clear_indicate.png`
   （金）/ `fullcombo_indicate.png`（粉）盖在同一个矩形上——三张图都是 38x38，直接同尺寸叠加。
+  **尺寸对齐的权威依据是 [`SELECT-UI.md`](SELECT-UI.md)**（原作实测：行 912×144、等级球/曲绘
+  各 96、5 个通关指示 38 方块横排；我们目前整体只有原作的 0.41×，放大方案与数值都在那份文档里）。
 - 右侧手机整体倾斜：先按正放坐标画完整块（手机框、封面、文字、难度圆、按钮），再用
   `dl->VtxBuffer` 把这一段的顶点统一绕手机中心旋转 **+5°**（2026-09-22 之前是 -5°，
   用户要求换成"向右倾"，就是取正号：顶边左高右低）。命中框不能旋转，所以难度圆 /

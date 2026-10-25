@@ -1,7 +1,9 @@
 # CppSekai — 项目长期记忆（索引）
 
 > **权威文档在仓库里**，不是这个文件：`AGENTS.md`（架构 / 全部坑 / 各功能一节，改代码前按章节查）、
-> `CLI.md`（命令行 + 无头自检）、`CHARTS.md`、`CODE-REVIEW.md`（体量）、`COPYRIGHT.md`。
+> `CLI.md`（命令行 + 无头自检）、`CHARTS.md`、`CODE-REVIEW.md`（体量）、`COPYRIGHT.md`、
+> **`SELECT-UI.md`（选曲界面对齐规格：原作实测尺寸 + 换算基准 + 方案）**、
+> **`RE.md`（pjsk 解包工具链与产物索引）**。
 > 这里只留跨会话必须记住的**约定**和**入口索引**；细节翻 `.workbuddy/memory/2026-*.md`（append-only）。
 
 ## 协作约定（用户明确要求）
@@ -82,6 +84,16 @@
   **「repo 404」不能归因**，别拿别人 repo 的状态当决策依据。
 
 ## 最近工作
+- 10-25：**触摸特效重做到位**（`game/TapEffect.*`）：参数全部来自日服 7.1.0 的
+  `ScreenLayerTouchEffect`（4×4 序列帧 + 三色三角 mesh 粒子），Tap / Hold 两态，
+  三角形做真 3D 投影（X/Y 倾角 + Z 轴自转），`kRingScale/kShardScale/kShardTilt`
+  三个旋钮。性能实测整个特效 **0.03ms**（`CPSEKAI_FRAME_STATS=1` + `--fps 2000` 才有意义，
+  `--fps 1000` 量到的是节流地板）。「帧率不高」是美术：主环 16 帧/0.5s ≈ 32fps 序列帧。
+- 10-25：**日服 7.1.0 全解包成功**（`dump.cs` 82MB、15,072 类型、159 个 dummy dll），
+  工具链与产物全记在 **`RE.md`**。国服是 AES+RSA，卡住，别在那上面花时间。
+- 10-25：**选曲界面原作几何实测完成** → **`SELECT-UI.md`**。要点：原作画布 **1334×750**，
+  换到我们 1920×1080 要 **×1.44**；列表行 912×144（→1313×207），我们只有 450×84
+  （**0.41×**）。方案 A（等比放大）/B（照抄版式）/C（补零件）还没动工，等用户拍板。
 - 10-20：教学加了 `type: "name"` 用户名卡片（`storyui::nameCard`，照用户给的 pjsk 截图做），
   **画在窗口 draw list**（输入框文字是 ImGui item，前景层会盖住字）；限长按码点；
   focus-by-code 的全选要等下一帧再 `ClearSelection()`。教学全程循环
