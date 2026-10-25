@@ -209,6 +209,10 @@ cppsekai [--sus <file.sus>] [--bgm <audio>] [--charts <dir>] [--cover <image>]
   无头模式可以直接拿来当断言（自动演示应当全 PERFECT、0 miss）。
 - `--screenshot` **完全不写 `userdata.json`**，随便跑，不会污染存档。
 - 贴图加载耗时想细看：设环境变量 `CPSEKAI_ASSET_TIMING=1`，日志里会多出每张贴图的耗时。
+- **帧时间/性能**：`CPSEKAI_FRAME_STATS=1` 每 120 帧打一行
+  `[framestats] avg=… ms peak=… ms (… fps)`，默认完全静默。注意 `--fps N` 的节流会把
+  avg 顶在 `1000/N` 的地板上（`--fps 1000` 时任何东西都是 1.00 ms），**测真实开销要用
+  `--fps 2000`** 这种远超实际能力的上限，否则量到的是节流器不是负载。
 - 看动画的某一帧：卡片（设置卡 / 各弹窗）的入场只有 0.16s，`--screenshot` 的时机根本追不上，
   所以有个 `CPSEKAI_CARD_T=<0..1>`——把**所有卡片的动画冻结在这个进度**上再抓图，
   `0.3` 左右最能看出内容是不是跟着框一起缩放/淡入。

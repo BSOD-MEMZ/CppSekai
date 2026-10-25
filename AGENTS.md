@@ -3052,9 +3052,9 @@ ea\work\jp\jp_fx_group.py`）。
 |---|---|---|---|
 | 环 `PT_01` | **160**，life 0.5，单发 | **330**，life 0.45，循环 | 无 |
 | 柔光 `PT_02` | — | **650**，4/s | 无 |
-| `particle3` | 2.5~235，speed 35~100 | 42~147，speed 0~0.45，**6/s** | 0.03~0.05（不可见） |
-| `particle2` | 15.7~18.2 | 10.5~21，6/s | 不可见 |
-| `particle2_1` | 1.2~11.7 | — | — |
+| `particle3` | **15.8~235.5**，speed 35~100 | 42~147，speed 0~0.45，**6/s** | 0.03~0.05（不可见） |
+| `particle2` | 18.2~20.5 | 10.5~21，6/s | 不可见 |
+| `particle2_1` | 3.0~14.1 | — | — |
 | `particle1` | 1.6~7.9 | 2.1~10.5 | 不可见 |
 | 粒子 scale | **157** | **210** | 1 / 0.1 / 0.1 |
 | scalingMode | 0 Hierarchy | 0 Hierarchy | 1 Local |
@@ -3070,8 +3070,14 @@ ea\work\jp\jp_fx_group.py`）。
 ### 数据换算
 
 - 世界尺寸 = `startSize × RectTransform.localScale`（scalingMode Hierarchy）。
-- **`startSize` 是 Random Between Two Curves**（`minMaxState: 2`），
-  尺寸在 `minCurve × minScalar` 和 `maxCurve × scalar` 之间随机，跨度能到 100 倍。
+- **`startSize` 的两种模式别混**：
+  - `minMaxState: 2`（Random Between Two Curves）——`scalar` 是**两条曲线共用的乘数**
+    （Unity 的 `m_CurveMultiplier`），`minScalar` 在这里**不参与**；
+  - `minMaxState: 3`（Two Constants）——`scalar` 是上限、`minScalar` 是下限。
+  （2026-10-25 第二次核对才发现：早先把 Two Curves 也乘了 `minScalar`，把 particle3
+  的下限算成 2.5px、跨度算成 90 倍；真值是 **15.8~235.5，跨度 15 倍**。）
+- **绝对像素不可求证**：四个三角节点都挂在 `particle1` 下，而 `particle1` 自己也是
+  scale 157，缩放会连乘；所以能信的只有**互相之间的比例**（三角 : 环），别拿 px 当真理。
 - **`rateOverTime` + `lengthInSec` + `looping` 决定"一次发几个"**：single 组三个
   系统都是 1/s + 0.5s + 不循环 → **一次点击每个系统最多一个粒子，都在 t=0**。
 - **`startSpeed` 沿圆盘法线（+Z，屏幕外）**，正交 2D 看不到位移；代码里
@@ -3080,15 +3086,33 @@ ea\work\jp\jp_fx_group.py`）。
   `RotationOverLifetime` 的 `separateAxes = 0` 所以**只有 Z 在转**（π rad/s），
   X/Y 是每颗粒子固定的倾角。渲染要做真 3D 投影（绕 X→Y→Z 后正交投影），
   倾斜的 quad 会被压扁成瘦长条 —— 这才是"翻滚的玻璃片"，纯 2D 旋转做不出来。
+  **但 X/Y 倾角别照抄 ±2π**：真 mesh 有厚度和明暗，侧对时仍有体积感；平 quad 侧对
+  就是一条线，表现成"三角忽大忽小"。代码里用 `kShardTilt = 1.15`（≈±66°）夹住。
 
 ### 代码里的可调旋钮
 
-- **`kRingScale = 0.45` / `kShardScale = 0.60`**（`TapEffect.cpp` 顶部）：唯一的
-  非实测值，分开缩放。环缩到 0.45 才顺眼，但三角跟着缩就成微粒了，所以给它单独
-  一档。两个都设 1.0 = 字面值（单击环 160px、三角 2.5~235）。
-- `particle3` 的 `sizeMin`：实测下限 2.5px（`minCurve 0.08 × minScalar 0.2`）
-  看起来像脏点，代码抬到 40。上限 235（= 环的 1.5 倍）也收到 130。
+- **`kRingScale = 0.45` / `kShardScale = 0.60`**（`TapEffect.cpp` 顶部）：非实测的
+  全局缩放，分开是为了环能缩而三角不跟着变成微粒。都设 1.0 = 字面值。
+- **`kShardTilt = 1.15`**：三角的 X/Y 倾角上限（弧度）。0 = 纯平面，3.14159 = 实测的
+  ±2π。调大全飘成细线，调小失去 3D 感。
+- **`particle3` 的 `sizeMin/sizeMax`**：实测 15.8~235.5（uniform，一半的点击都比环大），
+  代码收成 `54~90`（缩后 32~54px = 环的 0.45~0.75）。想更接近原版就往两头放。
 - `kRadialGain`：0 = 粒子不动（字面读法），1.0 = 按 startSpeed 向外飘。
+
+### 性能（2026-10-25 实测，别凭感觉优化）
+
+`CPSEKAI_FRAME_STATS=1` 会每 120 帧打一行 `[framestats] avg/peak`（默认静默）。
+在 `--fps 2000`（关 vsync + 关 60 上限）下：
+
+| | avg | peak |
+|---|---|---|
+| 无特效 | 0.51 ms | 0.75 ms |
+| 3 个 burst 常驻（3 环 + 15 三角） | 0.54 ms | 1.10 ms |
+
+→ **整个特效约 0.03 ms**，占 60fps 预算（16.7 ms）的 0.2%。所谓"帧率不高"来自美术：
+主环是 **16 帧 / 0.5s ≈ 32fps 的序列帧**（Unity 的 `fps: 30` 也是这样），60Hz 下每格
+停约 1.9 帧，看着就是一顿一顿的。想要更顺只能给相邻两格做交叉淡入（会略糊），
+不是优化代码能解决的。
 
 ### 其它踩过的坑
 

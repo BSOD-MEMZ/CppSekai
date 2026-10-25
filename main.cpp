@@ -6886,6 +6886,28 @@ int main(int argc, char** argv)
             fpsNextSampleSec = uiClock + 0.25;
             fpsDisplay = 1.0 / std::clamp(lastFrameDeltaSec, 1.0 / 1000.0, 1.0);
         }
+        // CPSEKAI_FRAME_STATS=1: print avg / p99 frame time every 120 frames, so a
+        // headless run can tell "this new effect costs 3 ms" from "it looks slow".
+        // Silent unless the variable is set.
+        {
+            static const bool frameStats = std::getenv("CPSEKAI_FRAME_STATS") != nullptr;
+            static double frameSum = 0.0;
+            static double framePeak = 0.0;
+            static int frameCount = 0;
+            if (frameStats) {
+                frameSum += lastFrameDeltaSec;
+                framePeak = std::max(framePeak, lastFrameDeltaSec);
+                if (++frameCount >= 120) {
+                    std::printf("[framestats] avg=%.2f ms  peak=%.2f ms  (%.1f fps)\n",
+                        frameSum / static_cast<double>(frameCount) * 1000.0, framePeak * 1000.0,
+                        1000.0 / (frameSum / static_cast<double>(frameCount) * 1000.0));
+                    std::fflush(stdout);
+                    frameSum = 0.0;
+                    framePeak = 0.0;
+                    frameCount = 0;
+                }
+            }
+        }
         const float frameDelta = static_cast<float>(lastFrameDeltaSec);
         uiClock += lastFrameDeltaSec;
 #ifdef _WIN32

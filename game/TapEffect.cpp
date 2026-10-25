@@ -52,6 +52,13 @@ constexpr float kRadialGain = 1.0f;
 // makes the shards look like tumbling 3D cards instead of flat stickers.
 constexpr float kSpinRate = 3.14159265f; // pi rad/s on Z
 
+// The measured startRotationX / startRotationY are Two Constants at +-2pi, i.e.
+// every particle gets a completely random tilt. A real mesh keeps its silhouette
+// when it turns edge-on (it has thickness and shading); a flat quad just
+// collapses to a sliver, which reads as "the shards keep changing size". This
+// caps the tilt instead: 0 = flat, 1.15 = up to ~66 deg, 3.14159 = literal.
+constexpr float kShardTilt = 1.15f;
+
 struct ColorKey
 {
     float t;
@@ -118,19 +125,24 @@ struct TriSpec
 };
 
 // fx_Tap_single: one particle per system, all at t=0, thrown outward fast.
+// Sizes are startSize * localScale(157). In Two Curves mode the multiplier
+// (`scalar`) applies to BOTH curves; `minScalar` only matters for Two Constants.
+// Measured: particle3 15.8..235.5 (a 15x uniform spread!), particle2 18.2..20.5,
+// particle2_1 3.0..14.1, particle1 1.6..7.9.
 constexpr int kTapSpecCount = 4;
 constexpr TriSpec kTapSpecs[kTapSpecCount] = {
-    // particle3. Measured range is 2.5..235 px (minCurve 0.08 * minScalar 0.2 on
-    // the low side). Both ends are trimmed by hand: 2.5px reads as a dirty speck
-    // and 235px is 1.5x the ring, which looks oversized. 40..130 -> 24..78 px
-    // after kFxScale, i.e. a quarter to four-fifths of the ripple.
-    {40.0f, 130.0f, 0.30f, 0.70f, 157.0f, 35.0f, 100.0f, 1, &kGradBig},
-    // particle2: 15.7..18.2
-    {15.7f, 18.2f, 0.10f, 0.70f, 157.0f, 35.0f, 100.0f, 1, &kGradMid},
-    // particle2_1: measured 1.2..11.7, floor raised to 6 for the same reason
-    {6.0f, 11.7f, 0.20f, 0.70f, 157.0f, 35.0f, 100.0f, 1, &kGradMid},
-    // particle1: 1.6..7.9, emits at the tap point (its shape module is off).
-    // Original life is 30..35s; clamped to 2s, a 35s speck is not feedback.
+    // particle3, the "hero" shard. The original really does roll anywhere in
+    // 16..235 px (uniform between the curves, so half of all taps are >125 px,
+    // i.e. wider than the 160 px ripple). On a real mesh that reads as a glass
+    // slab catching the light; as a flat quad 235 px is just a big coloured card,
+    // so the band is trimmed to 0.45..0.75 of the ripple.
+    {54.0f, 90.0f, 0.30f, 0.70f, 157.0f, 35.0f, 100.0f, 1, &kGradBig},
+    // particle2: measured 18.2..20.5, essentially one size.
+    {18.2f, 20.5f, 0.10f, 0.70f, 157.0f, 35.0f, 100.0f, 1, &kGradMid},
+    // particle2_1: measured 3.0..14.1.
+    {3.0f, 14.1f, 0.20f, 0.70f, 157.0f, 35.0f, 100.0f, 1, &kGradMid},
+    // particle1: Two Constants 1.6..7.9, emits at the tap point (shape module
+    // off). Original life is 30..35s; clamped to 2s, a 35s speck is not feedback.
     {1.6f, 7.9f, 0.60f, 2.00f, 0.0f, 1.0f, 20.0f, 2, nullptr},
 };
 
@@ -138,7 +150,8 @@ constexpr TriSpec kTapSpecs[kTapSpecCount] = {
 // long-lived (transform scale 210 instead of 157).
 constexpr int kHoldSpecCount = 3;
 constexpr TriSpec kHoldSpecs[kHoldSpecCount] = {
-    {42.0f, 147.0f, 0.30f, 1.50f, 210.0f, 0.0f, 0.45f, 1, &kGradBig},
+    // measured 42..147; trimmed the same way as the tap hero shard
+    {50.0f, 90.0f, 0.30f, 1.50f, 210.0f, 0.0f, 0.45f, 1, &kGradBig},
     {10.5f, 21.0f, 0.30f, 1.50f, 210.0f, 0.0f, 0.45f, 1, &kGradMid},
     {2.1f, 10.5f, 0.60f, 2.00f, 210.0f, 5.0f, 40.0f, 1, nullptr},
 };
@@ -303,9 +316,10 @@ void TapEffect::buildTapShards(Instance& instance, unsigned& rng) const
             shard.angle = randomRange(rng, 0.0f, kTwoPi);
             shard.speed = randomRange(rng, spec.speedMin, spec.speedMax) * kRadialGain * kRingScale;
             shard.size = randomRange(rng, spec.sizeMin, spec.sizeMax) * kShardScale;
-            // startRotation is a Vector3 with every axis at +-2pi.
-            shard.rot0x = randomRange(rng, -kTwoPi, kTwoPi);
-            shard.rot0y = randomRange(rng, -kTwoPi, kTwoPi);
+            // startRotation is a Vector3 with every axis at +-2pi; X/Y are capped
+            // by kShardTilt so a flat quad cannot collapse to a sliver.
+            shard.rot0x = randomRange(rng, -kShardTilt, kShardTilt);
+            shard.rot0y = randomRange(rng, -kShardTilt, kShardTilt);
             shard.rot0z = randomRange(rng, -kTwoPi, kTwoPi);
             // Only Z spins (separateAxes = 0); X/Y stay as the initial tilt.
             shard.spinX = 0.0f;
@@ -331,8 +345,8 @@ void TapEffect::emitHoldShard(HoldState& hold, unsigned& rng) const
         shard.angle = randomRange(rng, 0.0f, kTwoPi);
         shard.speed = randomRange(rng, spec.speedMin, spec.speedMax) * kRadialGain * kRingScale;
         shard.size = randomRange(rng, spec.sizeMin, spec.sizeMax) * kShardScale;
-        shard.rot0x = randomRange(rng, -kTwoPi, kTwoPi);
-        shard.rot0y = randomRange(rng, -kTwoPi, kTwoPi);
+        shard.rot0x = randomRange(rng, -kShardTilt, kShardTilt);
+        shard.rot0y = randomRange(rng, -kShardTilt, kShardTilt);
         shard.rot0z = randomRange(rng, -kTwoPi, kTwoPi);
         shard.spinX = 0.0f;
         shard.spinY = 0.0f;
