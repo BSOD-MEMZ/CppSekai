@@ -1313,6 +1313,7 @@ int main(int argc, char** argv)
     // Debug: freeze one tap ripple at a fixed age so one --screenshot run can
     // photograph the effect (it is otherwise driven by real clicks).
     bool tapFxTest = false;
+    bool tapFxHold = false;
     float tapFxAge = 0.35f;
     // --story-test [id]: boot straight into the tutorial script (headless
     // checks: --screenshot can then photograph any step).
@@ -1566,6 +1567,15 @@ int main(int argc, char** argv)
         } else if (arg == "--tap-fx-test") {
             // Debug: freeze one tap ripple at this age (default 0.35s).
             tapFxTest = true;
+            if (i + 1 < utf8Argc && utf8Argv[i + 1][0] != '-') {
+                const float parsed = static_cast<float>(std::atof(utf8Argv[++i]));
+                if (parsed > 0.0f) {
+                    tapFxAge = parsed;
+                }
+            }
+        } else if (arg == "--tap-fx-hold") {
+            // Debug: same as --tap-fx-test but freezes the held-press effect.
+            tapFxHold = true;
             if (i + 1 < utf8Argc && utf8Argv[i + 1][0] != '-') {
                 const float parsed = static_cast<float>(std::atof(utf8Argv[++i]));
                 if (parsed > 0.0f) {
@@ -2578,7 +2588,15 @@ int main(int argc, char** argv)
     };
     applyRenderMode();
 
-    if (tapFxTest) {
+    if (tapFxHold) {
+        // Two held-press states at different ages: the ripple loops every 0.45s
+        // and shards keep spawning at 6/s, so age changes what you see.
+        tapEffect.setFrozen(true);
+        tapEffect.debugHoldAt(static_cast<float>(windowW) * 0.30f,
+            static_cast<float>(windowH) * 0.50f, tapFxAge);
+        std::printf("[tap-fx] held press frozen at %.2fs\n", static_cast<double>(tapFxAge));
+        std::fflush(stdout);
+    } else if (tapFxTest) {
         // Three real bursts side by side, all frozen at --tap-fx-age. The
         // particle sizes are Random Between Two Curves, so one burst alone is
         // not representative - three of them show the spread. Each burst gets
@@ -7466,7 +7484,7 @@ int main(int argc, char** argv)
                         // filtered out in the mouse path), so the button has to
                         // be tested here as well.
                         if (tapEffect.loaded()) {
-                            tapEffect.spawn(event.tfinger.x * static_cast<float>(windowW),
+                            tapEffect.press(event.tfinger.x * static_cast<float>(windowW),
                                 event.tfinger.y * static_cast<float>(windowH));
                         }
                         const int fx = static_cast<int>(event.tfinger.x * static_cast<float>(windowW));
@@ -7478,7 +7496,7 @@ int main(int argc, char** argv)
                     }
                     // Tap feedback on the non-play screens (select, settings).
                     if (state != AppState::Play && tapEffect.loaded()) {
-                        tapEffect.spawn(
+                        tapEffect.press(
                             event.tfinger.x * static_cast<float>(windowW),
                             event.tfinger.y * static_cast<float>(windowH));
                         break;
@@ -7520,6 +7538,8 @@ int main(int argc, char** argv)
                     break;
                 }
                 case SDL_FINGERMOTION: {
+                    tapEffect.moveHold(event.tfinger.x * static_cast<float>(windowW),
+                        event.tfinger.y * static_cast<float>(windowH));
                     if (longPress.active) {
                         const float dx = event.tfinger.x * static_cast<float>(windowW) - longPress.x;
                         const float dy = event.tfinger.y * static_cast<float>(windowH) - longPress.y;
@@ -7561,6 +7581,7 @@ int main(int argc, char** argv)
                 }
                 case SDL_FINGERUP: {
                     longPress.active = false;
+                    tapEffect.release();
                     if (event.tfinger.fingerId == uiTouchScrollId) {
                         // Only the finger state goes; whatever was banked stays
                         // for the card to apply this frame. A quick flick hands
@@ -7664,7 +7685,7 @@ int main(int argc, char** argv)
                     // cosmetic, so it fires on buttons and sliders too (pjsk
                     // does the same).
                     if (state != AppState::Play && tapEffect.loaded()) {
-                        tapEffect.spawn(static_cast<float>(event.button.x),
+                        tapEffect.press(static_cast<float>(event.button.x),
                             static_cast<float>(event.button.y));
                     }
                     // Opening-card skip button (top-right): jump the
@@ -7699,6 +7720,14 @@ int main(int argc, char** argv)
                     if (event.motion.which == SDL_TOUCH_MOUSEID) {
                         break; // touch drag is handled by the finger path
                     }
+                    if (state != AppState::Play && tapEffect.loaded()) {
+                        // Held-press ripple follows the pointer; in Play a drag is
+                        // note input and must stay untouched.
+                        if ((event.motion.state & SDL_BUTTON_LMASK) != 0) {
+                            tapEffect.moveHold(static_cast<float>(event.motion.x),
+                                static_cast<float>(event.motion.y));
+                        }
+                    }
                     if (autoPlay || paused || state != AppState::Play) {
                         break;
                     }
@@ -7716,6 +7745,7 @@ int main(int argc, char** argv)
                     if (event.button.which == SDL_TOUCH_MOUSEID) {
                         break; // touch release is handled by the finger path
                     }
+                    tapEffect.release();
                     if (event.button.button != SDL_BUTTON_LEFT && event.button.button != SDL_BUTTON_RIGHT) {
                         break;
                     }

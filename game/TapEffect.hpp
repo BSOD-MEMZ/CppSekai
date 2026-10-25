@@ -1,39 +1,38 @@
 // CppSekai - PJSK style global tap feedback.
 //
-// Everything below is reverse engineered from pjsk 7.1.0's
-// `ScreenLayerTouchEffect` prefab (Assets/Resources/screen/prefabs/), read out
-// through AssetRipper. The real effect is a Unity ParticleSystem cluster:
+// Reverse engineered from pjsk 7.1.0's `ScreenLayerTouchEffect`. That prefab
+// holds THREE different effects, and they look nothing alike:
 //
-//   root
-//     PT_01      billboard, 4x4 texture sheet (tex_tap_texturesheet)
-//     PT_02      billboard, single flare (tex_tap_flare)
-//     particle3  MESH triangle, big      (tex_sekai_01_2, 2x2 colour cells)
-//     particle2_1 MESH triangle, medium
-//     particle1  MESH triangle, tiny flakes
+//   fx_Tap_single  a tap:        one 160px ripple + one big shard, then gone
+//   Follow         a held press: 330px ripple looping + 650px glow + shards at 6/s
+//   fx_Tap_flick   dragging:     no ripple at all (its particle scales are
+//                                1 / 0.1 / 0.1, i.e. sub-pixel - the group is
+//                                effectively invisible in the shipped build)
 //
-// Measured values (see RE-report-jp.md section 9/10 for the raw YAML):
-//   PT_01       life 0.5s, speed 0, startSize 160, UV 4x4 WholeSheet, fps 30,
-//               frameOverTime linear 0->1. Transform scale 1.
-//   PT_02       life 0.5s, speed 0, startSize 650, rate 4/s, no UV module.
-//   particle3   startSize 0.2..0.7, Transform scale 210 -> 42..147 px,
-//               life 0.3..1.5s, spawn ring radius 1*210 = 210 px (edge only),
-//               startRotation +-2pi, rotate 180 deg/s, UV 2x2 with a random
-//               start frame (so each triangle picks one of the four colours).
-//   particle2_1 startSize 0.09, scale 157 -> 14 px, life 0.2..0.7s,
-//               ring 157 px, speed 35..100.
-//   particle1   startSize 0.01..0.05, scale 210 -> 2.1..10.5 px, life 1..30s
-//               (clamped to 3s here: a 30s tail is meaningless as tap feedback).
+// So this class models two states, not three: Tap (a burst that dies on its own)
+// and Hold (a live effect that follows the finger). Dragging is Hold with a
+// moving position, which is what the original ends up looking like too.
 //
-// The mesh particles all share the same triangle mesh (sekai_PT_05) and draw
-// with ColorOverLifetime FADING IN, not out:
-//   particle3   alpha 0 -> 0.5, tint (0.138, 0.175, 0.302)  dark slate blue
-//   particle2_1 alpha 0 -> 1.0, tint white
-//   particle1   no colour module at all
-// So they read as translucent coloured glass shards, not as glowing sparks.
+// Measured values (raw YAML in D:\Tools\rea\work\jp\fx_touch\, grouped into fx by
+// jp_fx_group.py; write-up in RE-report-jp.md section 11):
 //
-// Their `startSpeed` points along the disc normal (out of the screen), which is
-// invisible in an orthographic 2D view; the small radial drift we add is an
-// explicit artistic translation of that speed, see kRadialGain.
+//   PT_01   single: startSize 160, life 0.5, uv 4x4 WholeSheet fps 30, rate 0
+//           hold  : startSize 330, life 0.45, same sheet, looping
+//   PT_02   hold only: startSize 650, life 0.5, rateOverTime 4/s
+//   particle3 single: size 2.5..235 (random between two curves), life 0.3..0.7,
+//                     startSpeed 35..100, one particle at t=0
+//           hold  : size 42..147, life 0.3..1.5, startSpeed 0..0.45, 6/s
+//   particle2 single: 15.7..18.2 ; hold: 10.5..21 at 6/s
+//   particle2_1 single only: 1.2..11.7
+//   particle1 life 30..35s in the original (clamped here): tiny specks
+//
+// All four particle nodes sit at RectTransform scale 157 in fx_Tap_single and
+// 210 in Follow; scalingMode is Hierarchy, so world size = startSize * scale.
+//
+// The originals' startSpeed points along the disc normal (out of the screen),
+// which an orthographic 2D view cannot show, so kRadialGain reinterprets it as
+// outward drift. Everything else - sizes, lifetimes, rates, colour keyframes -
+// is measured, apart from kFxScale (a global shrink, see below).
 //
 // Never spawned during the play state: there a pointer press is a note hit and
 // the judgement input path must stay untouched (see main.cpp).
@@ -59,20 +58,32 @@ class TapEffect
     bool load(platform::Renderer& renderer, const std::string& fxDir, std::string& outError);
     bool loaded() const { return mSheet != 0 || mRing != 0; }
 
-    // Spawns one burst at a window-pixel position with age 0.
+    // One-shot burst (used by --tap-fx-test and kept for callers that only want
+    // the "tap" half).
     void spawn(float x, float y);
-    // Same, but starts at a given age - used by --tap-fx-test so a headless
-    // screenshot can show several phases at once.
     void spawnAt(float x, float y, float age);
 
-    // Freezes ageing (headless verification only).
+    // Pointer went down: fires the tap burst and enters the held state.
+    void press(float x, float y);
+    // Pointer moved while held: drags the held effect along.
+    void moveHold(float x, float y);
+    // Pointer went up: drops the held state.
+    void release();
+    bool holding() const { return mHold.active; }
+
+    // Headless only: build a held-press state that has already been running for
+    // `age` seconds, so one screenshot can show what a long press looks like.
+    void debugHoldAt(float x, float y, float age);
+
+    // Freezes ageing (headless verification only): keeps the hold effect alive
+    // and stops tickers so a screenshot is deterministic.
     void setFrozen(bool frozen) { mFrozen = frozen; }
 
     void update(float dt);
     // Draws on the foreground draw list (above every screen).
     void draw();
 
-    void clear() { mActive.clear(); }
+    void clear();
 
   private:
     // One mesh particle. All values are already randomised at spawn time so a
@@ -99,29 +110,45 @@ class TapEffect
         std::vector<Shard> shards;
     };
 
-    // One flipbook layer of a burst (PT_01 / PT_02).
+    // The held-press effect: one ripple looping forever, a steady glow, and
+    // shards emitted at a fixed rate, all anchored to the pointer.
+    struct HoldState
+    {
+        bool active = false;
+        float x = 0.0f;
+        float y = 0.0f;
+        float age = 0.0f;
+        float emitAccum = 0.0f;
+        std::vector<Shard> shards;
+    };
+
+    // One flipbook layer (the ripple).
     struct FlipLayer
     {
         ImTextureID tex = 0; // 0 = skip
         int tiles = 4;       // tiles per axis
         int frames = 16;     // frames actually used
-        float life = 0.5f;   // seconds
+        float life = 0.5f;   // seconds per loop
         float diameter = 160.0f; // design px
         float alpha = 1.0f;
     };
 
-    void layerList(FlipLayer (&out)[1]) const;
-    void buildShards(Instance& instance, unsigned& rng) const;
-    void drawFlip(ImDrawList* dl, float cx, float cy, float t, const FlipLayer& layer,
+    void buildTapShards(Instance& instance, unsigned& rng) const;
+    void emitHoldShard(HoldState& hold, unsigned& rng) const;
+    void drawFlip(ImDrawList* dl, float cx, float cy, float age, const FlipLayer& layer,
         float scale) const;
-    void drawShard(ImDrawList* dl, const Instance& in, const Shard& shard, float scale) const;
-    void drawRingLegacy(ImDrawList* dl, const Instance& in, float scale, float alphaScale,
-        bool shadow) const;
+    void drawShard(ImDrawList* dl, float originX, float originY, float instanceAge,
+        const Shard& shard, float scale) const;
+    void drawGlow(ImDrawList* dl, float cx, float cy, float alpha, float scale) const;
+    void drawRingLegacy(ImDrawList* dl, float cx, float cy, float age, float scale,
+        float alphaScale, bool shadow) const;
 
-    ImTextureID mSheet = 0;    // 4x4 main ripple      (tex_tap_texturesheet)
-    ImTextureID mTri = 0;      // 2x2 colour triangles (tex_sekai_01_2)
-    ImTextureID mRing = 0;     // legacy fallback ring
+    ImTextureID mSheet = 0;  // 4x4 main ripple      (tex_tap_texturesheet)
+    ImTextureID mTri = 0;    // 2x2 colour triangles (tex_sekai_01_2)
+    ImTextureID mGlow = 0;   // single radial glow   (tex_tap_flare)
+    ImTextureID mRing = 0;   // legacy fallback ring
     std::vector<Instance> mActive;
+    HoldState mHold;
     int mNextSeed = 0;
     bool mFrozen = false;
 };

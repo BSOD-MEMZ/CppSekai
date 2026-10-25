@@ -3034,64 +3034,70 @@ UI 在 **设置 → 演奏 → 按键映射**（3 列 × 4 行，点一格再按
   实际最后几分钟的输出还躺在用户态缓冲里，进程被 kill 就永远丢了。
   排查多人问题花的时间有一半耗在这上面。
 
-## 触摸特效（TapEffect）2026-10-25 —— 环是 flipbook，三角是粒子
+## 触摸特效（TapEffect）2026-10-25 —— 三种状态，参数全实测
 
-`game/TapEffect.*`：非演奏状态下点哪都会在点击点放一次特效。**参数全部来自
-pjsk 日服 7.1.0 的 `ScreenLayerTouchEffect`**（prefab 走 AssetRipper 本地 HTTP API
-按 PathID 单取 YAML；原始文件 `D:\Toolsea\work\jpx_touch\`，报告
-`RE-report-jp.md` 第 9/10/11 节）。
+`game/TapEffect.*`。**pjsk 的"点一下 / 按住 / 按住拖动"是三套不同的 fx**，
+`ScreenLayerTouchEffect` prefab 里分别叫 `fx_Tap_single` / `Follow`(`fx_Tap_loop`) /
+`fx_Tap_flick`，参数差得很远。别再把其中一套的数拿来当另一套（踩过两次）。
 
-### 先分清是哪个 fx
+### 先分级，再读参数
 
-prefab 里 `TouchEffect` 下有 **fx_Tap_single / Follow(fx_Tap_loop) / fx_Tap_flick**
-三套，外加 `TouchEffect (1)`~`(4)` 四个额外实例。**参数完全不同**，早期把 loop 组
-（scale 210、rate 6/s、life 1.5s）当成单击，才是"三角形太大/太多"的根源。
+prefab 里有 75 个粒子系统，分属 `fx_Tap_single` / `Follow` / `fx_Tap_flick` /
+`TouchEffect (1)~(4)`。**分组方法**：prefab View 页面的 `GameObjects[]` 是
+**深度优先**顺序，按各 fx 节点的下标切区间即可（`D:\Toolsea\work\jp\jp_fx_group.py`）。
+（`grouped.json` 就是结果，改之前先看它。）
 
-GameObjects[] 在 prefab View 页面上是**深度优先**顺序，用它可以按区间切子树
-（脚本 `jp_fx_group.py`）。单击组（`fx_Tap_single`，PathID 98）只有 6 个粒子系统：
+| | 单击 `fx_Tap_single` | 按住 `Follow` | 拖动 `fx_Tap_flick` |
+|---|---|---|---|
+| 环 `PT_01` | **160**，life 0.5，单发 | **330**，life 0.45，循环 | 无 |
+| 柔光 `PT_02` | — | **650**，4/s | 无 |
+| `particle3` | 2.5~235，speed 35~100 | 42~147，speed 0~0.45，**6/s** | 0.03~0.05（不可见） |
+| `particle2` | 15.7~18.2 | 10.5~21，6/s | 不可见 |
+| `particle2_1` | 1.2~11.7 | — | — |
+| `particle1` | 1.6~7.9 | 2.1~10.5 | 不可见 |
+| 粒子 scale | **157** | **210** | 1 / 0.1 / 0.1 |
+| scalingMode | 0 Hierarchy | 0 Hierarchy | 1 Local |
 
-| 节点 | length | life | startSize | speed | 备注 |
-|---|---|---|---|---|---|
-| `PT_01` | 1.0 | 0.5 | **160 const** | 0 | uv 4x4 16 帧 fps30，shape 关闭，rate 0 |
-| `particle3` | 0.5 | 0.3~0.7 | rand-curve ×1.5 | **35~100** | 2.5~235 px，ColorModule 4 个 alpha key |
-| `particle2` | 0.5 | 0.1~0.7 | rand-curve ×0.14 | 35~100 | 15.7~18.2 px |
-| `particle2_1` | 0.5 | 0.2~0.7 | rand-curve ×0.09 | 35~100 | 1.2~11.7 px |
-| `particle1` | 25 | 30~35 | 0.01~0.05 | 1~20 | shape 关闭；life 截到 2s |
+`fx_Tap_flick` 的三个粒子节点 scale 是 1 / 0.1 / 0.1，算出来只有 0.005~0.05px，
+**在正式包里等于不可见**（多半是半成品）。所以代码只做两个状态：
+**Tap（一次性 burst）** 和 **Hold（跟随指针的持续效果）**，拖动 = Hold 换位置。
 
-**没有 PT_02 柔光**——650px 的 flare 只存在于 loop / 额外实例里。
+### 数据换算
 
-### 尺寸怎么算
+- 世界尺寸 = `startSize × RectTransform.localScale`（scalingMode Hierarchy）。
+- **`startSize` 是 Random Between Two Curves**（`minMaxState: 2`），
+  尺寸在 `minCurve × minScalar` 和 `maxCurve × scalar` 之间随机，跨度能到 100 倍。
+- **`rateOverTime` + `lengthInSec` + `looping` 决定"一次发几个"**：single 组三个
+  系统都是 1/s + 0.5s + 不循环 → **一次点击每个系统最多一个粒子，都在 t=0**。
+- **`startSpeed` 沿圆盘法线（+Z，屏幕外）**，正交 2D 看不到位移；代码里
+  `kRadialGain` 把它折算成径向漂移（0 = 严格照原样）。
 
-- 四个粒子节点的 `RectTransform.localScale` **都是 157**（不是 210/0.1，那是 loop 组）。
-- `scalingMode` 0 = Hierarchy，所以世界尺寸 = `startSize × 157`。
-- **`startSize` 的 `minMaxState` 是 2 = Random Between Two Curves**，不是 Curve。
-  尺寸在 `minCurve × minScalar` 和 `maxCurve × scalar` 之间随机（particle3 就是
-  0.016~1.5 世界单位 = 2.5~235 px，跨度 100 倍）。取上限当成固定值就会得到
-  "一个巨大三角"，这是第二轮的错误。
-- `rateOverTime` 全是 1/s，`lengthInSec` 0.5，`looping` 0 → **一次点击每个系统最多
-  发一个粒子**，而且都在 t=0。所以单击是"一个环 + 偶尔一个大三角 + 两个小碎片"，
-  不是"一片三角"。
+### 代码里的可调旋钮
+
+- **`kFxScale = 0.60`**（`TapEffect.cpp` 顶部）：唯一的全局非实测值，同时缩放
+  环、三角、半径。设 1.0 = 字面值（单击环 160px）。
+- `particle3` 的 `sizeMin`：实测下限 2.5px（`minCurve 0.08 × minScalar 0.2`）
+  看起来像脏点，代码抬到 40。上限 235（= 环的 1.5 倍）也收到 130。
+- `kRadialGain`：0 = 粒子不动（字面读法），1.0 = 按 startSpeed 向外飘。
 
 ### 其它踩过的坑
 
-- **`startSpeed` 沿圆盘法线（+Z，屏幕外）**，正交 2D 下没有位移。代码里用
-  `kRadialGain` 把它折算成径向漂移（0 = 严格照原样）。
-- **`ColorOverLifetime` 的 Gradient**：只有前 `m_NumColorKeys` 个 key 的 RGB 是颜色
-  （走 ctime 轴），前 `m_NumAlphaKeys` 个的 A 是 alpha（走**独立的 atime 轴**），
+- **ColorOverLifetime 的 Gradient**：只有前 `m_NumColorKeys` 个 key 的 RGB 是颜色
+  （ctime 轴），前 `m_NumAlphaKeys` 个的 A 是 alpha（走**独立的 atime 轴**），
   其余 key 的 rgb 是 `(0,0,0)` 占位。当成颜色关键帧会得出"三角中途变纯黑"的假结论。
-- **颜色是线性空间**，必须过 `srgbOf()`，否则是近黑色块。
+  颜色还是**线性空间**，要过 `srgbOf()`。
 - **`tex_sekai_01_2` 每格三角形外面有 alpha=255 的底色**，官方 mesh 是三角形所以
-  从不采样；用正方形 quad 就会画成方块 → `strip_tri_background.py` 抹掉。
-- **混合**：环走 additive（`AddCallback` 切 `glBlendFunc(SRC_ALPHA, ONE)`，**画完
-  必须恢复** `ONE_MINUS_SRC_ALPHA`）；三角走 alpha blend（白描边 + 渐变填充 =
-  贴纸不是光）。这条是从美术特征推断的，shader `sekaieffect` 没源码。
-- **`kShardScale`（默认 0.55）是文件里唯一的非实测值**，只缩放三角直径。设 1.0
-  就是字面值（particle3 峰值 235px = 环的 1.5 倍，在浅色背景上像块大玻璃）。
-- 随机数用 **xorshift32**：原来的 LCG 前几个值挤在 0 附近，每次测试都抽到最小尺寸。
-- 缺 `tap_sheet.png` 时回退到老的 `tap_ring.png` 缩放路径（这条别删）。
-- 无头验证：`--tap-fx-test [秒]` 冻结**三个** burst（尺寸是随机的，一个不代表分布）。
-  截图用 `.workbuddy/tools/shot.sh`：`--screenshot` 偶尔抓到没画完的帧（纯白、
-  ~35KB），脚本会检查大小并重试。
+  从不采样；用正方形 quad 会画成方块 → `strip_tri_background.py` 抹掉。
+- **混合**：环和柔光 additive（`AddCallback` 切 `glBlendFunc(SRC_ALPHA, ONE)`，
+  **画完必须恢复** `ONE_MINUS_SRC_ALPHA`）；三角 alpha blend（白描边 + 渐变填充 =
+  贴纸不是光）。三角的混合模式是从美术特征推断的，shader `sekaieffect` 没源码。
+- 随机数用 **xorshift32**：LCG 前几个值挤在 0 附近，每次测试都抽到最小尺寸。
+- 无头验证：`--tap-fx-test [秒]` 三个冻结的 burst，`--tap-fx-hold [秒]` 冻结的按住
+  状态（走 `debugHoldAt`，确定性重放发射）。**采样时刻别取太晚**：粒子 life 只有
+  0.1~0.7s，age 超过 0.3 时大半已经死了，看起来像"没画"。
+- 截图用 `.workbuddy/tools/shot.sh`：`--screenshot` 偶尔抓到没画完的帧（纯白、~35KB），
+  脚本会检查大小并重试。
+- 编译报 `lld-link: failed to write output` = 有残留 cppsekai 进程占着 exe。
 
 ## 待办（按优先级）
 

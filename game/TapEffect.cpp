@@ -1,6 +1,6 @@
 // CppSekai - PJSK style global tap feedback. See TapEffect.hpp for the
-// provenance of every number here (all of them are measured out of pjsk
-// 7.1.0's ParticleSystem YAML, none are eyeballed).
+// provenance of every number here, and RE-report-jp.md section 11 for the raw
+// YAML these were read from.
 #include "TapEffect.hpp"
 
 #include "Ui.hpp"
@@ -16,38 +16,35 @@ namespace game
 {
 namespace
 {
-// --- PT_01 main ripple ---------------------------------------------------
-// Read out of fx_Tap_single's ParticleSystem_217: length 1.0s, looping 0,
-// scalingMode Hierarchy (0), Transform scale 1, so startSize 160 is a direct
-// design-pixel diameter. Its ShapeModule is disabled and rateOverTime is 0:
-// the ring is spawned by Play() alone.
-constexpr float kRingLife = 0.50f;
-constexpr float kRingDiameter = 160.0f;
-constexpr int kTiles = 4;
-constexpr int kFrames = 16; // WholeSheet: all 16 tiles, 30 fps ramp 0 -> 0.9999
+// The ONLY number in this file that is not measured. Everything else is read
+// straight out of the prefab; this is a global shrink applied to every size and
+// radius, because a literal 1:1 mapping (PT_01 = 160 design px) reads too big on
+// our 1920x1080 canvas. Set to 1.0 for the literal values.
+constexpr float kFxScale = 0.60f;
 
-// --- mesh triangle particles --------------------------------------------
-// fx_Tap_single carries FOUR particle systems under SekaiEffect_2, all with
-// Transform scale 157 and scalingMode Hierarchy, so the world size is
-//   size = startSize(curve peak) * scalar * 157
-// Every one of them emits at rateOverTime 1/s over a 0.5s system, i.e. one
-// particle at t=0, and every one has startSpeed 35..100 pointing along the
-// disc normal (+Z, out of the screen).
-//
-//   node         life          curve peak  scalar   world size
-//   particle3    0.30..0.70    1.00        1.50     235
-//   particle2    0.10..0.70    0.83        0.14      18
-//   particle2_1  0.20..0.70    0.83        0.09      12
-//   particle1    30..35        0.05 const  -          1.6..7.9
-//
-// A tap therefore throws ONE big triangle plus a medium, a small and a couple
-// of flakes - not a swarm of mid-sized ones.
-// The ONLY non-measured number in this file. Everything above is read straight
-// out of the prefab; this multiplies the shard diameters to taste. Set it to
-// 1.0 for the literal values (particle3 then peaks at 235 px, i.e. 1.5x the
-// ring, which reads as a huge glass slab on a bright song-select backdrop).
-constexpr float kShardScale = 0.55f;
-constexpr float kRadialGain = 1.0f; // Z-axis speed reinterpreted as radial px/s
+// --- tap (fx_Tap_single) -------------------------------------------------
+// PT_01: startSize 160, life 0.5, 4x4 WholeSheet at 30 fps, rate 0, transform 1.
+constexpr float kTapRing = 160.0f * kFxScale;
+constexpr float kTapRingLife = 0.50f;
+
+// --- hold (Follow) -------------------------------------------------------
+// PT_01 here is 330 and loops every 0.45s; PT_02 is the 650px glow at 4/s.
+constexpr float kHoldRing = 330.0f * kFxScale;
+constexpr float kHoldRingLife = 0.45f;
+constexpr float kHoldGlow = 650.0f * kFxScale;
+// The original spawns a glow every 0.25s with a 0.5s life, so ~2 overlap. One
+// steady quad at this alpha matches that without blowing out on a pale backdrop.
+constexpr float kHoldGlowAlpha = 0.22f;
+// All three shard systems run rateOverTime 6/s.
+constexpr float kHoldShardRate = 6.0f;
+
+constexpr int kTiles = 4;
+constexpr int kFrames = 16;
+
+// The originals' startSpeed points along the disc normal (out of the screen).
+// An orthographic 2D view cannot show that, so this reinterprets it as outward
+// drift; 0 keeps the particles perfectly still (the literal reading).
+constexpr float kRadialGain = 1.0f;
 constexpr float kSpinRate = 3.14159265f; // RotationOverLifetime: pi rad/s
 
 struct ColorKey
@@ -97,45 +94,52 @@ constexpr AlphaKey kMidAlphas[] = {
     {1.000f, 0.000f},
 };
 
+constexpr ShardGradient kGradBig = {kBigColors, 2, kBigAlphas, 4};
+constexpr ShardGradient kGradMid = {kMidColors, 2, kMidAlphas, 5};
+
 struct TriSpec
 {
-    // startSize is Random Between Two Curves, so every particle rolls its own
-    // diameter between these two (minCurve*minScalar and maxCurve*scalar, both
-    // times the 157 Transform scale). The ranges are wide on purpose - that is
-    // how the original gets a mix of one big shard and a lot of small ones.
+    // startSize is Random Between Two Curves in every shard system, so each
+    // particle rolls its own diameter. sizeMin is the minCurve * minScalar side.
     float sizeMin;
     float sizeMax;
     float lifeMin;
     float lifeMax;
-    float radius;   // emission ring radius: shape radius 1 * scale 157
-    float speedMin; // startSpeed, world units/s (along +Z in the original)
+    float radius;   // emission ring radius (shape radius * transform scale)
+    float speedMin; // startSpeed, world units/s
     float speedMax;
     int count;
-    const ShardGradient* grad; // nullptr = ColorModule disabled (keep startColor)
+    const ShardGradient* grad; // nullptr = no ColorModule (keep startColour)
 };
 
-constexpr ShardGradient kGradBig = {kBigColors, 2, kBigAlphas, 4};
-constexpr ShardGradient kGradMid = {kMidColors, 2, kMidAlphas, 5};
-
-constexpr int kTriSpecCount = 4;
-constexpr TriSpec kTriSpecs[kTriSpecCount] = {
-    // particle3: the big shard, 2.5..235 px
-    {2.5f, 235.0f, 0.30f, 0.70f, 157.0f, 35.0f, 100.0f, 1, &kGradBig},
-    // particle2: 15.7..18.2 px
+// fx_Tap_single: one particle per system, all at t=0, thrown outward fast.
+constexpr int kTapSpecCount = 4;
+constexpr TriSpec kTapSpecs[kTapSpecCount] = {
+    // particle3. Measured range is 2.5..235 px (minCurve 0.08 * minScalar 0.2 on
+    // the low side). Both ends are trimmed by hand: 2.5px reads as a dirty speck
+    // and 235px is 1.5x the ring, which looks oversized. 40..130 -> 24..78 px
+    // after kFxScale, i.e. a quarter to four-fifths of the ripple.
+    {40.0f, 130.0f, 0.30f, 0.70f, 157.0f, 35.0f, 100.0f, 1, &kGradBig},
+    // particle2: 15.7..18.2
     {15.7f, 18.2f, 0.10f, 0.70f, 157.0f, 35.0f, 100.0f, 1, &kGradMid},
-    // particle2_1: 1.2..11.7 px
-    {1.2f, 11.7f, 0.20f, 0.70f, 157.0f, 35.0f, 100.0f, 1, &kGradMid},
-    // particle1: 1.6..7.9 px. Original life is 30..35s, clamped here to 2s - a
-    // 35s speck is not tap feedback. ShapeModule is disabled on this one, so it
-    // emits at the tap point instead of on the ring.
+    // particle2_1: measured 1.2..11.7, floor raised to 6 for the same reason
+    {6.0f, 11.7f, 0.20f, 0.70f, 157.0f, 35.0f, 100.0f, 1, &kGradMid},
+    // particle1: 1.6..7.9, emits at the tap point (its shape module is off).
+    // Original life is 30..35s; clamped to 2s, a 35s speck is not feedback.
     {1.6f, 7.9f, 0.60f, 2.00f, 0.0f, 1.0f, 20.0f, 2, nullptr},
 };
 
-// ColorOverLifetime, read key by key out of the YAML.
-//
-constexpr float kTwoPi = 6.28318530717959f;
+// Follow / fx_Tap_loop: the same three shard systems at 6/s, but small, slow and
+// long-lived (transform scale 210 instead of 157).
+constexpr int kHoldSpecCount = 3;
+constexpr TriSpec kHoldSpecs[kHoldSpecCount] = {
+    {42.0f, 147.0f, 0.30f, 1.50f, 210.0f, 0.0f, 0.45f, 1, &kGradBig},
+    {10.5f, 21.0f, 0.30f, 1.50f, 210.0f, 0.0f, 0.45f, 1, &kGradMid},
+    {2.1f, 10.5f, 0.60f, 2.00f, 210.0f, 5.0f, 40.0f, 1, nullptr},
+};
 
-constexpr ImU32 kRingTint = IM_COL32(255, 255, 255, 255);
+constexpr float kTwoPi = 6.28318530717959f;
+constexpr ImU32 kWhite = IM_COL32(255, 255, 255, 255);
 
 ImU32 withAlpha(ImU32 color, float alpha)
 {
@@ -160,16 +164,14 @@ int srgbOf(float linear)
 {
     const float c = linear <= 0.0031308f ? linear * 12.92f
                                          : 1.055f * std::pow(linear, 1.0f / 2.4f) - 0.055f;
-    const int v = static_cast<int>(clamp01(c) * 255.0f + 0.5f);
-    return v;
+    return static_cast<int>(clamp01(c) * 255.0f + 0.5f);
 }
 
 // Linear interpolation over the measured ColorOverLifetime keys. Interpolation
-// happens in linear space (Unity's own behaviour), conversion to sRGB is last.
+// happens in linear space (Unity's own behaviour), conversion is last.
 void evalGradient(const ShardGradient& g, float t, float& r, float& gr, float& b, float& a)
 {
-    r = gr = b = 1.0f;
-    a = 1.0f;
+    r = gr = b = a = 1.0f;
     if (g.colorCount > 0) {
         const ColorKey* k = g.colors;
         if (t <= k[0].t || g.colorCount == 1) {
@@ -213,8 +215,8 @@ void evalGradient(const ShardGradient& g, float t, float& r, float& gr, float& b
 }
 
 // Deterministic PRNG so --tap-fx-test replays the exact same burst. xorshift32:
-// an LCG's low bits have a short period and the first few draws clustered near
-// zero, which made every test burst roll a tiny shard.
+// an LCG's low bits have a short period and its first draws cluster near zero,
+// which made every test burst roll the smallest possible shard.
 unsigned nextRandom(unsigned& state)
 {
     state ^= state << 13;
@@ -256,7 +258,8 @@ bool TapEffect::load(platform::Renderer& renderer, const std::string& fxDir, std
     const Entry entries[] = {
         {"tap_sheet.png", &mSheet, true}, // 4x4 main ripple (tex_tap_texturesheet)
         {"tap_tri.png", &mTri, false},    // 2x2 colour triangles (tex_sekai_01_2)
-        {"tap_ring.png", &mRing, false},   // legacy fallback ring
+        {"tap_flare.png", &mGlow, false}, // 650px hold glow (tex_tap_flare)
+        {"tap_ring.png", &mRing, false},  // legacy fallback ring
     };
 
     bool anyLoaded = false;
@@ -264,6 +267,7 @@ bool TapEffect::load(platform::Renderer& renderer, const std::string& fxDir, std
         const std::string path = fxDir + "\\" + entry.file;
         std::string error;
         const GLuint id = renderer.loadUiTexture(path, error);
+        std::fflush(stdout);
         if (id == 0) {
             if (entry.required) {
                 outError = error;
@@ -275,6 +279,53 @@ bool TapEffect::load(platform::Renderer& renderer, const std::string& fxDir, std
         anyLoaded = true;
     }
     return anyLoaded;
+}
+
+void TapEffect::buildTapShards(Instance& instance, unsigned& rng) const
+{
+    // Every shard system in fx_Tap_single runs rateOverTime 1/s over a 0.5s
+    // lifetime, so Unity emits exactly one particle at t=0. Nothing is
+    // staggered: the whole burst appears on the click.
+    for (int specIndex = 0; specIndex < kTapSpecCount; ++specIndex) {
+        const TriSpec& spec = kTapSpecs[specIndex];
+        for (int i = 0; i < spec.count; ++i) {
+            Shard shard;
+            shard.born = 0.0f;
+            shard.life = randomRange(rng, spec.lifeMin, spec.lifeMax);
+            // Circle shape, radiusThickness 0: emitted on the ring itself.
+            shard.radius =
+                spec.radius * (0.70f + 0.30f * randomRange(rng, 0.0f, 1.0f)) * kFxScale;
+            shard.angle = randomRange(rng, 0.0f, kTwoPi);
+            shard.speed = randomRange(rng, spec.speedMin, spec.speedMax) * kRadialGain * kFxScale;
+            shard.size = randomRange(rng, spec.sizeMin, spec.sizeMax) * kFxScale;
+            shard.rot0 = randomRange(rng, -kTwoPi, kTwoPi); // startRotation +-2pi
+            shard.spin = kSpinRate;                         // 180 deg/s
+            shard.cell = static_cast<int>(nextRandom(rng) & 3u); // UV startFrame 0..0.9999
+            shard.grad = spec.grad == &kGradBig ? 0 : (spec.grad != nullptr ? 1 : -1);
+            instance.shards.push_back(shard);
+        }
+    }
+}
+
+void TapEffect::emitHoldShard(HoldState& hold, unsigned& rng) const
+{
+    // Follow runs all three systems at rateOverTime 6/s, so one particle of each
+    // per 1/6 s tick.
+    for (int specIndex = 0; specIndex < kHoldSpecCount; ++specIndex) {
+        const TriSpec& spec = kHoldSpecs[specIndex];
+        Shard shard;
+        shard.born = hold.age;
+        shard.life = randomRange(rng, spec.lifeMin, spec.lifeMax);
+        shard.radius = spec.radius * (0.70f + 0.30f * randomRange(rng, 0.0f, 1.0f)) * kFxScale;
+        shard.angle = randomRange(rng, 0.0f, kTwoPi);
+        shard.speed = randomRange(rng, spec.speedMin, spec.speedMax) * kRadialGain * kFxScale;
+        shard.size = randomRange(rng, spec.sizeMin, spec.sizeMax) * kFxScale;
+        shard.rot0 = randomRange(rng, -kTwoPi, kTwoPi);
+        shard.spin = kSpinRate;
+        shard.cell = static_cast<int>(nextRandom(rng) & 3u);
+        shard.grad = spec.grad == &kGradBig ? 0 : (spec.grad != nullptr ? 1 : -1);
+        hold.shards.push_back(shard);
+    }
 }
 
 void TapEffect::spawn(float x, float y)
@@ -292,7 +343,7 @@ void TapEffect::spawnAt(float x, float y, float age)
     instance.y = y;
     instance.age = age;
     unsigned rng = static_cast<unsigned>(mNextSeed++ * 2654435761u + 1u);
-    buildShards(instance, rng);
+    buildTapShards(instance, rng);
     mActive.push_back(std::move(instance));
 
     // Bursts are short; drop the oldest so the vector cannot grow without bound
@@ -302,59 +353,111 @@ void TapEffect::spawnAt(float x, float y, float age)
     }
 }
 
-void TapEffect::buildShards(Instance& instance, unsigned& rng) const
+void TapEffect::press(float x, float y)
 {
-    // Every triangle system in fx_Tap_single runs rateOverTime 1/s over a 0.5s
-    // lifetime, so Unity emits exactly one particle at t=0. Nothing is staggered:
-    // the whole burst appears on the click.
-    for (int specIndex = 0; specIndex < kTriSpecCount; ++specIndex) {
-        const TriSpec& spec = kTriSpecs[specIndex];
-        for (int i = 0; i < spec.count; ++i) {
-            Shard shard;
-            shard.born = 0.0f;
-            shard.life = randomRange(rng, spec.lifeMin, spec.lifeMax);
-            // Circle shape, radiusThickness 0: emitted on the ring itself. A bit
-            // of inward tolerance keeps it from looking like a drawn circle.
-            shard.radius = spec.radius * (0.70f + 0.30f * randomRange(rng, 0.0f, 1.0f));
-            shard.angle = randomRange(rng, 0.0f, kTwoPi);
-            shard.speed = randomRange(rng, spec.speedMin, spec.speedMax) * kRadialGain;
-            shard.size = randomRange(rng, spec.sizeMin, spec.sizeMax) * kShardScale;
-            shard.rot0 = randomRange(rng, -kTwoPi, kTwoPi); // startRotation +-2pi
-            shard.spin = kSpinRate;                         // 180 deg/s, always positive
-            shard.cell = static_cast<int>(nextRandom(rng) & 3u); // UV startFrame 0..0.9999
-            shard.grad = spec.grad != nullptr ? specIndex : -1;
-            instance.shards.push_back(shard);
-        }
+    // pjsk fires the tap burst and starts the follow effect on the same press.
+    spawn(x, y);
+    mHold = HoldState{};
+    mHold.active = true;
+    mHold.x = x;
+    mHold.y = y;
+    unsigned rng = static_cast<unsigned>(mNextSeed++ * 2246822519u + 7u);
+    emitHoldShard(mHold, rng);
+}
+
+void TapEffect::moveHold(float x, float y)
+{
+    if (!mHold.active) {
+        return;
     }
+    mHold.x = x;
+    mHold.y = y;
+}
+
+void TapEffect::release()
+{
+    // Matches StopTapEffect / EndFollowEffect: the ripple and glow stop at once,
+    // the shards already in flight live out their own lifetimes.
+    mHold.active = false;
+}
+
+void TapEffect::debugHoldAt(float x, float y, float age)
+{
+    press(x, y);
+    // Replay the emission ticker at a fixed step so the result is deterministic.
+    constexpr float kStep = 1.0f / 60.0f;
+    const float interval = 1.0f / kHoldShardRate;
+    unsigned rng = static_cast<unsigned>(mNextSeed++ * 747796405u + 1013904223u);
+    float t = 0.0f;
+    while (t < age) {
+        const float dt = std::min(kStep, age - t);
+        mHold.age += dt;
+        mHold.emitAccum += dt;
+        while (mHold.emitAccum >= interval) {
+            mHold.emitAccum -= interval;
+            emitHoldShard(mHold, rng);
+        }
+        t += dt;
+    }
+    const float holdAge = mHold.age;
+    mHold.shards.erase(std::remove_if(mHold.shards.begin(), mHold.shards.end(),
+                           [holdAge](const Shard& shard) {
+                               return holdAge - shard.born >= shard.life;
+                           }),
+        mHold.shards.end());
+}
+
+void TapEffect::clear()
+{
+    mActive.clear();
+    mHold = HoldState{};
 }
 
 void TapEffect::update(float dt)
 {
-    if (!mFrozen) {
-        for (Instance& instance : mActive) {
-            instance.age += dt;
-        }
+    if (mFrozen) {
+        return;
     }
-    float maxLife = kRingLife;
-    for (const TriSpec& spec : kTriSpecs) {
+    for (Instance& instance : mActive) {
+        instance.age += dt;
+    }
+    float maxLife = kTapRingLife;
+    for (const TriSpec& spec : kTapSpecs) {
         maxLife = std::max(maxLife, spec.lifeMax);
     }
     mActive.erase(std::remove_if(mActive.begin(), mActive.end(),
                       [maxLife](const Instance& instance) { return instance.age >= maxLife; }),
         mActive.end());
-}
 
-void TapEffect::layerList(FlipLayer (&out)[1]) const
-{
-    // fx_Tap_single has a single billboard system (PT_01). The 650px flare some
-    // earlier notes mention belongs to fx_Tap_loop / the extra TouchEffect
-    // instances, not to the click.
-    out[0] = FlipLayer{mSheet, kTiles, kFrames, kRingLife, kRingDiameter, 1.0f};
+    if (mHold.active) {
+        mHold.age += dt;
+        mHold.emitAccum += dt;
+        const float interval = 1.0f / kHoldShardRate;
+        unsigned rng = static_cast<unsigned>(mNextSeed++ * 747796405u + 1013904223u);
+        while (mHold.emitAccum >= interval) {
+            mHold.emitAccum -= interval;
+            emitHoldShard(mHold, rng);
+        }
+    } else {
+        mHold.age += dt; // shards keep ageing after the finger lifts
+    }
+
+    const float holdAge = mHold.age;
+    mHold.shards.erase(std::remove_if(mHold.shards.begin(), mHold.shards.end(),
+                           [holdAge](const Shard& shard) {
+                               return holdAge - shard.born >= shard.life;
+                           }),
+        mHold.shards.end());
+    if (!mHold.active && mHold.shards.empty()) {
+        mHold = HoldState{};
+    }
 }
 
 void TapEffect::draw()
 {
-    if (mActive.empty()) {
+    const bool anyTap = !mActive.empty();
+    const bool anyHold = mHold.active || !mHold.shards.empty();
+    if (!anyTap && !anyHold) {
         return;
     }
     ImDrawList* drawList = ImGui::GetForegroundDrawList();
@@ -363,50 +466,54 @@ void TapEffect::draw()
     }
     const float scale = ui::scale();
 
-    FlipLayer layers[1];
-    layerList(layers);
-
     if (mSheet != 0) {
-        // The glow and the 4x4 ripple are additive: their art is pure light.
+        // Ripples and the hold glow are pure light, so they go through one
+        // additive pass. The shards follow in the normal alpha-blended pass.
         drawList->AddCallback(&beginAdditive, nullptr);
-        for (const FlipLayer& layer : layers) {
-            for (const Instance& instance : mActive) {
-                drawFlip(drawList, instance.x, instance.y, instance.age, layer, scale);
-            }
+        const FlipLayer tapLayer{mSheet, kTiles, kFrames, kTapRingLife, kTapRing, 1.0f};
+        for (const Instance& instance : mActive) {
+            drawFlip(drawList, instance.x, instance.y, instance.age, tapLayer, scale);
+        }
+        if (mHold.active) {
+            // PT_02: a steady 650px glow while the finger is down.
+            drawGlow(drawList, mHold.x, mHold.y, kHoldGlowAlpha, scale);
+            // PT_01 loops every 0.45s for as long as the press lasts.
+            const FlipLayer holdLayer{mSheet, kTiles, kFrames, kHoldRingLife, kHoldRing, 1.0f};
+            drawFlip(drawList, mHold.x, mHold.y, std::fmod(mHold.age, kHoldRingLife), holdLayer,
+                scale);
         }
         drawList->AddCallback(&endAdditive, nullptr);
     } else if (mRing != 0) {
         // Legacy fallback: scaled ring sprite, keeps old installs working.
         for (const Instance& instance : mActive) {
-            drawRingLegacy(drawList, instance, scale, 0.30f, true);
-        }
-        for (const Instance& instance : mActive) {
-            drawRingLegacy(drawList, instance, scale, 1.0f, false);
+            drawRingLegacy(drawList, instance.x, instance.y, instance.age, scale, 0.30f, true);
+            drawRingLegacy(drawList, instance.x, instance.y, instance.age, scale, 1.0f, false);
         }
     }
 
     // The mesh triangles are alpha blended, not additive: they carry a white
-    // outline and a gradient fill, i.e. they are die-cut stickers, and their
-    // ColorOverLifetime ramps through black before fading out (a black additive
-    // quad would simply vanish, which would waste half the animation).
+    // outline and a gradient fill, i.e. die-cut stickers rather than light.
     if (mTri != 0) {
         for (const Instance& instance : mActive) {
             for (const Shard& shard : instance.shards) {
-                drawShard(drawList, instance, shard, scale);
+                drawShard(drawList, instance.x, instance.y, instance.age, shard, scale);
             }
+        }
+        for (const Shard& shard : mHold.shards) {
+            drawShard(drawList, mHold.x, mHold.y, mHold.age, shard, scale);
         }
     }
 }
 
-void TapEffect::drawFlip(ImDrawList* drawList, float cx, float cy, float t, const FlipLayer& layer,
-    float scale) const
+void TapEffect::drawFlip(ImDrawList* drawList, float cx, float cy, float age,
+    const FlipLayer& layer, float scale) const
 {
-    if (layer.tex == 0 || t >= layer.life) {
+    if (layer.tex == 0 || age >= layer.life) {
         return;
     }
-    const float localT = clamp01(t / layer.life);
+    const float localT = clamp01(age / layer.life);
 
-    // frameOverTime is a linear 0 -> 0.9999 ramp; 16 frames over a 0.5s life
+    // frameOverTime is a linear 0 -> 0.9999 ramp; 16 frames over 0.5s of life
     // works out to the sheet's declared 30 fps.
     int frame = static_cast<int>(localT * static_cast<float>(layer.frames));
     frame = frame < 0 ? 0 : (frame >= layer.frames ? layer.frames - 1 : frame);
@@ -416,19 +523,28 @@ void TapEffect::drawFlip(ImDrawList* drawList, float cx, float cy, float t, cons
         static_cast<float>(frame / tiles) * tile);
     const ImVec2 uv1(uv0.x + tile, uv0.y + tile);
 
-    const float alpha = layer.alpha;
-    if (alpha <= 0.004f) {
+    if (layer.alpha <= 0.004f) {
         return;
     }
-
     const float half = layer.diameter * scale * 0.5f;
     drawList->AddImage(layer.tex, ImVec2(cx - half, cy - half), ImVec2(cx + half, cy + half), uv0,
-        uv1, withAlpha(kRingTint, alpha));
+        uv1, withAlpha(kWhite, layer.alpha));
 }
 
-void TapEffect::drawShard(ImDrawList* dl, const Instance& in, const Shard& shard, float scale) const
+void TapEffect::drawGlow(ImDrawList* drawList, float cx, float cy, float alpha, float scale) const
 {
-    const float localAge = in.age - shard.born;
+    if (mGlow == 0 || alpha <= 0.004f) {
+        return;
+    }
+    const float half = kHoldGlow * scale * 0.5f;
+    drawList->AddImage(mGlow, ImVec2(cx - half, cy - half), ImVec2(cx + half, cy + half),
+        ImVec2(0, 0), ImVec2(1, 1), withAlpha(kWhite, alpha));
+}
+
+void TapEffect::drawShard(ImDrawList* dl, float originX, float originY, float instanceAge,
+    const Shard& shard, float scale) const
+{
+    const float localAge = instanceAge - shard.born;
     if (localAge < 0.0f || localAge >= shard.life) {
         return;
     }
@@ -449,8 +565,8 @@ void TapEffect::drawShard(ImDrawList* dl, const Instance& in, const Shard& shard
     }
 
     const float travel = shard.speed * localAge * scale;
-    const float px = in.x + std::cos(shard.angle) * (shard.radius * scale + travel);
-    const float py = in.y + std::sin(shard.angle) * (shard.radius * scale + travel);
+    const float px = originX + std::cos(shard.angle) * (shard.radius * scale + travel);
+    const float py = originY + std::sin(shard.angle) * (shard.radius * scale + travel);
 
     const float rot = shard.rot0 + shard.spin * localAge;
     const float c = std::cos(rot);
@@ -467,8 +583,8 @@ void TapEffect::drawShard(ImDrawList* dl, const Instance& in, const Shard& shard
     }
 
     // 2x2 colour cells, picked once per particle via UV startFrame.
-    const float u0 = (shard.cell & 1) * 0.5f;
-    const float v0 = (shard.cell >> 1) * 0.5f;
+    const float u0 = static_cast<float>(shard.cell & 1) * 0.5f;
+    const float v0 = static_cast<float>(shard.cell >> 1) * 0.5f;
     const ImVec2 uv[4] = {
         ImVec2(u0, v0), ImVec2(u0 + 0.5f, v0), ImVec2(u0 + 0.5f, v0 + 0.5f), ImVec2(u0, v0 + 0.5f),
     };
@@ -478,20 +594,20 @@ void TapEffect::drawShard(ImDrawList* dl, const Instance& in, const Shard& shard
     dl->AddImageQuad(mTri, pts[0], pts[1], pts[2], pts[3], uv[0], uv[1], uv[2], uv[3], tint);
 }
 
-void TapEffect::drawRingLegacy(ImDrawList* drawList, const Instance& in, float scale,
+void TapEffect::drawRingLegacy(ImDrawList* drawList, float cx, float cy, float age, float scale,
     float alphaScale, bool shadow) const
 {
-    const float t = clamp01(in.age / kRingLife);
+    const float t = clamp01(age / kTapRingLife);
     const float alpha = std::pow(1.0f - t, 1.5f) * alphaScale;
     if (alpha <= 0.004f) {
         return;
     }
-    const float diameter = kRingDiameter * scale * (0.15f + 0.85f * easeOutCubic(t));
+    const float diameter = kTapRing * scale * (0.15f + 0.85f * easeOutCubic(t));
     const float offset = shadow ? 1.5f * scale : 0.0f;
-    const ImVec2 min(in.x - diameter * 0.5f + offset, in.y - diameter * 0.5f + offset);
-    const ImVec2 max(in.x + diameter * 0.5f + offset, in.y + diameter * 0.5f + offset);
+    const ImVec2 min(cx - diameter * 0.5f + offset, cy - diameter * 0.5f + offset);
+    const ImVec2 max(cx + diameter * 0.5f + offset, cy + diameter * 0.5f + offset);
     const ImU32 tint = shadow ? IM_COL32(48, 52, 72, static_cast<int>(alpha * 255.0f + 0.5f))
-                              : withAlpha(kRingTint, alpha);
+                              : withAlpha(kWhite, alpha);
     drawList->AddImage(mRing, min, max, ImVec2(0, 0), ImVec2(1, 1), tint);
 }
 
