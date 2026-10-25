@@ -3044,7 +3044,8 @@ UI 在 **设置 → 演奏 → 按键映射**（3 列 × 4 行，点一格再按
 
 prefab 里有 75 个粒子系统，分属 `fx_Tap_single` / `Follow` / `fx_Tap_flick` /
 `TouchEffect (1)~(4)`。**分组方法**：prefab View 页面的 `GameObjects[]` 是
-**深度优先**顺序，按各 fx 节点的下标切区间即可（`D:\Toolsea\work\jp\jp_fx_group.py`）。
+**深度优先**顺序，按各 fx 节点的下标切区间即可（`D:\Tools
+ea\work\jp\jp_fx_group.py`）。
 （`grouped.json` 就是结果，改之前先看它。）
 
 | | 单击 `fx_Tap_single` | 按住 `Follow` | 拖动 `fx_Tap_flick` |
@@ -3062,6 +3063,10 @@ prefab 里有 75 个粒子系统，分属 `fx_Tap_single` / `Follow` / `fx_Tap_f
 **在正式包里等于不可见**（多半是半成品）。所以代码只做两个状态：
 **Tap（一次性 burst）** 和 **Hold（跟随指针的持续效果）**，拖动 = Hold 换位置。
 
+**Hold 没有环**：`Follow` 里的 `PT_01`（330）`rateOverTime = 0`，只能靠代码 `Play()`
+触发，而游戏里没播它。实际按住时只有 **650px 白色光晕 + 环绕的三角形**。
+（实测确认过：加上环反而不对。）
+
 ### 数据换算
 
 - 世界尺寸 = `startSize × RectTransform.localScale`（scalingMode Hierarchy）。
@@ -3071,11 +3076,16 @@ prefab 里有 75 个粒子系统，分属 `fx_Tap_single` / `Follow` / `fx_Tap_f
   系统都是 1/s + 0.5s + 不循环 → **一次点击每个系统最多一个粒子，都在 t=0**。
 - **`startSpeed` 沿圆盘法线（+Z，屏幕外）**，正交 2D 看不到位移；代码里
   `kRadialGain` 把它折算成径向漂移（0 = 严格照原样）。
+- **三角形是 3D 的**：`startRotation` 是 Vector3（三轴各自 ±2π），
+  `RotationOverLifetime` 的 `separateAxes = 0` 所以**只有 Z 在转**（π rad/s），
+  X/Y 是每颗粒子固定的倾角。渲染要做真 3D 投影（绕 X→Y→Z 后正交投影），
+  倾斜的 quad 会被压扁成瘦长条 —— 这才是"翻滚的玻璃片"，纯 2D 旋转做不出来。
 
 ### 代码里的可调旋钮
 
-- **`kFxScale = 0.60`**（`TapEffect.cpp` 顶部）：唯一的全局非实测值，同时缩放
-  环、三角、半径。设 1.0 = 字面值（单击环 160px）。
+- **`kRingScale = 0.45` / `kShardScale = 0.60`**（`TapEffect.cpp` 顶部）：唯一的
+  非实测值，分开缩放。环缩到 0.45 才顺眼，但三角跟着缩就成微粒了，所以给它单独
+  一档。两个都设 1.0 = 字面值（单击环 160px、三角 2.5~235）。
 - `particle3` 的 `sizeMin`：实测下限 2.5px（`minCurve 0.08 × minScalar 0.2`）
   看起来像脏点，代码抬到 40。上限 235（= 环的 1.5 倍）也收到 130。
 - `kRadialGain`：0 = 粒子不动（字面读法），1.0 = 按 startSpeed 向外飘。

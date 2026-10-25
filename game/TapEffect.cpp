@@ -16,22 +16,24 @@ namespace game
 {
 namespace
 {
-// The ONLY number in this file that is not measured. Everything else is read
-// straight out of the prefab; this is a global shrink applied to every size and
-// radius, because a literal 1:1 mapping (PT_01 = 160 design px) reads too big on
-// our 1920x1080 canvas. Set to 1.0 for the literal values.
-constexpr float kFxScale = 0.60f;
+// The only numbers in this file that are not measured. Literal 1:1 mapping
+// (PT_01 = 160 design px) reads too big on our 1920x1080 canvas, and the shards
+// cannot shrink as far as the ring or they turn into specks. So they scale
+// separately: kRingScale for the ripple, the glow and the emission radius,
+// kShardScale for the triangle diameters. Both 1.0 = literal values.
+constexpr float kRingScale = 0.45f;
+constexpr float kShardScale = 0.60f;
 
 // --- tap (fx_Tap_single) -------------------------------------------------
 // PT_01: startSize 160, life 0.5, 4x4 WholeSheet at 30 fps, rate 0, transform 1.
-constexpr float kTapRing = 160.0f * kFxScale;
+constexpr float kTapRing = 160.0f * kRingScale;
 constexpr float kTapRingLife = 0.50f;
 
 // --- hold (Follow) -------------------------------------------------------
-// PT_01 here is 330 and loops every 0.45s; PT_02 is the 650px glow at 4/s.
-constexpr float kHoldRing = 330.0f * kFxScale;
-constexpr float kHoldRingLife = 0.45f;
-constexpr float kHoldGlow = 650.0f * kFxScale;
+// Follow also carries a PT_01 (330, looping every 0.45s) but its rateOverTime is
+// 0 and the game never Play()s it, so a held press shows no ring at all - only
+// the 650px glow and the orbiting shards. Verified against the real game.
+constexpr float kHoldGlow = 650.0f * kRingScale;
 // The original spawns a glow every 0.25s with a 0.5s life, so ~2 overlap. One
 // steady quad at this alpha matches that without blowing out on a pale backdrop.
 constexpr float kHoldGlowAlpha = 0.22f;
@@ -45,7 +47,10 @@ constexpr int kFrames = 16;
 // An orthographic 2D view cannot show that, so this reinterprets it as outward
 // drift; 0 keeps the particles perfectly still (the literal reading).
 constexpr float kRadialGain = 1.0f;
-constexpr float kSpinRate = 3.14159265f; // RotationOverLifetime: pi rad/s
+// RotationOverLifetime has separateAxes = 0, so only Z actually spins. X and Y
+// are just startRotation, i.e. a fixed 3D tilt per particle: that tilt is what
+// makes the shards look like tumbling 3D cards instead of flat stickers.
+constexpr float kSpinRate = 3.14159265f; // pi rad/s on Z
 
 struct ColorKey
 {
@@ -294,12 +299,18 @@ void TapEffect::buildTapShards(Instance& instance, unsigned& rng) const
             shard.life = randomRange(rng, spec.lifeMin, spec.lifeMax);
             // Circle shape, radiusThickness 0: emitted on the ring itself.
             shard.radius =
-                spec.radius * (0.70f + 0.30f * randomRange(rng, 0.0f, 1.0f)) * kFxScale;
+                spec.radius * (0.70f + 0.30f * randomRange(rng, 0.0f, 1.0f)) * kRingScale;
             shard.angle = randomRange(rng, 0.0f, kTwoPi);
-            shard.speed = randomRange(rng, spec.speedMin, spec.speedMax) * kRadialGain * kFxScale;
-            shard.size = randomRange(rng, spec.sizeMin, spec.sizeMax) * kFxScale;
-            shard.rot0 = randomRange(rng, -kTwoPi, kTwoPi); // startRotation +-2pi
-            shard.spin = kSpinRate;                         // 180 deg/s
+            shard.speed = randomRange(rng, spec.speedMin, spec.speedMax) * kRadialGain * kRingScale;
+            shard.size = randomRange(rng, spec.sizeMin, spec.sizeMax) * kShardScale;
+            // startRotation is a Vector3 with every axis at +-2pi.
+            shard.rot0x = randomRange(rng, -kTwoPi, kTwoPi);
+            shard.rot0y = randomRange(rng, -kTwoPi, kTwoPi);
+            shard.rot0z = randomRange(rng, -kTwoPi, kTwoPi);
+            // Only Z spins (separateAxes = 0); X/Y stay as the initial tilt.
+            shard.spinX = 0.0f;
+            shard.spinY = 0.0f;
+            shard.spinZ = kSpinRate;
             shard.cell = static_cast<int>(nextRandom(rng) & 3u); // UV startFrame 0..0.9999
             shard.grad = spec.grad == &kGradBig ? 0 : (spec.grad != nullptr ? 1 : -1);
             instance.shards.push_back(shard);
@@ -316,12 +327,16 @@ void TapEffect::emitHoldShard(HoldState& hold, unsigned& rng) const
         Shard shard;
         shard.born = hold.age;
         shard.life = randomRange(rng, spec.lifeMin, spec.lifeMax);
-        shard.radius = spec.radius * (0.70f + 0.30f * randomRange(rng, 0.0f, 1.0f)) * kFxScale;
+        shard.radius = spec.radius * (0.70f + 0.30f * randomRange(rng, 0.0f, 1.0f)) * kRingScale;
         shard.angle = randomRange(rng, 0.0f, kTwoPi);
-        shard.speed = randomRange(rng, spec.speedMin, spec.speedMax) * kRadialGain * kFxScale;
-        shard.size = randomRange(rng, spec.sizeMin, spec.sizeMax) * kFxScale;
-        shard.rot0 = randomRange(rng, -kTwoPi, kTwoPi);
-        shard.spin = kSpinRate;
+        shard.speed = randomRange(rng, spec.speedMin, spec.speedMax) * kRadialGain * kRingScale;
+        shard.size = randomRange(rng, spec.sizeMin, spec.sizeMax) * kShardScale;
+        shard.rot0x = randomRange(rng, -kTwoPi, kTwoPi);
+        shard.rot0y = randomRange(rng, -kTwoPi, kTwoPi);
+        shard.rot0z = randomRange(rng, -kTwoPi, kTwoPi);
+        shard.spinX = 0.0f;
+        shard.spinY = 0.0f;
+        shard.spinZ = kSpinRate;
         shard.cell = static_cast<int>(nextRandom(rng) & 3u);
         shard.grad = spec.grad == &kGradBig ? 0 : (spec.grad != nullptr ? 1 : -1);
         hold.shards.push_back(shard);
@@ -475,12 +490,10 @@ void TapEffect::draw()
             drawFlip(drawList, instance.x, instance.y, instance.age, tapLayer, scale);
         }
         if (mHold.active) {
-            // PT_02: a steady 650px glow while the finger is down.
+            // Only the glow: Follow's PT_01 has rateOverTime 0 and the game code
+            // never Play()s it, so a held press really does show no ring - just
+            // the white halo and the orbiting triangles.
             drawGlow(drawList, mHold.x, mHold.y, kHoldGlowAlpha, scale);
-            // PT_01 loops every 0.45s for as long as the press lasts.
-            const FlipLayer holdLayer{mSheet, kTiles, kFrames, kHoldRingLife, kHoldRing, 1.0f};
-            drawFlip(drawList, mHold.x, mHold.y, std::fmod(mHold.age, kHoldRingLife), holdLayer,
-                scale);
         }
         drawList->AddCallback(&endAdditive, nullptr);
     } else if (mRing != 0) {
@@ -568,9 +581,19 @@ void TapEffect::drawShard(ImDrawList* dl, float originX, float originY, float in
     const float px = originX + std::cos(shard.angle) * (shard.radius * scale + travel);
     const float py = originY + std::sin(shard.angle) * (shard.radius * scale + travel);
 
-    const float rot = shard.rot0 + shard.spin * localAge;
-    const float c = std::cos(rot);
-    const float s = std::sin(rot);
+    // 3D pose: the quad starts tilted by startRotation (X and Y, fixed) and
+    // spins about Z over its life. Projected orthographically, so a tilted quad
+    // foreshortens - which is the "flipping glass card" read the flat 2D version
+    // could not produce.
+    const float rx = shard.rot0x + shard.spinX * localAge;
+    const float ry = shard.rot0y + shard.spinY * localAge;
+    const float rz = shard.rot0z + shard.spinZ * localAge;
+    const float cxr = std::cos(rx);
+    const float sxr = std::sin(rx);
+    const float cyr = std::cos(ry);
+    const float syr = std::sin(ry);
+    const float czr = std::cos(rz);
+    const float szr = std::sin(rz);
     const float half = shard.size * scale * 0.5f;
 
     const ImVec2 local[4] = {
@@ -578,8 +601,17 @@ void TapEffect::drawShard(ImDrawList* dl, float originX, float originY, float in
     };
     ImVec2 pts[4];
     for (int i = 0; i < 4; ++i) {
-        pts[i].x = px + local[i].x * c - local[i].y * s;
-        pts[i].y = py + local[i].x * s + local[i].y * c;
+        const float lx = local[i].x;
+        const float ly = local[i].y;
+        // rotate about X (quad lives in z = 0)
+        const float y1 = ly * cxr;
+        const float z1 = ly * sxr;
+        // rotate about Y
+        const float x2 = lx * cyr + z1 * syr;
+        // rotate about Z
+        const float x3 = x2 * czr - y1 * szr;
+        const float y3 = x2 * szr + y1 * czr;
+        pts[i] = ImVec2(px + x3, py + y3);
     }
 
     // 2x2 colour cells, picked once per particle via UV startFrame.

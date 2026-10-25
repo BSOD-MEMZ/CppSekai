@@ -96,8 +96,12 @@ class TapEffect
         float angle = 0.0f;  // spawn direction, radians
         float speed = 0.0f;  // radial drift, design px/s (see kRadialGain)
         float size = 10.0f;  // quad diameter, design px
-        float rot0 = 0.0f;   // initial spin, radians
-        float spin = 0.0f;   // radians/s (original: a constant pi)
+        // The original is a MESH particle with startRotation +-2pi and
+        // RotationOverLifetime pi rad/s on all three axes, so the triangle
+        // tumbles in 3D and foreshortens as it turns. Rotating in 2D only (the
+        // old behaviour) misses that entirely.
+        float rot0x = 0.0f, rot0y = 0.0f, rot0z = 0.0f;
+        float spinX = 0.0f, spinY = 0.0f, spinZ = 0.0f;
         int cell = 0;        // 0..3, which 2x2 colour cell of the sheet
         int grad = -1;       // index into the ColorOverLifetime tables, -1 = none
     };
