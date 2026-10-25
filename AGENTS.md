@@ -3034,6 +3034,24 @@ UI 在 **设置 → 演奏 → 按键映射**（3 列 × 4 行，点一格再按
   实际最后几分钟的输出还躺在用户态缓冲里，进程被 kill 就永远丢了。
   排查多人问题花的时间有一半耗在这上面。
 
+## 触摸特效（TapEffect）2026-10-25 —— 4x4 flipbook，不是缩放环
+
+`game/TapEffect.*`：非演奏状态下点哪都会在点击点放一次涟漪。参数**不是凭感觉**，
+是从 pjsk 日服 7.1.0 的 `ScreenLayerTouchEffect` 粒子系统读出来的
+（全过程见 `.workbuddy/memory/2026-10-25.md`、`D:\Tools\rea\work\jp\RE-report-jp.md`）：
+
+- 主涟漪 `PT_01`：4x4 图集**只用 14 帧**、`startLifetime = 0.5s`、`startSpeed = 0`
+  → **不位移**，扩张完全靠图本身逐帧变大；`frameOverTime` 线性 0→1，等效 ~32fps。
+- 细环层 `tap_sheet_1.png`：4x4、16 帧、0.45s；柔光层 `tap_flare.png`：单张、0.5s 淡出。
+- **quad 尺寸恒定**（官方也恒定）。别去缩 quad —— 那就退回"缩放环"了，不是序列帧。
+- 图集自绘：`.workbuddy/tools/gen_tap_sheet.py`（官方美术不入库，仓库里只有自绘版）。
+- 混合：flipbook 层用 `ImDrawList::AddCallback` 切成 additive
+  （`glBlendFunc(GL_SRC_ALPHA, GL_ONE)`），**画完必须恢复** `ONE_MINUS_SRC_ALPHA`，
+  否则之后所有 UI 都会发光。
+- 缺 `tap_sheet.png` 时回退到老的 `tap_ring.png` 缩放路径（这条别删）。
+- 无头验证：`--tap-fx-test` 冻结 4 个相位（0.03 / 0.13 / 0.26 / 0.42s），
+  一张 `--screenshot` 就能看全序列。
+
 ## 待办（按优先级）
 
 0. **Win7 的 UCRT 怎么给**：随包带 app-local UCRT / 要求装运行库 / 干脆放弃 Win7 三选一，
