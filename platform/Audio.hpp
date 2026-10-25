@@ -60,6 +60,11 @@ class AudioEngine
         // plain click for that (see story::UiSe).
         UiSeChoicesOpen,
         UiSeChoicesDecide,
+        // The end-of-live sting (assets/se/LIVE_CLEAR.mp3). Not a UI interaction:
+        // game/LiveClearBanner plays it directly when the letters land. It has to
+        // stay *after* every kind ui::SeKind knows about, because flushSe() casts
+        // the ui index straight into this enum.
+        UiSeLiveClear,
         UiSeCount,
     };
     static constexpr int UI_SE_POOL = 3;

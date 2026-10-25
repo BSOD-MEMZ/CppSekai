@@ -9575,6 +9575,11 @@ int main(int argc, char** argv)
                 && !resultScheduled && songTime >= effectiveEnd && clearedSoFar) {
                 liveClearBannerArmed = true;
                 liveClearBanner.start();
+                // The sting that ships with the effect (assets/se/LIVE_CLEAR.mp3).
+                // Played straight off the banner, not through ui::se: that queue is
+                // for widget feedback and would drop this on any frame where a
+                // widget also fired.
+                audio.playUiSe(platform::AudioEngine::UiSeLiveClear, 0.8f);
             }
             if (trackDurationSec > 1.0) {
                 if (liveClearBannerArmed) {
@@ -10355,17 +10360,18 @@ int main(int argc, char** argv)
             if (state == AppState::Result) {
                 songEndBlackout = std::max(0.0f, songEndBlackout - frameDelta / 0.6f);
             }
-            // "LIVE CLEAR!" banner: runs on the play clock (frozen while paused)
-            // and is painted *under* the blackout so the tail fade swallows it.
-            if (liveClearBanner.active() && state == AppState::Play) {
-                if (!paused) {
-                    liveClearBanner.update(frameDelta);
-                }
-                liveClearBanner.draw(renderer, windowW, windowH, userSettings.uiScale);
+            // "LIVE CLEAR!" banner: runs on the play clock (frozen while paused).
+            // The scrim below is painted first and the letters on top of it - the
+            // original dims the stage *behind* the word, never over it.
+            if (liveClearBanner.active() && state == AppState::Play && !paused) {
+                liveClearBanner.update(frameDelta);
             }
             if (songEndBlackout > 0.002f) {
                 fg->AddRectFilled(ImVec2(0.0f, 0.0f), ImVec2(w, h),
                     IM_COL32(0, 0, 0, static_cast<int>(std::clamp(songEndBlackout, 0.0f, 1.0f) * 255.0f)));
+            }
+            if (liveClearBanner.active() && state == AppState::Play) {
+                liveClearBanner.draw(renderer, windowW, windowH, userSettings.uiScale);
             }
             // 多人游玩 charge: no countdown here any more. The room starts as
             // soon as every window's chart is decoded (see the host's arming

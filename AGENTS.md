@@ -1288,10 +1288,31 @@ prefab，**10 个字母各占一个 Image 节点**（不是一行文字，也不
 `result_liveclear` / `result_liveclear_light`。字母表（atlas x/宽 + prefab 的 w/h/x）在
 `LiveClearBanner.cpp` 顶部的 `kGlyphs`，**每个字母的宽高是 prefab 手调的，不是等比**，照抄才不歪。
 
-流程接在 `main.cpp`：`songTime >= effectiveEnd` 且 `st.life > 0` 时 `start()`，然后
+**光效 / 粒子**（2026-10-25 第二轮，按 `fx_result_LiveClear` 的 ParticleSystem 实测参数）：
+
+| 节点 | 实测 | 实现 |
+|---|---|---|
+| `light` | burst 1 个 @t=0，startSize **15**（×100 = 直径 1500px）、startSpeed 0、寿命 0.8s | `softBlob`：14~20 层同心圆模拟径向渐变，加法混合，半径 620 长到 750 |
+| `pt` | burst 30 个 @t≈0，startSize 0.02~0.07（2~7px）、startSpeed 3（300px/s）、寿命 0.25~1s | 30 个点，纵向压扁 0.5（字是横条，圆形爆散会变光晕） |
+| `pt_loop` | rateOverTime 10/s，startSize 0.03~0.08、**startSpeed 0（原地闪）**、寿命 1~2s，0.5167s 起 | 16 个静止小点，`sin` 包络闪，散布在字带内 |
+
+尺寸换算：**粒子世界单位 ×100 = 画布像素**（fx prefab 自身 scale 是 1，但 UI 的 Canvas 是
+1 单位 = 1/100 世界单位；按 startSize 0.07 推出来的，和文字高度对得上）。
+
+**黑遮罩**（用户点名的第二处）：原作不是"字出来前白白亮着、最后一秒才黑"。`blackout()` 分两段：
+0.0167→0.25 压到 **0.5 的半透明遮罩**（舞台还看得见，字亮在上面），一直保持到 1.25s，
+然后从 0.5 平滑涨到 1（1.5167s 全黑）。**遮罩必须画在字下面** —— 顺序反了字会整个发灰（踩过）。
+
+**音效**：`assets/se/LIVE_CLEAR.mp3`（用户自己录的，官方 SE 是 ACB/CriWare，没解）。挂在
+`AudioEngine::UiSe` 末尾的 `UiSeLiveClear`，`loadUiSe` 的文件表最后一格；banner 启动时
+`audio.playUiSe(UiSeLiveClear, 0.8f)` **直接播**，不走 `ui::se` 队列（那套是控件反馈，
+同帧有控件发声会把这条顶掉）。加在枚举末尾是必须的：`ui::flushSe()` 把 `ui::SeKind` 的
+下标直接 cast 进这个枚举。
+
+流程接在 `main.cpp`：`songTime >= effectiveEnd` 且 `st.life > 0` 时 `start()` + 播音效，然后
 - `resultDue` 等 **banner 自己的时钟**（`time() >= kDuration`），不是 songTime —— 音频时钟在
   曲末就停了，用 songTime 会永远等不到；
-- 黑幕由 `banner.blackout()` 接管（1.25s 前恒 0、之后到 1.5167s 涨满）；**活着的曲子在这段
+- 黑幕由 `banner.blackout()` 接管（半透明 0.5 遮罩 → 1.25s 后涨到 1）；**活着的曲子在这段
   完全不走老的 `kSongEndFadeSec` 淡黑**，否则字会出现在黑屏上（`songEndBlackout` 老代码是
   `max()` 累加，一旦涨到 1 就再也下不来）；
 - banner 期间不画 HUD（`drawHud` 的条件加 `!liveClearBanner.active()`），原作曲终就是只剩舞台；
@@ -1305,9 +1326,12 @@ prefab，**10 个字母各占一个 Image 节点**（不是一行文字，也不
 2. **ImGui 只有 alpha 混合**，`text_ADD` 那种加色层用叠几层白图模拟不出来（最多把米白推到纯白，
    溢不出去）。用 `ImDrawList::AddCallback` 在绘制前后切 `glBlendFunc(GL_SRC_ALPHA, GL_ONE)`，
    画完恢复 `GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA`。ImGui 每帧会重设混合状态，不用额外清理。
-3. 粒子是**手写的近似**（26 个径向小圆 + 8 个慢速微粒，确定性哈希，截图可复现），不是原作
-   `ParticleSystem` 的参数；三套里只做了两套，`light` 没做。要更近一步得先导 `fx_liveclear`
-   的粒子 YAML（`RE.md` §4.3 那套 recipe）。
+3. **遮罩要画在字下面**。遮罩和 banner 都在 foreground 层，先画黑幕再画字；顺序反了整行字
+   会发灰（2026-10-25 第二轮踩到，看起来像"字变成灰色米白"）。
+4. 加法层分两段 callback：`glow`/`burst` 在字**之前**（光在字后面），`text_ADD`/`pt_loop`
+   在字**之后**（光在字上面）。早先全塞在字后面，光斑把字糊成一团白饼。
+5. 粒子位置是**确定性哈希**（`hash01`），不是真随机 —— 否则 `--screenshot` 每次抓到的
+   星点位置都不同，没法比对。要改效果改常量，别改成 `rand()`。
 
 **验证**：`CPSEKAI_BANNER_T=<sec>` 把 banner 时钟钉住（只影响显示，不推进），配合
 `--result-at 0.3 --screenshot-time 0.6` 抓任意一帧：
@@ -1317,8 +1341,8 @@ CPSEKAI_BANNER_T=0.19 bash .workbuddy/tools/shot.sh shots/banner.png \
   --sus build/charts/0001_easy.sus --auto --no-party --result-at 0.3 --screenshot-time 0.6
 ```
 
-0.10 是字母还挤在中间、0.19 是刚到位（加法层拉满、纯白）、0.70 是背光铺开（米白带光晕）、
-1.30 是淡黑。
+0.06 字母还挤在中心（白块）、0.19 刚到位（加法层拉满、纯白）、0.70 背光铺开（米白带光晕，
+背景已被 0.5 遮罩压暗）、1.40 背景基本黑掉而字还亮着、1.50 全黑切结算。
 
 ## 平台 / 输入相关的坑（2026-09-12）
 

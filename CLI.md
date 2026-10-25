@@ -230,8 +230,9 @@ cppsekai [--sus <file.sus>] [--bgm <audio>] [--charts <dir>] [--cover <image>]
   （只影响显示，不推进、也没法让它播完）。配合 `--result-at 0.3`（曲末前就触发）和
   `--screenshot-time 0.6` 抓任意一帧：
   `CPSEKAI_BANNER_T=0.19 bash .workbuddy/tools/shot.sh shots/banner.png --sus build/charts/0001_easy.sus --auto --no-party --result-at 0.3 --screenshot-time 0.6`
-  —— 0.10 字母还在中心挤着、0.19 刚到位（加法层拉满、纯白）、0.70 背光铺开（米白带光晕）、
-  1.30 淡黑。正常跑不设这个变量。细节见 AGENTS.md「曲末的 LIVE CLEAR 大字」。
+  —— 0.06 字母还在中心挤着、0.19 刚到位（加法层拉满、纯白）、0.70 背光铺开（米白带光晕，
+  背景已被半透明遮罩压暗）、1.40 背景基本黑掉而字还亮着、1.50 全黑切结算。
+  正常跑不设这个变量。细节见 AGENTS.md「曲末的 LIVE CLEAR 大字」。
 - **某个键"按了没反应"**：`CPSEKAI_KEY_LOG=1` 会把每一笔按键打一行
   （`[key] sym=0x… (名字) scancode=… mod=… repeat=…`）。先用它确认这一笔到底有没有变成
   `SDL_KEYDOWN`、变成的是哪个 keysym——媒体键、手柄、输入法相关的怪问题都该从这一行开始查。

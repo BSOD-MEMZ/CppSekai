@@ -178,6 +178,7 @@ void AudioEngine::loadUiSe(const std::string& dir)
         "start.mp3",
         "choice_open.wav",
         "choice_decide.wav",
+        "LIVE_CLEAR.mp3", // the "LIVE CLEAR!" banner (game/LiveClearBanner.cpp)
     };
     for (int kind = 0; kind < UiSeCount; ++kind) {
         const std::string path = dir + "/" + kFiles[kind];

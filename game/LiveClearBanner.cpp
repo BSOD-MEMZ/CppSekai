@@ -69,10 +69,10 @@ ImU32 withAlpha(float a)
     return IM_COL32(255, 255, 255, v);
 }
 
-// ImDrawCallback hooks: ImGui batches its quads with plain alpha blending, and
-// the "text_ADD" layer in the original is a straight additive (SRC_ALPHA, ONE)
-// composite. These two callbacks bracket the extra pass; the renderer resets the
-// blend state every frame, so restoring alpha here is the whole cleanup.
+// ImDrawCallback hooks: ImGui batches its quads with plain alpha blending, while
+// the light-emitting half of the original (text_ADD, the flash, the particles)
+// is additive. These two callbacks bracket that pass; ImGui resets the blend
+// state every frame, so restoring alpha here is the whole cleanup.
 void blendAdditive(const ImDrawList*, const ImDrawCmd*)
 {
     glEnable(GL_BLEND);
@@ -99,7 +99,7 @@ constexpr float kBackFullAt = 0.683333f;
 // ---------------------------------------------------------------------------
 // Atlas layout. tex_LiveClear.png is 1236x182 and holds the ten glyphs in
 // reading order; the y column is the full texture height, so only u varies.
-//   x/w  = the glyph's cell in the atlas (sprite-geometry.csv)
+//   u0/u1 = the glyph's cell in the atlas (sprite-geometry.csv)
 //   dw/dh = the size the prefab gives that Image node (hand-tuned per letter,
 //           not a uniform scale - copying it is what makes the spacing right)
 //   tx    = anchoredPosition.x of the node
@@ -132,9 +132,8 @@ constexpr int kGlyphCount = static_cast<int>(sizeof(kGlyphs) / sizeof(kGlyphs[0]
 
 // The prefab spaces the row around x=+60.7 (that is where the backlight strip
 // sits too), so the whole group has to be shifted by that much to read as
-// centred on a 1920 canvas. The vertical anchor is the `text` node's y=66.
-// Canvas coordinates start at the top-left corner, so the group centre is the
-// canvas centre (960, 474), not the origin.
+// centred on a 1920 canvas. Canvas coordinates start at the top-left corner, so
+// the group centre is the canvas centre (960, 474), not the origin.
 constexpr float kGroupCenterX = 960.0f;
 constexpr float kGroupBiasX = -60.7f;
 constexpr float kGroupCenterY = 474.0f;
@@ -143,67 +142,100 @@ constexpr float kBackW = 1148.0f;
 constexpr float kBackH = 188.0f;
 
 // Deterministic pseudo-random so a headless screenshot always matches.
-float hash01(int i, int salt){
+float hash01(int i, int salt)
+{
     const float s = std::sin(static_cast<float>(i) * 12.9898f + static_cast<float>(salt) * 78.233f);
     return s - std::floor(s);
 }
 
-// One-off burst at 0.05 s: specks thrown outward from the word's centre. The
-// original drives this with a ParticleSystem; the shipped effect is small
-// enough that a deterministic radial spray reads the same at 1080p.
-void drawBurst(const Canvas& c, float t)
+// One soft blob built out of concentric discs - ImGui has no radial gradient and
+// this is cheap enough at 1080p. `radius` is in canvas units.
+void softBlob(const Canvas& c, float cx, float cy, float radius, float alpha)
 {
-    if (t < 0.05f || t > 1.05f)
+    constexpr int kSteps = 20;
+    for (int i = kSteps; i >= 1; --i)
+    {
+        const float f = static_cast<float>(i) / static_cast<float>(kSteps);
+        // Squared falloff: bright core, long soft edge.
+        const float a = alpha * (1.0f - f) * (1.0f - f);
+        if (a <= 0.002f)
+        {
+            continue;
+        }
+        c.dl->AddCircleFilled(c.p(cx, cy), c.s(radius * f), withAlpha(a), 48);
+    }
+}
+
+// `light`: startSize 15 units (= 1500 px across at the 100x UI scale), one burst
+// at t=0, no speed, lifetime 0.8 s. This is the big flash behind the word - the
+// thing the first pass was missing entirely, and what made the rest look off.
+void drawGlow(const Canvas& c, float t)
+{
+    constexpr float kLife = 0.8f;
+    if (t >= kLife)
     {
         return;
     }
-    constexpr int kSparks = 26;
+    // Grows fast, holds, then fades; the original drives size and alpha over
+    // the particle's lifetime.
+    const float grow = smoothstep(clamp01(t / 0.16f));
+    const float fade = 1.0f - smoothstep(clamp01((t - 0.12f) / (kLife - 0.12f)));
+    const float radius = 620.0f * (0.35f + 0.65f * grow);
+    softBlob(c, kGroupCenterX + kGroupBiasX, kGroupCenterY, radius, 0.05f * fade);
+}
+
+// `pt`: burst of 30 at 0.05 s, startSize 0.02..0.07 units (2..7 px),
+// startSpeed 3 units (300 px/s), startLifetime 0.25..1 s.
+void drawBurst(const Canvas& c, float t)
+{
+    constexpr int kSparks = 30;
+    constexpr float kT0 = 0.05f;
     for (int i = 0; i < kSparks; ++i)
     {
-        const float t0 = 0.05f + hash01(i, 1) * 0.04f;
-        const float life = 0.42f + hash01(i, 2) * 0.22f;
-        const float age = (t - t0) / life;
+        const float life = 0.25f + hash01(i, 2) * 0.75f;
+        const float age = (t - kT0) / life;
         if (age < 0.0f || age > 1.0f)
         {
             continue;
         }
         const float ang = hash01(i, 3) * 6.2831853f;
-        const float speed = 420.0f + hash01(i, 4) * 830.0f;
-        // Fast out, then drifting: the original's particles have drag.
-        const float dist = speed * (age - age * age * 0.35f);
+        const float speed = 300.0f * (0.75f + hash01(i, 4) * 0.5f);
+        const float dist = speed * age;
         const float x = kGroupCenterX + kGroupBiasX + std::cos(ang) * dist;
-        const float y = kGroupCenterY + std::sin(ang) * dist * 0.55f;
-        const float a = (1.0f - age) * (1.0f - age);
-        const float r = (2.6f + hash01(i, 5) * 5.2f) * (1.0f - age * 0.55f);
-        c.dl->AddCircleFilled(c.p(x, y), c.s(std::max(r, 0.4f)), withAlpha(a), 12);
+        // Squashed vertically: the word is a wide band, so a circular burst
+        // reads as a halo rather than a spray.
+        const float y = kGroupCenterY + std::sin(ang) * dist * 0.5f;
+        const float a = (1.0f - age) * (1.0f - age) * 0.85f;
+        const float r = (1.0f + hash01(i, 5) * 2.5f) * (1.0f - age * 0.6f);
+        c.dl->AddCircleFilled(c.p(x, y), c.s(std::max(r, 0.5f)), withAlpha(a), 10);
     }
 }
 
-// `pt_loop` from 0.5167 s: a slow trickle of tiny specks that keeps the word
-// alive until the fade. Only a couple are on screen at once.
+// `pt_loop`: rateOverTime 10/s, startSize 0.03..0.08 units (3..8 px), startSpeed
+// 0 - they sit still and twinkle - lifetime 1..2 s, enabled at 0.5167 s.
 void drawTrickle(const Canvas& c, float t)
 {
-    if (t < 0.516667f)
+    constexpr float kStart = 0.516667f;
+    if (t < kStart)
     {
         return;
     }
-    constexpr int kSparks = 8;
+    constexpr int kSparks = 16;
     for (int i = 0; i < kSparks; ++i)
     {
-        const float t0 = 0.516667f + static_cast<float>(i) * 0.11f;
-        constexpr float life = 0.62f;
+        const float t0 = kStart + static_cast<float>(i) * 0.1f;
+        const float life = 1.0f + hash01(i, 11) * 1.0f;
         const float age = (t - t0) / life;
         if (age < 0.0f || age > 1.0f)
         {
             continue;
         }
-        const float ang = hash01(i, 11) * 6.2831853f;
-        const float speed = 60.0f + hash01(i, 12) * 90.0f;
-        const float dist = speed * age;
-        const float x = kGroupCenterX + kGroupBiasX + std::cos(ang) * dist;
-        const float y = kGroupCenterY + std::sin(ang) * dist * 0.5f - age * 18.0f;
-        const float a = (1.0f - age) * 0.55f;
-        c.dl->AddCircleFilled(c.p(x, y), c.s(1.5f + hash01(i, 13) * 2.2f), withAlpha(a), 8);
+        // Scattered across the word's band, not at its centre.
+        const float x = kGroupCenterX + kGroupBiasX + (hash01(i, 12) - 0.5f) * 1150.0f;
+        const float y = kGroupCenterY + (hash01(i, 13) - 0.5f) * 210.0f;
+        const float a = std::sin(age * 3.14159265f) * 0.65f;
+        const float r = 1.5f + hash01(i, 14) * 2.5f;
+        c.dl->AddCircleFilled(c.p(x, y), c.s(r), withAlpha(a), 10);
     }
 }
 
@@ -252,8 +284,15 @@ float LiveClearBanner::blackout() const
     {
         return 0.0f;
     }
-    // Holds clear until 1.25 s, then hands the screen over in the clip's tail.
-    return span(mTime, 1.25f, kDuration - 1.25f);
+    // Two stages, like the original: a translucent scrim comes down with the
+    // letters (the stage stays readable behind them), it holds, and only then
+    // does the screen go fully black for the hand-over to the result view.
+    constexpr float kScrim = 0.5f;
+    const float dim = kScrim * smoothstep(span(mTime, kOn, 0.23f));
+    // The tail picks up where the scrim left off (0.5 -> 1.0), so there is no
+    // dead stretch where the screen neither brightens nor darkens.
+    const float fade = kScrim + (1.0f - kScrim) * smoothstep(span(mTime, 1.25f, kDuration - 1.25f));
+    return std::max(dim, fade);
 }
 
 void LiveClearBanner::draw(platform::Renderer& renderer, int windowW, int windowH,
@@ -289,22 +328,13 @@ void LiveClearBanner::draw(platform::Renderer& renderer, int windowW, int window
         }
     }
 
+    // Light that lives *behind* the letters: the flash and the outward burst.
+    // Additive, so it brightens the (already dimmed) stage instead of painting
+    // an opaque disc over it; drawn before the glyphs so the word stays on top.
+    c.dl->AddCallback(blendAdditive, nullptr);
+    drawGlow(c, t);
     drawBurst(c, t);
-    drawTrickle(c, t);
-
-    // Additive duplicate layer: peaks the moment the letters land, halves by
-    // 0.267 s, gone by 0.683 s. ImGui draws every quad with plain alpha
-    // blending, so the "add" read is produced by stacking the white glyph two
-    // more times instead of switching the GL blend mode mid-list.
-    float addA = 0.0f;
-    if (t < kAddMidAt)
-    {
-        addA = span(t, kOn, kAddPeakAt - kOn);
-    }
-    else if (t < kAddGoneAt)
-    {
-        addA = kAddMid * (1.0f - span(t, kAddMidAt, kAddGoneAt - kAddMidAt));
-    }
+    c.dl->AddCallback(blendAlpha, nullptr);
 
     const auto texId = reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(tex->id));
     for (int i = 0; i < kGlyphCount; ++i)
@@ -318,12 +348,23 @@ void LiveClearBanner::draw(platform::Renderer& renderer, int windowW, int window
             ImVec2(g.u1 / kAtlasW, 1.0f), IM_COL32(255, 255, 255, 255));
     }
 
-    // The additive duplicate: a real GL additive pass (ImDrawCallback flips the
-    // blend mode for exactly these quads), because stacking alpha quads can only
-    // lift the glyph towards white, never blow it out past it.
+    // Over the letters: the duplicate additive glyph (the "bloom" the original
+    // gets from text_ADD) and the twinkling loop particles. Stacking alpha quads
+    // can only lift a glyph towards white, never blow it out past it, which is
+    // why this pass flips the blend mode instead.
+    float addA = 0.0f;
+    if (t < kAddMidAt)
+    {
+        addA = span(t, kOn, kAddPeakAt - kOn);
+    }
+    else if (t < kAddGoneAt)
+    {
+        addA = kAddMid * (1.0f - span(t, kAddMidAt, kAddGoneAt - kAddMidAt));
+    }
+
+    c.dl->AddCallback(blendAdditive, nullptr);
     if (addA > 0.002f)
     {
-        c.dl->AddCallback(blendAdditive, nullptr);
         for (int i = 0; i < kGlyphCount; ++i)
         {
             const Glyph& g = kGlyphs[i];
@@ -334,8 +375,9 @@ void LiveClearBanner::draw(platform::Renderer& renderer, int windowW, int window
                 c.p(cx + halfW, kGroupCenterY + halfH), ImVec2(g.u0 / kAtlasW, 0.0f),
                 ImVec2(g.u1 / kAtlasW, 1.0f), withAlpha(addA));
         }
-        c.dl->AddCallback(blendAlpha, nullptr);
     }
+    drawTrickle(c, t);
+    c.dl->AddCallback(blendAlpha, nullptr);
 }
 
 } // namespace game
