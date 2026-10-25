@@ -3034,23 +3034,56 @@ UI 在 **设置 → 演奏 → 按键映射**（3 列 × 4 行，点一格再按
   实际最后几分钟的输出还躺在用户态缓冲里，进程被 kill 就永远丢了。
   排查多人问题花的时间有一半耗在这上面。
 
-## 触摸特效（TapEffect）2026-10-25 —— 4x4 flipbook，不是缩放环
+## 触摸特效（TapEffect）2026-10-25 —— 环是 flipbook，三角是粒子
 
-`game/TapEffect.*`：非演奏状态下点哪都会在点击点放一次涟漪。参数**不是凭感觉**，
-是从 pjsk 日服 7.1.0 的 `ScreenLayerTouchEffect` 粒子系统读出来的
-（全过程见 `.workbuddy/memory/2026-10-25.md`、`D:\Tools\rea\work\jp\RE-report-jp.md`）：
+`game/TapEffect.*`：非演奏状态下点哪都会在点击点放一次特效。**所有参数都是从
+pjsk 日服 7.1.0 的 `ScreenLayerTouchEffect` 里读出来的**（prefab 走 AssetRipper 的
+本地 HTTP API 按路径单取 YAML；原始文件在 `D:\Tools\rea\work\jp\fx_touch\`，
+报告 `RE-report-jp.md` 第 9/10 节）。
 
-- 主涟漪 `PT_01`：4x4 图集**只用 14 帧**、`startLifetime = 0.5s`、`startSpeed = 0`
-  → **不位移**，扩张完全靠图本身逐帧变大；`frameOverTime` 线性 0→1，等效 ~32fps。
-- 细环层 `tap_sheet_1.png`：4x4、16 帧、0.45s；柔光层 `tap_flare.png`：单张、0.5s 淡出。
-- **quad 尺寸恒定**（官方也恒定）。别去缩 quad —— 那就退回"缩放环"了，不是序列帧。
-- 图集自绘：`.workbuddy/tools/gen_tap_sheet.py`（官方美术不入库，仓库里只有自绘版）。
-- 混合：flipbook 层用 `ImDrawList::AddCallback` 切成 additive
-  （`glBlendFunc(GL_SRC_ALPHA, GL_ONE)`），**画完必须恢复** `ONE_MINUS_SRC_ALPHA`，
-  否则之后所有 UI 都会发光。
+prefab 结构（`Assets/Resources/screen/prefabs/ScreenLayerTouchEffect`）：
+
+```
+ComponentRoot → TouchEffect → fx_Tap_single / Follow(fx_Tap_loop) / fx_Tap_flick
+                                  └ root: PT_01 + PT_02 + SekaiEffect_2{particle1..3, particle2_1}
+```
+
+- **环 `PT_01`**：4x4 图集**16 帧全用**（`animationType` WholeSheet；`rowMode: 1` 在
+  WholeSheet 下无效，别被它误导）、life 0.5s、`startSpeed = 0`、`startSize = 160`、
+  `fps 30`（0.5s 扫完 16 帧 ≈ 32fps）、Transform scale = 1。**quad 尺寸恒定**，
+  扩张完全靠图本身逐帧变大——别去缩 quad，那就退回"缩放环"了。
+- **柔光 `PT_02`**：单张 `tex_tap_flare`、`startSize = 650`、0.5s、`rateOverTime 4/s`。
+- **三角 `particle1/2/3/2_1`**：都是 mesh `sekai_PT_05`（三角形，10x8.7）+ 贴图
+  `tex_sekai_01_2`（**2x2 四色**：粉/黄/绿/蓝，白描边 + 垂直渐变）。尺寸 =
+  `startSize x RectTransform.localScale`（scale 是 **210 / 157 / 210**，所以
+  42~147 / 14 / 2.1~10.5 px）；发射形状 `Circle(type 10)`，`radius x scale` 就是
+  出生环半径（210 / 157 px）；`startRotation ±2π`、`RotationOverLifetime = π rad/s`、
+  UV 用 `startFrame 0~0.9999` 随机取四格之一。
+- **`startSpeed` 沿圆盘法线（屏幕外）**，正交 2D 下看不见位移——所以三角形是
+  "原地出现 + 自转 + 淡入淡出"，`kRadialGain` 只是把它折成径向漂移的艺术补偿（0 = 严格照原样）。
+- **ColorOverLifetime 的坑（踩过）**：Unity 的 Gradient 把 8 个 key 塞进一个数组，
+  但**只有前 `m_NumColorKeys` 个的 RGB 算颜色**（走 ctime 轴）、**只有前 `m_NumAlphaKeys`
+  个的 A 算透明度**（走**另一条 atime 轴**）。剩下那些 key 的 rgb 是 `(0,0,0)` 占位，
+  当成颜色关键帧就会得出"三角中途变纯黑"的错误结论（第一版就是这么错的）。
+  实际：particle3 颜色只在 `t=0` 浅蓝灰 → `t=1` 深蓝灰之间变，alpha 是
+  `0 → 0.5(25%) → 0.5(70%) → 0`；particle2_1 颜色恒白，alpha 5% 就跳到 1。
+- **颜色是线性空间**：Unity 存的 `(0.138,0.175,0.302)` 直接当 sRGB 用会变近黑，
+  必须过 `srgbOf()`。
+- **混合**：环 + 柔光 additive（`AddCallback` 切 `glBlendFunc(SRC_ALPHA, ONE)`，
+  **画完必须恢复** `ONE_MINUS_SRC_ALPHA`，否则之后所有 UI 都发光）；
+  **三角走 alpha blend**（它们带白描边 + 渐变填充，是"贴纸"不是"光"）。这条是从
+  美术特征推断的，shader `sekaieffect` 没有源码可取。
+- **尺寸基准**：`PT_01`/`PT_02`/`root` 的 scale 都是 1，所以按 `1 world unit = 1 design px`
+  换算（这是唯一一个未经证实的假设，改了它就整体缩放）。
+- 贴图：`assets/fx/tap_sheet.png`（1024，4x4）、`tap_flare.png`（256）、
+  `tap_tri.png`（512，2x2，**已用 `.workbuddy/tools/strip_tri_background.py` 抹掉
+  三角形外面的 alpha=255 底色**——官方 mesh 本身是三角形所以从不采样那层底色，
+  我们拿正方形 quad 就会把底色画成方块）。
 - 缺 `tap_sheet.png` 时回退到老的 `tap_ring.png` 缩放路径（这条别删）。
-- 无头验证：`--tap-fx-test` 冻结 4 个相位（0.03 / 0.13 / 0.26 / 0.42s），
-  一张 `--screenshot` 就能看全序列。
+- 无头验证：`--tap-fx-test [秒]` 冻结**一个** burst（默认 0.35s）。别一次 spawn 多个
+  —— 一次点击只有 1 个 burst，叠 8 个会让画面看着比游戏里满得多。
+  截图用 `.workbuddy/tools/shot.sh`：项目自己的 `--screenshot` 偶尔会抓到还没画完的帧
+  （整张纯白、PNG 只有 ~35KB），那个脚本会检查大小并自动重试。
 
 ## 待办（按优先级）
 

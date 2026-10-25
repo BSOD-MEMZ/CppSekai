@@ -34,6 +34,7 @@ imgui.ini
 
 # Scratch screenshots from --screenshot runs (see AGENTS.md "验证")
 .workbuddy/shots/
+shots/
 # Local backups of pre-shrink assets (the originals also live in git history).
 .workbuddy/backup/
 

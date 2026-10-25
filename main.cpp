@@ -1310,9 +1310,10 @@ int main(int argc, char** argv)
     // an interactive session to be driven by PostMessage), so the launch path
     // gets its own switch.
     double chartDlTestAtSec = -1.0;
-    // Debug: freeze the tap ripple at four fixed ages so one --screenshot run
-    // shows the whole flipbook (the effect is otherwise driven by real clicks).
+    // Debug: freeze one tap ripple at a fixed age so one --screenshot run can
+    // photograph the effect (it is otherwise driven by real clicks).
     bool tapFxTest = false;
+    float tapFxAge = 0.35f;
     // --story-test [id]: boot straight into the tutorial script (headless
     // checks: --screenshot can then photograph any step).
     std::string storyTestId;
@@ -1563,8 +1564,14 @@ int main(int argc, char** argv)
                 confirmFlashAtSec = std::atof(utf8Argv[++i]);
             }
         } else if (arg == "--tap-fx-test") {
-            // Debug: freeze the tap ripple at fixed ages for headless checks.
+            // Debug: freeze one tap ripple at this age (default 0.35s).
             tapFxTest = true;
+            if (i + 1 < utf8Argc && utf8Argv[i + 1][0] != '-') {
+                const float parsed = static_cast<float>(std::atof(utf8Argv[++i]));
+                if (parsed > 0.0f) {
+                    tapFxAge = parsed;
+                }
+            }
         } else if (arg == "--chartdl-test") {
             // Debug: press 下载谱面 (the empty-list button) at this second.
             chartDlTestAtSec = 1.5;
@@ -2572,16 +2579,14 @@ int main(int argc, char** argv)
     applyRenderMode();
 
     if (tapFxTest) {
-        // Four bursts frozen at fixed ages: dot -> rings -> fade, all in one
-        // screenshot. Ages come from the measured 0.5s lifetime.
+        // One real burst, frozen at --tap-fx-age (default 0.35s: the ring is
+        // mid-animation and most triangles have been born). A single burst is
+        // what one click actually looks like - spawning several at once makes
+        // the screen look far busier than the game ever does.
         tapEffect.setFrozen(true);
-        const float ages[4] = {0.03f, 0.13f, 0.26f, 0.42f};
-        const float xs[4] = {0.20f, 0.40f, 0.60f, 0.80f};
-        for (int i = 0; i < 4; ++i) {
-            tapEffect.spawnAt(static_cast<float>(windowW) * xs[i],
-                static_cast<float>(windowH) * 0.42f, ages[i]);
-        }
-        std::printf("[tap-fx] test bursts spawned (frozen)\n");
+        tapEffect.spawnAt(static_cast<float>(windowW) * 0.5f,
+            static_cast<float>(windowH) * 0.5f, tapFxAge);
+        std::printf("[tap-fx] single burst frozen at %.2fs\n", static_cast<double>(tapFxAge));
         std::fflush(stdout);
     }
 
