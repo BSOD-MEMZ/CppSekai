@@ -24,6 +24,7 @@
 #include "game/Hud.hpp"
 #include "game/PartyScreen.hpp"
 #include "game/Result.hpp"
+#include "game/LiveClearBanner.hpp"
 #include "game/SongSelect.hpp"
 #include "game/Story.hpp"
 #include "game/StageBackground.hpp"
@@ -3747,6 +3748,12 @@ int main(int argc, char** argv)
     // fades that black back off. One value drives both halves.
     constexpr float kSongEndFadeSec = 1.2f;
     float songEndBlackout = 0.0f;
+    // "LIVE CLEAR!" banner (game/LiveClearBanner.*): the original plays a 1.5 s
+    // letter-by-letter burst on the playfield before the result screen exists,
+    // and only then blacks out. So the switch has to wait for it, and while it
+    // runs the blackout is driven by the banner instead of the fade above.
+    game::LiveClearBanner liveClearBanner;
+    bool liveClearBannerArmed = false;
     double resultPreviousBest = 0.0;
     // Player rank bookkeeping for the run that is currently ending: what the
     // score granted and how many ranks it rolled over (see the result screen).
@@ -6767,6 +6774,8 @@ int main(int argc, char** argv)
         resultScheduled = false;
         resultData = game::ResultData{};
         songEndBlackout = 0.0f;
+        liveClearBanner.reset();
+        liveClearBannerArmed = false;
         lastSeenJudgeTime = -100.0f;
         hudState = game::HudState{};
         mpFollowing = false;
@@ -6853,6 +6862,8 @@ int main(int argc, char** argv)
         resultScheduled = false;
         resultData = game::ResultData{};
         songEndBlackout = 0.0f;
+        liveClearBanner.reset();
+        liveClearBannerArmed = false;
         state = AppState::Play;
         beginSessionClock();
         std::printf("[%s] playing %s\n", how, path.c_str());
@@ -9159,6 +9170,8 @@ int main(int argc, char** argv)
                                 resultScheduled = false;
                                 resultData = game::ResultData{};
                                 songEndBlackout = 0.0f;
+                                liveClearBanner.reset();
+                                liveClearBannerArmed = false;
                                 // The white burst is the cover for exactly this
                                 // load (see confirmFlashActive): arm it here,
                                 // with nothing for it to load of its own.
@@ -9551,12 +9564,35 @@ int main(int argc, char** argv)
             //
             // Measured against the same end the result triggers on (including the
             // --result-at debug override), so the fade always leads into the switch.
+            //
+            // A cleared run takes a detour first: the "LIVE CLEAR!" banner owns the
+            // screen for 1.5 s and drives the blackout itself (it only starts at
+            // 1.25 s into the banner, otherwise the fade would swallow the letters).
+            // A failed run has no banner and keeps the plain fade.
             const double effectiveEnd = resultAtSec > 0.0 ? resultAtSec : trackDurationSec - 0.15;
+            const bool clearedSoFar = judgement.stats().life > 0.0f;
+            if (state == AppState::Play && trackDurationSec > 1.0 && !liveClearBannerArmed
+                && !resultScheduled && songTime >= effectiveEnd && clearedSoFar) {
+                liveClearBannerArmed = true;
+                liveClearBanner.start();
+            }
             if (trackDurationSec > 1.0) {
-                const float fadeFrom = static_cast<float>(effectiveEnd) - kSongEndFadeSec;
-                const float u = std::clamp((static_cast<float>(songTime) - fadeFrom) / kSongEndFadeSec,
-                    0.0f, 1.0f);
-                songEndBlackout = std::max(songEndBlackout, u);
+                if (liveClearBannerArmed) {
+                    // The banner owns the fade once it is up: it holds the screen
+                    // clear until 1.25 s, then hands over to black. Assigning
+                    // (instead of max) also lets it *clear* a fade that had
+                    // already started, which is what makes a cleared run skip
+                    // the plain fade entirely.
+                    songEndBlackout = liveClearBanner.blackout();
+                } else if (!clearedSoFar) {
+                    // A failed run has no banner - it keeps the plain fade. A
+                    // living run deliberately does not start fades here: the
+                    // banner would otherwise appear behind a black screen.
+                    const float fadeFrom = static_cast<float>(effectiveEnd) - kSongEndFadeSec;
+                    const float u = std::clamp(
+                        (static_cast<float>(songTime) - fadeFrom) / kSongEndFadeSec, 0.0f, 1.0f);
+                    songEndBlackout = std::max(songEndBlackout, u);
+                }
             }
 
             // ----------------------------------------------------------
@@ -9564,8 +9600,14 @@ int main(int argc, char** argv)
             // chart keeps running past the last note while the track plays
             // out), then the result screen takes over with its own clock.
             // ----------------------------------------------------------
+            // The banner runs on its own clock (the audio clock stops with the
+            // track), so the switch waits for *it*, not for songTime.
+            const bool bannerDone = liveClearBannerArmed
+                && liveClearBanner.time() >= game::LiveClearBanner::kDuration;
             const bool resultDue = state == AppState::Play && trackDurationSec > 1.0
-                && songTime >= (resultAtSec > 0.0 ? resultAtSec : trackDurationSec - 0.15);
+                && (liveClearBannerArmed ? bannerDone
+                                         : songTime >= (resultAtSec > 0.0 ? resultAtSec
+                                                                          : trackDurationSec - 0.15));
             if (resultDue && !resultScheduled) {
                 resultScheduled = true;
                 const auto& st = judgement.stats();
@@ -9911,7 +9953,10 @@ int main(int argc, char** argv)
                 bg->AddRectFilledMultiColor(ImVec2(w - rc, 0.0f), ImVec2(w, h), none, dark, dark, none);
             }
 
-            if (visibility > 0.0f) {
+            // The "LIVE CLEAR!" banner owns the screen the moment it starts: the
+            // original hides the whole play HUD (score / life / combo / pause)
+            // for the burst, so the letters land on the bare stage.
+            if (visibility > 0.0f && !liveClearBanner.active()) {
                 game::drawHud(renderer, hudState, static_cast<float>(songTime), windowW, windowH,
                     static_cast<float>(leadInSec), dumpJudgeSheet,
                     showFps ? static_cast<float>(fpsDisplay) : 0.0f);
@@ -10276,6 +10321,8 @@ int main(int argc, char** argv)
                     resultScheduled = false;
                     resultData = game::ResultData{};
                     songEndBlackout = 0.0f;
+                    liveClearBanner.reset();
+                    liveClearBannerArmed = false;
                     state = AppState::Play;
                     beginSessionClock();
                 } else {
@@ -10307,6 +10354,14 @@ int main(int argc, char** argv)
             // Song end: the result screen takes the black over and lifts it.
             if (state == AppState::Result) {
                 songEndBlackout = std::max(0.0f, songEndBlackout - frameDelta / 0.6f);
+            }
+            // "LIVE CLEAR!" banner: runs on the play clock (frozen while paused)
+            // and is painted *under* the blackout so the tail fade swallows it.
+            if (liveClearBanner.active() && state == AppState::Play) {
+                if (!paused) {
+                    liveClearBanner.update(frameDelta);
+                }
+                liveClearBanner.draw(renderer, windowW, windowH, userSettings.uiScale);
             }
             if (songEndBlackout > 0.002f) {
                 fg->AddRectFilled(ImVec2(0.0f, 0.0f), ImVec2(w, h),

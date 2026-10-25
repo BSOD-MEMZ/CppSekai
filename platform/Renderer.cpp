@@ -993,6 +993,12 @@ bool Renderer::loadHud(const std::string& overlayDir, std::string& outError)
     add("effect_hit", "../effect.png", kEffectMaxDim);
     add("start_grad", "start_grad.png", kGradientMaxDim);
 
+    // "LIVE CLEAR!" banner (game/LiveClearBanner.cpp). The atlas is the game's
+    // own tex_LiveClear: ten glyphs in reading order, one row, full height, so
+    // the banner addresses them by u-range alone. The strip is tex_LiveClear_light.
+    add("result_liveclear", "result/liveclear.png");
+    add("result_liveclear_light", "result/liveclear_light.png");
+
     outError.clear();
     return !mHudSprites.empty();
 }

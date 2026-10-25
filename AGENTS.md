@@ -129,6 +129,10 @@ game/Result.*     # 结算画面（PRESENT/RESULT）：参考原版截图 1:1 �
                   # RESULT 大字的空心轮廓来自 platform/FontOutline.cpp（ImGui 只会盖实心
                   # 字形，"描边 + 背景色挖空"那套在带图案的背景上必露馅）。
                   # 详细测量笔记见下面「结算画面」一节。
+game/LiveClearBanner.*  # 曲末的「LIVE CLEAR!」大字（2026-10-25，照日服 fx_result_LiveClear
+                  # + clip_result_LiveClear 还原）。10 个字母各一个节点、从屏幕中心向外炸开，
+                  # 上面再叠一层加法发光副本 + 1148x188 背光条。曲末接管屏幕：播 1.5167s、
+                  # 期间不画 HUD、最后 0.27s 淡黑，然后才切 Result。细节见下面那一节。
 game/Intro.*      # ImGui 卡片/UI；字体**只走系统**（注册表找字体文件 + 按文件名兜底 +
                   # 日文/简中字形探测。Yu Gothic UI 是 CFF 轮廓，stb_truetype 渲染不了，
                   # 会自动落到 Microsoft YaHei）。2026-09-19 删掉 assets/mmw/font 后
@@ -1255,6 +1259,66 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
   掉到 0 血。`--result-at`（调试，中途切结算）不写成绩。
 点「继续」（或 ESC）回选曲。调试：`--result-preview`（启动即进，用参考图的样例数字）、
 `--result-at <sec>`（跑到指定秒数切）。
+
+## 曲末的「LIVE CLEAR!」大字（2026-10-25，`game/LiveClearBanner.*`）
+
+曲末到结算之间**不是淡黑**，原作先砸一行大字。数据全部来自日服 7.1.0（取数脚本见
+`RE.md` 的工具一节，产物在 `D:\Tools\rea\work\jp\`）。
+
+**原作怎么做的**：`Assets\Resources\effects\result\prefab\fx_result_LiveClear` 是独立特效
+prefab，**10 个字母各占一个 Image 节点**（不是一行文字，也不是一张整图），另有一整层
+`text_ADD`（同位置、加法混合）+ `tex_back` 1148×188 背光条 + `pt`/`pt_loop`/`light` 三套粒子。
+动画是 `clip_result_LiveClear`（1.5167s @60fps），只动三类属性：字母的
+`m_AnchoredPosition.x`、`m_Color.a`、`m_IsActive`。**没有任何 scale 曲线**：
+
+| 时间 | 事件 |
+|---|---|
+| 0.0167 | 全部激活 |
+| 0.0167 → 0.1833 | 每个字母 x 从 **0** 滑到自己的槽位（L1 −446 … R +497.6、! +589.9），`text_ADD` alpha 0→1 |
+| 0.05 | `pt` 喷一次 |
+| 0.1833 → 0.6833 | `tex_back` alpha 0→1 |
+| 0.2667 | `text_ADD` alpha 0.51 |
+| 0.5167 | `pt_loop` 起 |
+| 0.6833 | `text_ADD` ≈0（只剩普通层，米白色） |
+
+所谓「炸开」就是**同时出发、同时到位、路程不同**。
+
+**我们的实现**：素材是原作的 `tex_LiveClear.png`（1236×182，10 格单行，只在 u 方向切）
+和 `tex_LiveClear_light.png`，放在 `assets/mmw/overlay/result/`，在 `Renderer.cpp` 注册成
+`result_liveclear` / `result_liveclear_light`。字母表（atlas x/宽 + prefab 的 w/h/x）在
+`LiveClearBanner.cpp` 顶部的 `kGlyphs`，**每个字母的宽高是 prefab 手调的，不是等比**，照抄才不歪。
+
+流程接在 `main.cpp`：`songTime >= effectiveEnd` 且 `st.life > 0` 时 `start()`，然后
+- `resultDue` 等 **banner 自己的时钟**（`time() >= kDuration`），不是 songTime —— 音频时钟在
+  曲末就停了，用 songTime 会永远等不到；
+- 黑幕由 `banner.blackout()` 接管（1.25s 前恒 0、之后到 1.5167s 涨满）；**活着的曲子在这段
+  完全不走老的 `kSongEndFadeSec` 淡黑**，否则字会出现在黑屏上（`songEndBlackout` 老代码是
+  `max()` 累加，一旦涨到 1 就再也下不来）；
+- banner 期间不画 HUD（`drawHud` 的条件加 `!liveClearBanner.active()`），原作曲终就是只剩舞台；
+- 失败（`life <= 0`）不播，照旧淡黑。
+
+**坑**：
+
+1. **画布坐标原点在左上角**，不是屏幕中心。结算/HUD 的常量都是绝对坐标（`kPanelLeft=413`
+   那种）；这套 prefab 的字母位置是相对中心的 `anchoredPosition`，要先加 `960/540` 再平移
+   `−60.7`（prefab 里字母和背光的共同中心在 x=+60.7）。第一版忘了加 960，字整个跑出屏幕左边。
+2. **ImGui 只有 alpha 混合**，`text_ADD` 那种加色层用叠几层白图模拟不出来（最多把米白推到纯白，
+   溢不出去）。用 `ImDrawList::AddCallback` 在绘制前后切 `glBlendFunc(GL_SRC_ALPHA, GL_ONE)`，
+   画完恢复 `GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA`。ImGui 每帧会重设混合状态，不用额外清理。
+3. 粒子是**手写的近似**（26 个径向小圆 + 8 个慢速微粒，确定性哈希，截图可复现），不是原作
+   `ParticleSystem` 的参数；三套里只做了两套，`light` 没做。要更近一步得先导 `fx_liveclear`
+   的粒子 YAML（`RE.md` §4.3 那套 recipe）。
+
+**验证**：`CPSEKAI_BANNER_T=<sec>` 把 banner 时钟钉住（只影响显示，不推进），配合
+`--result-at 0.3 --screenshot-time 0.6` 抓任意一帧：
+
+```bash
+CPSEKAI_BANNER_T=0.19 bash .workbuddy/tools/shot.sh shots/banner.png \
+  --sus build/charts/0001_easy.sus --auto --no-party --result-at 0.3 --screenshot-time 0.6
+```
+
+0.10 是字母还挤在中间、0.19 是刚到位（加法层拉满、纯白）、0.70 是背光铺开（米白带光晕）、
+1.30 是淡黑。
 
 ## 平台 / 输入相关的坑（2026-09-12）
 
