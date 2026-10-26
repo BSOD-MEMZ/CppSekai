@@ -20,7 +20,7 @@
 
 | 工具 | 版本 / 位置 | 用途 |
 |---|---|---|
-| REA（`rea-agents`） | 6.7.0，MCP 服务名 `rea`，配置在 `~/.workbuddy/mcp.json` | 统一入口（PE 的原生逆向；**Windows 上只收 PE，不收 ELF**） |
+| REA（`rea-agents`） | 6.7.0，MCP 服务名 `rea`；注册在 `~/.workbuddy/mcp.json` **和** `%APPDATA%\Code\User\mcp.json`（见 §2.1） | 统一入口（PE 的原生逆向；**Windows 上只收 PE，不收 ELF**） |
 | Ghidra | 12.1.4 → `D:\Tools\ghidra_12.1.4_PUBLIC` | 原生代码（REA 只认 12.1.x，**别升 12.2**） |
 | Temurin JDK | 21.0.12.1 → `D:\Tools\jdk-21.0.12.1+1` | Ghidra / JADX 运行时（要 full JDK） |
 | JADX（headless MCP） | `D:\Tools\rea\android\jadx-headless-mcp-0.7.1-all.jar` | APK 的 Java 层（环境变量 `REA_JADX_MCP_JAR`） |
@@ -42,6 +42,31 @@ D:\Tools\rea\work\
   pjsk_6.4.0\         国服 6.4.0（卡在 AES，只留证据）
   tools\
 ```
+
+## 2.1 重装记录：工具链曾整个丢失（2026-10-26）
+
+某天 `D:\Tools\rea` 整个目录不在了（只剩 `D:\Tools` 下别的软件），REA 也同时在
+**所有**客户端里变成 `missing`。2026-10-26 重装了**引擎与注册**（JDK / Ghidra / JADX
++ 两个客户端的 MCP 配置），但**上面的 `work\` 产物树没有恢复** —— `dump.cs`、`GameData\`、
+`fx_touch\` 那些要按 §3 重新解一遍才有。顺带记下这次绕网络的两条硬事实
+（GitHub release 的 CDN 在这台机器上直连会被 reset）：
+
+| 包 | 源 | 校验 |
+|---|---|---|
+| JDK 21.0.12.1+1 | 清华镜像 `mirrors.tuna.tsinghua.edu.cn/Adoptium/21/jdk/x64/windows/` | SHA256 对上 Adoptium API 的 `binary.package.checksum` |
+| Ghidra 12.1.4 | GitHub release → `https://gh-proxy.com/<github url>` | 尺寸 569,649,598 字节（官方没发 sha256） |
+| jadx-headless-mcp 0.7.1 | 同上代理 | 与 release 里的 `jadx-headless-mcp.sha256` 一致 |
+
+- **代理单连接只有 100~400KB/s**，543MB 的 Ghidra 单线程要 1.5 小时。用**多连接分段**
+  （`.workbuddy/tools/seg_download.js`：`curl -r` 切 16MB 段、6~10 并发、拼装前校验总尺寸；<br>
+  用法 `node .workbuddy/tools/seg_download.js <url> <out> <totalBytes> [并发] [段MB]`）。
+- 分段时**必须给 `curl --max-filesize <段长+1>`**：gh-proxy 偶尔忽略 `Range` 直接回整包
+  （200），不加限制的话会把 543MB 整个下进某个 16MB 的段里再丢掉（实测出现过 391MB 的半成品）。
+- 注册与引擎是两件事：`rea setup --client vscode --client workbuddy --yes` 只写
+  MCP 配置；引擎靠注册里的 `env`（`JAVA_HOME` / `GHIDRA_INSTALL_DIR` / `REA_JADX_MCP_JAR`）。
+  验证：`doctor --client vscode --format json --filter-output providerInspections`，
+  期望 ghidra `available:true providerVersion "12.1.4"`、jadx `configured:true`。
+- IDA（`REA_IDA_MCP_CONFIG`）与 Kuna（`REA_KUNA_COMMAND`）仍是有意不配（都要用户自备）。
 
 ## 3. 从 XAPK 到 dump.cs（已经跑通过的流程）
 
