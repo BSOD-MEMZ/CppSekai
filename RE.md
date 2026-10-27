@@ -68,6 +68,61 @@ D:\Tools\rea\work\
   期望 ghidra `available:true providerVersion "12.1.4"`、jadx `configured:true`。
 - IDA（`REA_IDA_MCP_CONFIG`）与 Kuna（`REA_KUNA_COMMAND`）仍是有意不配（都要用户自备）。
 
+### 重新解包（2026-10-26 / 27，同一天做完）
+
+用用户手动下的 `%USERPROFILE%\Downloads\プロジェクトセカイ+カラフルステージ！+feat.+初音ミク_7.1.0_APKPure.xapk`
+（455MB）把 `work\jp\` 重新跑了一遍，**结果与上一轮一致**，可以直接用：
+
+| 产物 | 大小 | 备注 |
+|---|---|---|
+| `splits/*.apk` | base 87.2 / config 64.2 / UnityDataAssetPack 303.1 MB | `tar -xf/x` 就够了（见下） |
+| `assets/.../global-metadata.dat` | 27.0 MB | 密文，**需要 XOR** |
+| `lib/arm64-v8a/libil2cpp.so` | 189.9 MB | |
+| `global-metadata-decrypted.dat` | 27.0 MB | key anchor **0x1F23B7C**、metadata **version 31** |
+| `dump/dump.cs` | 81.1 MB / 225 万行 / 3.7 万条类型声明 | |
+| `dump/DummyDll/` | 159 个 dll / 46.1 MB | 含 `Assembly-CSharp.dll` |
+| `dump/il2cpp.h` / `script.json` / `stringliteral.json` | 237.3 / 248.2 / 2.9 MB | script.json 给 IDA/Ghidra |
+
+两条实测修正：
+
+- **不需要 `jp_pipeline.py`**：`tar -tf/-xf` 直接读 XAPK 与 APK（bsdtar 认 zip），
+  `tar -xf <xapk> -C splits` 拆出三个 split，再
+  `tar -xf splits/com.sega.pjsekai.apk -C . "assets/bin/Data/Managed/Metadata/global-metadata.dat"`、
+  `tar -xf splits/config.arm64_v8a.apk -C . "lib/arm64-v8a/libil2cpp.so"`。
+- **反混淆脚本已入库**：`.workbuddy/tools/pjsk_deobf_metadata.py`（不硬编码偏移：
+  明文前 4 字节 `AF1BB1FA` 反推 key[0:4] → 在 `.so` 里找锚点 → 用 version 与头部
+  offset 自洽性选唯一解）。本次 3 个候选锚点里只有 `0x1F23B7C` 通过校验。
+- **Il2CppDumper 的两行警告是正常的**：`WARNING: find JNI_OnLoad` /
+  `ERROR: This file may be protected.` 之后它会自己 `Searching...` 找到
+  `CodeRegistration` / `MetadataRegistration`，190MB 的 so 要几分钟。
+
+工具按 RE.md 的路径重装并**逐一验过**（都是 `gh-proxy.com` 下的）：
+
+| 工具 | 版本 | 验证 |
+|---|---|---|
+| Il2CppDumper | 6.7.46（`Il2CppDumper-win-v6.7.46.zip`，自包含，不用装 .NET） | 产出上表全部文件 |
+| AssetStudioModCLI | 0.19.0（`net8_portable`） | `-m info` 读 `UnityDataAssetPack.apk`：**7033 文件 / 194422 资产**，Sprite 2807、Mesh 39、Unity 2022.3.62f2 |
+| AssetRipper | 2.0.0（`AssetRipper_win_x64.zip`） | 解压在 `work/tools/arip/`（`AssetRipper.GUI.Free.exe` + `capstone.dll`），本次未跑 |
+
+工作区占用：`work\jp` 1.28 GB、`work\tools` 0.21 GB。
+
+**还没重建的只有 `GameData\`**（base + UnityDataAssetPack + config 合并成一份喂
+AssetRipper，约 624MB，做法见 §4.2 之前的步骤）。要读 prefab 的 RectTransform /
+粒子参数时先补这一步，否则 §4.2 那几个 `ms_geom.py` 跑不起来。
+
+> 2026-10-27 已补：三个 apk 依次 `tar -xf ... -C GameData` 叠在一起即可
+> （8848 文件 / 672MB）。**但必须把解密后的 metadata 覆盖进去**
+> （`cp global-metadata-decrypted.dat GameData/assets/bin/Data/Managed/Metadata/global-metadata.dat`），
+> 否则 AssetRipper 的 Cpp2IL 报 `Invalid or corrupt metadata (magic number check failed)`、
+> 退回 `Unknown` scripting backend（MonoBehaviour 字段就解析不了）。覆盖后实测：
+> `Cpp2IL : Using actual IL2CPP Metadata version 31.1`、`codereg 0xB0AEFC0 / metareg 0xB548B38`
+> （与 Il2CppDumper 报的完全一致）、`Processed 212684 OK`、application model 19s 建好。
+> `POST /LoadFolder` **会阻塞几分钟且可能直接超时**，超时不等于失败 —— 看服务端日志判断。
+
+**AssetRipper 验证**：`Search/View?q=MusicSelect` 返回 196 个资产链接，
+名字含 `MusicSelect` / `MusicSelectListView` / `ScreenLayerMusicSelectBackground` /
+`MultiLiveMusicSelectPlayerCell`，即 §4.2 那条几何导出路径可用。
+
 ## 3. 从 XAPK 到 dump.cs（已经跑通过的流程）
 
 ```bash

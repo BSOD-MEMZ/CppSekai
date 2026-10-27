@@ -84,12 +84,18 @@
   **「repo 404」不能归因**，别拿别人 repo 的状态当决策依据。
 
 ## 最近工作
+- 10-27：**日服 7.1.0 重新解包完成**，`D:\Tools\rea\work\jp\` 恢复可用：
+  metadata key anchor `0x1F23B7C`（v31）→ `dump.cs` 81.1MB / DummyDll 159 个；
+  Il2CppDumper 6.7.46 + AssetStudioModCLI 0.19.0（Sprite 2807 / 194422 资产）+
+  AssetRipper 2.0.0 都装好验过。反混淆脚本入库 `.workbuddy/tools/pjsk_deobf_metadata.py`。
+  ⚠ 10MB 的 zip 单连接也会卡死 → 一律用 `.workbuddy/tools/seg_download.js`。
 - 10-26：**REA 工具链重新配置**。两个客户端（VS Code `%APPDATA%\Code\User\mcp.json`、
   WorkBuddy `~/.workbuddy/mcp.json`）的 `rea` 注册都是 missing，`D:\Tools\rea` 也整个没了 →
   重新 `rea setup` + 重装 JDK 21.0.12.1+1 / Ghidra 12.1.4 / jadx-headless-mcp 0.7.1，
   引擎路径写进注册的 `env`。ghidra/jadx 两个 provider 已 `available:true`，MCP 握手 207 个工具。
   网络：GitHub CDN 直连被 reset，走 `gh-proxy.com` + 分段下载（细节见 `RE.md` §2.1）。
-  ⚠ `work\` 里的解包产物（dump.cs / GameData）**没恢复**，要用还得按 RE.md §3 重跑。
+  ⚠ 当时 `work\` 的解包产物没恢复；10-27 已全部重跑补齐（dump.cs / DummyDll / 工具链 /
+  `GameData\`，见上一条）。
 - 10-25：**触摸特效重做到位**（`game/TapEffect.*`）：参数全部来自日服 7.1.0 的
   `ScreenLayerTouchEffect`（4×4 序列帧 + 三色三角 mesh 粒子），Tap / Hold 两态，
   三角形做真 3D 投影（X/Y 倾角 + Z 轴自转），`kRingScale/kShardScale/kShardTilt`
