@@ -998,6 +998,15 @@ bool Renderer::loadHud(const std::string& overlayDir, std::string& outError)
     // the banner addresses them by u-range alone. The strip is tex_LiveClear_light.
     add("result_liveclear", "result/liveclear.png");
     add("result_liveclear_light", "result/liveclear_light.png");
+    // Result page badges (game/Result.cpp): pjsk's `badge_result_fullcombo` /
+    // `badge_result_allperfect` out of the same result atlas. Drawn whole
+    // (glow margin included), so no ink box is needed.
+    add("result_badge_fullcombo", "result/badge_fullcombo.png");
+    add("result_badge_allperfect", "result/badge_allperfect.png");
+    // `txt_livefailed_wh` (1352x166): pjsk's failed-live state. Our result page
+    // is the score page, which otherwise says nothing at all about a run that
+    // died with the life bar at zero.
+    add("result_livefailed", "result/livefailed_wh.png");
 
     outError.clear();
     return !mHudSprites.empty();

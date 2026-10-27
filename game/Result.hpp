@@ -31,6 +31,17 @@ struct ResultData
     int maxCombo = 0;
     float chartRating = 26.0f; // drives the square-rule / score bar thresholds
 
+    // pjsk's result page has three mutually exclusive states, and they are what
+    // the FULL COMBO / ALL PERFECT badge keys off:
+    //   failed      life ran out (the live did not clear at all)
+    //   fullCombo   cleared without a single MISS
+    //   allPerfect  full combo *and* nothing below PERFECT
+    // Derived from the same stats the record is written from, so the screen and
+    // what was banked into userdata cannot disagree.
+    bool failed = false;
+    bool fullCombo = false;
+    bool allPerfect = false;
+
     // Player rank (the account). rank/exp are the *post-run* values, so the chip
     // and the bar already show the rank this score just earned.
     int playerRank = 1;

@@ -17,12 +17,15 @@ namespace game
 namespace
 {
 // The only numbers in this file that are not measured. Literal 1:1 mapping
-// (PT_01 = 160 design px) reads too big on our 1920x1080 canvas, and the shards
-// cannot shrink as far as the ring or they turn into specks. So they scale
-// separately: kRingScale for the ripple, the glow and the emission radius,
-// kShardScale for the triangle diameters. Both 1.0 = literal values.
+// (PT_01 = 160 design px) reads too big on our 1920x1080 canvas, so the whole
+// effect is scaled down. 2026-10-27: the shards used to have their own, smaller
+// factor (0.60 vs the ring's 0.45), which made every triangle roughly the same
+// mid-sized sticker - the original's 15x size spread was being trimmed away.
+// Both now share kRingScale so the shard:ring ratio is the measured one, and
+// the spread is restored through TriSpec::sizeBias instead of a narrow band.
+// 1.0 = literal values.
 constexpr float kRingScale = 0.45f;
-constexpr float kShardScale = 0.60f;
+constexpr float kShardScale = kRingScale;
 
 // --- tap (fx_Tap_single) -------------------------------------------------
 // PT_01: startSize 160, life 0.5, 4x4 WholeSheet at 30 fps, rate 0, transform 1.
@@ -122,6 +125,14 @@ struct TriSpec
     float speedMax;
     int count;
     const ShardGradient* grad; // nullptr = no ColorModule (keep startColour)
+    // Shape of the size roll: the unit random is raised to this power before it
+    // is mapped onto [sizeMin, sizeMax]. 1.0 = uniform (what Unity does).
+    // Values > 1 push the distribution towards sizeMin, which is how a system
+    // with a huge measured spread (particle3: 15.8..235.5, a 15x range) keeps
+    // its *average* size sane while still occasionally throwing a big slab.
+    // Unity's own curve is uniform, so this is a deliberate approximation of
+    // "most taps get a small-to-mid shard, some get a big one".
+    float sizeBias;
 };
 
 // fx_Tap_single: one particle per system, all at t=0, thrown outward fast.
@@ -131,29 +142,30 @@ struct TriSpec
 // particle2_1 3.0..14.1, particle1 1.6..7.9.
 constexpr int kTapSpecCount = 4;
 constexpr TriSpec kTapSpecs[kTapSpecCount] = {
-    // particle3, the "hero" shard. The original really does roll anywhere in
-    // 16..235 px (uniform between the curves, so half of all taps are >125 px,
-    // i.e. wider than the 160 px ripple). On a real mesh that reads as a glass
-    // slab catching the light; as a flat quad 235 px is just a big coloured card,
-    // so the band is trimmed to 0.45..0.75 of the ripple.
-    {54.0f, 90.0f, 0.30f, 0.70f, 157.0f, 35.0f, 100.0f, 1, &kGradBig},
+    // particle3, the "hero" shard: the measured 15.8..235.5 band, all of it.
+    // kShardScale is the ring's factor now, so this is the original's own
+    // shard:ring ratio (0.10x .. 1.47x the ripple diameter). The 1.9 bias keeps
+    // the average near where the old trimmed band put it while restoring the
+    // variance - a real tap now sometimes throws a slab wider than the ring,
+    // which is what the original mesh does.
+    {15.8f, 235.5f, 0.30f, 0.70f, 157.0f, 35.0f, 100.0f, 1, &kGradBig, 1.9f},
     // particle2: measured 18.2..20.5, essentially one size.
-    {18.2f, 20.5f, 0.10f, 0.70f, 157.0f, 35.0f, 100.0f, 1, &kGradMid},
+    {18.2f, 20.5f, 0.10f, 0.70f, 157.0f, 35.0f, 100.0f, 1, &kGradMid, 1.0f},
     // particle2_1: measured 3.0..14.1.
-    {3.0f, 14.1f, 0.20f, 0.70f, 157.0f, 35.0f, 100.0f, 1, &kGradMid},
+    {3.0f, 14.1f, 0.20f, 0.70f, 157.0f, 35.0f, 100.0f, 1, &kGradMid, 1.0f},
     // particle1: Two Constants 1.6..7.9, emits at the tap point (shape module
     // off). Original life is 30..35s; clamped to 2s, a 35s speck is not feedback.
-    {1.6f, 7.9f, 0.60f, 2.00f, 0.0f, 1.0f, 20.0f, 2, nullptr},
+    {1.6f, 7.9f, 0.60f, 2.00f, 0.0f, 1.0f, 20.0f, 2, nullptr, 1.0f},
 };
 
 // Follow / fx_Tap_loop: the same three shard systems at 6/s, but small, slow and
 // long-lived (transform scale 210 instead of 157).
 constexpr int kHoldSpecCount = 3;
 constexpr TriSpec kHoldSpecs[kHoldSpecCount] = {
-    // measured 42..147; trimmed the same way as the tap hero shard
-    {50.0f, 90.0f, 0.30f, 1.50f, 210.0f, 0.0f, 0.45f, 1, &kGradBig},
-    {10.5f, 21.0f, 0.30f, 1.50f, 210.0f, 0.0f, 0.45f, 1, &kGradMid},
-    {2.1f, 10.5f, 0.60f, 2.00f, 210.0f, 5.0f, 40.0f, 1, nullptr},
+    // measured 42..147 (3.5x spread) - same treatment as the tap hero shard.
+    {42.0f, 147.0f, 0.30f, 1.50f, 210.0f, 0.0f, 0.45f, 1, &kGradBig, 1.4f},
+    {10.5f, 21.0f, 0.30f, 1.50f, 210.0f, 0.0f, 0.45f, 1, &kGradMid, 1.0f},
+    {2.1f, 10.5f, 0.60f, 2.00f, 210.0f, 5.0f, 40.0f, 1, nullptr, 1.0f},
 };
 
 constexpr float kTwoPi = 6.28318530717959f;
@@ -249,6 +261,17 @@ float randomRange(unsigned& state, float lo, float hi)
     return lo + (hi - lo) * unit;
 }
 
+// One shard's diameter: the measured [sizeMin, sizeMax] band, rolled with the
+// system's own bias (see TriSpec::sizeBias) and then scaled to canvas units.
+float rolledSize(unsigned& state, const TriSpec& spec)
+{
+    float unit = static_cast<float>(nextRandom(state)) / 4294967295.0f;
+    if (spec.sizeBias != 1.0f) {
+        unit = std::pow(unit, spec.sizeBias);
+    }
+    return (spec.sizeMin + (spec.sizeMax - spec.sizeMin) * unit) * kShardScale;
+}
+
 // pjsk draws the ripple additively (it glows over the dimmed backdrop). The
 // ImGui GL3 backend sets blending once per draw data, so a draw-list callback
 // has to switch it and put it back.
@@ -315,7 +338,7 @@ void TapEffect::buildTapShards(Instance& instance, unsigned& rng) const
                 spec.radius * (0.70f + 0.30f * randomRange(rng, 0.0f, 1.0f)) * kRingScale;
             shard.angle = randomRange(rng, 0.0f, kTwoPi);
             shard.speed = randomRange(rng, spec.speedMin, spec.speedMax) * kRadialGain * kRingScale;
-            shard.size = randomRange(rng, spec.sizeMin, spec.sizeMax) * kShardScale;
+            shard.size = rolledSize(rng, spec);
             // startRotation is a Vector3 with every axis at +-2pi; X/Y are capped
             // by kShardTilt so a flat quad cannot collapse to a sliver.
             shard.rot0x = randomRange(rng, -kShardTilt, kShardTilt);
@@ -344,7 +367,7 @@ void TapEffect::emitHoldShard(HoldState& hold, unsigned& rng) const
         shard.radius = spec.radius * (0.70f + 0.30f * randomRange(rng, 0.0f, 1.0f)) * kRingScale;
         shard.angle = randomRange(rng, 0.0f, kTwoPi);
         shard.speed = randomRange(rng, spec.speedMin, spec.speedMax) * kRadialGain * kRingScale;
-        shard.size = randomRange(rng, spec.sizeMin, spec.sizeMax) * kShardScale;
+        shard.size = rolledSize(rng, spec);
         shard.rot0x = randomRange(rng, -kShardTilt, kShardTilt);
         shard.rot0y = randomRange(rng, -kShardTilt, kShardTilt);
         shard.rot0z = randomRange(rng, -kTwoPi, kTwoPi);

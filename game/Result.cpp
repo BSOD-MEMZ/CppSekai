@@ -178,6 +178,31 @@ constexpr float kBtnBottom = 1039.0f;
 constexpr float kBtnTextSize = 42.0f;
 
 // ---------------------------------------------------------------------------
+// FULL COMBO / ALL PERFECT badge.
+//
+// pjsk's score page carries `badge_result_fullcombo` / `badge_result_allperfect`
+// (358x76 in the result atlas) and plays clip_result_score_fullcombo_v2_01 /
+// _allperfect_v2_01 alongside the score rows. That clip is 2 s long and touches
+// exactly two properties: anchoredPosition.x 4.2 -> 44.2 and Color.a 0 -> 1, so
+// the badge slides 40 px to the right while it fades up. There is no scale and
+// no bounce.
+//
+// Where it sits: the row of empty canvas to the right of the COMBO read-out
+// (the combo number ends at kComboRight, the panel goes on to 1905). The exact
+// prefab anchor was not measured this session, so this is the one provisional
+// number in the block - it is a single pair of constants, easy to nudge once a
+// screenshot lands next to the official one.
+constexpr float kBadgeCenterX = 1490.0f;
+constexpr float kBadgeCenterY = 656.0f; // first judge row, right of the combo
+constexpr float kBadgeBoxH = 72.0f;     // 76 px sprite, drawn a touch smaller
+constexpr float kBadgeSlide = 40.0f;    // the clip's 4.2 -> 44.2 travel
+constexpr float kBadgeStart = 2.05f;    // after the last judge row (~2.13)
+constexpr float kBadgeDur = 2.0f;       // clip duration
+// LIVE FAILED wordmark (1352x166) takes the same slot on a failed run. Wider than
+// the badge, so it is drawn shorter to keep the same footprint.
+constexpr float kFailedBoxH = 58.0f;
+
+// ---------------------------------------------------------------------------
 // Helpers.
 // ---------------------------------------------------------------------------
 struct Canvas
@@ -773,6 +798,51 @@ void drawResult(platform::Renderer& renderer, const ResultData& data, float elap
                 drawFontDigits(c, bold, kComboFontSize, combo, kComboRight,
                     cy + kComboFontSize * kDigitBaselineNudge, kComboAdvance, kDigitGray, kWhite,
                     alpha);
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // FULL COMBO / ALL PERFECT badge (numbers and provenance: kBadge* above).
+    // Only one of the two can ever show, and a failed run shows neither - that
+    // is the official rule, not a fallback.
+    // -----------------------------------------------------------------------
+    if (data.fullCombo) {
+        const platform::Renderer::HudSprite* badge = renderer.hud(
+            data.allPerfect ? "result_badge_allperfect" : "result_badge_fullcombo");
+        if (badge != nullptr && badge->id != 0 && badge->height > 0) {
+            const float p = easeOutCubic(span(t, kBadgeStart, kBadgeDur));
+            if (p > 0.002f) {
+                const float h = kBadgeBoxH;
+                const float w = h * static_cast<float>(badge->width)
+                    / static_cast<float>(badge->height);
+                // The clip slides the badge 40 px to the right while it fades up,
+                // so it enters from the left of its final slot.
+                const float cx = kBadgeCenterX - kBadgeSlide * (1.0f - p);
+                const ImU32 tint = withAlpha(kWhite, p);
+                c.dl->AddImage(
+                    reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(badge->id)),
+                    c.p(cx - w * 0.5f, kBadgeCenterY - h * 0.5f),
+                    c.p(cx + w * 0.5f, kBadgeCenterY + h * 0.5f),
+                    ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), tint);
+            }
+        }
+    } else if (data.failed) {
+        // Failed run: pjsk's own LIVE FAILED wordmark (`txt_livefailed_wh`) takes
+        // the same slot. The two states are mutually exclusive, so the free band
+        // right of the combo is never asked to hold both.
+        const platform::Renderer::HudSprite* failed = renderer.hud("result_livefailed");
+        if (failed != nullptr && failed->id != 0 && failed->height > 0) {
+            const float p = easeOutCubic(span(t, kBadgeStart, kBadgeDur * 0.5f));
+            if (p > 0.002f) {
+                const float h = kFailedBoxH;
+                const float w = h * static_cast<float>(failed->width)
+                    / static_cast<float>(failed->height);
+                c.dl->AddImage(
+                    reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(failed->id)),
+                    c.p(kBadgeCenterX - w * 0.5f, kBadgeCenterY - h * 0.5f),
+                    c.p(kBadgeCenterX + w * 0.5f, kBadgeCenterY + h * 0.5f),
+                    ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), withAlpha(kWhite, p));
             }
         }
     }

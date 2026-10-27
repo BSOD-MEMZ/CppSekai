@@ -755,6 +755,13 @@ namespace
         data.miss = stats.miss;
         data.maxCombo = stats.maxCombo;
         data.chartRating = chartRating;
+        // Result-page state (see ResultData): same rule the score record uses -
+        // CLEAR means the bar was still above zero - but computed here so the
+        // preview paths (--result-preview, --auto) show the same badge a real
+        // run would instead of always claiming a clearance.
+        data.failed = stats.life <= 0.0f;
+        data.fullCombo = !data.failed && stats.miss == 0;
+        data.allPerfect = data.fullCombo && stats.great == 0 && stats.good == 0 && stats.bad == 0;
         // Player rank: read *after* addPlayerExp(), so the chip already shows
         // the rank this score earned.
         data.playerRank = account.rank;
@@ -6561,6 +6568,13 @@ int main(int argc, char** argv)
         resultData.miss = 1;
         resultData.maxCombo = 361;
         resultData.chartRating = 23.0f;
+        // The state flags were derived from the (empty) live stats above; the
+        // preview numbers are written afterwards, so re-derive them or the
+        // reference shot would claim a full combo despite the MISS in it.
+        resultData.failed = false;
+        resultData.fullCombo = resultData.miss == 0;
+        resultData.allPerfect = resultData.fullCombo && resultData.great == 0
+            && resultData.good == 0 && resultData.bad == 0;
         beginSessionClockPending = false;
         audio.stopMusic();
         state = AppState::Result;

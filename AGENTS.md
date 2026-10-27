@@ -1260,6 +1260,23 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
 点「继续」（或 ESC）回选曲。调试：`--result-preview`（启动即进，用参考图的样例数字）、
 `--result-at <sec>`（跑到指定秒数切）。
 
+### 结算页的 FULL COMBO / ALL PERFECT 与 LIVE FAILED（2026-10-27）
+
+- **原作没有 "LIVE FINISH" 这条文案**：sprite 表 2807 条与 metadata 字符串里都查不到 finish。
+  真正的三张是 `txt_liveclear_wh`(1220×166) / `txt_livefailed_wh`(1352×166) /
+  `txt_liveresult_wh`(1272×166)，对应 `SoloLiveScoreSummary` 的
+  `LiveResultClear = "liveclear"` / `LiveResultFailed = "livefailed"` 常量。
+- 曲末那 1.5167s 大字是 `fx_result_LiveClear`（**只有 clear 才有**），失败局不播它。
+- 结算分数页带两张徽章 `badge_result_fullcombo` / `badge_result_allperfect`（358×76，
+  ResultAtlas），由 `clip_result_score_{fullcombo,allperfect}_v2_01` 播 **2s**：
+  **只动 `anchoredPosition.x` 4.2→44.2 与 `Color.a` 0→1**，没有 scale、没有弹跳。
+- 我们的落地：`ResultData::failed / fullCombo / allPerfect`（`main.cpp` 的 `buildResultData`
+  从 `JudgementStats` 推：`failed = life<=0`、`fullCombo = !failed && miss==0`、
+  `allPerfect = 全 PERFECT`；和写成绩用的是同一套规则，preview 路径也一致）；
+  `Result.cpp` 在 COMBO 右边的空带画徽章（滑动 40px + 淡入，2s），失败局在同一位置画
+  `LIVE FAILED`（两者互斥）。⚠ 徽章锚点（`kBadgeCenterX/Y`）是**临时值** —— prefab 的
+  RectTransform 这次没量到，等有人截一张官方结算图再校准。
+
 ## 曲末的「LIVE CLEAR!」大字（2026-10-25，`game/LiveClearBanner.*`）
 
 曲末到结算之间**不是淡黑**，原作先砸一行大字。数据全部来自日服 7.1.0（取数脚本见
@@ -3186,12 +3203,17 @@ ea\work\jp\jp_fx_group.py`）。
 
 ### 代码里的可调旋钮
 
-- **`kRingScale = 0.45` / `kShardScale = 0.60`**（`TapEffect.cpp` 顶部）：非实测的
-  全局缩放，分开是为了环能缩而三角不跟着变成微粒。都设 1.0 = 字面值。
+- **`kRingScale = 0.45` / `kShardScale = kRingScale`**（`TapEffect.cpp` 顶部）：非实测的
+  全局缩放。都设 1.0 = 字面值。**2026-10-27 改过**：三角原来是单独的 `0.60`、band 又被压成
+  `54~90`，于是每次点击的三角都差不多大；原作是 **15 倍跨度**（15.8~235.5），观感上
+  "有时一小片、有时一大块"。现在两者同一个系数（shard:ring 比例 = 实测），band 回到实测值，
+  再靠 `TriSpec::sizeBias`（把单位随机取幂：tap hero 1.9 / hold hero 1.4）把分布压向小值 ——
+  平均值和以前接近，但**偶尔会甩出一块比环还宽的三角**。
 - **`kShardTilt = 1.15`**：三角的 X/Y 倾角上限（弧度）。0 = 纯平面，3.14159 = 实测的
   ±2π。调大全飘成细线，调小失去 3D 感。
-- **`particle3` 的 `sizeMin/sizeMax`**：实测 15.8~235.5（uniform，一半的点击都比环大），
-  代码收成 `54~90`（缩后 32~54px = 环的 0.45~0.75）。想更接近原版就往两头放。
+- **`particle3` 的 `sizeMin/sizeMax`**：实测 15.8~235.5（uniform，一半的点击都比环大）。
+  虽然现在用的是实测 band，但**别把 sizeBias 去掉**：uniform 下平均值会翻到 ~106px，
+  每一下都糊一大块，和"绝大多数是小三角"的实际手感不符。
 - `kRadialGain`：0 = 粒子不动（字面读法），1.0 = 按 startSpeed 向外飘。
 
 ### 性能（2026-10-25 实测，别凭感觉优化）
