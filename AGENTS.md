@@ -1317,6 +1317,30 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
   下次启动生效）。`--screenshot` 无头跑**一律跳过**，否则现有选曲截图自检全会拍到标题；
   要无头截它：`CPSEKAI_TITLE=1 CPSEKAI_TITLE_T=<秒> --screenshot ...`。
 
+### 国服标题画面（2026-10-28，`cn\` 子目录 + `cnMode()`）
+
+国服**开屏是几张静态图**（没有 Live2D），所以直接铺图：
+
+- 素材来自 [资产浏览器 | Moesekai](https://pjsk.moe/zh-cn/asset-viewer/?server=cn) 的 CDN，
+  放在 `assets/title/cn/`：`title_background.png`(2338×1440，粉青斜带的整张底图) 和
+  `tex_projectsekai_front.png`(512×128，「Project SEKAI / 初音未来 缤纷舞台！」logo 整图)。
+  **取法**（同一个 API 也能拿别的国服资源，国服的包我们无法逆向，只能从这儿取）：
+  `GET https://storage.pjsk.moe/api/assets/bundles?server=cn&prefix=title_screen/<dir>&limit=200`
+  给出 bundle 的完整 `path`，再
+  `GET /api/assets/bundle-files?server=cn&path=<bundlePath>&limit=200` 拿到 `url`，
+  资源本体在 `https://storage.pjsk.moe<url>`。`curl.exe` 打这个站要 `--ssl-no-revoke`。
+- **`cnMode()` = 那两张图加载成功**（`mCnLogo != 0`），加载失败自动退回日服那套，所以
+  只放日服素材 / 只放国服素材都能跑。`load()` 会打一行 `[title] chinese client art loaded`。
+- 布局常量（`TitleScreen.cpp` 顶部）：`kCnLogoWidth=980` / `kCnLogoCenterY=470`，
+  底图 **cover-fit 铺满**（原图 2338×1440 比 16:9 高，横向正好、纵向裁掉一点），
+  logo 宽度驱动、高度按源图比例算。
+- 「点击开始」是**文字不是素材**（原作那句在 prefab 里就是 Text）：中心 `kCnStartY=872`、
+  字号 `kCnStartSize=46`、色 `#444466`。⚠ **必须用 `game::bodyFont()`**，不能用
+  `ImGui::GetFont()` —— 前景 draw list 当前字体是 ImGui 内置的**ASCII 位图字**，
+  中文会整行渲染成 `????`（真踩过）。日服那句反过来是 sprite（`txt_taptostart.png`），
+  因为它在白底上要用白色描边字形。
+- 日服的柔光 / 版权行 / JASRAC 在国服**都不画**（底图是浅色的，白字看不见）。
+
 ## 曲末的「LIVE CLEAR!」大字（2026-10-25，`game/LiveClearBanner.*`）
 
 曲末到结算之间**不是淡黑**，原作先砸一行大字。数据全部来自日服 7.1.0（取数脚本见

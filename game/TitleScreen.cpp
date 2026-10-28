@@ -1,11 +1,14 @@
 // CppSekai - pjsk title screen. See TitleScreen.hpp for where every file came from.
 #include "game/TitleScreen.hpp"
 
+#include "game/Intro.hpp" // bodyFont(): the CJK face, see the CN branch below
+
 #include "imgui.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 
 namespace game
@@ -32,6 +35,17 @@ constexpr float kFinePrintRight = 1888.0f;
 constexpr float kFinePrintY = 1020.0f;
 constexpr float kFinePrintGap = 26.0f;
 
+// --- Chinese client layout --------------------------------------------------
+// 国服标题画面是**静态的**：一张粉蓝斜带底板 + 「初音未来 缤纷舞台！」logo
+// （tex_projectsekai_front，512x128，一张图里就带了 Project SEKAI / 中文标题 /
+// HATSUNE MIKU COLORFUL STAGE 三行）。原作没有日服那种逐字母动画，所以这里只做
+// 呼吸缩放 + 「点击开始」脉冲。背景是白底，提示必须用深色，不能沿用日服的白色 sprite。
+constexpr float kCnLogoWidth = 980.0f;
+constexpr float kCnLogoCenterY = 470.0f;
+constexpr float kCnStartY = 872.0f;
+constexpr float kCnStartSize = 46.0f;
+constexpr ImU32 kCnStartColor = IM_COL32(68, 68, 102, 255); // #444466,项目正文色
+
 // --- animation --------------------------------------------------------------
 // The official title pulses the tap prompt; the logo only breathes a little.
 constexpr float kPulsePeriod = 1.6f;
@@ -50,6 +64,9 @@ struct Canvas
     {
         return ImVec2(ox + vx * scale, oy + vy * scale);
     }
+    [[nodiscard]] float x(float vx) const { return ox + vx * scale; }
+    [[nodiscard]] float y(float vy) const { return oy + vy * scale; }
+    [[nodiscard]] float s(float v) const { return v * scale; }
 };
 
 Canvas makeCanvas(ImDrawList* dl, int windowW, int windowH, float uiScale)
@@ -97,6 +114,28 @@ void drawArtRight(ImDrawList* dl, unsigned tex, int srcW, int srcH, float destWi
         ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), color);
 }
 
+// Cover-fit a texture over the whole canvas (centre crop, never stretch).
+void drawCover(ImDrawList* dl, unsigned tex, int srcW, int srcH, const Canvas& c)
+{
+    if (tex == 0 || srcW <= 0 || srcH <= 0) {
+        return;
+    }
+    const float srcAspect = static_cast<float>(srcW) / static_cast<float>(srcH);
+    const float dstAspect = kCanvasW / kCanvasH;
+    float uw = 1.0f;
+    float uh = 1.0f;
+    if (srcAspect > dstAspect) {
+        uw = dstAspect / srcAspect;
+    } else {
+        uh = srcAspect / dstAspect;
+    }
+    const float u0 = (1.0f - uw) * 0.5f;
+    const float v0 = (1.0f - uh) * 0.5f;
+    dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(tex)),
+        c.p(0.0f, 0.0f), c.p(kCanvasW, kCanvasH), ImVec2(u0, v0), ImVec2(u0 + uw, v0 + uh),
+        IM_COL32(255, 255, 255, 255));
+}
+
 } // namespace
 
 float TitleScreen::frozenTime()
@@ -139,7 +178,6 @@ bool TitleScreen::load(platform::Renderer& renderer, const std::string& titleDir
         {"splash_sega.png", &mSega, &mSegaW, &mSegaH, 766, 256, false},
         {"splash_cp.png", &mCp, &mCpW, &mCpH, 1080, 151, false},
     };
-
     for (const Entry& entry : entries) {
         const std::string path = titleDir + "\\" + entry.file;
         std::string error;
@@ -155,7 +193,38 @@ bool TitleScreen::load(platform::Renderer& renderer, const std::string& titleDir
         *entry.w = entry.srcW;
         *entry.h = entry.srcH;
     }
-    return mLogo != 0;
+
+    // Chinese client art (optional, `assets/title/cn/`). Two files are enough to
+    // switch layouts: the pastel plate and the CN wordmark. Both coming from
+    // pjsk.moe's CN asset mirror (title_screen/default_bg + default_logo).
+    struct CnEntry
+    {
+        const char* file;
+        unsigned* id;
+        int* w;
+        int* h;
+        int srcW;
+        int srcH;
+    };
+    const CnEntry cnEntries[] = {
+        {"cn\\title_background.png", &mCnBg, &mCnBgW, &mCnBgH, 2338, 1440},
+        {"cn\\tex_projectsekai_front.png", &mCnLogo, &mCnLogoW, &mCnLogoH, 512, 128},
+    };
+    for (const CnEntry& entry : cnEntries) {
+        std::string error;
+        const unsigned id = renderer.loadUiTexture(titleDir + "\\" + entry.file, error);
+        if (id == 0) {
+            continue;
+        }
+        *entry.id = id;
+        *entry.w = entry.srcW;
+        *entry.h = entry.srcH;
+    }
+    if (mCnLogo != 0) {
+        std::printf("[title] chinese client art loaded (bg=%d)\n", mCnBg != 0 ? 1 : 0);
+        std::fflush(stdout);
+    }
+    return mLogo != 0 || mCnLogo != 0;
 }
 
 void TitleScreen::release()
@@ -164,16 +233,18 @@ void TitleScreen::release()
     // does is forget the handles - load() will look them up again.
     mLogo = mTap = mCopy = mJasrac = mSoft = 0;
     mSega = mCp = 0;
+    mCnBg = mCnLogo = 0;
     mLogoW = mLogoH = mTapW = mTapH = 0;
     mCopyW = mCopyH = mJasracW = mJasracH = 0;
     mSoftW = mSoftH = 0;
     mSegaW = mSegaH = mCpW = mCpH = 0;
+    mCnBgW = mCnBgH = mCnLogoW = mCnLogoH = 0;
 }
 
 void TitleScreen::draw(int windowW, int windowH, float uiScale, float elapsedSec,
     unsigned backdropTex, int backdropW, int backdropH, float backdropDim) const
 {
-    if (mLogo == 0) {
+    if (mLogo == 0 && mCnLogo == 0) {
         return;
     }
     const float frozen = frozenTime();
@@ -201,6 +272,31 @@ void TitleScreen::draw(int windowW, int windowH, float uiScale, float elapsedSec
     }
 
     const float t = raw - kSplashDur;
+
+    // --- Chinese client: static plate + its own wordmark --------------------
+    if (mCnLogo != 0) {
+        drawCover(dl, mCnBg, mCnBgW, mCnBgH, c);
+        const float pulseCn = 0.5f + 0.5f * std::sin(t * 6.2831853f / kPulsePeriod);
+        const float breathCn = 1.0f + kBreathAmount * std::sin(t * 6.2831853f / kBreathPeriod);
+        drawArt(dl, mCnLogo, mCnLogoW, mCnLogoH, kCnLogoWidth * breathCn, c, kCanvasW * 0.5f,
+            kCnLogoCenterY, tint(1.0f));
+        // 「点击开始」 has to be drawn with the game's own CJK face: the foreground
+        // list's current font is ImGui's built-in ASCII-only bitmap font (which
+        // renders every Chinese glyph as '?'), and the CN plate is white so the
+        // JP white "TAP TO START" sprite would be invisible on it anyway.
+        ImFont* font = bodyFont();
+        if (font != nullptr) {
+            const float size = c.s(kCnStartSize);
+            const char* hint = "点击开始";
+            const ImVec2 ts = font->CalcTextSizeA(size, FLT_MAX, 0.0f, hint);
+            const float alpha = kPulseMin + (1.0f - kPulseMin) * pulseCn;
+            const ImU32 col = (kCnStartColor & 0x00FFFFFFu)
+                | (static_cast<ImU32>(alpha * 255.0f) << 24);
+            dl->AddText(font, size,
+                ImVec2(c.x(kCanvasW * 0.5f) - ts.x * 0.5f, c.y(kCnStartY) - ts.y * 0.5f), col, hint);
+        }
+        return;
+    }
 
     // Backdrop first: the song select's own wallpaper, cover-fit so it never
     // stretches, then a flat wash so white art stays readable on a bright photo.

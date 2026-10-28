@@ -50,7 +50,12 @@ public:
     bool load(platform::Renderer& renderer, const std::string& titleDir, std::string& outError);
     void release();
 
-    [[nodiscard]] bool loaded() const { return mLogo != 0; }
+    [[nodiscard]] bool loaded() const { return mLogo != 0 || mCnLogo != 0; }
+
+    // True when the Chinese-client art was found (`<titleDir>/cn/`). The CN
+    // client's title screen is a flat pastel plate with a completely different
+    // wordmark ("初音未来 缤纷舞台！"), so it is a separate layout, not a recolor.
+    [[nodiscard]] bool cnMode() const { return mCnLogo != 0; }
 
     // Draws on ImGui's *foreground* list (same layer as the transition overlays),
     // so it covers the song select underneath. `elapsedSec` drives the pulse.
@@ -90,6 +95,13 @@ private:
     unsigned mCp = 0;
     int mCpW = 0;
     int mCpH = 0;
+    // Chinese client (assets/title/cn/): pastel plate + its own wordmark.
+    unsigned mCnBg = 0;
+    int mCnBgW = 0;
+    int mCnBgH = 0;
+    unsigned mCnLogo = 0;
+    int mCnLogoW = 0;
+    int mCnLogoH = 0;
 };
 
 } // namespace game
