@@ -33,6 +33,17 @@ namespace game
 class TitleScreen
 {
 public:
+    // Boot splash timings, straight out of TitleController:
+    //   SEGA_LOGO_DISPLAY_TIME = 1, CP_LOGO_DISPLAY_TIME = 2
+    // The two logo cards come before the title, on black, and cannot be skipped
+    // (the tap only arms once they are done).
+    static constexpr float kSegaDur = 1.0f;
+    static constexpr float kCpDur = 2.0f;
+    static constexpr float kSplashDur = kSegaDur + kCpDur;
+
+    // True once the splash is over and the title ("TAP TO START") is showing.
+    [[nodiscard]] static bool splashDone(float elapsedSec) { return elapsedSec >= kSplashDur; }
+
     // Loads the title art from `<titleDir>`. Missing files are reported through
     // outError but are not fatal: whatever loaded is still drawn, so a pruned
     // assets folder degrades instead of breaking.
@@ -72,6 +83,13 @@ private:
     unsigned mSoft = 0;
     int mSoftW = 0;
     int mSoftH = 0;
+    // Boot splash cards (globalgamemanagers: logo_sega / logo_colorfulpalette).
+    unsigned mSega = 0;
+    int mSegaW = 0;
+    int mSegaH = 0;
+    unsigned mCp = 0;
+    int mCpW = 0;
+    int mCpH = 0;
 };
 
 } // namespace game

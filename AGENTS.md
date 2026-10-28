@@ -1290,12 +1290,21 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
 
 ## 标题画面「TAP TO START」（2026-10-28，`game/TitleScreen.*`）
 
-- 素材全部来自日服 7.1.0 包，解到 `assets/title/`（**本地、git-ignore，不进包**）：
+- 素材全部来自日服 7.1.0 包，解到 `assets/title/`（**本地，目前未 `git add`**，
+  要不要入库由仓库主决定 —— 和 `assets/mmw/overlay/result/` 那些一样属于官方美术）：
   `tex_title_logo_mult_01.png` 1968×416（logo 整图）、`txt_taptostart.png` 560×48（sprite 自动裁切）、
   `tex_title_copy_01.png` 734×46（版权行）、`tex_title_jasrac.png` 698×64、`tex_title_soft.png` 268×80
   （提示后面的柔光）、`tex_title_sweep_01.png` / `tex_title_btn_01.png`（暂未用）。
-  取法：`AssetStudioModCLI -m export -t tex2d --filter-by-name "title"`（贴图）与
-  `-t sprite --filter-by-name "taptostart"`（自动裁切的 sprite）。
+  ⚠ **开屏那三张不是 sprite，是 `globalgamemanagers` 里的 Texture2D**，所以按 sprite 名单
+  （`as_out`）一辈子也搜不到：`logo_sega`(766×256) / `logo_colorfulpalette`(1080×151) /
+  `Splash Screen Unity Logo`(2048×1024) / `splash_attention`(1504×808)。
+  取法：`AssetStudioModCLI <GameData>/assets/bin/Data/globalgamemanagers -m export -t tex2d -o ...`
+  （单文件输入，866 个资产，几秒出完）。
+- **开屏时序**在 `TitleController` 里（dump.cs :322615 附近）：
+  `SEGA_LOGO_DISPLAY_TIME = 1`、`CP_LOGO_DISPLAY_TIME = 2`、`ANIMATION_TIME = 1`、
+  `MIKU_CHARACTER_ID = 21`（标题背景那个初音是 Live2D，运行时下载，包里没有）。
+  实现成 SEGA 1s → CP 2s（黑底、0.15s 交叉淡入淡出）→ 标题；**两段 logo 不能跳过**，
+  `TitleScreen::splashDone()` 之前点按无效。Unity 那张 splash 素材已搬但没画（我们不是 Unity）。
 - **原作背景不在包里**（运行时下载的角色/房间动画），所以背景按用户选择走"跟随桌面壁纸"：
   `TitleScreen::draw(..., backdropTex, w, h, dim)` 直接复用 `refreshSelectBackdrop()` 那份纹理，
   cover-fit + 压暗；没有壁纸（bgStyle≠1）时不画底，露出选曲自己的背景。

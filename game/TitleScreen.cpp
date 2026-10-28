@@ -134,6 +134,10 @@ bool TitleScreen::load(platform::Renderer& renderer, const std::string& titleDir
         {"tex_title_copy_01.png", &mCopy, &mCopyW, &mCopyH, 734, 46, false},
         {"tex_title_jasrac.png", &mJasrac, &mJasracW, &mJasracH, 698, 64, false},
         {"tex_title_soft.png", &mSoft, &mSoftW, &mSoftH, 268, 80, false},
+        // Boot splash cards. They are plain Texture2D in globalgamemanagers (not
+        // sprites), which is why a sprite-name scan never found them.
+        {"splash_sega.png", &mSega, &mSegaW, &mSegaH, 766, 256, false},
+        {"splash_cp.png", &mCp, &mCpW, &mCpH, 1080, 151, false},
     };
 
     for (const Entry& entry : entries) {
@@ -159,9 +163,11 @@ void TitleScreen::release()
     // The renderer owns the GL textures (they are dropped with it), so all this
     // does is forget the handles - load() will look them up again.
     mLogo = mTap = mCopy = mJasrac = mSoft = 0;
+    mSega = mCp = 0;
     mLogoW = mLogoH = mTapW = mTapH = 0;
     mCopyW = mCopyH = mJasracW = mJasracH = 0;
     mSoftW = mSoftH = 0;
+    mSegaW = mSegaH = mCpW = mCpH = 0;
 }
 
 void TitleScreen::draw(int windowW, int windowH, float uiScale, float elapsedSec,
@@ -171,9 +177,30 @@ void TitleScreen::draw(int windowW, int windowH, float uiScale, float elapsedSec
         return;
     }
     const float frozen = frozenTime();
-    const float t = frozen >= 0.0f ? frozen : std::max(elapsedSec, 0.0f);
+    const float raw = frozen >= 0.0f ? frozen : std::max(elapsedSec, 0.0f);
     const Canvas c = makeCanvas(ImGui::GetForegroundDrawList(), windowW, windowH, uiScale);
     ImDrawList* dl = c.dl;
+
+    // --- boot splash: SEGA (1 s) -> Colorful Palette (2 s), on black ---------
+    // The official sequence is Unity's own splash followed by these two cards;
+    // we are not Unity, so it starts at SEGA. Both cards are cross-faded against
+    // black because the pack has no animation clips for them (TitleController
+    // only exposes the two display times).
+    if (raw < kSplashDur) {
+        dl->AddRectFilled(c.p(0.0f, 0.0f), c.p(kCanvasW, kCanvasH), IM_COL32(0, 0, 0, 255));
+        const bool sega = raw < kSegaDur;
+        const float local = sega ? raw : raw - kSegaDur;
+        const float dur = sega ? kSegaDur : kCpDur;
+        const float fadeIn = std::min(1.0f, local / 0.15f);
+        const float fadeOut = std::min(1.0f, std::max(0.0f, (dur - local) / 0.15f));
+        const float alpha = std::min(fadeIn, fadeOut);
+        const float w = sega ? 320.0f : 440.0f;
+        drawArt(dl, sega ? mSega : mCp, sega ? mSegaW : mCpW, sega ? mSegaH : mCpH, w, c,
+            kCanvasW * 0.5f, kCanvasH * 0.5f, tint(alpha));
+        return;
+    }
+
+    const float t = raw - kSplashDur;
 
     // Backdrop first: the song select's own wallpaper, cover-fit so it never
     // stretches, then a flat wash so white art stays readable on a bright photo.

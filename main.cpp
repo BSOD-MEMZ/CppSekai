@@ -8586,10 +8586,15 @@ int main(int argc, char** argv)
                     titleShownAt = uiClock;
                 }
                 ImGui::GetIO().MousePos = ImVec2(-FLT_MAX, -FLT_MAX);
-                if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)
-                    || ImGui::IsKeyPressed(ImGuiKey_Enter, false)
-                    || ImGui::IsKeyPressed(ImGuiKey_Space, false)
-                    || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+                // The SEGA / Colorful Palette cards cannot be skipped, exactly
+                // like the original: the tap only arms once they are done.
+                const bool canDismiss =
+                    game::TitleScreen::splashDone(uiClock - titleShownAt);
+                if (canDismiss
+                    && (ImGui::IsMouseClicked(ImGuiMouseButton_Left)
+                        || ImGui::IsKeyPressed(ImGuiKey_Enter, false)
+                        || ImGui::IsKeyPressed(ImGuiKey_Space, false)
+                        || ImGui::IsKeyPressed(ImGuiKey_Escape, false))) {
                     titlePending = false;
                     std::printf("[title] dismissed\n");
                     std::fflush(stdout);
