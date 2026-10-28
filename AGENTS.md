@@ -1260,13 +1260,24 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
 点「继续」（或 ESC）回选曲。调试：`--result-preview`（启动即进，用参考图的样例数字）、
 `--result-at <sec>`（跑到指定秒数切）。
 
-### 结算页的 FULL COMBO / ALL PERFECT 与 LIVE FAILED（2026-10-27）
+### 结算页的 FULL COMBO / ALL PERFECT 与 LIVE FAILED / FINISH（2026-10-27，10-28 更正）
 
-- **原作没有 "LIVE FINISH" 这条文案**：sprite 表 2807 条与 metadata 字符串里都查不到 finish。
-  真正的三张是 `txt_liveclear_wh`(1220×166) / `txt_livefailed_wh`(1352×166) /
-  `txt_liveresult_wh`(1272×166)，对应 `SoloLiveScoreSummary` 的
-  `LiveResultClear = "liveclear"` / `LiveResultFailed = "livefailed"` 常量。
-- 曲末那 1.5167s 大字是 `fx_result_LiveClear`（**只有 clear 才有**），失败局不播它。
+- ⚠ **10-27 那条"原作没有 LIVE FINISH"是错的**：当时只翻了 sprite 表（那里确实没有
+  `finish` 字样的图），但**曲末特效是 prefab 不是 sprite**。`stringliteral.json` 里这一族是：
+  `fx_result_finish` / `fx_result_clear_v2` / `fx_result_failed_v2` /
+  `fx_result_full_combo_v2` / `fx_result_all_perfect_v2`。
+  **`fx_result_finish` = 血掉完、曲子结束时播的那个大字**（用户实测确认）。
+- 徽章（`badge_result_fullcombo` / `badge_result_allperfect`，358×76）**是结算页的**，
+  和曲末特效是两回事：曲末另有 `fx_result_full_combo_v2` / `fx_result_all_perfect_v2`。
+- 结算页的 `txt_liveclear_wh`(1220×166) / `txt_livefailed_wh`(1352×166) /
+  `txt_liveresult_wh`(1272×166) 属于 summary 页（`LiveResultClear="liveclear"` /
+  `LiveResultFailed="livefailed"`）。
+- 我们现在的状态：曲末只有 `LiveClearBanner`（= clear 那支）；**finish / failed / FC / AP
+  四支曲末特效都还没做**。结算页的徽章 + LIVE FAILED 已按 `ResultData::failed/fullCombo/
+  allPerfect` 接上（见下）。
+- 待办：五支 `fx_result_*` 的 prefab 内容（贴图 + 时间轴）要 AssetRipper 读 YAML 才能照抄；
+  4GB 内存的机器上跑 AssetRipper 会 OOM，需要分次/换机器。
+
 - 结算分数页带两张徽章 `badge_result_fullcombo` / `badge_result_allperfect`（358×76，
   ResultAtlas），由 `clip_result_score_{fullcombo,allperfect}_v2_01` 播 **2s**：
   **只动 `anchoredPosition.x` 4.2→44.2 与 `Color.a` 0→1**，没有 scale、没有弹跳。
@@ -1276,6 +1287,26 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
   `Result.cpp` 在 COMBO 右边的空带画徽章（滑动 40px + 淡入，2s），失败局在同一位置画
   `LIVE FAILED`（两者互斥）。⚠ 徽章锚点（`kBadgeCenterX/Y`）是**临时值** —— prefab 的
   RectTransform 这次没量到，等有人截一张官方结算图再校准。
+
+## 标题画面「TAP TO START」（2026-10-28，`game/TitleScreen.*`）
+
+- 素材全部来自日服 7.1.0 包，解到 `assets/title/`（**本地、git-ignore，不进包**）：
+  `tex_title_logo_mult_01.png` 1968×416（logo 整图）、`txt_taptostart.png` 560×48（sprite 自动裁切）、
+  `tex_title_copy_01.png` 734×46（版权行）、`tex_title_jasrac.png` 698×64、`tex_title_soft.png` 268×80
+  （提示后面的柔光）、`tex_title_sweep_01.png` / `tex_title_btn_01.png`（暂未用）。
+  取法：`AssetStudioModCLI -m export -t tex2d --filter-by-name "title"`（贴图）与
+  `-t sprite --filter-by-name "taptostart"`（自动裁切的 sprite）。
+- **原作背景不在包里**（运行时下载的角色/房间动画），所以背景按用户选择走"跟随桌面壁纸"：
+  `TitleScreen::draw(..., backdropTex, w, h, dim)` 直接复用 `refreshSelectBackdrop()` 那份纹理，
+  cover-fit + 压暗；没有壁纸（bgStyle≠1）时不画底，露出选曲自己的背景。
+- 布局是 1920×1080 虚拟画布（和 HUD/结算同一套 `Canvas`），每个元素只写**目标宽度**，
+  高度按源图比例算 —— 改一个数不会把美术拉变形。常量在 `TitleScreen.cpp` 顶部。
+- 交互：`titlePending` 期间把 `io.MousePos` 挪到屏幕外（选曲列表是读原始 `io.MousePos`
+  做命中测试的，**这是唯一的输入闸门**），点一下 / Enter / Space / Esc 关闭；
+  `escapePressed` 那条"选曲按 ESC 退出游戏"的分支加了 `!titlePending`。
+- 开关：`UserSettings::showTitleScreen`（设置 → 画面，「启动时显示标题画面」，默认开，
+  下次启动生效）。`--screenshot` 无头跑**一律跳过**，否则现有选曲截图自检全会拍到标题；
+  要无头截它：`CPSEKAI_TITLE=1 CPSEKAI_TITLE_T=<秒> --screenshot ...`。
 
 ## 曲末的「LIVE CLEAR!」大字（2026-10-25，`game/LiveClearBanner.*`）
 

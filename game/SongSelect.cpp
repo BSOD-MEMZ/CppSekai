@@ -1101,6 +1101,7 @@ void loadUserData(const std::string& path, UserSettings& settings,
             // what an existing install should see after this version lands.
             settings.eulaAccepted = s.value("eulaAccepted", settings.eulaAccepted);
             settings.tutorialDone = s.value("tutorialDone", settings.tutorialDone);
+            settings.showTitleScreen = s.value("showTitleScreen", settings.showTitleScreen);
         }
         if (wrapped && doc.contains("account") && doc["account"].is_object()) {
             const nlohmann::json& a = doc["account"];
@@ -1243,6 +1244,7 @@ void saveUserData(const std::string& path, const UserSettings& settings,
         {"liveBonus", settings.liveBonus},
         {"eulaAccepted", settings.eulaAccepted},
         {"tutorialDone", settings.tutorialDone},
+        {"showTitleScreen", settings.showTitleScreen},
     };
     doc["scores"] = scoreDoc;
     doc["account"] = {

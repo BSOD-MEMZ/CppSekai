@@ -319,6 +319,10 @@ struct UserSettings
     // 跳过 / 中途关掉也算看过 —— 反复弹一个玩家明确关掉的窗口是最烦人的事。
     // 和 eulaAccepted 一样按 profile 存，第二个玩家还会被教一次。
     bool tutorialDone = false;
+    // 启动时先出 pjsk 那张「TAP TO START」标题画面（game/TitleScreen.*），
+    // 点一下 / 回车才进选曲。默认开；不想每次多点一次的人可以关掉。
+    // `--screenshot` 无头跑一律跳过它（否则现有的选曲截图自检全会拍到标题）。
+    bool showTitleScreen = true;
 };
 
 // Path of userdata.json: <exeDir>\.. \userdata.json when a charts\ folder sits
