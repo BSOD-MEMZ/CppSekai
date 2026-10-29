@@ -1288,18 +1288,19 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
   `LIVE FAILED`（两者互斥）。⚠ 徽章锚点（`kBadgeCenterX/Y`）是**临时值** —— prefab 的
   RectTransform 这次没量到，等有人截一张官方结算图再校准。
 
-## 标题画面「TAP TO START」（2026-10-28 做过，**2026-10-29 按要求整块删除**）
+## 标题画面「TAP TO START」（2026-10-28 做过，**2026-10-29 按要求整块删除，代码和素材都不在了**）
 
-> `game/TitleScreen.*`、开屏 SEGA / Colorful Palette 卡、`UserSettings::showTitleScreen`
-> 与 main.cpp 里的接线**全部已删**（用户要求「彻底删掉」）。`assets/title/` 里的图还在硬盘上
-> （本地未入库），要重做直接照下面的取法再拉，代码得重写。
+> **现状：功能与素材全部移除。** `game/TitleScreen.*`、开屏 SEGA / Colorful Palette 卡、
+> `UserSettings::showTitleScreen`、main.cpp 里的全部接线，以及 `assets/title/`（20 个文件）
+> 都已删除；`grep -i "TitleScreen|titlePending|showTitleScreen|assets/title"` 现在零命中。
+> 启动直接进选曲。下面这段只是**留档**：万一日后想做，素材取法和实测数值都还成立，
+> 但代码得重写。
 
-- 素材全部来自日服 7.1.0 包，解到 `assets/title/`（**本地，目前未 `git add`**，
-  要不要入库由仓库主决定 —— 和 `assets/mmw/overlay/result/` 那些一样属于官方美术）：
-  `tex_title_logo_mult_01.png` 1968×416（logo 整图）、`txt_taptostart.png` 560×48（sprite 自动裁切）、
-  `tex_title_copy_01.png` 734×46（版权行）、`tex_title_jasrac.png` 698×64、`tex_title_soft.png` 268×80
-  （提示后面的柔光）、`tex_title_sweep_01.png` / `tex_title_btn_01.png`（暂未用）。
-  ⚠ **开屏那三张不是 sprite，是 `globalgamemanagers` 里的 Texture2D**，所以按 sprite 名单
+- 素材来自日服 7.1.0 包（sprite 用 AssetStudioModCLI 按名字 dump）：
+  `tex_title_logo_mult_01.png` 1968×416（logo 整图）、`txt_taptostart.png` 560×48、
+  `tex_title_copy_01.png` 734×46（版权行）、`tex_title_jasrac.png` 698×64、
+  `tex_title_soft.png` 268×80（提示后面的柔光）。
+  ⚠ **开屏那几张不是 sprite，是 `globalgamemanagers` 里的 Texture2D**，按 sprite 名单
   （`as_out`）一辈子也搜不到：`logo_sega`(766×256) / `logo_colorfulpalette`(1080×151) /
   `Splash Screen Unity Logo`(2048×1024) / `splash_attention`(1504×808)。
   取法：`AssetStudioModCLI <GameData>/assets/bin/Data/globalgamemanagers -m export -t tex2d -o ...`
@@ -1307,43 +1308,23 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
 - **开屏时序**在 `TitleController` 里（dump.cs :322615 附近）：
   `SEGA_LOGO_DISPLAY_TIME = 1`、`CP_LOGO_DISPLAY_TIME = 2`、`ANIMATION_TIME = 1`、
   `MIKU_CHARACTER_ID = 21`（标题背景那个初音是 Live2D，运行时下载，包里没有）。
-  实现成 SEGA 1s → CP 2s（黑底、0.15s 交叉淡入淡出）→ 标题；**两段 logo 不能跳过**，
-  `TitleScreen::splashDone()` 之前点按无效。Unity 那张 splash 素材已搬但没画（我们不是 Unity）。
-- **原作背景不在包里**（运行时下载的角色/房间动画），所以背景按用户选择走"跟随桌面壁纸"：
-  `TitleScreen::draw(..., backdropTex, w, h, dim)` 直接复用 `refreshSelectBackdrop()` 那份纹理，
-  cover-fit + 压暗；没有壁纸（bgStyle≠1）时不画底，露出选曲自己的背景。
-- 布局是 1920×1080 虚拟画布（和 HUD/结算同一套 `Canvas`），每个元素只写**目标宽度**，
-  高度按源图比例算 —— 改一个数不会把美术拉变形。常量在 `TitleScreen.cpp` 顶部。
-- 交互：`titlePending` 期间把 `io.MousePos` 挪到屏幕外（选曲列表是读原始 `io.MousePos`
-  做命中测试的，**这是唯一的输入闸门**），点一下 / Enter / Space / Esc 关闭；
-  `escapePressed` 那条"选曲按 ESC 退出游戏"的分支加了 `!titlePending`。
-- 开关：`UserSettings::showTitleScreen`（设置 → 画面，「启动时显示标题画面」，默认开，
-  下次启动生效）。`--screenshot` 无头跑**一律跳过**，否则现有选曲截图自检全会拍到标题；
-  要无头截它：`CPSEKAI_TITLE=1 CPSEKAI_TITLE_T=<秒> --screenshot ...`。
-
-### 国服标题画面（2026-10-28，`cn\` 子目录 + `cnMode()`）
-
-国服**开屏是几张静态图**（没有 Live2D），所以直接铺图：
-
-- 素材来自 [资产浏览器 | Moesekai](https://pjsk.moe/zh-cn/asset-viewer/?server=cn) 的 CDN，
-  放在 `assets/title/cn/`：`title_background.png`(2338×1440，粉青斜带的整张底图) 和
-  `tex_projectsekai_front.png`(512×128，「Project SEKAI / 初音未来 缤纷舞台！」logo 整图)。
-  **取法**（同一个 API 也能拿别的国服资源，国服的包我们无法逆向，只能从这儿取）：
+- **原作背景不在包里**（运行时下载的角色/房间动画），当年只能"跟随桌面壁纸"——
+  复用 `refreshSelectBackdrop()` 那份纹理，cover-fit + 压暗。
+- 布局用 1920×1080 虚拟画布（和 HUD/结算同一套 `Canvas`），每个元素只写**目标宽度**、
+  高度按源图比例算 —— 改一个数不会把美术拉变形。
+- 交互的关键点只有一个：`titlePending` 期间把 `io.MousePos` 挪到屏幕外。
+  选曲列表是读**原始 `io.MousePos`** 做命中测试的，这是唯一的输入闸门；
+  另外 `escapePressed` 那条「选曲按 ESC 退出游戏」的分支得加 `!titlePending`。
+- 「点击开始」这类**中文文字**必须用 `game::bodyFont()`，不能用 `ImGui::GetFont()`
+  —— 前景 draw list 当时的字体是 ImGui 内置**ASCII 位图字**，中文会整行变成 `????`（真踩过）。
+- 国服开屏是几张静态图（没有 Live2D）。**国服的包无法逆向**，素材只能从
+  [资产浏览器 | Moesekai](https://pjsk.moe/zh-cn/asset-viewer/?server=cn) 的 CDN 取：
   `GET https://storage.pjsk.moe/api/assets/bundles?server=cn&prefix=title_screen/<dir>&limit=200`
   给出 bundle 的完整 `path`，再
   `GET /api/assets/bundle-files?server=cn&path=<bundlePath>&limit=200` 拿到 `url`，
-  资源本体在 `https://storage.pjsk.moe<url>`。`curl.exe` 打这个站要 `--ssl-no-revoke`。
-- **`cnMode()` = 那两张图加载成功**（`mCnLogo != 0`），加载失败自动退回日服那套，所以
-  只放日服素材 / 只放国服素材都能跑。`load()` 会打一行 `[title] chinese client art loaded`。
-- 布局常量（`TitleScreen.cpp` 顶部）：`kCnLogoWidth=980` / `kCnLogoCenterY=470`，
-  底图 **cover-fit 铺满**（原图 2338×1440 比 16:9 高，横向正好、纵向裁掉一点），
-  logo 宽度驱动、高度按源图比例算。
-- 「点击开始」是**文字不是素材**（原作那句在 prefab 里就是 Text）：中心 `kCnStartY=872`、
-  字号 `kCnStartSize=46`、色 `#444466`。⚠ **必须用 `game::bodyFont()`**，不能用
-  `ImGui::GetFont()` —— 前景 draw list 当前字体是 ImGui 内置的**ASCII 位图字**，
-  中文会整行渲染成 `????`（真踩过）。日服那句反过来是 sprite（`txt_taptostart.png`），
-  因为它在白底上要用白色描边字形。
-- 日服的柔光 / 版权行 / JASRAC 在国服**都不画**（底图是浅色的，白字看不见）。
+  本体在 `https://storage.pjsk.moe<url>`。`curl.exe` 打这个站要 `--ssl-no-revoke`。
+  当年用的两张：`title_background.png`(2338×1440 粉青斜带底图)、
+  `tex_projectsekai_front.png`(512×128 logo)，底图 cover-fit 铺满。
 
 ## 教学对话的文本描边（2026-10-29，`game/StoryUi.cpp`）
 
@@ -3281,19 +3262,30 @@ ea\work\jp\jp_fx_group.py`）。
 ### 代码里的可调旋钮
 
 - **`kRingScale = 0.45` / `kShardScale = kRingScale`**（`TapEffect.cpp` 顶部）：非实测的
-  全局缩放。都设 1.0 = 字面值。**2026-10-29 按手感再收窄**：实测跨度 15.8~235.5 铺满后两端
-  都太极端（这次一小片、下次一大块），tap hero 改成 `60..140` + `sizeBias 1.25`，
-  hold hero 改成 `70..125` + `1.2`；有效直径约 27~63px，均值 ~43px 不变。
-  想更接近原版就把 band 往两端放，但**别再把 sizeBias 去掉**（uniform 下均值会翻倍）。**2026-10-27 改过**：三角原来是单独的 `0.60`、band 又被压成
-  `54~90`，于是每次点击的三角都差不多大；原作是 **15 倍跨度**（15.8~235.5），观感上
-  "有时一小片、有时一大块"。现在两者同一个系数（shard:ring 比例 = 实测），band 回到实测值，
-  再靠 `TriSpec::sizeBias`（把单位随机取幂：tap hero 1.9 / hold hero 1.4）把分布压向小值 ——
-  平均值和以前接近，但**偶尔会甩出一块比环还宽的三角**。
+  全局缩放，1.0 = 字面值。三角的绝对 world size 本来就不可求证（四个三角节点都挂在
+  `particle1` 下，而 `particle1` 自己也 scale 157，缩放会连乘），能信的只有**互相之间的比例**。
+- **`TriSpec` 的 `sizeMin/sizeMax`**：每颗三角的直径（乘 `kShardScale` 得画布 px）。
+  **2026-10-29 收敛了两轮**（用户："大的太大、小的小到看不见"）：
+
+  | system | 实测 | 现在 | 画布 px |
+  |---|---|---|---|
+  | tap hero（particle3） | 15.8~235.5 | 80~130，bias 1.15 | 36~58 |
+  | tap particle2 | 18.2~20.5 | 30~38 | 13~17 |
+  | tap particle2_1 | 3.0~14.1 | 24~34 | 11~15 |
+  | tap particle1（×2 颗） | 1.6~7.9 | 20~30 | 9~14 |
+  | hold hero | 42~147 | 85~120，bias 1.10 | 38~54 |
+  | hold particle2 | 10.5~21 | 30~40 | 14~18 |
+  | hold particle1 | 2.1~10.5 | 24~34 | 11~15 |
+
+  **次级那几档是被抬上来的**：按字面值乘 0.45 之后只有 0.7~3.6 px，屏幕上就是看不见的
+  灰点 —— 用户报的"小到看不到"其实是它们，不是 hero。抬到 ~10 px 下限之后，一次点击读起来
+  是"一圈 + 几片大小相近的玻璃"，系统之间的先后顺序仍然是实测那个。
+- **`TriSpec::sizeBias`**：把单位的随机取幂再映射到 band。1.0 = uniform（Unity 原样）；
+  >1 把分布压向 `sizeMin`。**别删**：hero band 一旦放回实测跨度，uniform 的平均值会翻到
+  ~106 px，每一下都糊一大块。
 - **`kShardTilt = 1.15`**：三角的 X/Y 倾角上限（弧度）。0 = 纯平面，3.14159 = 实测的
-  ±2π。调大全飘成细线，调小失去 3D 感。
-- **`particle3` 的 `sizeMin/sizeMax`**：实测 15.8~235.5（uniform，一半的点击都比环大）。
-  虽然现在用的是实测 band，但**别把 sizeBias 去掉**：uniform 下平均值会翻到 ~106px，
-  每一下都糊一大块，和"绝大多数是小三角"的实际手感不符。
+  ±2π。调大全飘成细线，调小失去 3D 感。侧对时看着像一条细线是**正常的**（真 mesh 有厚度，
+  平 quad 没有），别为了这个把 tilt 拧小。
 - `kRadialGain`：0 = 粒子不动（字面读法），1.0 = 按 startSpeed 向外飘。
 
 ### 性能（2026-10-25 实测，别凭感觉优化）

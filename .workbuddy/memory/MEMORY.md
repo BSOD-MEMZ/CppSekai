@@ -84,6 +84,10 @@
   **「repo 404」不能归因**，别拿别人 repo 的状态当决策依据。
 
 ## 最近工作
+- 10-29：**删除标题画面**（TitleScreen.* / 开屏卡 / showTitleScreen / assets/title 20 个文件
+  全删，取法留档在 AGENTS.md）；教学对话描边 16步4px -> 8步<=2.5px 且原点 floor
+  （描边 -40%、白芯不变、不再抖）；点击特效三角两轮收敛 —— hero 80..130/bias1.15
+  （hold 85..120/bias1.10），**次级系统从 0.7~3.6px 抬到 9~18px**（"小到看不见"的是它们）。
 - 10-27：**日服 7.1.0 重新解包完成**，`D:\Tools\rea\work\jp\` 恢复可用：
   metadata key anchor `0x1F23B7C`（v31）→ `dump.cs` 81.1MB / DummyDll 159 个；
   Il2CppDumper 6.7.46 + AssetStudioModCLI 0.19.0（Sprite 2807 / 194422 资产）+

@@ -140,31 +140,41 @@ struct TriSpec
 // (`scalar`) applies to BOTH curves; `minScalar` only matters for Two Constants.
 // Measured: particle3 15.8..235.5 (a 15x uniform spread!), particle2 18.2..20.5,
 // particle2_1 3.0..14.1, particle1 1.6..7.9.
+//
+// 2026-10-29 (second pass): the measured bands were tuned by eye twice, and the
+// user reported shards that are simply *not visible*. The reason is the global
+// kShardScale: 1.6..7.9 world units become 0.7..3.6 canvas px, i.e. sub-pixel
+// dust. Absolute world sizes are not verifiable anyway (the four triangle nodes
+// sit under particle1, which itself scales by 157, so the products compound -
+// see the note at the top of the file). What *is* trustworthy is the ratio
+// between systems, so the bands below keep their relative order while every
+// one of them clears a ~10 px floor, and the hero band is narrowed to 1.6x.
 constexpr int kTapSpecCount = 4;
 constexpr TriSpec kTapSpecs[kTapSpecCount] = {
-    // particle3, the "hero" shard. 2026-10-29: the user tuned this by eye - the
-    // measured 15.8..235.5 band put both extremes on screen too often (one tap a
-    // 7 px speck, the next a 106 px slab). The band is now a narrower 60..140
-    // with a gentler bias, which keeps the same average (~43 px effective) but
-    // never reads as "either tiny or huge".
-    {60.0f, 140.0f, 0.30f, 0.70f, 157.0f, 35.0f, 100.0f, 1, &kGradBig, 1.25f},
-    // particle2: measured 18.2..20.5, essentially one size.
-    {18.2f, 20.5f, 0.10f, 0.70f, 157.0f, 35.0f, 100.0f, 1, &kGradMid, 1.0f},
-    // particle2_1: measured 3.0..14.1.
-    {3.0f, 14.1f, 0.20f, 0.70f, 157.0f, 35.0f, 100.0f, 1, &kGradMid, 1.0f},
-    // particle1: Two Constants 1.6..7.9, emits at the tap point (shape module
-    // off). Original life is 30..35s; clamped to 2s, a 35s speck is not feedback.
-    {1.6f, 7.9f, 0.60f, 2.00f, 0.0f, 1.0f, 20.0f, 2, nullptr, 1.0f},
+    // particle3, the "hero" shard (measured 15.8..235.5). Deliberately narrow:
+    // 80..130 x kShardScale = 36..58 canvas px, so a tap always throws one
+    // clearly readable slab and never a 7 px speck or a 106 px wall.
+    {80.0f, 130.0f, 0.30f, 0.70f, 157.0f, 35.0f, 100.0f, 1, &kGradBig, 1.15f},
+    // particle2: measured 18.2..20.5 (essentially one size) -> 13..17 px.
+    {30.0f, 38.0f, 0.10f, 0.70f, 157.0f, 35.0f, 100.0f, 1, &kGradMid, 1.0f},
+    // particle2_1: measured 3.0..14.1 -> 11..15 px.
+    {24.0f, 34.0f, 0.20f, 0.70f, 157.0f, 35.0f, 100.0f, 1, &kGradMid, 1.0f},
+    // particle1: Two Constants 1.6..7.9 -> 9..14 px. Emits at the tap point
+    // (shape module off). Original life is 30..35s; clamped to 2s, a 35s speck
+    // is not feedback.
+    {20.0f, 30.0f, 0.60f, 2.00f, 0.0f, 1.0f, 20.0f, 2, nullptr, 1.0f},
 };
 
 // Follow / fx_Tap_loop: the same three shard systems at 6/s, but small, slow and
 // long-lived (transform scale 210 instead of 157).
 constexpr int kHoldSpecCount = 3;
 constexpr TriSpec kHoldSpecs[kHoldSpecCount] = {
-    // measured 42..147 - same treatment as the tap hero shard (narrowed by eye).
-    {70.0f, 125.0f, 0.30f, 1.50f, 210.0f, 0.0f, 0.45f, 1, &kGradBig, 1.2f},
-    {10.5f, 21.0f, 0.30f, 1.50f, 210.0f, 0.0f, 0.45f, 1, &kGradMid, 1.0f},
-    {2.1f, 10.5f, 0.60f, 2.00f, 210.0f, 5.0f, 40.0f, 1, nullptr, 1.0f},
+    // measured 42..147 - narrowed to 85..120 (38..54 px) for the same reason.
+    {85.0f, 120.0f, 0.30f, 1.50f, 210.0f, 0.0f, 0.45f, 1, &kGradBig, 1.10f},
+    // measured 10.5..21 -> 14..18 px.
+    {30.0f, 40.0f, 0.30f, 1.50f, 210.0f, 0.0f, 0.45f, 1, &kGradMid, 1.0f},
+    // measured 2.1..10.5 -> 11..15 px.
+    {24.0f, 34.0f, 0.60f, 2.00f, 210.0f, 5.0f, 40.0f, 1, nullptr, 1.0f},
 };
 
 constexpr float kTwoPi = 6.28318530717959f;
