@@ -25,7 +25,6 @@
 #include "game/PartyScreen.hpp"
 #include "game/Result.hpp"
 #include "game/LiveClearBanner.hpp"
-#include "game/TitleScreen.hpp"
 #include "game/SongSelect.hpp"
 #include "game/Story.hpp"
 #include "game/StageBackground.hpp"
@@ -2554,25 +2553,6 @@ int main(int argc, char** argv)
     }
     bootLog("tap effect");
 
-    // pjsk's title screen ("TAP TO START", game/TitleScreen.*). Art lives in
-    // assets/title/ (extracted from the 7.1.0 pack, local only). A missing
-    // folder only disables the screen.
-    game::TitleScreen titleScreen;
-    if (!titleScreen.load(renderer, baseDir + "assets\\title", error)) {
-        std::fprintf(stderr, "warning: title screen art missing (%s)\n", error.c_str());
-        error.clear();
-    }
-    bootLog("title screen");
-    // Headless runs always skip it: every existing select-screen screenshot
-    // check assumes the list is already up when the frame is captured.
-    // CPSEKAI_TITLE=1 forces it back on headless (paired with CPSEKAI_TITLE_T to
-    // freeze the pulse), which is the only way to screenshot it from a script.
-    const bool forceTitle = std::getenv("CPSEKAI_TITLE") != nullptr;
-    bool titlePending = titleScreen.loaded()
-        && (forceTitle || (userSettings.showTitleScreen && !headlessRun));
-    bool titleShown = false;
-    float titleShownAt = 0.0f;
-
     // Ring behind the resume-countdown numbers (same tap_ring.png). Failure
     // is not fatal - the numbers draw without the halo.
     ImTextureID countdownRing = 0;
@@ -4767,21 +4747,6 @@ int main(int argc, char** argv)
                             persistUserData();
                         }
                     });
-                // Title screen ("TAP TO START") in front of the song list. Like
-                // the splash style above it is read at startup only, so the
-                // checkbox says so instead of pretending to apply live.
-                contentLeft();
-                twoCols(
-                    [&](float w) {
-                        colSet(0);
-                        bool titleBox = userSettings.showTitleScreen;
-                        ui::checkBox("启动时显示标题画面", &titleBox, w);
-                        if (titleBox != userSettings.showTitleScreen) {
-                            userSettings.showTitleScreen = titleBox;
-                            persistUserData();
-                        }
-                    },
-                    [&](float w) { colSet(1); });
                 contentLeft();
                 ui::sectionLabel("背景", interior);
                 twoCols(
@@ -8106,7 +8071,7 @@ int main(int argc, char** argv)
         }
 #endif
 
-        if (escapePressed && !game::guessDialogOpen() && !story::blocksInput() && !titlePending) {
+        if (escapePressed && !game::guessDialogOpen() && !story::blocksInput()) {
             countdownActive = false; // leaving / continuing cancels any countdown
             if (keymapCardAlive) {
                 // 「按键映射」卡片（2026-10-11）：ESC = 关掉它。改键位等待中
@@ -8573,33 +8538,6 @@ int main(int argc, char** argv)
         }
 
         if (state == AppState::Select) {
-            // ----------------------------------------------------------
-            // pjsk's title screen comes before the song list. The rest of this
-            // branch still runs (it draws the backdrop the title sits on), but
-            // the list must not see the pointer: it hit-tests raw io.MousePos,
-            // so parking the pointer off-screen *is* the input gate. A press or
-            // Enter/Space/Esc dismisses the title instead of reaching anything.
-            // ----------------------------------------------------------
-            if (titlePending) {
-                if (!titleShown) {
-                    titleShown = true;
-                    titleShownAt = uiClock;
-                }
-                ImGui::GetIO().MousePos = ImVec2(-FLT_MAX, -FLT_MAX);
-                // The SEGA / Colorful Palette cards cannot be skipped, exactly
-                // like the original: the tap only arms once they are done.
-                const bool canDismiss =
-                    game::TitleScreen::splashDone(uiClock - titleShownAt);
-                if (canDismiss
-                    && (ImGui::IsMouseClicked(ImGuiMouseButton_Left)
-                        || ImGui::IsKeyPressed(ImGuiKey_Enter, false)
-                        || ImGui::IsKeyPressed(ImGuiKey_Space, false)
-                        || ImGui::IsKeyPressed(ImGuiKey_Escape, false))) {
-                    titlePending = false;
-                    std::printf("[title] dismissed\n");
-                    std::fflush(stdout);
-                }
-            }
             // ----------------------------------------------------------
             // Song select
             // ----------------------------------------------------------
@@ -10432,14 +10370,7 @@ int main(int argc, char** argv)
             ImDrawList* fg = ImGui::GetForegroundDrawList();
             const float w = static_cast<float>(windowW);
             const float h = static_cast<float>(windowH);
-            // Title screen: drawn last of all so nothing of the song select
-            // leaks through. It owns no input (see the Select branch), it is
-            // only art over the wallpaper.
-            if (state == AppState::Select && titlePending && titleScreen.loaded()) {
-                titleScreen.draw(windowW, windowH, userSettings.uiScale,
-                    uiClock - titleShownAt, backdropTex, backdropW, backdropH,
-                    userSettings.bgDim * 0.6f);
-            }
+
             // Song end: the result screen takes the black over and lifts it.
             if (state == AppState::Result) {
                 songEndBlackout = std::max(0.0f, songEndBlackout - frameDelta / 0.6f);

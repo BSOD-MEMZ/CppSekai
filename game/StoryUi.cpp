@@ -11,6 +11,7 @@
 #include "../third_party/mmw_preview/vendor/stb_image.h"
 
 #include <algorithm>
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -121,18 +122,31 @@ namespace
 
     // Pixi's `strokeThickness: 8` is a stroke centred on the glyph outline, so
     // it reaches 4px past the glyph. ImDrawList has no stroke, so the same ring
-    // is approximated with 16 offset copies. `radius` is that 4px.
+    // is approximated with offset copies.
+    //
+    // 2026-10-29: it used to be 16 copies at the full measured radius. On CJK
+    // that eats the fill - a 44px glyph's horizontal strokes are 2-3px wide, and
+    // a 4px dilation covers them completely, so the text read as a navy blob
+    // (measured: the fill's white core was down to ~1.7k pixels and invisible at
+    // a glance). Three changes:
+    //   * 8 directions instead of 16 - the union is the same shape,
+    //   * radius clamped to 2.5px - keeps the outline visible at 720p without
+    //     swallowing the glyph,
+    //   * the origin snapped to whole pixels - fractional text positions make
+    //     the stroke copies shimmer frame to frame ("闪几下").
     void outlineText(ImDrawList* dl, ImFont* font, float size, const ImVec2& pos, ImU32 fill,
         const char* begin, const char* end, float radius, ImU32 stroke)
     {
-        constexpr int kSteps = 16;
+        constexpr int kSteps = 8;
+        const float r = std::clamp(radius, 1.0f, 2.5f);
+        const ImVec2 base(std::floor(pos.x), std::floor(pos.y));
         for (int i = 0; i < kSteps; ++i)
         {
             const float a = 6.28318530718f * static_cast<float>(i) / static_cast<float>(kSteps);
-            dl->AddText(font, size, ImVec2(pos.x + std::cos(a) * radius, pos.y + std::sin(a) * radius),
-                stroke, begin, end);
+            dl->AddText(font, size,
+                ImVec2(base.x + std::cos(a) * r, base.y + std::sin(a) * r), stroke, begin, end);
         }
-        dl->AddText(font, size, pos, fill, begin, end);
+        dl->AddText(font, size, base, fill, begin, end);
     }
 
     void outlineText(ImDrawList* dl, ImFont* font, float size, const ImVec2& pos, ImU32 fill,

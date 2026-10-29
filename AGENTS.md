@@ -1288,7 +1288,11 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
   `LIVE FAILED`（两者互斥）。⚠ 徽章锚点（`kBadgeCenterX/Y`）是**临时值** —— prefab 的
   RectTransform 这次没量到，等有人截一张官方结算图再校准。
 
-## 标题画面「TAP TO START」（2026-10-28，`game/TitleScreen.*`）
+## 标题画面「TAP TO START」（2026-10-28 做过，**2026-10-29 按要求整块删除**）
+
+> `game/TitleScreen.*`、开屏 SEGA / Colorful Palette 卡、`UserSettings::showTitleScreen`
+> 与 main.cpp 里的接线**全部已删**（用户要求「彻底删掉」）。`assets/title/` 里的图还在硬盘上
+> （本地未入库），要重做直接照下面的取法再拉，代码得重写。
 
 - 素材全部来自日服 7.1.0 包，解到 `assets/title/`（**本地，目前未 `git add`**，
   要不要入库由仓库主决定 —— 和 `assets/mmw/overlay/result/` 那些一样属于官方美术）：
@@ -1340,6 +1344,15 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
   中文会整行渲染成 `????`（真踩过）。日服那句反过来是 sprite（`txt_taptostart.png`），
   因为它在白底上要用白色描边字形。
 - 日服的柔光 / 版权行 / JASRAC 在国服**都不画**（底图是浅色的，白字看不见）。
+
+## 教学对话的文本描边（2026-10-29，`game/StoryUi.cpp`）
+
+`outlineText()` 用「多份偏移副本」模拟 Pixi 的 8px 描边。原来 16 份 × 实测半径 4px：
+CJK 44px 字的横画只有 2~3px，4px 膨胀直接把白色填充盖掉，整行看起来是**藏青色糊块**
+（实测白芯只剩 1674 像素），而且小数像素位置会让描边逐帧抖动（用户说的「闪几下」）。
+现在：**8 个方向 + 半径 clamp 到 1..2.5px + 原点 floor 到整像素**。
+实测描边像素 5839 → 3478（−40%），白芯数量不变，字看起来才是白字蓝边。
+判断「字色不对」别靠猜：`pngcrop.py` 放大后统计 `(93,93,121)` 与近白像素数即可。
 
 ## 曲末的「LIVE CLEAR!」大字（2026-10-25，`game/LiveClearBanner.*`）
 
@@ -3268,7 +3281,10 @@ ea\work\jp\jp_fx_group.py`）。
 ### 代码里的可调旋钮
 
 - **`kRingScale = 0.45` / `kShardScale = kRingScale`**（`TapEffect.cpp` 顶部）：非实测的
-  全局缩放。都设 1.0 = 字面值。**2026-10-27 改过**：三角原来是单独的 `0.60`、band 又被压成
+  全局缩放。都设 1.0 = 字面值。**2026-10-29 按手感再收窄**：实测跨度 15.8~235.5 铺满后两端
+  都太极端（这次一小片、下次一大块），tap hero 改成 `60..140` + `sizeBias 1.25`，
+  hold hero 改成 `70..125` + `1.2`；有效直径约 27~63px，均值 ~43px 不变。
+  想更接近原版就把 band 往两端放，但**别再把 sizeBias 去掉**（uniform 下均值会翻倍）。**2026-10-27 改过**：三角原来是单独的 `0.60`、band 又被压成
   `54~90`，于是每次点击的三角都差不多大；原作是 **15 倍跨度**（15.8~235.5），观感上
   "有时一小片、有时一大块"。现在两者同一个系数（shard:ring 比例 = 实测），band 回到实测值，
   再靠 `TriSpec::sizeBias`（把单位随机取幂：tap hero 1.9 / hold hero 1.4）把分布压向小值 ——

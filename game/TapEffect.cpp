@@ -142,13 +142,12 @@ struct TriSpec
 // particle2_1 3.0..14.1, particle1 1.6..7.9.
 constexpr int kTapSpecCount = 4;
 constexpr TriSpec kTapSpecs[kTapSpecCount] = {
-    // particle3, the "hero" shard: the measured 15.8..235.5 band, all of it.
-    // kShardScale is the ring's factor now, so this is the original's own
-    // shard:ring ratio (0.10x .. 1.47x the ripple diameter). The 1.9 bias keeps
-    // the average near where the old trimmed band put it while restoring the
-    // variance - a real tap now sometimes throws a slab wider than the ring,
-    // which is what the original mesh does.
-    {15.8f, 235.5f, 0.30f, 0.70f, 157.0f, 35.0f, 100.0f, 1, &kGradBig, 1.9f},
+    // particle3, the "hero" shard. 2026-10-29: the user tuned this by eye - the
+    // measured 15.8..235.5 band put both extremes on screen too often (one tap a
+    // 7 px speck, the next a 106 px slab). The band is now a narrower 60..140
+    // with a gentler bias, which keeps the same average (~43 px effective) but
+    // never reads as "either tiny or huge".
+    {60.0f, 140.0f, 0.30f, 0.70f, 157.0f, 35.0f, 100.0f, 1, &kGradBig, 1.25f},
     // particle2: measured 18.2..20.5, essentially one size.
     {18.2f, 20.5f, 0.10f, 0.70f, 157.0f, 35.0f, 100.0f, 1, &kGradMid, 1.0f},
     // particle2_1: measured 3.0..14.1.
@@ -162,8 +161,8 @@ constexpr TriSpec kTapSpecs[kTapSpecCount] = {
 // long-lived (transform scale 210 instead of 157).
 constexpr int kHoldSpecCount = 3;
 constexpr TriSpec kHoldSpecs[kHoldSpecCount] = {
-    // measured 42..147 (3.5x spread) - same treatment as the tap hero shard.
-    {42.0f, 147.0f, 0.30f, 1.50f, 210.0f, 0.0f, 0.45f, 1, &kGradBig, 1.4f},
+    // measured 42..147 - same treatment as the tap hero shard (narrowed by eye).
+    {70.0f, 125.0f, 0.30f, 1.50f, 210.0f, 0.0f, 0.45f, 1, &kGradBig, 1.2f},
     {10.5f, 21.0f, 0.30f, 1.50f, 210.0f, 0.0f, 0.45f, 1, &kGradMid, 1.0f},
     {2.1f, 10.5f, 0.60f, 2.00f, 210.0f, 5.0f, 40.0f, 1, nullptr, 1.0f},
 };
