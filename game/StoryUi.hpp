@@ -139,9 +139,9 @@ int cards(const Canvas& c, ImFont* font, const std::vector<Image>& images,
 void imageCard(const Canvas& c, ImFont* font, const Image& img, const std::string& caption);
 
 // pjsk's name-entry card: the pale full-width plate with the hint line, the
-// rounded text field (with a pencil at its right end), the pink "later you can
-// change it" note and the mint 确定 capsule. `buf` is the live text and is
-// edited in place; `maxLen` counts UTF-8 code points, not bytes.
+// rounded text field, the pink "later you can change it" note and the mint 确定
+// capsule. `buf` is the live text and is edited in place; `maxLen` counts UTF-8
+// code points, not bytes.
 //
 // Returns true on the frame 确定 / Enter was pressed. `requestFocus` puts the
 // caret in the field (the step's first frame), and `time` drives the card's

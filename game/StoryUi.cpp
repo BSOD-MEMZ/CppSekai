@@ -1010,27 +1010,6 @@ namespace
         return 0;
     }
 
-    // The little pencil at the right end of the field. Drawn rather than shipped
-    // as a sprite: the reference's icon is a 22px glyph that would blur at this
-    // canvas size, and a shape has no file to go missing.
-    void pencilIcon(ImDrawList* dl, const ImVec2& center, float size, ImU32 body, ImU32 tip)
-    {
-        constexpr float k = 0.70710678f;
-        const float half = size * 0.5f;
-        const float wide = size * 0.13f;
-        const float tipLen = size * 0.32f;
-        // u points at the eraser (up-right), n is across the pencil.
-        const ImVec2 p0(center.x - k * half, center.y + k * half);              // writing tip
-        const ImVec2 p1(center.x + k * half, center.y - k * half);              // eraser end
-        const ImVec2 s0(center.x - k * (half - tipLen) + k * wide,
-            center.y + k * (half - tipLen) + k * wide);
-        const ImVec2 s1(center.x - k * (half - tipLen) - k * wide,
-            center.y + k * (half - tipLen) - k * wide);
-        const ImVec2 e0(p1.x + k * wide, p1.y + k * wide);
-        const ImVec2 e1(p1.x - k * wide, p1.y - k * wide);
-        dl->AddTriangleFilled(p0, s0, s1, tip);
-        dl->AddQuadFilled(s0, e0, e1, s1, body);
-    }
 } // namespace
 
 bool nameCard(const Canvas& c, ImFont* font, const std::string& title, const std::string& note,
@@ -1092,9 +1071,9 @@ bool nameCard(const Canvas& c, ImFont* font, const std::string& title, const std
     const float fontSize = c.s(42.0f);
     const ImVec2 textSize
         = font != nullptr ? font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, buf) : ImVec2(0.0f, 0.0f);
-    // Centred like the reference, but never so far in that the pencil collides.
-    const float pencilRoom = c.s(56.0f);
-    const float padX = std::max((fieldW - textSize.x - pencilRoom) * 0.5f, c.s(18.0f));
+    // The field has no icon at its right end any more, so the text is free to
+    // sit exactly in the middle of it.
+    const float padX = std::max((fieldW - textSize.x) * 0.5f, c.s(18.0f));
     const float padY = std::max((fieldH - fontSize) * 0.5f, 0.0f);
 
     ImGui::PushID("story-name-field");
@@ -1151,12 +1130,6 @@ bool nameCard(const Canvas& c, ImFont* font, const std::string& title, const std
         ImGui::PopFont();
     }
     ImGui::PopID();
-
-    if (font != nullptr)
-    {
-        pencilIcon(dl, ImVec2(fHi.x - c.s(34.0f), (fLo.y + fHi.y) * 0.5f), c.s(30.0f), textCol,
-            IM_COL32(38, 38, 70, 255));
-    }
 
     // ---- the pink note ----
     if (font != nullptr && !note.empty())

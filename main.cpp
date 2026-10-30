@@ -10594,6 +10594,23 @@ int main(int argc, char** argv)
         // when the render mode draws straight to the window.
         renderer.presentFrame();
 
+        // Opaque presentation needs alpha = 1 over the whole buffer. The DWM
+        // frame is extended for the image splash (and stays extended for the
+        // Aero-glass background), and with an extended frame every pixel left
+        // below alpha 1 lets the desktop bleed through - that is what made the
+        // tutorial look washed out for a few seconds at a time (the game's own
+        // --screenshot reads the GL buffer, where alpha is invisible, so it can
+        // never show it). Only the alpha channel is written; colours and every
+        // deterministic screenshot stay exactly as they were.
+        if (!glassBackground) {
+            glDisable(GL_SCISSOR_TEST);
+            glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_TRUE);
+            glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT);
+            glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        }
+
+
         // Captured after the ImGui pass so the HUD / intro card / song list
         // are part of the frame.
         if (wantScreenshot) {
