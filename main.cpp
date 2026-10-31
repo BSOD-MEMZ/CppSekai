@@ -2369,9 +2369,10 @@ int main(int argc, char** argv)
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
         }
         gCrashGlassMode = glassMode;
-        std::printf("[window] glass mode %d (%s), frameless %d\n", glassMode,
+        std::printf("[window] glass mode %d (%s), frameless %d, per-pixel alpha %s\n", glassMode,
             glassMode == 0 ? "extend frame only" :
-            glassMode == 1 ? "DWM NCR off" : "own custom frame", noFrameMode);
+            glassMode == 1 ? "DWM NCR off" : "own custom frame", noFrameMode,
+            enable ? "on" : "off");
         std::fflush(stdout);
     };
     // DWM: the first swap above is what the compositor keeps until the game
@@ -2876,6 +2877,20 @@ int main(int argc, char** argv)
             } else if (windowMode == 2) {
                 SDL_SetWindowFullscreen(window, SDL_WINDOW_FULLSCREEN_DESKTOP);
             }
+#ifdef _WIN32
+            // The image splash is the only reason the DWM frame was extended at
+            // boot: its PNG has to blend with the desktop. Loading is over, so
+            // unless the background really is the Aero glass one, hand the window
+            // an opaque surface back. Leaving it extended means the whole session
+            // runs through DWM's per-pixel compositor, where every pixel the GL
+            // frame leaves below alpha 1 blends with the desktop - that is the
+            // washed-out look, and it shows up on one machine but not another
+            // simply because whether the framebuffer carries an alpha channel at
+            // all is the driver's call (see GPU-GLITCH.md).
+            if (!glassBackground) {
+                applyGlassWindowMode(false);
+            }
+#endif
         }
     }
 
@@ -4796,7 +4811,13 @@ int main(int argc, char** argv)
                             // client area see-through in the first place.
                             renderer.setTransparentBackground(userSettings.bgStyle == 2);
 #ifdef _WIN32
-                            requestGlassWindowMode(splashStyle == 0 || userSettings.bgStyle == 2);
+                            // Only the Aero background needs an extended frame.
+                            // This used to also test `splashStyle == 0`, which -
+                            // with the image splash, the default - stays true for
+                            // the whole session, so every background switch turned
+                            // the per-pixel compositor back on and switching *away*
+                            // from glass left the window transparent anyway.
+                            requestGlassWindowMode(userSettings.bgStyle == 2);
 #endif
                             persistUserData();
                         }
