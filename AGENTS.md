@@ -33,6 +33,9 @@ CppSekai：Project SEKAI 风格 SUS 谱面 Windows 原生游玩器。
   **再遇到「某台机器画面不对」先看这篇**，别从渲染逻辑查起。
 - `RE.md` —— **pjsk 解包产物与工具链**：日服/国服的差异、Il2CppDumper / AssetStudio /
   AssetRipper 的用法与坑、产物索引（dump.cs、sprite 尺寸表、prefab 几何）。
+- `RESULT-FX.md` —— **曲末特效的实测规格（2026-10-31）**：`fx_result_*` 这一族真名
+  （三支 prefab，两个代码字符串）、每支的结构树 / `m_IsActive`+`Color.a` 时间轴 /
+  贴图尺寸。**做曲末大字前必读**，别按 stringliteral 里那五个名字去找资产。
 - `CREDITS.md` —— 借用清单：每个来源是谁的、什么许可、放在哪（含 Fontworks 字体这条独立风险）。
 - `COPYRIGHT.md` —— 版权与风险：什么能发、什么不能发。
 - `README.md` —— 面向玩家的说明（只放用户最需要的东西，技术细节一律挪到本文件，别往 README 加）。
@@ -1280,8 +1283,10 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
 - 我们现在的状态：曲末只有 `LiveClearBanner`（= clear 那支）；**finish / failed / FC / AP
   四支曲末特效都还没做**。结算页的徽章 + LIVE FAILED 已按 `ResultData::failed/fullCombo/
   allPerfect` 接上（见下）。
-- 待办：五支 `fx_result_*` 的 prefab 内容（贴图 + 时间轴）要 AssetRipper 读 YAML 才能照抄；
-  4GB 内存的机器上跑 AssetRipper 会 OOM，需要分次/换机器。
+- **已提取（2026-10-31）**：五支里其实只有三支是 prefab —— `fx_result_LiveClear` /
+  `fx_result_FullCombo` / `fx_result_AllPerfect`（`finish` / `failed_v2` 在资产里
+  **不存在**，只是代码字符串）。结构、时间轴、贴图尺寸全部实测在 **`RESULT-FX.md`**；
+  `fullcombo.png` / `allperfect.png` 已放进 `assets/mmw/overlay/result/`。
 
 - 结算分数页带两张徽章 `badge_result_fullcombo` / `badge_result_allperfect`（358×76，
   ResultAtlas），由 `clip_result_score_{fullcombo,allperfect}_v2_01` 播 **2s**：

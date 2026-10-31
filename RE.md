@@ -253,6 +253,14 @@ $DOTNET AssetStudioModCLI.dll <apk> -m export -t tex2d --filter-by-name "tap" -o
   但里面的 GameObject 在**另一个 collection**（如 `I:3250` / `I:4345`）。
   正确做法：抓页面里第一条 `GameObjects[]` 链接，取它 `,"D":` 之前的部分当前缀。
 - GO 路径**不能**用 `/Assets/Yaml`（404），只有组件能；要拿 GO 的信息走 `/Assets/View`。
+- **curl / python urllib 会走系统代理，把 `127.0.0.1:17654` 的请求转发到外网**（2026-10-31
+  实测：拿回来一整页 APKMirror，还以为是搜索没结果）。curl 一律 `--noproxy '*'`，
+  python 用 `urllib.request.build_opener(urllib.request.ProxyHandler({}))`。
+- **Git Bash 的 `/tmp` 写不进去**（沙箱），`curl -o /tmp/x` 静默不落盘，之后 `cat` 读到的是
+  几天前的同名旧文件 —— 排查时会以为是服务返回了怪东西。临时文件一律写进项目 `build/`。
+- **搜索结果里同名资产有三份**：`PrefabHierarchyObject`（collection `I:0`，**这才是 prefab**）、
+  `PrefabInstance`（`I:1`）、根 `GameObject`（`I:49xx`）。只有第一类页面有 `GameObjects[]`
+  列表；拿 GameObject 的链接去导会得到「no GameObjects[]」。
 
 ### Unity 序列化语义（这几条最容易把结论带偏）
 - **`MinMaxCurve` 两种模式**：`minMaxState: 2`（Two Curves）的 `scalar` 是**两条曲线共用的
@@ -284,7 +292,8 @@ $DOTNET AssetStudioModCLI.dll <apk> -m export -t tex2d --filter-by-name "tap" -o
 | 粒子参数（YAML 原文） | `jp/fx_touch/*.yml` + `manifest.json` |
 | 选曲界面几何 | `jp/ms_freelive.*`、`ms_info.*`、`ms_row.*`、`ms_diffbtn.*`、`ms_bg.*` |
 | 结论汇总 | `jp/RE-report-jp.md`（§8 触摸特效参数、§11 选曲界面几何） |
-| 对项目的落地规格 | [SELECT-UI.md](SELECT-UI.md)（选曲）、AGENTS.md「触摸特效」一节 |
+| 曲末特效（2026-10-31） | `jp/fx_result_*/`（树 + 组件 YAML）、`jp/clip_{liveclear,fullcombo,allperfect}.txt`、`jp/tex_result/{FullCombo,AllPerfect}.png`；规格见 [RESULT-FX.md](RESULT-FX.md) |
+| 对项目的落地规格 | [SELECT-UI.md](SELECT-UI.md)（选曲）、[RESULT-FX.md](RESULT-FX.md)（曲末特效）、AGENTS.md「触摸特效」一节 |
 
 ## 7. 还没做的
 
