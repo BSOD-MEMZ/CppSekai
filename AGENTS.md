@@ -26,6 +26,11 @@ CppSekai：Project SEKAI 风格 SUS 谱面 Windows 原生游玩器。
 - `SELECT-UI.md` —— **选曲界面对齐规格（2026-10-25）**：原作 prefab 的实测尺寸、
   1334×750 → ×1.44 的换算基准、我们的现状对照表、A/B/C 三个方案与验收方法。
   **动选曲布局前必读。**
+- `GPU-GLITCH.md` —— **两条画面异常的排查（2026-10-31）**：「画面过曝」= DWM
+  逐像素 alpha 合成 + GL 帧 alpha < 1（**和机器有没有 alpha 通道强相关**，日志里
+  `[gl] framebuffer alpha=` 是判据）；「演奏中白条 + 卡住 + 屏幕黑一下」= TDR，
+  探针是 `[gl] dropped` / `[gl] slow swap` / `[gl] context lost`。
+  **再遇到「某台机器画面不对」先看这篇**，别从渲染逻辑查起。
 - `RE.md` —— **pjsk 解包产物与工具链**：日服/国服的差异、Il2CppDumper / AssetStudio /
   AssetRipper 的用法与坑、产物索引（dump.cs、sprite 尺寸表、prefab 几何）。
 - `CREDITS.md` —— 借用清单：每个来源是谁的、什么许可、放在哪（含 Fontworks 字体这条独立风险）。

@@ -2297,6 +2297,23 @@ int main(int argc, char** argv)
             glVersion != nullptr ? glVersion : "?",
             glRenderer != nullptr ? glRenderer : "?",
             glVendor != nullptr ? glVendor : "?");
+        // The window is always created with an extended DWM frame (per-pixel
+        // alpha compositing), so a frame whose alpha stays below 1 lets the
+        // desktop bleed through and reads as "washed out". Whether that can
+        // happen at all depends on the framebuffer actually having an alpha
+        // channel, and that is the driver's call - SDL_GL_ALPHA_SIZE is a
+        // request. Printing both numbers is what tells two machines apart when
+        // one shows the wash and the other does not.
+        int requestedAlpha = 0;
+        SDL_GL_GetAttribute(SDL_GL_ALPHA_SIZE, &requestedAlpha);
+        int framebufferAlpha = 0;
+        int framebufferDepth = 0;
+        int maxTexture = 0;
+        glGetIntegerv(0x0D55, &framebufferAlpha); // GL_ALPHA_BITS
+        glGetIntegerv(0x0D56, &framebufferDepth); // GL_DEPTH_BITS
+        glGetIntegerv(0x0D33, &maxTexture);       // GL_MAX_TEXTURE_SIZE
+        std::printf("[gl] framebuffer alpha=%d (asked %d) depth=%d maxTexture=%d\n",
+            framebufferAlpha, requestedAlpha, framebufferDepth, maxTexture);
         std::fflush(stdout);
     }
     const bool headlessRun = !screenshotPath.empty();
@@ -10640,7 +10657,26 @@ int main(int argc, char** argv)
             SDL_GL_SetSwapInterval(wantVsync ? 1 : 0);
             vsyncActive = wantVsync;
         }
+        // How long the swap blocks is the cheapest GPU-side probe there is:
+        // with vsync on it should never exceed one refresh interval, so a swap
+        // that takes hundreds of milliseconds means the CPU is waiting for the
+        // GPU to finish the frame - i.e. the work submitted was far too big.
+        // That is the state a driver timeout (TDR, "screen blinks black for a
+        // second") grows out of, and it is logged before Windows gets there.
+        const Uint64 swapBegin = SDL_GetPerformanceCounter();
         SDL_GL_SwapWindow(window);
+        const double swapMs
+            = static_cast<double>(SDL_GetPerformanceCounter() - swapBegin) / perfFreqD * 1000.0;
+        if (swapMs > 150.0) {
+            std::printf("[gl] slow swap %.0f ms (present waited on the GPU)\n", swapMs);
+            std::fflush(stdout);
+        }
+        // A lost context means the driver already reset. Reporting it separately
+        // tells "the picture froze" apart from "the GPU was taken away".
+        if (glGetError() == 0x0507) { // GL_CONTEXT_LOST
+            std::printf("[gl] context lost - the driver reset the device (TDR)\n");
+            std::fflush(stdout);
+        }
 
         // Optional frame cap on top of vsync: sleep in coarse chunks, then
         // busy-wait the last millisecond for accuracy. Keeps the GPU idle

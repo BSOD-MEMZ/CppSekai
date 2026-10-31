@@ -1322,10 +1322,90 @@ void Renderer::drawVertices(const Texture& texture, const std::vector<float>& ve
     glBindVertexArray(0);
 }
 
+namespace
+{
+// 2026-10-31 - "white streaks / colour blocks during play, the picture freezes,
+// the whole screen blinks black for a second and comes back". That is what a
+// GPU driver timeout (TDR) looks like from the inside, and the most common way a
+// render loop causes one is a *huge* triangle: one vertex whose x/y came out as
+// NaN, as +/-inf, or as an absurd number (a transform that divided by a
+// near-zero w, a chart with an out-of-range lane ...) is rasterised into a shape
+// that covers the screen. Its UVs are stretched just as far, so clamp-to-edge
+// sampling drags a single texture-edge pixel across the whole surface - that is
+// the white streak - and filling a screen-sized triangle per such quad is enough
+// to blow the frame budget on a weak integrated GPU, which is what the driver
+// then resets.
+//
+// Every vertex is therefore checked right before it is uploaded. The test is on
+// the *real* clip position, not the packed one: effect quads arrive with the
+// perspective divide already applied to x/y and 1/w stored separately (the
+// shader multiplies them back together), so a vertex sitting behind the camera
+// legitimately packs as e.g. x=430 with 1/w=-33. That is fine - the hardware
+// clips it. Only a vertex that ends up more than kGlitchClip away in clip space
+// after the divide, or a non-finite one, can make a screen-sized triangle.
+//
+// With CPSEKAI_GL_TRACE=1 the offending quad's raw 25 floats are printed, which
+// tells a note quad from a hold quad from an effect quad. Dropping is the default
+// because a broken vertex has no correct rendering - and a *dropped* quad can
+// only make the frame cleaner.
+constexpr float kGlitchClip = 1.0e5f;
+
+bool quadIsGarbage(const std::array<std::array<float, 2>, 4>& clip,
+    const std::array<float, 4>& reciprocalW, bool isEffect)
+{
+    for (int i = 0; i < 4; ++i) {
+        float x = clip[i][0];
+        float y = clip[i][1];
+        if (!std::isfinite(x) || !std::isfinite(y)) {
+            return true;
+        }
+        if (isEffect) {
+            const float rw = reciprocalW[i];
+            if (!std::isfinite(rw)) {
+                return true;
+            }
+            // rw == 0 is handled by the vertex shader (it substitutes w = 1);
+            // anything else divides back to the position the hardware will use.
+            if (rw != 0.0f) {
+                x /= rw;
+                y /= rw;
+                if (!std::isfinite(x) || !std::isfinite(y)) {
+                    return true;
+                }
+            }
+        }
+        if (std::fabs(x) > kGlitchClip || std::fabs(y) > kGlitchClip) {
+            return true;
+        }
+    }
+    return false;
+}
+
+struct GlitchStats
+{
+    int framesWithGarbage = 0;
+    int quadsDropped = 0;
+};
+
+GlitchStats& glitchStats()
+{
+    static GlitchStats stats;
+    return stats;
+}
+
+bool glitchTraceEnabled()
+{
+    static const bool enabled = std::getenv("CPSEKAI_GL_TRACE") != nullptr;
+    return enabled;
+}
+} // namespace
+
 void Renderer::renderFrame(const float* packedQuads, int quadCount, float backgroundBrightness,
     float playfieldVisibility)
 {
     const float visibility = std::max(0.0f, std::min(1.0f, playfieldVisibility));
+    int frameGarbage = 0;
+    int frameGarbageDumped = 0;
     GLint viewport[4] = {0, 0, 0, 0};
     glGetIntegerv(GL_VIEWPORT, viewport);
     // Fixed-resolution mode: everything this frame (ImGui included, which runs
@@ -1413,6 +1493,24 @@ void Renderer::renderFrame(const float* packedQuads, int quadCount, float backgr
             };
         }
 
+        // See the note above renderFrame(): a vertex this far out would be
+        // rasterised into a screen-sized triangle, which is exactly the white
+        // streak / driver-timeout path. Never upload one.
+        if (quadIsGarbage(clip, reciprocalW, isEffect)) {
+            ++frameGarbage;
+            if (glitchTraceEnabled() && frameGarbageDumped < 8) {
+                ++frameGarbageDumped;
+                std::printf("[gl] dropped quad #%d/%d tex=%d kind=%s:", quad, quadCount,
+                    rawTextureId, isEffect ? "effect" : "note");
+                for (int field = 0; field < 25; ++field) {
+                    std::printf(" %.3f", packedQuads[offset + field]);
+                }
+                std::printf("\n");
+                std::fflush(stdout);
+            }
+            continue;
+        }
+
         const float cr = packedQuads[offset + 20];
         const float cg = packedQuads[offset + 21];
         const float cb = packedQuads[offset + 22];
@@ -1442,6 +1540,19 @@ void Renderer::renderFrame(const float* packedQuads, int quadCount, float backgr
                                                        : currentBucket == 2                ? mTouchLine
                                                                                            : mEffect;
         flush(texture, currentBucket == 3, currentBlend);
+    }
+
+    if (frameGarbage > 0) {
+        GlitchStats& stats = glitchStats();
+        ++stats.framesWithGarbage;
+        stats.quadsDropped += frameGarbage;
+        // The first few frames in full, then every 300th, so a long session
+        // cannot bury the rest of the log in one line per frame.
+        if (stats.framesWithGarbage <= 5 || (stats.framesWithGarbage % 300) == 0) {
+            std::printf("[gl] dropped %d garbage quad(s) this frame (%d over %d frame(s))\n",
+                frameGarbage, stats.quadsDropped, stats.framesWithGarbage);
+            std::fflush(stdout);
+        }
     }
 
     (void)viewport;

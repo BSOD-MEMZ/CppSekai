@@ -213,6 +213,10 @@ cppsekai [--sus <file.sus>] [--bgm <audio>] [--charts <dir>] [--cover <image>]
   `[framestats] avg=… ms peak=… ms (… fps)`，默认完全静默。注意 `--fps N` 的节流会把
   avg 顶在 `1000/N` 的地板上（`--fps 1000` 时任何东西都是 1.00 ms），**测真实开销要用
   `--fps 2000`** 这种远超实际能力的上限，否则量到的是节流器不是负载。
+- **画面异常 / 驱动超时（TDR）**：`CPSEKAI_GL_TRACE=1` 把被丢掉的坏 quad 的原始
+  25 个 float 打出来。平时**不用开**——`[gl] dropped …` / `[gl] slow swap … ms` /
+  `[gl] context lost` 这三行无论如何都会写进日志，只在出事时出现。
+  机制与「过曝」那条的机器差异见 `GPU-GLITCH.md`。
 - 看动画的某一帧：卡片（设置卡 / 各弹窗）的入场只有 0.16s，`--screenshot` 的时机根本追不上，
   所以有个 `CPSEKAI_CARD_T=<0..1>`——把**所有卡片的动画冻结在这个进度**上再抓图，
   `0.3` 左右最能看出内容是不是跟着框一起缩放/淡入。
