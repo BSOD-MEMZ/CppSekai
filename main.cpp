@@ -10298,8 +10298,13 @@ int main(int argc, char** argv)
                 partyAutoContinued = true;
                 resultContinueRequested = true;
             }
-            // Headless check: dump the settled result screen.
-            if (!screenshotPath.empty() && !wantScreenshot && resultElapsed >= 2.6f) {
+            // Headless check: dump the settled result screen. The screen has two
+            // pages now (summary -> score), so "settled" means the score page has
+            // finished its own entrance: 2.6 s of summary + its 2.6 s. An explicit
+            // --screenshot-time overrides that, which is how the summary itself is
+            // captured (`--result-preview --screenshot-time 1.2`).
+            const double resultShotAt = screenshotTimeGiven ? screenshotTimeSec : 5.2;
+            if (!screenshotPath.empty() && !wantScreenshot && resultElapsed >= resultShotAt) {
                 wantScreenshot = true;
             }
         }

@@ -422,6 +422,53 @@ void drawSpriteInkCentered(const Canvas& c, const platform::Renderer::HudSprite*
     drawSpriteInk(c, sprite, inkX, inkY, inkW, inkH, centerX - inkW * scale * 0.5f, centerY, boxH, tint);
 }
 
+// ---------------------------------------------------------------------------
+// First of the two result screens: the summary that plays before the score
+// page (LIVE RESULT / LIVE FAILED banner + its two rule lines).
+//
+// Geometry comes from ScreenLayerFreeLiveResult's SoloLiveScoreSummary ->
+// ScoreView, whose parents are all (0,0) so these are offsets from the screen
+// centre (see RESULT-SUMMARY.md):
+//     ResultImage     centre (-132.1, 35.6), 1220x166
+//     ResultLine_01   +(0, 73.6)   - both carry the `line` sprite, which is
+//     ResultLine_02   +(0, -88.5)    drawn once (see drawSummary)
+// The design canvas is the 2520x1440 Background, converted by height
+// (1080/1440 = 0.75) because 2520:1440 is not quite 16:9.
+constexpr float kSummaryTitleX = 960.0f - 132.1f * 0.75f; // 860.9
+constexpr float kSummaryTitleY = 540.0f - 35.6f * 0.75f;  // 513.3
+constexpr float kSummaryTitleH = 166.0f * 0.75f;          // 124.5
+
+void drawSummary(platform::Renderer& renderer, const ResultData& data, float t, const Canvas& c,
+    float windowW, float windowH)
+{
+    ImDrawList* dl = c.dl;
+    const float in = easeOutCubic(span(t, 0.0f, 0.35f));
+    // The original has a whole background image here; we sit on the stage art,
+    // so a flat dim stands in for it. 196/255 keeps the art readable underneath.
+    dl->AddRectFilled(ImVec2(0.0f, 0.0f), ImVec2(windowW, windowH),
+        IM_COL32(10, 10, 22, static_cast<int>(196.0f * in)));
+
+    const auto* line = renderer.hud("result_liveresult_line");
+    const auto* title = renderer.hud(data.failed ? "result_livefailed" : "result_liveresult");
+    if (line != nullptr && line->id != 0 && line->height > 0) {
+        // This sprite is the thin outline of the same words plus the two rules
+        // either side of them, so it goes on exactly once, centred on the title.
+        // (Drawing it twice - once per ResultLine_01/02 offset - reads as a
+        // smeared double image.)
+        drawSpriteInkCentered(c, line, 0.0f, 0.0f, static_cast<float>(line->width),
+            static_cast<float>(line->height), kSummaryTitleX, kSummaryTitleY, kSummaryTitleH,
+            IM_COL32(255, 255, 255, static_cast<int>(170.0f * in)));
+    }
+    if (title != nullptr && title->id != 0 && title->height > 0) {
+        // A small overshoot on entry, matching the rest of the screen's easeOutBack.
+        const float pop = easeOutBack(span(t, 0.12f, 0.45f));
+        drawSpriteInkCentered(c, title, 0.0f, 0.0f, static_cast<float>(title->width),
+            static_cast<float>(title->height), kSummaryTitleX, kSummaryTitleY,
+            kSummaryTitleH * (0.86f + 0.14f * pop),
+            IM_COL32(255, 255, 255, static_cast<int>(255.0f * in)));
+    }
+}
+
 // Right-aligned run of plain-font digits. The reference's judge counts and
 // the combo read-out are the ordinary UI face (only the 8-digit score uses
 // the game's own score numerals), so they are drawn as text - leading zeros
@@ -507,7 +554,17 @@ void drawResult(platform::Renderer& renderer, const ResultData& data, float elap
     ImDrawList* dl = ImGui::GetBackgroundDrawList();
     const Canvas c = makeCanvas(dl, windowW, windowH, uiScale);
 
-    const float t = std::max(elapsedSec, 0.0f);
+    // The official screen runs in two parts: the summary banner first, then the
+    // score page. Everything below is written against the score page's own clock,
+    // so the summary's time is simply taken off the front of it.
+    constexpr float kSummarySec = 2.6f;
+    const float sinceEnter = std::max(elapsedSec, 0.0f);
+    if (sinceEnter < kSummarySec) {
+        drawSummary(renderer, data, sinceEnter, c, static_cast<float>(windowW),
+            static_cast<float>(windowH));
+        return;
+    }
+    const float t = std::max(sinceEnter - kSummarySec, 0.0f);
     const float appear = easeOutCubic(span(t, 0.0f, 0.30f));
     const float panelIn = easeOutCubic(span(t, 0.08f, 0.40f));
     const float panelDrop = (1.0f - panelIn) * -55.0f;

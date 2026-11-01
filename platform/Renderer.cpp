@@ -1007,6 +1007,13 @@ bool Renderer::loadHud(const std::string& overlayDir, std::string& outError)
     // is the score page, which otherwise says nothing at all about a run that
     // died with the life bar at zero.
     add("result_livefailed", "result/livefailed_wh.png");
+    // Summary page (the first of the two result screens): the LIVE RESULT banner
+    // and the rule line that sits above/below it. Both cut out of the
+    // LiveResultAtlas - provenance in RESULT-SUMMARY.md.
+    add("result_liveresult", "result/liveresult_wh.png");
+    add("result_liveresult_cc", "result/liveresult_cc.png");
+    add("result_liveresult_line", "result/liveresult_line.png");
+    add("result_liveclear_cc", "result/liveclear_cc.png");
 
     outError.clear();
     return !mHudSprites.empty();

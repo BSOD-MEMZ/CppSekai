@@ -36,6 +36,10 @@ CppSekai：Project SEKAI 风格 SUS 谱面 Windows 原生游玩器。
 - `RESULT-FX.md` —— **曲末特效的实测规格（2026-10-31）**：`fx_result_*` 这一族真名
   （三支 prefab，两个代码字符串）、每支的结构树 / `m_IsActive`+`Color.a` 时间轴 /
   贴图尺寸。**做曲末大字前必读**，别按 stringliteral 里那五个名字去找资产。
+- `RESULT-SUMMARY.md` —— **两段结算的第一段（summary）规格（2026-11-01）**：
+  `SoloLiveScoreSummary` 的节点树与换算（2520×1440 → 1920×1080，×0.75）、
+  `LIVE RESULT` 大字的坐标、以及**从 ASTC SpriteAtlas 切图的方法**
+  （按 sprite 名导会失败，要导整张 atlas 再按 `m_Rect` 自己切）。
 - `CREDITS.md` —— 借用清单：每个来源是谁的、什么许可、放在哪（含 Fontworks 字体这条独立风险）。
 - `COPYRIGHT.md` —— 版权与风险：什么能发、什么不能发。
 - `README.md` —— 面向玩家的说明（只放用户最需要的东西，技术细节一律挪到本文件，别往 README 加）。
