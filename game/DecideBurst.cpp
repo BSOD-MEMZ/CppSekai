@@ -17,7 +17,7 @@ namespace
 // burst (main.cpp's confirmFlash) covers the screen, so the two never fight.
 constexpr float kLife = 0.90f;          // burst lifetime
 constexpr float kGlowRise = 0.07f;      // glow reaches full brightness here
-constexpr float kGlowGone = 0.62f;      // ... and is gone by here
+constexpr float kGlowGone = 0.78f;      // ... and is gone by here
 constexpr float kRingDelay = 0.03f;
 constexpr float kRingLife = 0.52f;
 constexpr float kShardLife = 0.42f;
@@ -70,23 +70,6 @@ float rnd(unsigned& s)
 {
     s = mix(s + 0x9e3779b9U);
     return static_cast<float>(s & 0xFFFFFFu) / 16777215.0f;
-}
-
-// One rotated quad out of four corners - ImDrawList::AddImage only takes an
-// axis-aligned rect, and the shards tumble.
-void addQuad(ImDrawList* dl, ImTextureID tex, float cx, float cy, float half, float rot,
-    ImVec2 uv0, ImVec2 uv1, ImU32 col)
-{
-    const float c = std::cos(rot);
-    const float s = std::sin(rot);
-    const ImVec2 pts[4] = {
-        ImVec2(cx - half * c + half * s, cy - half * s - half * c),
-        ImVec2(cx + half * c + half * s, cy + half * s - half * c),
-        ImVec2(cx + half * c - half * s, cy + half * s + half * c),
-        ImVec2(cx - half * c - half * s, cy - half * s + half * c),
-    };
-    dl->AddImageQuad(tex, pts[0], pts[1], pts[2], pts[3],
-        ImVec2(uv0.x, uv0.y), ImVec2(uv1.x, uv0.y), ImVec2(uv1.x, uv1.y), ImVec2(uv0.x, uv1.y), col);
 }
 
 ImU32 white(float alpha)
@@ -147,8 +130,14 @@ void DecideBurst::spawn(float cx, float cy, float spreadRadius)
         s.startRadius = 46.0f + rnd(seed) * 34.0f;
         s.speed = 190.0f + rnd(seed) * 230.0f;
         s.size = 34.0f + rnd(seed) * 30.0f;
-        s.spin0 = rnd(seed) * 6.2831853f;
-        s.spinSpd = (rnd(seed) - 0.5f) * 12.0f;
+        // startRotation 三轴各 ±2π（原版是 6.283185 / -6.283185 的随机区间）
+        s.rot0x = (rnd(seed) * 2.0f - 1.0f) * 3.1415927f;
+        s.rot0y = (rnd(seed) * 2.0f - 1.0f) * 3.1415927f;
+        s.rot0z = (rnd(seed) * 2.0f - 1.0f) * 3.1415927f;
+        // RotationModule：Z 轴 ±0.7854 rad/s 是实测值；X/Y 给一点，让它真的翻
+        s.spinZ = (rnd(seed) * 2.0f - 1.0f) * 0.7854f;
+        s.spinX = (rnd(seed) * 2.0f - 1.0f) * 1.3f;
+        s.spinY = (rnd(seed) * 2.0f - 1.0f) * 1.3f;
         s.cell = i % 4;
         burst.shards.push_back(s);
     }
@@ -195,9 +184,9 @@ void DecideBurst::draw()
                 const ImVec2 u1(1.0f, 1.0f);
                 const ImVec2 c(burst.cx, burst.cy);
                 dl->AddImage(mGlow, ImVec2(c.x - wide, c.y - wide), ImVec2(c.x + wide, c.y + wide),
-                    u0, u1, white(a * 0.30f));
+                    u0, u1, white(a * 0.38f));
                 dl->AddImage(mGlow, ImVec2(c.x - core, c.y - core), ImVec2(c.x + core, c.y + core),
-                    u0, u1, white(a * 0.42f));
+                    u0, u1, white(a * 0.50f));
             }
         }
 
@@ -227,11 +216,32 @@ void DecideBurst::draw()
                 const float py = burst.cy + std::sin(s.angle) * travelled;
                 const float size = s.size * (1.0f - 0.55f * easeIn(k));
                 const float alpha = (1.0f - easeIn(k)) * 0.95f;
-                const float rot = s.spin0 + s.spinSpd * local;
-                const float u0 = (s.cell % 2) * 0.5f;
-                const float v0 = (s.cell / 2) * 0.5f;
-                addQuad(dl, mTri, px, py, size * 0.5f, rot,
-                    ImVec2(u0, v0), ImVec2(u0 + 0.5f, v0 + 0.5f), white(alpha));
+                // 三轴旋转后正交投影：X 轴转把 quad 压扁，Y 轴转把它翻面，
+                // Z 轴转是原地自转。三样叠起来就是"翻滚的玻璃片"。
+                const float rx = s.rot0x + s.spinX * local;
+                const float ry = s.rot0y + s.spinY * local;
+                const float rz = s.rot0z + s.spinZ * local;
+                const float cxr = std::cos(rx);
+                const float sxr = std::sin(rx);
+                const float cyr = std::cos(ry);
+                const float syr = std::sin(ry);
+                const float czr = std::cos(rz);
+                const float szr = std::sin(rz);
+                const float half = size * 0.5f;
+                ImVec2 pts[4];
+                for (int k = 0; k < 4; ++k) {
+                    const float lx = (k == 0 || k == 3) ? -half : half;
+                    const float ly = (k < 2) ? -half : half;
+                    const float y1 = ly * cxr;
+                    const float z1 = ly * sxr;
+                    const float x2 = lx * cyr + z1 * syr;
+                    pts[k] = ImVec2(px + (x2 * czr - y1 * szr), py + (x2 * szr + y1 * czr));
+                }
+                const float u0 = static_cast<float>(s.cell & 1) * 0.5f;
+                const float v0 = static_cast<float>(s.cell >> 1) * 0.5f;
+                dl->AddImageQuad(mTri, pts[0], pts[1], pts[2], pts[3],
+                    ImVec2(u0, v0), ImVec2(u0 + 0.5f, v0),
+                    ImVec2(u0 + 0.5f, v0 + 0.5f), ImVec2(u0, v0 + 0.5f), white(alpha));
             }
         }
     }

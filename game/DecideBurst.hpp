@@ -67,8 +67,15 @@ class DecideBurst
         float startRadius = 0.0f; // where it leaves the button, px
         float speed = 0.0f;   // px/s at t=0, decays
         float size = 20.0f;   // quad edge, design px
-        float spin0 = 0.0f;
-        float spinSpd = 0.0f;
+        // 3D pose. Original: startRotationX/Y/Z are each a random +-2pi, and
+        // RotationModule only spins Z (separateAxes, +-0.7854 rad/s). A quad
+        // that starts at a random 3D angle and is projected orthographically
+        // foreshortens into anything from a full triangle to a thin sliver -
+        // that spread is what the original actually looks like. We also nudge
+        // X/Y so each shard keeps turning on screen instead of freezing its
+        // silhouette (the only place this departs from the measured values).
+        float rot0x = 0.0f, rot0y = 0.0f, rot0z = 0.0f;
+        float spinX = 0.0f, spinY = 0.0f, spinZ = 0.0f;
         int cell = 0;         // 2x2 atlas cell
     };
 

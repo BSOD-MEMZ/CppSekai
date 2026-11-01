@@ -180,7 +180,10 @@ void AudioEngine::loadUiSe(const std::string& dir)
         "choice_open.wav",
         "choice_decide.wav",
         "LIVE_CLEAR.mp3", // the "LIVE CLEAR!" banner (game/LiveClearBanner.cpp)
-        "LIVE_FINISH.mp3",   // result screen appears (se_live_finish)
+        // LIVE_FINISH.mp3 不再加载（2026-11-01 用户要求）。槽位必须留着 ——
+        // kFiles 的下标就是 UiSe 枚举的值，删一行后面全部错位（flushSe 是强转的）。
+        // 空名字让 ma_sound_init_from_file 直接失败，mUiSeLoaded 保持 false，播放时静默跳过。
+        "",
         "result_gauge.wav",  // SE_RESULT_SCORE_GAUGE_UP
         "result_record.wav", // SE_RESULT_RECORD
     };

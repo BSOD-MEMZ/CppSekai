@@ -7214,14 +7214,9 @@ int main(int argc, char** argv)
             std::fflush(stdout);
             return;
         }
-        if (state == AppState::Play && session.active && !forceQuitRequested
-            && screenshotPath.empty()) {
-            // 全屏下按错 Alt+F4 会把这一局连同还没写进档案的成绩一起扔掉。
-            platform::logf(platform::LogSystem, "[close] window close during a live -> asking first\n");
-            std::fflush(stdout);
-            closeAsk = true;
-            return;
-        }
+        // 2026-11-01 用户要求：演奏中点 X / Alt+F4 **直接退出**，不再弹「要不要
+        // 放弃这一局」的确认卡。走的是正常退出路径，档案照常落盘。
+        // （原来那个 closeAsk 分支存在是因为全屏下容易误触 —— 现在认了。）
         platform::logf(platform::LogSystem, "[instance] window close -> exiting\n");
         std::fflush(stdout);
         running = false;
@@ -10638,7 +10633,7 @@ int main(int argc, char** argv)
             // 2.6 s, its new-record row comes in at +0.1167).
             if (resultSeStage == 0) {
                 resultSeStage = 1;
-                audio.playUiSe(platform::AudioEngine::UiSeResultFinish, 0.85f);
+                // 2026-11-01：结算出现时不再放 LIVE_FINISH.mp3（用户要求）。
             } else if (resultSeStage == 1 && resultElapsed >= 0.25f) {
                 resultSeStage = 2;
                 audio.playUiSe(platform::AudioEngine::UiSeResultGauge, 0.7f);
