@@ -369,11 +369,6 @@ std::vector<Song> gSongs;
 // only, so "tyw" / "梦开始的地方" need it to find Tell Your World.
 // Exact match on purpose - the table is full of two-letter entries.
 std::map<std::string, std::vector<int>> gAliasIndex;
-// Minimum length of a query before it may match an alias *partially*. The table
-// is full of two-letter entries ("hs", "kz", "emu"); as substrings they would
-// light up half the list, so those stay exact-only.
-constexpr size_t kAliasSubstringMin = 3;
-
 // song id -> its aliases, built while the table is read. Note this is NOT the
 // struct member of the same shape (that one feeds the alias panel and is only
 // rebuilt when the window is created, i.e. never in `--list` runs) - the search
@@ -382,15 +377,12 @@ std::map<int, std::vector<std::string>> gAliasesById;
 
 bool aliasContainsPartial(int musicId, const std::string& needleLower)
 {
-    if (needleLower.size() < kAliasSubstringMin) {
-        return false;
-    }
     const auto it = gAliasesById.find(musicId);
     if (it == gAliasesById.end()) {
         return false;
     }
     for (const std::string& alias : it->second) {
-        if (alias.size() > needleLower.size() && alias.find(needleLower) != std::string::npos) {
+        if (alias.find(needleLower) != std::string::npos) {
             return true;
         }
     }
@@ -1479,11 +1471,10 @@ namespace
             || song.kana.find(filter) != std::string::npos) {
             return true;
         }
-        // Community alias. Exact match first; a query of 3+ bytes may also hit
-        // an alias that merely *contains* it, which is what makes "smile" find
-        // スマイル*シンフォニー (its aliases are "smile symphony" and friends).
-        // The length floor is what keeps the table's two-letter entries ("hs",
-        // "kz", "emu") from matching half the list.
+        // Community alias: exact match, plus a plain substring match so that
+        // "smile" finds スマイル*シンフォニー (its aliases are "smile symphony"
+        // and friends). The table is user data - a fragment is a fine thing to
+        // type, so no length floor.
         {
             const auto hit = gAliasIndex.find(needle);
             if (hit != gAliasIndex.end()

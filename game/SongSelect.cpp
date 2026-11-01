@@ -361,12 +361,10 @@ namespace
     // half the list at once.
     // -----------------------------------------------------------------
     std::map<std::string, std::vector<int>> gAliasIndex;
-    // Same table, song id -> its aliases, for the search's partial-alias rule.
+    // Same table, song id -> its aliases. The search wants it turned around:
+    // a query is matched against the aliases as a plain substring, so "smile"
+    // finds スマイル*シンフォニー (aliases "smile symphony" / "smilesymphony").
     std::map<int, std::vector<std::string>> gAliasBySong;
-    // A partial alias has to be at least this long to count. The table is full
-    // of two-letter entries ("hs", "kz", "emu"); as substrings they would light
-    // up half the list, so they stay exact-only.
-    constexpr std::size_t kAliasSubstringMin = 3;
 
     bool aliasMatches(int musicId, const std::string& needleLower)
     {
@@ -378,22 +376,19 @@ namespace
         return std::find(ids.begin(), ids.end(), musicId) != ids.end();
     }
 
-    // Partial alias: "smile" has to find スマイル*シンフォニー, whose aliases are
-    // "smile symphony" / "smiles symphony" / "smilesymphony" - none of which is
-    // the query itself. Only aliases *longer* than the query are considered, so
-    // this never duplicates the exact branch above.
+    // Alias substring: "smile" has to find スマイル*シンフォニー, whose aliases
+    // are "smile symphony" / "smiles symphony" / "smilesymphony" - none of which
+    // is the query itself. Plain substring on purpose: the table is user data,
+    // and a fragment is a perfectly good thing to type, so no length floor and
+    // no "must be longer than the query" cleverness.
     bool aliasContains(int musicId, const std::string& needleLower)
     {
-        if (needleLower.size() < kAliasSubstringMin) {
-            return false;
-        }
         const auto it = gAliasBySong.find(musicId);
         if (it == gAliasBySong.end()) {
             return false;
         }
         for (const std::string& alias : it->second) {
-            if (alias.size() > needleLower.size()
-                && alias.find(needleLower) != std::string::npos) {
+            if (alias.find(needleLower) != std::string::npos) {
                 return true;
             }
         }
