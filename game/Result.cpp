@@ -853,10 +853,14 @@ void drawResult(platform::Renderer& renderer, const ResultData& data, float elap
     const float cardIn = easeOutCubic(span(t, 0.20f, 0.30f));
     const float barFill = easeOutCubic(span(t, 0.45f, 0.90f));
     const float platePop = easeOutBack(span(t, 1.25f, 0.35f));
-    const float scoreIn = easeOutCubic(span(t, 0.70f, 0.25f));
-    const float countUp = easeOutCubic(span(t, 0.85f, 0.95f));
+    // Timings below are clip_result_score_v2_01 (1.1667 s), not guesses: the
+    // score starts at 0.05, the high score at 0.1167, COMBO at 0.15 and the
+    // five judge rows step in 0.0333 s apart from 0.15. Everything used to sit
+    // a full second later, which is why the page read as "not quite it".
+    const float scoreIn = easeOutCubic(span(t, 0.05f, 0.35f));
+    const float countUp = easeOutCubic(span(t, 0.05f, 0.45f));
     const float recordIn = easeOutBack(span(t, 1.50f, 0.35f));
-    const float highIn = easeOutBack(span(t, 1.62f, 0.35f));
+    const float highIn = easeOutCubic(span(t, 0.1167f, 0.35f));
 
     ImFont* bold = boldFont() != nullptr ? boldFont() : bodyFont();
     ImFont* cond = condensedFont() != nullptr ? condensedFont() : bodyFont();
@@ -1112,20 +1116,26 @@ void drawResult(platform::Renderer& renderer, const ResultData& data, float elap
             {17.0f, 16.0f, 150.0f, 49.0f},
         };
         for (int i = 0; i < 5; ++i) {
-            const float alpha = easeOutCubic(span(t, 1.85f + static_cast<float>(i) * 0.07f, 0.35f));
+            // Staggered like the clip: Perfect 0.15, then +0.0333 s per row.
+            // Each row also slides the last 45 px to the right on its way in
+            // (every x track in the clip is rest-60 design units).
+            const float rowP = span(t, 0.15f + static_cast<float>(i) * 0.0333f, 0.35f);
+            const float alpha = rowP <= 0.0f ? 0.0f : (rowP < 0.5f ? 0.6f * (rowP / 0.5f)
+                : 0.6f + 0.4f * ((rowP - 0.5f) / 0.5f));
             if (alpha <= 0.001f) {
                 continue;
             }
+            const float slide = -45.0f * (1.0f - easeOutCubic(rowP));
             const float cy = kRowFirstCenterY + static_cast<float>(i) * kRowPitch;
-            addRoundedRect(c, kTagX, cy - kTagH * 0.5f, kTagW, kTagH, kTagRound,
+            addRoundedRect(c, kTagX + slide, cy - kTagH * 0.5f, kTagW, kTagH, kTagRound,
                 withAlpha(kTagFill, alpha));
             // Label: the game's own judgement word (rainbow PERFECT included).
             const JudgeSprite& js = judgeSprite[i];
             drawSpriteInk(c, renderer.hud("judge_" + std::to_string(i + 1)), js.inkX, js.inkY,
-                js.inkW, js.inkH, kRowLabelX, cy, kRowLabelInkH, withAlpha(kWhite, alpha));
+                js.inkW, js.inkH, kRowLabelX + slide, cy, kRowLabelInkH, withAlpha(kWhite, alpha));
             char value[16];
             std::snprintf(value, sizeof(value), "%04d", rows[i].value);
-            drawFontDigits(c, bold, kRowNumberFontSize, value, kRowNumberRight,
+            drawFontDigits(c, bold, kRowNumberFontSize, value, kRowNumberRight + slide,
                 cy + kRowNumberFontSize * kDigitBaselineNudge, kRowNumberAdvance, kDigitGray, kWhite,
                 alpha);
 
