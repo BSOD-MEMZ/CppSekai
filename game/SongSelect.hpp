@@ -207,15 +207,15 @@ struct UserSettings
     // Judgement windows, in ms. These defaults are the 宽松 preset (the official
     // set opened up by 30 ms on every window); 设置 > 判定 > 判定预设 offers
     // 标准 (the bare official set) and 严格 (30 ms tighter) next to it.
-    float perfectMs = 70.0f;
-    float greatMs = 120.0f;
-    float goodMs = 170.0f;
+    float perfectMs = 72.0f;
+    float greatMs = 113.0f;
+    float goodMs = 138.0f;
     // BAD window end, and the point where an untouched note auto-misses. With
     // `linkBadMiss` on (default) the two are the same number: BAD stops exactly
     // where the note gives up. Off lets them drift apart, so a press may still
     // read as BAD for a moment after the note has already missed on its own.
-    float badMs = 230.0f;
-    float missMs = 230.0f;
+    float badMs = 155.0f;
+    float missMs = 155.0f;
     bool linkBadMiss = true;
     // Long-note tolerance. Letting go earlier than holdTailGraceMs before a
     // hold's end breaks it; the lane may be grabbed up to holdStartGraceMs

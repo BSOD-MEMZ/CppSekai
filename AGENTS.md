@@ -43,6 +43,11 @@ CppSekai：Project SEKAI 风格 SUS 谱面 Windows 原生游玩器。
   （填充必须走 `scoreRankAndBar(score, rating, markPos)` 那个重载，否则
   「填到 A 刻度右边、牌上写着 B」）。附 sprite 导出的正确姿势：**不过滤地
   全量导**，`--filter-by-name` 会漏掉 atlas 子 sprite。
+- `JUDGE-WINDOWS.md` —— **原作判定窗口的实测表（2026-11-01）**：数据来自
+  master 的 `ingameJudgeFrames.json`（单位是 **60fps 帧**），逐音符类型、左右不对称。
+  `normal` 的 Bad 是 ±125ms 不是 200；`friction` 全档 ±83.3（摸到就最高档）；
+  `long_end` 右偏。**我们是一套对称窗口**，`标准` 预设已按官方表改正（42/83/108/125），
+  逐类型/不对称还没做。**调判定先看这篇。**
 - `RESULT-SCORE.md` —— **结算页的 prefab 几何对照（2026-11-01）**：原作结算其实是
   **三段**（`MusicInfo` 常驻顶栏 + summary + score），第二段每个节点的实测坐标与
   换算值、判定行/徽章的 prefab 值、以及**哪些故意没跟着改**（右半边原作留给 Live2D，

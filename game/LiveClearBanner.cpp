@@ -292,9 +292,12 @@ float LiveClearBanner::blackout() const
     // ends"; the result view brings its own dim, so nothing needs to fade to
     // black here.
     constexpr float kScrim = 0.5f;
-    const float in = smoothstep(span(mTime, kOn, 0.20f));
-    const float out = 1.0f - smoothstep(span(mTime, kAddGoneAt, 0.35f));
-    return kScrim * in * out;
+    const float in = kScrim * smoothstep(span(mTime, kOn, 0.20f));
+    // Then on down to pure black, which is what the result view brightens out
+    // of. (The word stops glowing on its own: the additive layer is at zero
+    // after 0.683 s, per the clip.)
+    const float black = kScrim + (1.0f - kScrim) * smoothstep(span(mTime, 0.95f, 0.45f));
+    return std::max(in, black);
 }
 
 void LiveClearBanner::draw(platform::Renderer& renderer, int windowW, int windowH,

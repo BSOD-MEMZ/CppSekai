@@ -3972,15 +3972,19 @@ int main(int argc, char** argv)
     // the pad's shoulder buttons can switch pages from the input side.
     //
     // Judgement presets (settings > 判定 > 判定窗口): {Perfect, Great, Good, Bad,
-    // Miss} in ms. 标准 is the official table as this engine has always shipped
-    // it, 宽松 / 严格 the same set opened / tightened by 30 ms - and 宽松 is what
-    // a fresh profile starts on (UserSettings' own defaults), so the shipped
-    // order is the order of the radio row. A preset is only ever a shorthand for
-    // the five sliders below it: dragging one walks the selection off to -1.
+    // Miss} in ms. 标准 is now the game's real table - master/ingameJudgeFrames.json,
+    // which stores the windows in 60 fps frames and is asymmetric per note type:
+    //   normal  P ±2.5  G ±5.0  Gd ±6.5  B ±7.5   frames
+    //           = ±41.7  ±83.3  ±108.3  ±125    ms
+    // (flick / long_end / friction have their own wider, one-sided windows - see
+    // JUDGE-WINDOWS.md. This engine has a single symmetric set, so 标准 uses the
+    // normal note's numbers.) 宽松 / 严格 are that set ±30 ms, and 宽松 is what a
+    // fresh profile starts on. A preset is only ever a shorthand for the five
+    // sliders below it: dragging one walks the selection off to -1.
     static constexpr float kJudgePresets[3][5] = {
-        {70.0f, 120.0f, 170.0f, 230.0f, 230.0f}, // 宽松
-        {40.0f, 90.0f, 140.0f, 200.0f, 200.0f},  // 标准
-        {10.0f, 60.0f, 110.0f, 170.0f, 170.0f},  // 严格
+        {72.0f, 113.0f, 138.0f, 155.0f, 155.0f}, // 宽松   (官方 + 30)
+        {42.0f, 83.0f, 108.0f, 125.0f, 125.0f},  // 标准   (官方表)
+        {12.0f, 53.0f, 78.0f, 95.0f, 95.0f},     // 严格   (官方 - 30)
     };
     const std::vector<std::string> kJudgePresetLabels = {"宽松", "标准", "严格"};
     // Long-note tolerance presets (settings > 判定 > 长条容错): {松手容错, 起按容错}.

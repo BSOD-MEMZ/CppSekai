@@ -645,15 +645,29 @@ void drawSummaryParticles(platform::Renderer& renderer, float t, const Canvas& c
     c.dl->AddCallback(blendAlpha, nullptr);
 }
 
+// Result backdrop, shared by both pages. The prefab's Background node carries no
+// m_Sprite (it fills with the jacket at run time), so "the stage art we already
+// have, dimmed" is the same idea - but both pages have to use it. Stage two used
+// to draw nothing at all and let the raw stage through.
+void drawResultBackdrop(const Canvas& c, float windowW, float windowH, float alpha)
+{
+    c.dl->AddRectFilled(ImVec2(0.0f, 0.0f), ImVec2(windowW, windowH),
+        IM_COL32(10, 10, 22, static_cast<int>(196.0f * clamp01(alpha))));
+}
+
 void drawSummary(platform::Renderer& renderer, const ResultData& data, float t, const Canvas& c,
     float windowW, float windowH)
 {
     ImDrawList* dl = c.dl;
     const float in = easeOutCubic(span(t, 0.0f, 0.35f));
-    // The original has a whole background image here; we sit on the stage art,
-    // so a flat dim stands in for it. 196/255 keeps the art readable underneath.
-    dl->AddRectFilled(ImVec2(0.0f, 0.0f), ImVec2(windowW, windowH),
-        IM_COL32(10, 10, 22, static_cast<int>(196.0f * in)));
+    drawResultBackdrop(c, windowW, windowH, in);
+    // The banner hands over on pure black, so the summary has to brighten out of
+    // it - otherwise the transition is a hard cut from black to the dimmed stage.
+    const float fromBlack = 1.0f - easeOutCubic(span(t, 0.0f, 0.30f));
+    if (fromBlack > 0.004f) {
+        dl->AddRectFilled(ImVec2(0.0f, 0.0f), ImVec2(windowW, windowH),
+            IM_COL32(0, 0, 0, static_cast<int>(255.0f * fromBlack)));
+    }
 
     // Sparkles behind the heading. The particle node is ResultImage's first
     // child and the material is additive, so it only ever brightens what is
@@ -847,6 +861,9 @@ void drawResult(platform::Renderer& renderer, const ResultData& data, float elap
         return;
     }
     const float t = std::max(sinceEnter - kSummarySec, 0.0f);
+    // Same backdrop as the summary - the two pages are one screen in the
+    // original, only the content changes.
+    drawResultBackdrop(c, static_cast<float>(windowW), static_cast<float>(windowH), 1.0f);
     const float appear = easeOutCubic(span(t, 0.0f, 0.30f));
     const float panelIn = easeOutCubic(span(t, 0.08f, 0.40f));
     const float panelDrop = (1.0f - panelIn) * -55.0f;
