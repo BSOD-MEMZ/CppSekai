@@ -4411,7 +4411,15 @@ int main(int argc, char** argv)
         // it possible - with one column per page the content was 1000+ px tall
         // and 判定 alone needed 1076 against a 845 view; two columns halve that
         // (the tallest page is now 768) and every page fits without scrolling.
-        ImVec2 cardSize = ImVec2(920.0f * s, 780.0f * s);
+        // 卡片高度跟着当前页的内容走（2026-11-01）：固定 780 时，内容少的页
+        // （关于 340、系统 504）底部空出两三百像素，看着像没画完。这里用上一帧
+        // 量到的 used/view 差把高度收敛到"刚好包住内容 + 10px"，按页分别记住 ——
+        // 第一帧仍是 780，第二帧起就是合适的高度，之后差值归零不再动。
+        // 卡片左上角固定在 (18,18)，所以变矮是从底部收，顶栏不会跳。
+        static float tabCardH[7] = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+        const int cardTab = std::clamp(settingsTab, 0, 6);
+        const float cardH = tabCardH[cardTab] > 0.0f ? tabCardH[cardTab] : 780.0f * s;
+        ImVec2 cardSize = ImVec2(920.0f * s, cardH);
         ImVec2 cardCenter = ImVec2(18.0f * s + cardSize.x * 0.5f, 18.0f * s + cardSize.y * 0.5f);
         const float interior = cardSize.x - 56.0f * s;
         const float padX = 28.0f * s;
@@ -4623,6 +4631,16 @@ int main(int argc, char** argv)
                         colSet(1);
                         ui::sectionLabel("玩法", w);
                         colSet(1);
+                        ImGui::Text("默认歌手");
+                        colSet(1);
+                        // 26 个歌手塞不进设置页，选项在独立卡片里。
+                        // 2026-11-01：从「输入」挪上来 —— 它决定的是放谁的版本，
+                        // 是玩法不是按键。
+                        const std::string vocalLabel = vocalPrefSummary();
+                        if (ui::capsuleButton(vocalLabel.c_str(), ImVec2(w, 40.0f * s), false)) {
+                            vocalPrefCardOpen = true;
+                        }
+                        colSet(1);
                         // 自动演出 (moved here from 画面): it is a play-mode switch,
                         // not a display one. checkBox returns the *new* value, so
                         // gate on a real change - gating on the return value made
@@ -4650,21 +4668,13 @@ int main(int argc, char** argv)
                         }
                         // 现在这一栏只有半张卡片宽（292 而不是 864），摘要得再短一点，
                         // 否则"按键映射"四个字后面直接被切掉。
-                        if (keySummary.size() > 12) {
-                            keySummary = keySummary.substr(0, 11) + "…";
+                        if (keySummary.size() > 8) {
+                            keySummary = keySummary.substr(0, 7) + "…";
                         }
                         char keyLabel[96];
                         std::snprintf(keyLabel, sizeof(keyLabel), "按键映射　%s", keySummary.c_str());
                         if (ui::capsuleButton(keyLabel, ImVec2(w, 40.0f * s), false)) {
                             keymapCardOpen = true;
-                        }
-                        colSet(0);
-                        ImGui::Text("默认歌手");
-                        colSet(0);
-                        // 26 个歌手塞不进设置页（那七个页都是不滚的），选项在独立卡片里。
-                        const std::string vocalLabel = vocalPrefSummary();
-                        if (ui::capsuleButton(vocalLabel.c_str(), ImVec2(w, 40.0f * s), false)) {
-                            vocalPrefCardOpen = true;
                         }
                     },
                     [&](float w) {
@@ -4792,6 +4802,28 @@ int main(int argc, char** argv)
                             applyRenderMode();
                             persistUserData();
                         }
+                        // 性能：原来单独占一行两栏，"显示帧率"一个人待在右栏、
+                        // 左边空掉半张卡（2026-11-01 合并）。现在它就在读数下面，
+                        // 这个 checkbox 本来也是给这一组读数用的。
+                        colSet(0);
+                        ui::sectionLabel("性能", w);
+                        colSet(0);
+                        ImGui::Text("帧率上限");
+                        static float fpsLimitF = static_cast<float>(fpsLimit);
+                        colSet(0);
+                        if (ui::slider("fps", &fpsLimitF, 0.0f, 240.0f, 5.0f, "%.0f fps", w)) {
+                            fpsLimitLive = static_cast<int>(fpsLimitF);
+                        }
+                        colSet(0);
+                        bool showFpsBox = showFps;
+                        ui::checkBox("显示帧率", &showFpsBox, w);
+                        if (showFpsBox != showFps) {
+                            showFps = showFpsBox;
+                            persistUserData();
+                        }
+                        colSet(0);
+                        ImGui::Text("实测 %.0f fps · %d Hz 关垂直同步",
+                            1.0 / std::max(1e-6, lastFrameDeltaSec), displayRefreshHz);
                     },
                     [&](float w) {
                         colSet(1);
@@ -4858,33 +4890,17 @@ int main(int argc, char** argv)
                                 SDL_SetWindowResizable(window, SDL_TRUE);
                             }
                         }
-                    });
-                twoCols(
-                    [&](float w) {
-                        colSet(0);
-                        ui::sectionLabel("性能", w);
-                        colSet(0);
-                        ImGui::Text("帧率上限");
-                        static float fpsLimitF = static_cast<float>(fpsLimit);
-                        colSet(0);
-                        if (ui::slider("fps", &fpsLimitF, 0.0f, 240.0f, 5.0f, "%.0f fps", w)) {
-                            fpsLimitLive = static_cast<int>(fpsLimitF);
-                        }
-                        colSet(0);
-                        ImGui::Text("实测: %.1f fps", 1.0 / std::max(1e-6, lastFrameDeltaSec));
-                        colSet(0);
-                        ImGui::Text("超过 %d Hz 自动关垂直同步", displayRefreshHz);
-                    },
-                    [&](float w) {
+                        // 原生菜单栏（2026-11-01 从「系统集成」挪来）：它改的是窗口的
+                        // 非客户区，跟分辨率 / 窗口模式是一类东西。
                         colSet(1);
-                        ui::sectionLabel("显示", w);
-                        colSet(1);
-                        // 显示帧率 was down in 画面与特效; it is a performance
-                        // readout, so it moved up with the fps rows (2026-10-11).
-                        bool showFpsBox = showFps;
-                        ui::checkBox("显示帧率", &showFpsBox, w);
-                        if (showFpsBox != showFps) {
-                            showFps = showFpsBox;
+                        bool menuBarBox = userSettings.nativeMenuBar;
+                        ui::checkBox("原生菜单栏", &menuBarBox, w);
+                        if (menuBarBox != userSettings.nativeMenuBar) {
+                            userSettings.nativeMenuBar = menuBarBox;
+                            // 挂/摘**不在这里做**：SetMenu 会重排非客户区（WM_NCCALCSIZE
+                            // 一类的同步消息），而这正是"从 ImGui 帧中间动窗口"最不该干的
+                            // 事 —— 跟玻璃实现同一个理由。帧外那段 refreshNativeMenuBar
+                            // 会在这一帧结束后按设置自己挂/摘。
                             persistUserData();
                         }
                     });
@@ -4902,17 +4918,34 @@ int main(int argc, char** argv)
                             showProgressBar = showProgressBox;
                             persistUserData();
                         }
-                    },
-                    [&](float w) {
-                        colSet(1);
-                        ui::sectionLabel("开屏", w);
-                        colSet(1);
+                        colSet(0);
                         // Splash style: static image (0) vs classic progress bar (1).
                         // Only read at startup, so a change takes effect next launch.
+                        // 2026-11-01：原来自己一个「开屏」组，整栏就只有这一个 checkbox，
+                        // 标题占的宽度比内容还多 —— 并回「界面」。
                         bool classicSplashBox = userSettings.splashStyle != 0;
                         ui::checkBox("经典开屏画面", &classicSplashBox, w);
                         if (classicSplashBox != (userSettings.splashStyle != 0)) {
                             userSettings.splashStyle = classicSplashBox ? 1 : 0;
+                            persistUserData();
+                        }
+                    },
+                    [&](float w) {
+                        colSet(1);
+                        ui::sectionLabel("打击特效", w);
+                        colSet(1);
+                        // 弱化打击特效: pjsk's light effect profile. Only the basic
+                        // layer of a hit burst survives - the judgement spark and a
+                        // flick's flash - so the lane lights, the auras drawn under
+                        // the notes and the particles a long note burns while held
+                        // all go away. It is also the single biggest cut in
+                        // per-frame overdraw, which is what a weak integrated GPU
+                        // feels first. Takes effect on the next spawned particle.
+                        bool simpleFxBox = simpleEffects;
+                        ui::checkBox("弱化打击特效", &simpleFxBox, w);
+                        if (simpleFxBox != simpleEffects) {
+                            simpleEffects = simpleFxBox;
+                            core_api::setSimpleEffect(simpleEffects);
                             persistUserData();
                         }
                     });
@@ -5009,40 +5042,6 @@ int main(int argc, char** argv)
                             glassMode = chosen; // the helper reads this one
 #ifdef _WIN32
                             requestGlassWindowMode(true); // applied between frames, not here
-#endif
-                            persistUserData();
-                        }
-                    });
-                twoCols(
-                    [&](float w) {
-                        colSet(0);
-                        ui::sectionLabel("打击特效", w);
-                        colSet(0);
-                        // 弱化打击特效: pjsk's light effect profile. Only the basic
-                        // layer of a hit burst survives - the judgement spark and a
-                        // flick's flash - so the lane lights, the auras drawn under
-                        // the notes and the particles a long note burns while held
-                        // all go away. It is also the single biggest cut in
-                        // per-frame overdraw, which is what a weak integrated GPU
-                        // feels first. Takes effect on the next spawned particle.
-                        bool simpleFxBox = simpleEffects;
-                        ui::checkBox("弱化打击特效", &simpleFxBox, w);
-                        if (simpleFxBox != simpleEffects) {
-                            simpleEffects = simpleFxBox;
-                            core_api::setSimpleEffect(simpleEffects);
-                            persistUserData();
-                        }
-                    },
-                    [&](float w) {
-                        colSet(1);
-                        ui::sectionLabel("系统触摸", w);
-                        colSet(1);
-                        bool hideTouchBox = hideTouchFeedback;
-                        ui::checkBox("隐藏系统触摸特效", &hideTouchBox, w);
-                        if (hideTouchBox != hideTouchFeedback) {
-                            hideTouchFeedback = hideTouchBox;
-#ifdef _WIN32
-                            applyTouchFeedback(window, hideTouchFeedback);
 #endif
                             persistUserData();
                         }
@@ -5291,17 +5290,6 @@ int main(int argc, char** argv)
                             }
                             persistUserData();
                         }
-                        colSet(1);
-                        bool menuBarBox = userSettings.nativeMenuBar;
-                        ui::checkBox("原生菜单栏", &menuBarBox, w);
-                        if (menuBarBox != userSettings.nativeMenuBar) {
-                            userSettings.nativeMenuBar = menuBarBox;
-                            // 挂/摘**不在这里做**：SetMenu 会重排非客户区（WM_NCCALCSIZE
-                            // 一类的同步消息），而这正是"从 ImGui 帧中间动窗口"最不该干的
-                            // 事 —— 跟玻璃实现同一个理由。帧外那段 refreshNativeMenuBar
-                            // 会在这一帧结束后按设置自己挂/摘。
-                            persistUserData();
-                        }
 #ifdef _WIN32
                         // .sus 文件关联：注册表是唯一真相，所以不存进档案 —— 启动查一次，
                         // 之后跟着这个开关走（在别处改过关联时，重启就看到真实状态）。
@@ -5328,6 +5316,19 @@ int main(int argc, char** argv)
                         ui::checkBox("开始游戏时切到英文输入法", &imeBox, w);
                         if (imeBox != userSettings.switchImeOnStart) {
                             userSettings.switchImeOnStart = imeBox;
+                            persistUserData();
+                        }
+                        colSet(1);
+                        // 隐藏系统触摸特效（2026-11-01 从「外观」挪来）：它关掉的是
+                        // Windows 自己的触摸反馈（圆点 / 涟漪），跟 SMTC、输入法一样
+                        // 是「和系统打交道」，不是画面风格。
+                        bool hideTouchBox = hideTouchFeedback;
+                        ui::checkBox("隐藏系统触摸特效", &hideTouchBox, w);
+                        if (hideTouchBox != hideTouchFeedback) {
+                            hideTouchFeedback = hideTouchBox;
+#ifdef _WIN32
+                            applyTouchFeedback(window, hideTouchFeedback);
+#endif
                             persistUserData();
                         }
                     });
@@ -5480,121 +5481,205 @@ int main(int argc, char** argv)
                     std::snprintf(noteBuf, sizeof(noteBuf), "%s", account.note.c_str());
                 }
 
-                twoCols(
-                    [&](float w) {
-                        // --- 多用户 ---
-                        colSet(0);
-                        ui::sectionLabel("用户", w);
-                        colSet(0);
-                        int current = 0;
-                        for (std::size_t i = 0; i < profiles.size(); ++i) {
-                            if (profiles[i].id == activeProfileId) {
-                                current = static_cast<int>(i);
-                            }
+                // --- 用户列表（2026-11-01 重做）---
+                // 原来是一个下拉框选用户，下面再堆「新建 / 删除 / 资料 / 导入导出」，
+                // 页面上一眼看不出"有几个用户、现在编辑的是谁"。现在一行一个用户：
+                // 点哪一行就切到谁，下面的资料跟着换。
+                contentLeft();
+                ui::sectionLabel("用户", interior);
+                {
+                    int current = 0;
+                    for (std::size_t i = 0; i < profiles.size(); ++i) {
+                        if (profiles[i].id == activeProfileId) {
+                            current = static_cast<int>(i);
                         }
-                        std::vector<std::string> labels;
-                        labels.reserve(profiles.size());
-                        for (const game::UserProfile& user : profiles) {
-                            labels.push_back(user.name);
+                    }
+                    const float rowH = 54.0f * s;
+                    ImDrawList* listDl = ImGui::GetWindowDrawList();
+                    int pick = -1;
+                    for (std::size_t i = 0; i < profiles.size(); ++i) {
+                        ImGui::PushID(0x5000 + static_cast<int>(i));
+                        contentLeft();
+                        const ImVec2 p0 = ImGui::GetCursorScreenPos();
+                        const ImVec2 p1(p0.x + interior, p0.y + rowH);
+                        const bool hit = ImGui::InvisibleButton("##profilerow", ImVec2(interior, rowH));
+                        const bool hovered = ImGui::IsItemHovered();
+                        const bool sel = static_cast<int>(i) == current;
+                        const float hot = ui::anim(0x50520000u + static_cast<unsigned>(i),
+                            hovered && !sel ? 1.0f : 0.0f, 14.0f);
+                        listDl->AddRectFilled(p0, p1,
+                            sel ? IM_COL32(230, 246, 242, 255)
+                                : ui::mix(IM_COL32(246, 246, 250, 255), IM_COL32(236, 238, 246, 255), hot),
+                            10.0f * s);
+                        if (sel) {
+                            listDl->AddRectFilled(ImVec2(p0.x + 5.0f * s, p0.y + 12.0f * s),
+                                ImVec2(p0.x + 9.0f * s, p1.y - 12.0f * s), IM_COL32(53, 208, 174, 255),
+                                2.0f * s);
                         }
-                        int chosen = current;
-                        const int labelCount = static_cast<int>(labels.size());
-                        bool profilePicked = !labels.empty()
-                            && ui::combo("##profile",
-                                labels[static_cast<std::size_t>(std::clamp(chosen, 0, labelCount - 1))].c_str(),
-                                labels, &chosen, w);
-                        if (!labels.empty()) {
-                            profilePicked |= ui::padComboNudge(&chosen, labelCount);
+                        ImGui::PushFont(game::bodyFont(), 24.0f * s);
+                        const ImVec2 ts = ImGui::CalcTextSize(profiles[i].name.c_str());
+                        listDl->AddText(ImGui::GetFont(), 24.0f * s,
+                            ImVec2(p0.x + 26.0f * s, p0.y + (rowH - ts.y) * 0.5f),
+                            sel ? IM_COL32(38, 42, 58, 255) : IM_COL32(98, 98, 120, 255),
+                            profiles[i].name.c_str());
+                        if (sel) {
+                            const char* tag = "当前";
+                            const ImVec2 tsz = ImGui::CalcTextSize(tag);
+                            listDl->AddText(ImGui::GetFont(), 18.0f * s,
+                                ImVec2(p1.x - tsz.x - 24.0f * s, p0.y + (rowH - tsz.y) * 0.5f),
+                                IM_COL32(116, 148, 138, 255), tag);
                         }
-                        if (profilePicked) {
-                            if (chosen != current) {
-                                activateProfile(profiles[static_cast<std::size_t>(chosen)].id);
-                            }
+                        ImGui::PopFont();
+                        if (hit && !sel) {
+                            pick = static_cast<int>(i);
                         }
-                        colSet(0);
-                        static char newName[48] = "新用户";
-                        const float buttonW = w * 0.34f;
-                        const float fieldW = w - buttonW - 8.0f * s;
-                        ImGui::SetNextItemWidth(fieldW);
-                        ImGui::InputText("##newprofile", newName, sizeof(newName));
-                        ImGui::SameLine();
-                        if (ui::capsuleButton("新建", ImVec2(buttonW, 40.0f * s), true)) {
-                            std::string label(newName);
-                            if (label.empty()) {
-                                label = "新用户";
-                            }
-                            // A fresh profile starts from the defaults (so it does
-                            // not inherit this user's note speed / offset), which
-                            // is also what "save the current one first" protects.
-                            game::saveUserData(userDataFile, userSettings, scores, account);
-                            game::UserProfile user;
-                            user.id = game::makeProfileId(label, profiles);
-                            user.name = label;
-                            profiles.push_back(user);
-                            activeProfileId.clear(); // so activateProfile() does not bail out
-                            activateProfile(user.id);
-                            // New account: clear the mirrored text buffers by
-                            // renaming through the profile id change.
-                            platform::logf(platform::LogSystem, "[profile] created '%s' as %s\n", label.c_str(), user.id.c_str());
-                        }
-                    },
-                    [&](float w) {
-                        colSet(1);
-                        ui::sectionLabel("管理", w);
-                        colSet(1);
-                        // Two-step instead of a modal: the first press only arms it,
-                        // and the same button becomes the confirmation for ~3s.
-                        static int confirmFrames = 0;
-                        const float buttonW = w * 0.72f;
-                        if (profiles.size() < 2) {
-                            ImGui::BeginDisabled();
-                        }
-                        if (confirmFrames > 0) {
-                            if (ui::capsuleButton("确认删除？", ImVec2(buttonW, 40.0f * s), true)) {
-                                confirmFrames = 0;
-                                const std::string victim = activeProfileId;
-                                std::string victimName;
-                                std::size_t target = profiles.size();
-                                for (std::size_t i = 0; i < profiles.size(); ++i) {
-                                    if (profiles[i].id == victim) {
-                                        victimName = profiles[i].name;
-                                    } else if (target == profiles.size()) {
-                                        target = i;
-                                    }
-                                }
-                                if (target < profiles.size()) {
-                                    // Take the id first: erasing shifts the indexes.
-                                    const std::string targetId = profiles[target].id;
-                                    profiles.erase(std::remove_if(profiles.begin(), profiles.end(),
-                                                       [&](const game::UserProfile& user) { return user.id == victim; }),
-                                        profiles.end());
-                                    activeProfileId.clear(); // so activateProfile() does not bail out
-                                    activateProfile(targetId);
-                                    // The file is left on disk on purpose: removing a
-                                    // user from the list must never destroy their
-                                    // scores. It sits in profiles/ as <id>.json.
-                                    platform::logf(platform::LogSystem, "[profile] removed '%s' (%s) from the list; file kept\n",
-                                        victimName.c_str(), victim.c_str());
+                        ImGui::PopID();
+                    }
+                    if (pick >= 0) {
+                        activateProfile(profiles[static_cast<std::size_t>(pick)].id);
+                    }
+                }
+
+                // 四个按钮一行：新建 / 删除 / 导出 / 导入。
+                // 新建不再问名字 —— 直接建一个「用户 N」，名字在下面的昵称里改
+                // （昵称本来就写回 profile 的名字，两处是同一个东西）。
+                contentLeft();
+                {
+                    const float gap = 8.0f * s;
+                    const float bw = (interior - gap * 3.0f) / 4.0f;
+                    if (ui::capsuleButton("新建用户", ImVec2(bw, 44.0f * s), false)) {
+                        std::string label = "用户 2";
+                        for (int n = 2; n < 999; ++n) {
+                            label = "用户 " + std::to_string(n);
+                            bool taken = false;
+                            for (const game::UserProfile& user : profiles) {
+                                if (user.name == label) {
+                                    taken = true;
+                                    break;
                                 }
                             }
-                            --confirmFrames;
-                        } else if (ui::capsuleButton("删除此用户", ImVec2(buttonW, 40.0f * s), false)) {
-                            confirmFrames = 180;
+                            if (!taken) {
+                                break;
+                            }
                         }
-                        if (profiles.size() < 2) {
-                            ImGui::EndDisabled();
+                        // A fresh profile starts from the defaults (so it does
+                        // not inherit this user's note speed / offset), which
+                        // is also what "save the current one first" protects.
+                        game::saveUserData(userDataFile, userSettings, scores, account);
+                        game::UserProfile user;
+                        user.id = game::makeProfileId(label, profiles);
+                        user.name = label;
+                        profiles.push_back(user);
+                        activeProfileId.clear(); // so activateProfile() does not bail out
+                        activateProfile(user.id);
+                        platform::logf(platform::LogSystem, "[profile] created '%s' as %s\n", label.c_str(), user.id.c_str());
+                    }
+                    ImGui::SameLine(0.0f, gap);
+                    // Two-step instead of a modal: the first press only arms it,
+                    // and the same button becomes the confirmation for ~3s.
+                    static int confirmFrames = 0;
+                    if (profiles.size() < 2) {
+                        ImGui::BeginDisabled();
+                    }
+                    if (confirmFrames > 0) {
+                        if (ui::capsuleButton("确认删除？", ImVec2(bw, 44.0f * s), true)) {
+                            confirmFrames = 0;
+                            const std::string victim = activeProfileId;
+                            std::string victimName;
+                            std::size_t target = profiles.size();
+                            for (std::size_t i = 0; i < profiles.size(); ++i) {
+                                if (profiles[i].id == victim) {
+                                    victimName = profiles[i].name;
+                                } else if (target == profiles.size()) {
+                                    target = i;
+                                }
+                            }
+                            if (target < profiles.size()) {
+                                // Take the id first: erasing shifts the indexes.
+                                const std::string targetId = profiles[target].id;
+                                profiles.erase(std::remove_if(profiles.begin(), profiles.end(),
+                                                   [&](const game::UserProfile& user) { return user.id == victim; }),
+                                    profiles.end());
+                                activeProfileId.clear(); // so activateProfile() does not bail out
+                                activateProfile(targetId);
+                                // The file is left on disk on purpose: removing a
+                                // user from the list must never destroy their
+                                // scores. It sits in profiles/ as <id>.json.
+                                platform::logf(platform::LogSystem, "[profile] removed '%s' (%s) from the list; file kept\n",
+                                    victimName.c_str(), victim.c_str());
+                            }
                         }
-                        colSet(1);
-                        // 等级 / 经验：原来是一整块 infoRows，现在跟着「管理」走，
-                        // 免得右边那一栏空着（下面还有导入导出）。
-                        const double need = game::expToNextRank(account.rank);
-                        char lvLine[64];
-                        std::snprintf(lvLine, sizeof(lvLine), "%d", account.rank);
-                        char expLine[64];
-                        std::snprintf(expLine, sizeof(expLine), "%d / %d",
-                            static_cast<int>(account.exp), static_cast<int>(need));
-                        ui::infoRows({{"等级", lvLine}, {"本级经验", expLine}}, w);
-                    });
+                        --confirmFrames;
+                    } else if (ui::capsuleButton("删除用户", ImVec2(bw, 44.0f * s), false)) {
+                        confirmFrames = 180;
+                    }
+                    if (profiles.size() < 2) {
+                        ImGui::EndDisabled();
+                    }
+                    ImGui::SameLine(0.0f, gap);
+                    if (ui::capsuleButton("导出", ImVec2(bw, 44.0f * s), false)) {
+                        // Nicknames are free text, so illegal file-name
+                        // characters are replaced rather than dropped.
+                        std::string who = account.name.empty() ? activeProfileId : account.name;
+                        for (char& c : who) {
+                            if (std::strchr("\\/:*?\"<>|", c) != nullptr) {
+                                c = '_';
+                            }
+                        }
+                        const std::string suggested = path_utf8::fromPath(path_utf8::toPath(userDataDir)
+                            / ("CppSekai-" + who + "-" + dateStamp() + ".json"));
+                        const std::string path = pickUserDataFile(true, suggested);
+                        if (!path.empty()) {
+                            // persistUserData() first: the live mirrors (note
+                            // speed, offset, judgement...) are what make up
+                            // userSettings, and they are only copied on save.
+                            persistUserData();
+                            game::saveUserData(path, userSettings, scores, account);
+                            profileIoStatus = "已导出：" + fileLabel(path);
+                            profileIoStatusFrames = 300;
+                            platform::logf(platform::LogSystem, "[profile] exported '%s' to %s\n", activeProfileId.c_str(),
+                                path.c_str());
+                            std::fflush(stdout);
+                        }
+                    }
+                    ImGui::SameLine(0.0f, gap);
+                    if (ui::capsuleButton("导入", ImVec2(bw, 44.0f * s), false)) {
+                        const std::string path = pickUserDataFile(false, std::string());
+                        if (!path.empty()) {
+                            // Screened *before* the confirmation card: a file
+                            // that is not user data must not get a "we are about
+                            // to replace your scores" prompt.
+                            if (game::isUserDataFile(path)) {
+                                game::UserSettings probeSettings;
+                                std::map<std::string, game::ScoreRecord> probeScores;
+                                game::AccountData probeAccount;
+                                game::loadUserData(path, probeSettings, probeScores, probeAccount);
+                                importPath = path;
+                                importWho = probeAccount.name.empty() ? "(无昵称)" : probeAccount.name;
+                                importScores = probeScores.size();
+                                importAsk = true;
+                                platform::logf(platform::LogSystem, "[profile] import candidate %s (user '%s', %zu score(s))\n",
+                                    path.c_str(), importWho.c_str(), importScores);
+                            } else {
+                                profileIoStatus = "不是用户数据文件：" + fileLabel(path);
+                                profileIoStatusFrames = 300;
+                                platform::logf(platform::LogSystem, "[profile] import rejected %s (not user data)\n", path.c_str());
+                            }
+                            std::fflush(stdout);
+                        }
+                    }
+                }
+                if (profileIoStatusFrames > 0) {
+                    --profileIoStatusFrames;
+                    contentLeft();
+                    ImGui::PushFont(game::bodyFont(), 19.0f * s);
+                    ImGui::PushTextWrapPos(cardCenter.x - cardSize.x * 0.5f + padX + interior);
+                    ImGui::TextWrapped("%s", profileIoStatus.c_str());
+                    ImGui::PopTextWrapPos();
+                    ImGui::PopFont();
+                }
+
+                // 选中那个用户的资料。改的就是上面列表里高亮的那一行。
                 twoCols(
                     [&](float w) {
                         colSet(0);
@@ -5605,12 +5690,10 @@ int main(int argc, char** argv)
                         ImGui::SetNextItemWidth(w);
                         if (ImGui::InputText("##pname", nameBuf, sizeof(nameBuf))) {
                             account.name = nameBuf;
-                            // The 用户 combobox above lists the *profile files*
-                            // (profiles/index.json), which had their own label - so
-                            // renaming yourself left it showing "默认用户" and the
-                            // two looked like unrelated things. Keep them the same
-                            // label; an empty nickname keeps whatever was there
-                            // before.
+                            // The 用户 list above shows the *profile file* label
+                            // (profiles/index.json); renaming yourself has to keep
+                            // the two in step, otherwise the list keeps the old
+                            // name. An empty nickname keeps whatever was there.
                             for (game::UserProfile& user : profiles) {
                                 if (user.id != activeProfileId || account.name.empty()
                                     || user.name == account.name) {
@@ -5637,6 +5720,14 @@ int main(int argc, char** argv)
                             account.org = orgBuf;
                             persistUserData();
                         }
+                        colSet(0);
+                        const double need = game::expToNextRank(account.rank);
+                        char lvLine[64];
+                        std::snprintf(lvLine, sizeof(lvLine), "%d", account.rank);
+                        char expLine[64];
+                        std::snprintf(expLine, sizeof(expLine), "%d / %d",
+                            static_cast<int>(account.exp), static_cast<int>(need));
+                        ui::infoRows({{"等级", lvLine}, {"本级经验", expLine}}, w);
                     },
                     [&](float w) {
                         colSet(1);
@@ -5649,162 +5740,86 @@ int main(int argc, char** argv)
                             persistUserData();
                         }
                     });
-
-                // 导入 / 导出. One profile file carries everything this account
-                // owns (settings + scores + 资料), so "backup" and "move to
-                // another machine" are the same operation - and a reinstall can
-                // be undone. Both go through the native picker.
-                twoCols(
-                    [&](float w) {
-                        colSet(0);
-                        ui::sectionLabel("备份", w);
-                        colSet(0);
-                        if (ui::capsuleButton("导出用户数据", ImVec2(w, 40.0f * s), false)) {
-                            // Nicknames are free text, so illegal file-name
-                            // characters are replaced rather than dropped.
-                            std::string who = account.name.empty() ? activeProfileId : account.name;
-                            for (char& c : who) {
-                                if (std::strchr("\\/:*?\"<>|", c) != nullptr) {
-                                    c = '_';
-                                }
-                            }
-                            const std::string suggested = path_utf8::fromPath(path_utf8::toPath(userDataDir)
-                                / ("CppSekai-" + who + "-" + dateStamp() + ".json"));
-                            const std::string path = pickUserDataFile(true, suggested);
-                            if (!path.empty()) {
-                                // persistUserData() first: the live mirrors (note
-                                // speed, offset, judgement...) are what make up
-                                // userSettings, and they are only copied on save.
-                                persistUserData();
-                                game::saveUserData(path, userSettings, scores, account);
-                                profileIoStatus = "已导出：" + fileLabel(path);
-                                profileIoStatusFrames = 300;
-                                platform::logf(platform::LogSystem, "[profile] exported '%s' to %s\n", activeProfileId.c_str(),
-                                    path.c_str());
-                                std::fflush(stdout);
-                            }
-                        }
-                    },
-                    [&](float w) {
-                        colSet(1);
-                        ui::sectionLabel("恢复", w);
-                        colSet(1);
-                        if (ui::capsuleButton("导入用户数据", ImVec2(w, 40.0f * s), false)) {
-                            const std::string path = pickUserDataFile(false, std::string());
-                            if (!path.empty()) {
-                                // Screened *before* the confirmation card: a file
-                                // that is not user data must not get a "we are about
-                                // to replace your scores" prompt.
-                                if (game::isUserDataFile(path)) {
-                                    game::UserSettings probeSettings;
-                                    std::map<std::string, game::ScoreRecord> probeScores;
-                                    game::AccountData probeAccount;
-                                    game::loadUserData(path, probeSettings, probeScores, probeAccount);
-                                    importPath = path;
-                                    importWho = probeAccount.name.empty() ? "(无昵称)" : probeAccount.name;
-                                    importScores = probeScores.size();
-                                    importAsk = true;
-                                    platform::logf(platform::LogSystem, "[profile] import candidate %s (user '%s', %zu score(s))\n",
-                                        path.c_str(), importWho.c_str(), importScores);
-                                } else {
-                                    profileIoStatus = "不是用户数据文件：" + fileLabel(path);
-                                    profileIoStatusFrames = 300;
-                                    platform::logf(platform::LogSystem, "[profile] import rejected %s (not user data)\n", path.c_str());
-                                }
-                                std::fflush(stdout);
-                            }
-                        }
-                    });
-                if (profileIoStatusFrames > 0) {
-                    --profileIoStatusFrames;
-                    contentLeft();
-                    ImGui::PushFont(game::bodyFont(), 19.0f * s);
-                    ImGui::PushTextWrapPos(cardCenter.x - cardSize.x * 0.5f + padX + interior);
-                    ImGui::TextWrapped("%s", profileIoStatus.c_str());
-                    ImGui::PopTextWrapPos();
-                    ImGui::PopFont();
-                }
             } else if (tab == 6) {
-                // 关于: what this is, who made it, what it is built on, what it is
-                // not, and the two links (把作者 / 上游 / 素材 / 仓库 / 个人站都放这里,
-                // 免得玩家去翻 README)。
-                //
-                // 2026-11-01 重排成两栏：左「关于」是读的部分（谁做的、什么时候），
-                // 右「链接 / 声明」是点的部分。原来单列一条竖着排，宽卡片右边整片空着。
-                const auto aboutLine = [&](float width, float x0, const char* text) {
-                    ImGui::SetCursorScreenPos(ImVec2(x0, ImGui::GetCursorScreenPos().y));
-                    ImGui::TextUnformatted(text);
-                    (void)width;
-                };
-                const auto aboutGap = [&]() {
-                    contentLeft();
-                    ImGui::Dummy(ImVec2(1.0f, 9.0f * s));
-                };
-                twoCols(
-                    [&](float w) {
-                        colSet(0);
-                        ui::sectionLabel("关于", w);
-                        const float x0 = cardLeft + padX;
-                        aboutLine(w, x0, "CppSekai");
-                        ImGui::PushFont(game::bodyFont(), 19.0f * s);
-                        aboutLine(w, x0, "版本 1.0.0.5");
-                        aboutLine(w, x0, "许可 AGPL-3.0-only");
-                        aboutGap();
-                        aboutLine(w, x0, "策划 / 开发");
-                        aboutLine(w, x0, "xxt8582753（BSOD-MEMZ）");
-                        aboutLine(w, x0, "测试");
-                        aboutLine(w, x0, "Shitakara4banme");
-                        aboutGap();
-                        aboutLine(w, x0, "株洲市南方中学");
-                        aboutLine(w, x0, "2026年9月");
-                        ImGui::PopFont();
-                    },
-                    [&](float w) {
-                        colSet(1);
-                        ui::sectionLabel("链接", w);
-                        // 两个整栏宽的胶囊，竖着排：列里横排两个各 200 宽会把
-                        // "访问 xxtsoft" 顶到边缘。
-                        if (ui::capsuleButton("GitHub", ImVec2(w, 44.0f * s), true)) {
-                            openUrl(L"https://github.com/BSOD-MEMZ/CppSekai");
-                        }
-                        colSet(1);
-                        if (ui::capsuleButton("访问 xxtsoft", ImVec2(w, 44.0f * s), false)) {
-                            openUrl(L"https://xxtsoft.top");
-                        }
-                        colSet(1);
-                        ui::sectionLabel("声明", w);
-                        colSet(1);
-                        // Wrapped at the column width: TextWrapped alone uses the
-                        // child's own width, which is the *card* - the text would
-                        // run out of the column instead of onto the next line.
-                        ImGui::PushFont(game::bodyFont(), 19.0f * s);
-                        ImGui::PushTextWrapPos(ImGui::GetCursorScreenPos().x + w);
-                        ImGui::TextWrapped("本项目免费、开源、非营利，与 SEGA、Colorful Palette 及《初音未来："
-                                           "缤纷舞台》官方没有任何关系，仅供本地学习与练习使用。");
-                        ImGui::PopTextWrapPos();
-                        ImGui::PopFont();
-                        colSet(1);
-                        // 许可与免责声明：把首次启动那张卡再抬一次。
-                        if (ui::capsuleButton("许可与免责声明", ImVec2(w, 44.0f * s), false)) {
-                            eulaAlive = true;
-                            eulaDismissedThisRun = false;
-                            eulaPadChoice = -1;
-                        }
-                        colSet(1);
-                        const bool replayHit = ui::capsuleButton("重播新手教学", ImVec2(w, 44.0f * s), true);
-                        if (std::getenv("CPSEKAI_UI_TRACE") != nullptr) {
-                            const ImVec2 lo = ImGui::GetItemRectMin();
-                            const ImVec2 hi = ImGui::GetItemRectMax();
-                            const ImVec2 mp = ImGui::GetIO().MousePos;
-                            const ImVec2 ds = ImGui::GetIO().DisplaySize;
-                            platform::logf(platform::LogRender, "[ui] replay pill %.0f,%.0f..%.0f,%.0f mouse=%.0f,%.0f display=%.0fx%.0f\n",
-                                lo.x, lo.y, hi.x, hi.y, mp.x, mp.y, ds.x, ds.y);
-                            std::fflush(stdout);
-                        }
-                        if (replayHit) {
-                            restartTutorial();
-                        }
-                    });
+                // 关于: 一页流水信息，不分组（2026-11-01 用户要求）。
+                // 短页上再加几条灰条只是多几块分隔；从上往下读完就行。
+                // 字号上限是 42 —— 字体图集就是按 42px 光栅化的（见 Intro.cpp 的
+                // AddFontFromFileTTF），超过它只会放大糊掉，所以标题取 40。
+                contentLeft();
+                ImGui::PushFont(game::titleFont(), 40.0f * s);
+                ImGui::TextUnformatted("CppSekai");
+                ImGui::PopFont();
+
+                contentLeft();
+                ImGui::PushFont(game::bodyFont(), 22.0f * s);
+                ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(122, 122, 148, 255));
+                ImGui::TextUnformatted("版本 1.0.0.5 · 许可 AGPL-3.0-only");
+                ImGui::PopStyleColor();
+                ImGui::PopFont();
+
+                contentLeft();
+                ImGui::PushFont(game::bodyFont(), 24.0f * s);
+                ImGui::TextUnformatted("策划 / 开发　xxt8582753（BSOD-MEMZ）");
+                contentLeft();
+                ImGui::TextUnformatted("测试　Shitakara4banme");
+                contentLeft();
+                ImGui::TextUnformatted("株洲市南方中学 · 2026 年 9 月");
+                ImGui::PopFont();
+
+                // 四个按钮一行，全都不是 primary —— 这一页没有"主操作"，
+                // 之前 GitHub 那颗是 primary，看着像"该点这个"。
+                contentLeft();
+                ImGui::Dummy(ImVec2(1.0f, 6.0f * s));
+                contentLeft();
+                {
+                    const float gap = 8.0f * s;
+                    const float bw = (interior - gap * 3.0f) / 4.0f;
+                    if (ui::capsuleButton("GitHub", ImVec2(bw, 44.0f * s), false)) {
+                        openUrl(L"https://github.com/BSOD-MEMZ/CppSekai");
+                    }
+                    ImGui::SameLine(0.0f, gap);
+                    if (ui::capsuleButton("访问 xxtsoft", ImVec2(bw, 44.0f * s), false)) {
+                        openUrl(L"https://xxtsoft.top");
+                    }
+                    ImGui::SameLine(0.0f, gap);
+                    if (ui::capsuleButton("许可与免责声明", ImVec2(bw, 44.0f * s), false)) {
+                        // Raises the first-run card again - see the eula state up
+                        // with the settings tab.
+                        eulaAlive = true;
+                        eulaDismissedThisRun = false;
+                        eulaPadChoice = -1;
+                    }
+                    ImGui::SameLine(0.0f, gap);
+                    const bool replayHit = ui::capsuleButton("重播新手教学", ImVec2(bw, 44.0f * s), false);
+                    if (std::getenv("CPSEKAI_UI_TRACE") != nullptr) {
+                        const ImVec2 lo = ImGui::GetItemRectMin();
+                        const ImVec2 hi = ImGui::GetItemRectMax();
+                        const ImVec2 mp = ImGui::GetIO().MousePos;
+                        const ImVec2 ds = ImGui::GetIO().DisplaySize;
+                        platform::logf(platform::LogRender, "[ui] replay pill %.0f,%.0f..%.0f,%.0f mouse=%.0f,%.0f display=%.0fx%.0f\n",
+                            lo.x, lo.y, hi.x, hi.y, mp.x, mp.y, ds.x, ds.y);
+                        std::fflush(stdout);
+                    }
+                    if (replayHit) {
+                        restartTutorial();
+                    }
+                }
+
+                contentLeft();
+                ImGui::Dummy(ImVec2(1.0f, 10.0f * s));
+                // Wrapped at the card interior: TextWrapped alone uses the child's
+                // own width, which already is the interior here, but an explicit
+                // wrap pos keeps it clear of the scrollbar.
+                contentLeft();
+                ImGui::PushFont(game::bodyFont(), 20.0f * s);
+                ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(122, 122, 148, 255));
+                ImGui::PushTextWrapPos(cardLeft + padX + interior);
+                ImGui::TextWrapped("本项目免费、开源、非营利，与 SEGA、Colorful Palette 及《初音未来："
+                                   "缤纷舞台》官方没有任何关系，仅供本地学习与练习使用。"
+                                   "全部曲名、角色、美术与音频的权利归各自权利人所有。");
+                ImGui::PopTextWrapPos();
+                ImGui::PopStyleColor();
+                ImGui::PopFont();
             }
             // End on an item: the checkbox helper leaves the cursor at the row
             // bottom with a bare SetCursorScreenPos, which trips ImGui's
@@ -5812,6 +5827,12 @@ int main(int argc, char** argv)
             // is the last window in the frame. The extra height also keeps the
             // last row off the card edge and inside the scroll range.
             ImGui::Dummy(ImVec2(1.0f, 14.0f * s));
+            // 记下这一页需要多高（下一帧的卡片高度用它，见上面的 tabCardH）。
+            // used 是 child 里的光标 y，view 是 child 的高度 —— 差值就是"多出来
+            // 的那截空白"，把它从卡片上减掉，正好收成贴着内容的高度。
+            tabCardH[std::clamp(tab, 0, 6)] = std::clamp(
+                cardH + (ImGui::GetCursorPosY() + 10.0f * s - ImGui::GetWindowHeight()),
+                400.0f * s, 1040.0f * s);
             // Diagnostic (CPSEKAI_UI_TRACE=1): how tall this tab really is against
             // the view. `used` past `view` means rows are being drawn below the
             // child and clipped - which is what "the settings do not fit" looks
@@ -5831,7 +5852,7 @@ int main(int argc, char** argv)
             const float closeBtnW = 200.0f * s;
             ImGui::SetCursorScreenPos(ImVec2(cardCenter.x - closeBtnW * 0.5f,
                 cardCenter.y + cardSize.y * 0.5f - 68.0f * s));
-            if (ui::capsuleButton("关闭", ImVec2(closeBtnW, 46.0f * s), false)) {
+            if (ui::capsuleButton("确定", ImVec2(closeBtnW, 46.0f * s), false)) {
                 showDebug = false;
                 keymapCardOpen = false;
             }
@@ -5934,7 +5955,7 @@ int main(int argc, char** argv)
                 persistUserData();
             }
             ImGui::SameLine();
-            if (ui::capsuleButton("关闭", ImVec2(btnW, 46.0f * s), true)) {
+            if (ui::capsuleButton("确定", ImVec2(btnW, 46.0f * s), true)) {
                 keymapCardOpen = false;
             }
             ui::endCard();
@@ -6060,7 +6081,7 @@ int main(int argc, char** argv)
         ImGui::PopStyleColor();
 
         ImGui::SetCursorScreenPos(ImVec2(cardLeft + padX, cardCenter.y + cardSize.y * 0.5f - 68.0f * s));
-        if (ui::capsuleButton("关闭", ImVec2(interior, 46.0f * s), true)) {
+        if (ui::capsuleButton("确定", ImVec2(interior, 46.0f * s), true)) {
             vocalPrefCardOpen = false;
         }
         ui::endCard();
@@ -6138,7 +6159,7 @@ int main(int argc, char** argv)
             persistUserData();
         }
         ImGui::SameLine(0.0f, 8.0f * s);
-        if (ui::capsuleButton("关闭", ImVec2(bw, 46.0f * s), true)) {
+        if (ui::capsuleButton("确定", ImVec2(bw, 46.0f * s), true)) {
             logCardOpen = false;
         }
         ui::endCard();
