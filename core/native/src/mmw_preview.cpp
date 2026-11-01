@@ -1249,6 +1249,14 @@ namespace mmw_preview
             if (holdEndEvent) {
                 flags += 8.0f;
             }
+            // Bit 4 = friction. `isFlick()` is tested before `friction` above,
+            // so a friction_flick arrives as kind 2; the flag is what lets the
+            // judgement engine give it the friction window row instead of the
+            // flick one (master's ingameJudgeFrames has a separate
+            // friction_flick entry, and it is uniform across all four grades).
+            if (note.friction) {
+                flags += 16.0f;
+            }
             float endTimeSec = -1.0f;
             const float volume = getSEVolumeAtTick(note.tick, gRuntime.score);
             gRuntime.hitEvents.push_back(HitEvent{

@@ -65,6 +65,15 @@ class AudioEngine
         // stay *after* every kind ui::SeKind knows about, because flushSe() casts
         // the ui index straight into this enum.
         UiSeLiveClear,
+        // The result screen's own sounds, straight out of the APK's
+        // MenuCommon.acb (D:/Dev/pjskassets has the whole set already decoded):
+        //   result_finish - se_live_finish, the sting when the result screen
+        //                   appears (the banner before it is LIVE_CLEAR's)
+        //   result_gauge  - SE_RESULT_SCORE_GAUGE_UP, the score bar filling
+        //   result_record - SE_RESULT_RECORD, "新纪录!"
+        UiSeResultFinish,
+        UiSeResultGauge,
+        UiSeResultRecord,
         UiSeCount,
     };
     static constexpr int UI_SE_POOL = 3;
@@ -111,9 +120,17 @@ class AudioEngine
     void update();
 
     // Jumps the lead-in clock straight to chart time 0 and starts the music
-    // right now (the opening card's skip button). No-op once the music is
-    // already playing, while paused, or when there is no music loaded.
+    // right now. No-op once the music is already playing, while paused, or when
+    // there is no music loaded.
     void skipLeadIn();
+    // Cuts the lead-in down to `remainingSec` so that chart time 0 arrives that
+    // soon - the opening card's skip button. Skipping all the way to 0 leaves
+    // the first notes with no runway at all: they are already on the judgement
+    // line on the frame the playfield appears, which reads as "my first few
+    // notes were eaten". A short remaining lead-in keeps the music anchored to
+    // chart time 0 (no audio/visual desync) while still giving the opening
+    // notes something to scroll in from.
+    void trimLeadInTo(double remainingSec);
 
     // Current chart time in seconds (negative = lead-in).
     double songTime() const;

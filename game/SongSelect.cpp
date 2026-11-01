@@ -361,6 +361,12 @@ namespace
     // half the list at once.
     // -----------------------------------------------------------------
     std::map<std::string, std::vector<int>> gAliasIndex;
+    // Same table, song id -> its aliases, for the search's partial-alias rule.
+    std::map<int, std::vector<std::string>> gAliasBySong;
+    // A partial alias has to be at least this long to count. The table is full
+    // of two-letter entries ("hs", "kz", "emu"); as substrings they would light
+    // up half the list, so they stay exact-only.
+    constexpr std::size_t kAliasSubstringMin = 3;
 
     bool aliasMatches(int musicId, const std::string& needleLower)
     {
@@ -370,6 +376,28 @@ namespace
         }
         const std::vector<int>& ids = it->second;
         return std::find(ids.begin(), ids.end(), musicId) != ids.end();
+    }
+
+    // Partial alias: "smile" has to find スマイル*シンフォニー, whose aliases are
+    // "smile symphony" / "smiles symphony" / "smilesymphony" - none of which is
+    // the query itself. Only aliases *longer* than the query are considered, so
+    // this never duplicates the exact branch above.
+    bool aliasContains(int musicId, const std::string& needleLower)
+    {
+        if (needleLower.size() < kAliasSubstringMin) {
+            return false;
+        }
+        const auto it = gAliasBySong.find(musicId);
+        if (it == gAliasBySong.end()) {
+            return false;
+        }
+        for (const std::string& alias : it->second) {
+            if (alias.size() > needleLower.size()
+                && alias.find(needleLower) != std::string::npos) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // -----------------------------------------------------------------
@@ -2539,6 +2567,7 @@ void applyDefaultVocal(ChartEntry& entry)
 void loadMusicAliases(const std::string& path)
 {
     gAliasIndex.clear();
+    gAliasBySong.clear();
     std::error_code ec;
     if (path.empty() || !fs::exists(toFsPath(path), ec)) {
         return;
@@ -2573,6 +2602,7 @@ void loadMusicAliases(const std::string& path)
             if (std::find(ids.begin(), ids.end(), musicId) == ids.end()) {
                 ids.push_back(musicId);
             }
+            gAliasBySong[musicId].push_back(alias);
         }
     }
     // Logged because a missing music-aliases.json is otherwise invisible: the
@@ -3220,7 +3250,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             // than folded into the substring tests - a two-letter alias is not
             // a fragment of the title, and treating it as one would match
             // everything.
-            if (aliasMatches(g.musicId, needle)) {
+            if (aliasMatches(g.musicId, needle) || aliasContains(g.musicId, needle)) {
                 visible.push_back(gi);
                 continue;
             }

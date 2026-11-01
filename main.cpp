@@ -3747,6 +3747,10 @@ int main(int argc, char** argv)
     // played (captured *before* the new record is written).
     game::ResultData resultData;
     double resultShownAt = 0.0;
+    // Result screen sound stages (0 = nothing played yet). The three one-shots
+    // fire exactly once each and sit at different points on the 2.6 s summary /
+    // score timeline, so a plain counter is enough.
+    int resultSeStage = 0;
     bool resultScheduled = false;
 
     // -----------------------------------------------------------------------
@@ -6636,6 +6640,7 @@ int main(int argc, char** argv)
         audio.stopMusic();
         state = AppState::Result;
         resultShownAt = uiClock;
+        resultSeStage = 0;
         std::printf("[result] preview mode (reference numbers)\n");
         std::fflush(stdout);
         std::fflush(stdout);
@@ -6799,16 +6804,24 @@ int main(int argc, char** argv)
         const double currentSongTime = songClock();
         return currentSongTime + leadInSec < static_cast<double>(game::kHudIntroDurationSec);
     };
+    // How much lead-in a skip leaves behind. Jumping straight to chart time 0
+    // puts the opening notes on the judgement line the instant the playfield
+    // appears - with no runway they are lost before the first frame is even on
+    // screen, which is exactly "跳过之后开头几个音符没打上". Half a second is
+    // enough to see the lane and pick up the beat, and short enough that the
+    // skip still feels instant.
+    constexpr double kSkipRemainingLeadInSec = 0.55;
     auto performIntroSkip = [&]() {
         if (audio.hasMusic()) {
-            audio.skipLeadIn();
+            audio.trimLeadInTo(kSkipRemainingLeadInSec);
         } else {
-            // No BGM: the clock is the wall clock - move its anchor so chart
-            // time 0 is now.
+            // No BGM: the clock is the wall clock - move its anchor so only
+            // kSkipRemainingLeadInSec of lead-in is left.
             perfStart = SDL_GetPerformanceCounter()
-                - static_cast<Uint64>(leadInSec * static_cast<double>(perfFreq));
+                - static_cast<Uint64>((leadInSec - kSkipRemainingLeadInSec)
+                    * static_cast<double>(perfFreq));
         }
-        std::printf("[intro] lead-in skipped%s\n", party.active() ? " (the whole room)" : "");
+        std::printf("[intro] lead-in trimmed to 0.55s%s\n", party.active() ? " (the whole room)" : "");
         std::fflush(stdout);
     };
     auto skipIntro = [&]() {
@@ -9801,6 +9814,7 @@ int main(int argc, char** argv)
                 }
                 state = AppState::Result;
                 resultShownAt = uiClock;
+                resultSeStage = 0;
                 std::printf("[result] shown (score=%.0f best=%.0f newRecord=%d)\n",
                     resultData.score, resultData.highScore, resultData.newRecord ? 1 : 0);
                 std::fflush(stdout);
@@ -10258,6 +10272,22 @@ int main(int argc, char** argv)
             renderer.renderFrame(nullptr, 0, 0.85f, 0.0f);
 
             const float resultElapsed = static_cast<float>(uiClock - resultShownAt);
+            // The result screen's own cues, one shot each (see resultSeStage).
+            // 0.00 = the summary rises out of black; 0.25 = its score bar has
+            // faded in; 2.75 = the score page's "新纪录!" lands (page 2 starts at
+            // 2.6 s, its new-record row comes in at +0.1167).
+            if (resultSeStage == 0) {
+                resultSeStage = 1;
+                audio.playUiSe(platform::AudioEngine::UiSeResultFinish, 0.85f);
+            } else if (resultSeStage == 1 && resultElapsed >= 0.25f) {
+                resultSeStage = 2;
+                audio.playUiSe(platform::AudioEngine::UiSeResultGauge, 0.7f);
+            } else if (resultSeStage == 2 && resultElapsed >= 2.75f) {
+                resultSeStage = 3;
+                if (resultData.newRecord) {
+                    audio.playUiSe(platform::AudioEngine::UiSeResultRecord, 0.8f);
+                }
+            }
             // Rumble: the score counting up. drawResult eases the counter from
             // 0 to the final score between 0.85s and 1.80s (its `countUp`), so
             // the same curve is replayed here and quantised into 24 ticks: they

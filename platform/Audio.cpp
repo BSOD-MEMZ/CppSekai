@@ -179,6 +179,9 @@ void AudioEngine::loadUiSe(const std::string& dir)
         "choice_open.wav",
         "choice_decide.wav",
         "LIVE_CLEAR.mp3", // the "LIVE CLEAR!" banner (game/LiveClearBanner.cpp)
+        "LIVE_FINISH.mp3",   // result screen appears (se_live_finish)
+        "result_gauge.wav",  // SE_RESULT_SCORE_GAUGE_UP
+        "result_record.wav", // SE_RESULT_RECORD
     };
     for (int kind = 0; kind < UiSeCount; ++kind) {
         const std::string path = dir + "/" + kFiles[kind];
@@ -238,6 +241,22 @@ void AudioEngine::skipLeadIn()
     ma_sound_start(&mMusic);
     mMusicStartFrames = ma_engine_get_time_in_pcm_frames(&mEngine);
     mMusicStarted = true;
+}
+
+void AudioEngine::trimLeadInTo(double remainingSec)
+{
+    if (!mStarted || mMusicStarted || mPaused || !mMusicLoaded) {
+        return;
+    }
+    // songTime() is "-mLeadInSec + (now - mAnchorFrames)/rate" until the music
+    // starts, so pulling the anchor forward is exactly "there is less lead-in
+    // left". The music itself still starts through the normal path at
+    // songTime() >= 0, which keeps chart time 0 == the first audible sample.
+    const double remaining = std::max(0.0, std::min(remainingSec, static_cast<double>(mLeadInSec)));
+    const std::uint64_t now = ma_engine_get_time_in_pcm_frames(&mEngine);
+    const auto skipFrames = static_cast<std::uint64_t>(
+        (static_cast<double>(mLeadInSec) - remaining) * sampleRate());
+    mAnchorFrames = skipFrames >= now ? 0 : now - skipFrames;
 }
 
 double AudioEngine::musicDurationSec() const

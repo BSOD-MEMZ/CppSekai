@@ -57,13 +57,27 @@ namespace
     // Which row a note reads. `critical` is flags bit 0; hold tails get their
     // own family because the official table grades them on the release, not on
     // the press.
-    WindowType windowTypeFor(float kind, bool critical, bool holdTail)
+    // Bit 4 of HitEvent.flags (core/native/src/mmw_preview.cpp): the note is a
+    // friction note even though its kind may say flick. `isFlick()` is tested
+    // first there, so friction_flick arrives as kind 2.
+    constexpr int kFlagFriction = 16;
+
+    WindowType windowTypeFor(float kind, bool critical, bool holdTail, bool friction)
     {
         if (holdTail) {
             if (kind == 2.0f) {
                 return WindowType::LongEndFlick;
             }
             return critical ? WindowType::LongEndCritical : WindowType::LongEnd;
+        }
+        if (friction) {
+            // friction_long_end / friction_flick have their own rows in the
+            // official table; a plain friction note's row is uniform across all
+            // four grades, which is the "touch it and it is PERFECT" rule.
+            if (kind == 2.0f) {
+                return WindowType::FrictionFlick;
+            }
+            return critical ? WindowType::FrictionCritical : WindowType::Friction;
         }
         if (kind == 3.0f) {
             return critical ? WindowType::FrictionCritical : WindowType::Friction;
@@ -72,6 +86,11 @@ namespace
             return critical ? WindowType::FlickCritical : WindowType::Flick;
         }
         return critical ? WindowType::NormalCritical : WindowType::Normal;
+    }
+
+    bool noteHasFlag(float flags, int bit)
+    {
+        return (static_cast<int>(std::lround(flags)) & bit) != 0;
     }
 
     // Lane coordinates: `center` is the middle of the note, `width` its span.
@@ -519,9 +538,11 @@ HitNote* JudgementEngine::findCandidate(float lanePos, float songTimeSec, float 
         // takes the press inside its own BAD window - outside it the note is
         // gone (MISS), and grading it BAD anyway is exactly the old bug.
         const float deltaMs = (songTimeSec - note.timeSec) * 1000.0f;
-        const bool noteCritical = (static_cast<int>(note.flags) & 1) != 0;
-        const JudgeWindow noteBad
-            = mWindows.windowsFor(windowTypeFor(note.kind, noteCritical, note.holdTail)).bad;
+        const bool noteCritical = noteHasFlag(note.flags, 1);
+        const JudgeWindow noteBad = mWindows
+            .windowsFor(windowTypeFor(note.kind, noteCritical, note.holdTail,
+                noteHasFlag(note.flags, kFlagFriction)))
+            .bad;
         if (-deltaMs > noteBad.earlyMs || deltaMs > noteBad.lateMs) {
             continue;
         }
@@ -537,9 +558,9 @@ HitNote* JudgementEngine::findCandidate(float lanePos, float songTimeSec, float 
     }
     // Signed: positive = the press was late. The official table gives every
     // note type its own early/late pair, so the grade comes from that row.
-    const bool bestCritical = (static_cast<int>(best->flags) & 1) != 0;
-    const TypeWindows bestWindows
-        = mWindows.windowsFor(windowTypeFor(best->kind, bestCritical, best->holdTail));
+    const bool bestCritical = noteHasFlag(best->flags, 1);
+    const TypeWindows bestWindows = mWindows.windowsFor(
+        windowTypeFor(best->kind, bestCritical, best->holdTail, noteHasFlag(best->flags, kFlagFriction)));
     const Judge judge = gradeFor(bestWindows, (songTimeSec - best->timeSec) * 1000.0f);
     best->state = 1;
     mHitEventIndices.push_back(static_cast<int>(best - mNotes.data()));
@@ -768,9 +789,9 @@ void JudgementEngine::update(float songTimeSec)
         // A note gives up when it is past its own LATE BAD bound. Using one
         // shared number here would keep a normal note alive 30 ms longer than
         // the game does while cutting a flick short.
-        const bool noteCritical = (static_cast<int>(note.flags) & 1) != 0;
-        const TypeWindows noteWindows
-            = mWindows.windowsFor(windowTypeFor(note.kind, noteCritical, note.holdTail));
+        const bool noteCritical = noteHasFlag(note.flags, 1);
+        const TypeWindows noteWindows = mWindows.windowsFor(
+            windowTypeFor(note.kind, noteCritical, note.holdTail, noteHasFlag(note.flags, kFlagFriction)));
         if (note.timeSec < songTimeSec - noteWindows.bad.lateMs / 1000.0f) {
             note.state = 2;
             registerMiss(songTimeSec, kLifeMiss);
@@ -903,9 +924,11 @@ void JudgementEngine::update(float songTimeSec)
                 const std::size_t tailIdx = hold.tailIndex;
                 const bool tailFlick = tailIdx < mNotes.size() && mNotes[tailIdx].kind == 2.0f;
                 const bool tailCritical = tailIdx < mNotes.size()
-                    && (static_cast<int>(mNotes[tailIdx].flags) & 1) != 0;
+                    && noteHasFlag(mNotes[tailIdx].flags, 1);
+                const bool tailFriction = tailIdx < mNotes.size()
+                    && noteHasFlag(mNotes[tailIdx].flags, kFlagFriction);
                 const TypeWindows tailWindows = mWindows.windowsFor(
-                    windowTypeFor(tailFlick ? 2.0f : 0.0f, tailCritical, true));
+                    windowTypeFor(tailFlick ? 2.0f : 0.0f, tailCritical, true, tailFriction));
                 judge = gradeFor(tailWindows, (hold.releaseTimeSec - hold.endTimeSec) * 1000.0f);
             }
             judgeHoldTail(hold, judge, songTimeSec);

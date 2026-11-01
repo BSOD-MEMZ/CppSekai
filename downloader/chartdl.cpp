@@ -369,6 +369,33 @@ std::vector<Song> gSongs;
 // only, so "tyw" / "梦开始的地方" need it to find Tell Your World.
 // Exact match on purpose - the table is full of two-letter entries.
 std::map<std::string, std::vector<int>> gAliasIndex;
+// Minimum length of a query before it may match an alias *partially*. The table
+// is full of two-letter entries ("hs", "kz", "emu"); as substrings they would
+// light up half the list, so those stay exact-only.
+constexpr size_t kAliasSubstringMin = 3;
+
+// song id -> its aliases, built while the table is read. Note this is NOT the
+// struct member of the same shape (that one feeds the alias panel and is only
+// rebuilt when the window is created, i.e. never in `--list` runs) - the search
+// has to work in both.
+std::map<int, std::vector<std::string>> gAliasesById;
+
+bool aliasContainsPartial(int musicId, const std::string& needleLower)
+{
+    if (needleLower.size() < kAliasSubstringMin) {
+        return false;
+    }
+    const auto it = gAliasesById.find(musicId);
+    if (it == gAliasesById.end()) {
+        return false;
+    }
+    for (const std::string& alias : it->second) {
+        if (alias.size() > needleLower.size() && alias.find(needleLower) != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
+}
 std::string gDataError;
 // How many rows in musics.json were dropped because their id was already taken.
 // Reported on the log so a broken table is visible instead of silently "just
@@ -588,6 +615,7 @@ void loadData()
     // Community song aliases (music-aliases.json, next to the tables above).
     // Same export the game reads - .workbuddy/tools/fetch_music_aliases.py.
     gAliasIndex.clear();
+    gAliasesById.clear();
     nlohmann::json aliases;
     if (readJson("music-aliases.json", aliases) && aliases.is_object()) {
         for (auto it = aliases.begin(); it != aliases.end(); ++it) {
@@ -607,6 +635,7 @@ void loadData()
                 if (std::find(ids.begin(), ids.end(), musicId) == ids.end()) {
                     ids.push_back(musicId);
                 }
+                gAliasesById[musicId].push_back(alias);
             }
         }
     }
@@ -1450,13 +1479,18 @@ namespace
             || song.kana.find(filter) != std::string::npos) {
             return true;
         }
-        // Community alias - exact match, because the table is full of very
-        // short entries ("hs", "kz", "emu") that as substrings would match
-        // half the list. See gAliasIndex.
+        // Community alias. Exact match first; a query of 3+ bytes may also hit
+        // an alias that merely *contains* it, which is what makes "smile" find
+        // スマイル*シンフォニー (its aliases are "smile symphony" and friends).
+        // The length floor is what keeps the table's two-letter entries ("hs",
+        // "kz", "emu") from matching half the list.
         {
             const auto hit = gAliasIndex.find(needle);
             if (hit != gAliasIndex.end()
                 && std::find(hit->second.begin(), hit->second.end(), song.id) != hit->second.end()) {
+                return true;
+            }
+            if (aliasContainsPartial(song.id, needle)) {
                 return true;
             }
         }
