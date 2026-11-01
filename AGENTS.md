@@ -650,6 +650,16 @@ bash build.sh          # 仅需 Git Bash；产物 build/cppsekai.exe + SDL2.dll 
   别再乘 1.44 —— 早先那个 ×1.44 是拿 bg sprite 的贴图分辨率当画布了。
   我们目前整体约 **0.49~0.63×**（列表 450/912、行 84/144）；2026-11-01 做过的 1:1 版本
   **已按用户要求回滚**，数值表和"顶栏没地方放"这个坑都留在 SELECT-UI.md §6.5。
+- **确定按钮的爆闪**（2026-11-01，`game/DecideBurst.*`）：原版
+  `ScreenLayerFreeLiveCellPhone.PlayButtonEffect()` → `SoloLiveTransitionEffectContent`
+  底下的三个 prefab（`fx_live_transition_v2_02` / `_botton_v2_01` / `_v2_01`），
+  实测是「大光晕 `light` 1532×2357 + 圆环 `line_circle` + 只有三角带初速」。
+  我们做成 0.9 s 的三层：两层 additive 光晕（宽 + 核）、两道扩散圆环、12 个
+  从按钮边缘起飞并自转的三角（贴图复用 `tap_flare.png` / `tap_tri.png`，不增加包体）。
+  **白屏（confirmFlash）要让它先亮 0.22 s**（`kDecideLead`）：两者同时开始的话
+  0.28 s 白屏铺满，三角还没飞出去就被糊掉。无头验证用
+  `CPSEKAI_DECIDE_ONLY=1 --confirm-flash 1.4 --screenshot-time 1.6`（这个开关
+  关掉白屏，只放爆闪）。
 - 右侧手机整体倾斜：先按正放坐标画完整块（手机框、封面、文字、难度圆、按钮），再用
   `dl->VtxBuffer` 把这一段的顶点统一绕手机中心旋转 **+5°**（2026-09-22 用户明确要"向右倾"，
   即顶边左高右低）。

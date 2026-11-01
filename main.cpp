@@ -21,6 +21,7 @@
 #include "platform/SystemMedia.hpp"
 #include "platform/ChartDlGuide.hpp"
 #include "game/Intro.hpp"
+#include "game/DecideBurst.hpp"
 #include "game/Judgement.hpp"
 #include "game/Hud.hpp"
 #include "game/PartyScreen.hpp"
@@ -2580,6 +2581,15 @@ int main(int argc, char** argv)
     }
     bootLog("tap effect");
 
+    // 确定按钮的爆闪（2026-11-01）：原版 ScreenLayerFreeLiveCellPhone 的
+    // PlayButtonEffect()，光晕 + 圆环 + 往外射的三角形。贴图跟 tapEffect 复用
+    // 那两张（tap_flare / tap_tri），所以不增加包体。
+    game::DecideBurst decideBurst;
+    if (!decideBurst.load(renderer, fxDir, error)) {
+        std::fprintf(stderr, "warning: decide burst disabled (%s)\n", error.c_str());
+        error.clear();
+    }
+
     // Ring behind the resume-countdown numbers (same tap_ring.png). Failure
     // is not fatal - the numbers draw without the halo.
     ImTextureID countdownRing = 0;
@@ -3797,6 +3807,9 @@ int main(int argc, char** argv)
     // next song is being loaded. Loading the chart, its audio and its generated
     // stage plate takes over a second, and a frozen frame is exactly what this
     // hides - the session is only started once the screen is fully white.
+    // 按钮自己的爆闪先亮 0.22 s，白屏再盖上来（2026-11-01）。原来两个同时开始，
+    // 白屏 0.28 s 就铺满，光效的三角还没飞出去就被糊掉了。
+    constexpr float kDecideLead = 0.22f;
     constexpr float kConfirmExpand = 0.28f; // burst grows from the button
     constexpr float kConfirmAttack = 0.09f; // soft onset - no hard "pop" on frame 0
     constexpr float kConfirmHold = 0.16f;   // brightest, session loads here
@@ -9308,6 +9321,10 @@ int main(int argc, char** argv)
                     confirmFlashActive = true;
                     confirmFlashTime = 0.0f;
                     confirmFlashOrigin = selectConfirmCenter;
+                    // 按钮自己的爆闪先走（0.9 s），白屏在它上面盖过来。
+                    decideBurst.spawn(selectConfirmCenter.x, selectConfirmCenter.y,
+                        static_cast<float>(windowW) * 0.24f);
+                    confirmFlashTime = -kDecideLead; // 白屏让爆闪先亮
                     ui::se(ui::SeStart); // start.mp3, fires with the burst
                     // The white flash is also the moment the pad should kick:
                     // it covers the chart load, so the buzz lands with it.
@@ -9353,11 +9370,18 @@ int main(int argc, char** argv)
             // --screenshot run can inspect the transition (nothing is loaded).
             if (confirmFlashShot && !confirmFlashShotFired && uiClock >= confirmFlashAtSec) {
                 confirmFlashShotFired = true;
-                confirmFlashActive = true;
+                // CPSEKAI_DECIDE_ONLY=1：只放按钮爆闪、不放那层白屏，用来单独截它
+                // （白屏 0.28 s 就铺满，两个叠在一起什么也看不清）。
+                confirmFlashActive = std::getenv("CPSEKAI_DECIDE_ONLY") == nullptr;
                 confirmFlashTime = 0.0f;
                 confirmFlashOrigin = selectConfirmCenter;
                 ui::se(ui::SeStart);
                 rumble(0.90f, 200, "confirm");
+                // 同一个调试口也拉一次按钮爆闪，`--confirm-flash --screenshot-time`
+                // 就能截到它（真人按确定时走的是上面那段）。
+                decideBurst.spawn(selectConfirmCenter.x, selectConfirmCenter.y,
+                    static_cast<float>(windowW) * 0.24f);
+                confirmFlashTime = -kDecideLead;
                 platform::logf(platform::LogRender, "[ui] confirm flash at %.0f,%.0f (debug)\n", selectConfirmCenter.x,
                     selectConfirmCenter.y);
                 std::fflush(stdout);
@@ -10758,6 +10782,8 @@ int main(int argc, char** argv)
         // PJSK style tap feedback, always on top of whatever is on screen.
         tapEffect.update(frameDelta);
         tapEffect.draw();
+        decideBurst.update(frameDelta);
+        decideBurst.draw();
 
         // --- Confirm flash: expand -> hold (the session loads here) -> fade -----
         // Runs in every state: it starts in Select and has to keep animating while
