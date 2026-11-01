@@ -20,6 +20,10 @@ userdata.json
 # Per-user profiles (settings / scores / account per player, 2026-09-16).
 # Same reasoning as userdata.json: this is someone's save, not source.
 profiles/
+# 目录名带后缀那种也要挡住：.workbuddy/backup-2026-09-18/build-profiles/ 就是
+# 靠"不叫 profiles"躲过了上面这条，结果两份玩家的 account/scores 进了仓库
+# （2026-11-01 清出去）。
+*-profiles/
 
 # Downloader settings (chartdl.json sits next to chartdl.exe)
 chartdl.json
@@ -37,7 +41,15 @@ imgui.ini
 shots/
 # Local backups of pre-shrink assets (the originals also live in git history).
 .workbuddy/backup/
+# 带日期的备份目录（backup-2026-09-18 之类）：整块都是当时的工作副本，
+# 里面还夹着玩家存档，一个都不该进仓库。
+.workbuddy/backup*/
 
 # Python bytecode from the .workbuddy/tools helpers
 __pycache__/
 *.pyc
+
+# 图片压缩脚本的一次性输出记录
+shrink_log.txt
+# 一次性发布文案草稿（内容是当时的活动文案，留在历史里就够了）
+release_note.txt
