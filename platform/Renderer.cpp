@@ -1033,6 +1033,9 @@ bool Renderer::loadHud(const std::string& overlayDir, std::string& outError)
         add(std::string("result_rank_line_") + letter, std::string("result/rank_line_") + letter + ".png");
     }
     add("result_rank_label", "result/rank_label.png");
+    // The summary's sparkle sprite: tex_common_kira_v2_01, reached through
+    // mat_common_kira_add_v2_01 ("particle add" shader). A 16x16 soft dot.
+    add("result_kira", "result/kira.png");
 
     outError.clear();
     return !mHudSprites.empty();

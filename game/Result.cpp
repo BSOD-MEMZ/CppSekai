@@ -7,7 +7,9 @@
 //     keeps the reference's absolute x,
 //   * right cluster (score bar, SCORERANK plate, 继续 button) hangs off the
 //     strip panel's right edge with the reference's offsets.
-// Element sizes are 1:1 with the reference. The score / combo / judge-count
+// Element sizes are 1:1 with the reference. (2026-11-01: the judge grid and the
+// FC/AP badge anchors no longer come from that capture - they are the prefab's
+// own numbers, design x 0.75; see RESULT-SCORE.md.) The score / combo / judge-count
 // numerals are drawn from the game's own overlay sprites (score/digit,
 // combo/p*), so they are the exact same font as the official screen.
 #include "game/Result.hpp"
@@ -20,6 +22,8 @@
 #include "platform/FontOutline.hpp"
 
 #include "imgui.h"
+
+#include <GL/gl.h> // blend callbacks for the additive sparkle pass
 
 #include <algorithm>
 #include <cctype>
@@ -133,20 +137,27 @@ constexpr float kHighScoreLabelCenterX = 537.0f;
 constexpr float kHighScoreLabelCenterY = 456.0f;
 constexpr float kHighScoreLabelSize = 36.0f;
 
-// Judge rows.
-constexpr float kRowFirstCenterY = 656.0f;
-constexpr float kRowPitch = 64.6f;
-constexpr float kTagX = 450.0f;
-constexpr float kTagW = 372.0f;
-constexpr float kTagH = 55.0f;
-constexpr float kTagRound = 18.0f;
-constexpr float kRowLabelX = 472.0f;
+// Judge rows. Geometry is now the prefab's own (ScreenLayerFreeLiveResult ->
+// SoloLiveScoreResult -> ScoreDetail -> ScoreDetail -> Grid), multiplied by the
+// 0.75 design-to-canvas factor:
+//   pill     384x56 design   -> 288x42 px, left edge 203.15 -> 693.7 centre
+//   pitch     64.62 design   -> 48.47 px
+//   label    word 32 tall    -> 24 px ink, centred 633.7
+//   count    container 166.2 -> 124.6 px wide, centred 775.4
+// The block used to be eyeballed off the reference capture (450/372/64.6).
+constexpr float kRowFirstCenterY = 725.4f;
+constexpr float kRowPitch = 48.5f;
+constexpr float kTagX = 549.7f;
+constexpr float kTagW = 288.0f;
+constexpr float kTagH = 42.0f;
+constexpr float kTagRound = 14.0f;
+constexpr float kRowLabelX = 570.0f;
 // The rows reuse the game's own judgement words (judge/v3/<1..5>.png, the
 // same sprites the in-game judge text uses - PERFECT even carries the rainbow
 // gradient). Only their solid ink matters: the sprites have a glow margin and
 // were measured with ImageMagick, see kJudgeSprite below.
-constexpr float kRowLabelInkH = 30.0f;
-constexpr float kRowNumberRight = 785.0f;
+constexpr float kRowLabelInkH = 24.0f;
+constexpr float kRowNumberRight = 836.0f;
 // 2026-09-19, by request: the row counts and the combo read-out use the system
 // UI face now - the same one as every other label on this screen - instead of
 // the condensed latin face. `advance` is only the slot pitch and each glyph is
@@ -187,13 +198,13 @@ constexpr float kBtnTextSize = 42.0f;
 // the badge slides 40 px to the right while it fades up. There is no scale and
 // no bounce.
 //
-// Where it sits: the row of empty canvas to the right of the COMBO read-out
-// (the combo number ends at kComboRight, the panel goes on to 1905). The exact
-// prefab anchor was not measured this session, so this is the one provisional
-// number in the block - it is a single pair of constants, easy to nudge once a
-// screenshot lands next to the official one.
-constexpr float kBadgeCenterX = 1490.0f;
-constexpr float kBadgeCenterY = 656.0f; // first judge row, right of the combo
+// Where it sits: measured (2026-11-01) off ScoreDetail/ComboDetail ->
+// FullCombo / AllPerfect, both 600x120 containers centred at design
+// (-92.0, -22.8) and (41.4, -22.8), i.e. just above the judge grid's right edge.
+//     project = (960 + x*0.75, 540 - y*0.75)
+constexpr float kBadgeCenterX = 891.0f;  // FullCombo; AllPerfect is 991
+constexpr float kBadgeAllPerfectX = 991.0f;
+constexpr float kBadgeCenterY = 557.1f;
 constexpr float kBadgeBoxH = 72.0f;     // 76 px sprite, drawn a touch smaller
 constexpr float kBadgeSlide = 40.0f;    // the clip's 4.2 -> 44.2 travel
 constexpr float kBadgeStart = 2.05f;    // after the last judge row (~2.13)
@@ -540,6 +551,100 @@ void blitSpriteCentered(const Canvas& c, const platform::Renderer::HudSprite* sp
     blitSprite(c, sprite, centerX - vw * 0.5f, centerY - vh * 0.5f, vw, vh, tint);
 }
 
+// ---------------------------------------------------------------------------
+// The sparkle field behind the heading: ScoreView/ResultImage/particle.
+//
+// Measured off the prefab's ParticleSystem (particle_ParticleSystem_1168):
+//   ShapeModule   type 5 (Box), m_Scale 2.59 x 0.62   -> spawn rectangle
+//   Emission      rateOverTime 15/s
+//   startLifetime twoConst 0.1 .. 1.0 s
+//   startSpeed    0          -> the sparkles sit still and only twinkle
+//   startSize     0.02 (world units)
+//   SizeModule    enabled, a deliberately jagged curve (1 -> 0.37 -> 0.77 ->
+//                 0.18 -> 0.49 -> 0.07 -> 0.37 -> 0), i.e. the twinkle
+//   ColorModule   alpha 1 -> 0 over the lifetime
+//   UVModule      DISABLED (the texture is a single 16x16 dot, not a sheet)
+//   material      mat_common_kira_add_v2_01, shader "particle add"
+//
+// The absolute world scale is not recoverable from the prefab (a UI Canvas's
+// world scale is a scene property, not a prefab one), so the two numbers it
+// would have to come from are pinned to the heading instead: the spawn box
+// spans the title band, and the dot is sized to read at 1080p. Everything else
+// - rate, lifetime, the twinkle curve, the alpha ramp, the additive blend - is
+// straight from the data.
+constexpr float kParticleRate = 15.0f;
+constexpr float kParticleLifeMin = 0.1f;
+constexpr float kParticleLifeMax = 1.0f;
+constexpr float kParticleBoxW = 1050.0f; // 2.59 units, pinned to the title band
+constexpr float kParticleBoxH = 250.0f;  // 0.62 units, same scale
+constexpr float kParticleDotPx = 20.0f;  // 0.02 units, same scale
+
+// SizeModule.maxCurve, t normalised to the particle's lifetime.
+constexpr CurveKey kParticleSize[] = {
+    {0.0f, 1.0f}, {0.2831f, 0.3717f}, {0.4699f, 0.7661f}, {0.6399f, 0.1830f},
+    {0.7113f, 0.4900f}, {0.7865f, 0.0725f}, {0.8622f, 0.3705f}, {1.0f, 0.0f}};
+
+// Deterministic hash -> [0,1). The emitter is stateless: a particle's whole life
+// is a function of its index, so a screenshot at any t reproduces the same
+// frame and there is no state to reset between runs.
+float hash01(std::uint32_t x)
+{
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return static_cast<float>(x & 0xffffffu) / 16777216.0f;
+}
+
+void blendAdditive(const ImDrawList*, const ImDrawCmd*)
+{
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+}
+
+void blendAlpha(const ImDrawList*, const ImDrawCmd*)
+{
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+}
+
+void drawSummaryParticles(platform::Renderer& renderer, float t, const Canvas& c, float centerX,
+    float centerY, float globalAlpha)
+{
+    const auto* kira = renderer.hud("result_kira");
+    if (kira == nullptr || kira->id == 0 || t <= 0.0f || globalAlpha <= 0.002f) {
+        return;
+    }
+    const auto texId = reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(kira->id));
+    const int last = static_cast<int>(t * kParticleRate);
+    c.dl->AddCallback(blendAdditive, nullptr);
+    for (int k = 0; k <= last; ++k) {
+        const std::uint32_t seed = static_cast<std::uint32_t>(k);
+        const float life = kParticleLifeMin
+            + (kParticleLifeMax - kParticleLifeMin) * hash01(seed * 2u + 1u);
+        const float age = t - static_cast<float>(k) / kParticleRate;
+        if (age < 0.0f || age >= life) {
+            continue;
+        }
+        const float f = age / life;
+        const float scale = curveAt(f, kParticleSize, 8);
+        const float half = kParticleDotPx * scale * 0.5f;
+        if (half <= 0.25f) {
+            continue;
+        }
+        const float px = centerX + (hash01(seed * 2u + 2u) * 2.0f - 1.0f) * kParticleBoxW * 0.5f;
+        const float py = centerY + (hash01(seed * 2u + 3u) * 2.0f - 1.0f) * kParticleBoxH * 0.5f;
+        // ColorModule: alpha 1 -> 0 across the lifetime.
+        const int a = static_cast<int>(255.0f * (1.0f - f) * globalAlpha);
+        if (a <= 2) {
+            continue;
+        }
+        c.dl->AddImage(texId, c.p(px - half, py - half), c.p(px + half, py + half),
+            ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), IM_COL32(255, 255, 255, a));
+    }
+    c.dl->AddCallback(blendAlpha, nullptr);
+}
+
 void drawSummary(platform::Renderer& renderer, const ResultData& data, float t, const Canvas& c,
     float windowW, float windowH)
 {
@@ -549,6 +654,11 @@ void drawSummary(platform::Renderer& renderer, const ResultData& data, float t, 
     // so a flat dim stands in for it. 196/255 keeps the art readable underneath.
     dl->AddRectFilled(ImVec2(0.0f, 0.0f), ImVec2(windowW, windowH),
         IM_COL32(10, 10, 22, static_cast<int>(196.0f * in)));
+
+    // Sparkles behind the heading. The particle node is ResultImage's first
+    // child and the material is additive, so it only ever brightens what is
+    // underneath - no ordering subtlety beyond drawing it before the text.
+    drawSummaryParticles(renderer, t, c, kSummaryTitleX, kSummaryTitleY, in);
 
     // --- curves (clip_result_summary_v2_01) --------------------------------
     static constexpr CurveKey kGaugeAlpha[] = {{0.0f, 0.0f}, {0.1333f, 1.0f}};
@@ -1047,7 +1157,8 @@ void drawResult(platform::Renderer& renderer, const ResultData& data, float elap
                     / static_cast<float>(badge->height);
                 // The clip slides the badge 40 px to the right while it fades up,
                 // so it enters from the left of its final slot.
-                const float cx = kBadgeCenterX - kBadgeSlide * (1.0f - p);
+                const float restX = data.allPerfect ? kBadgeAllPerfectX : kBadgeCenterX;
+                const float cx = restX - kBadgeSlide * (1.0f - p);
                 const ImU32 tint = withAlpha(kWhite, p);
                 c.dl->AddImage(
                     reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(badge->id)),

@@ -43,6 +43,10 @@ CppSekai：Project SEKAI 风格 SUS 谱面 Windows 原生游玩器。
   （填充必须走 `scoreRankAndBar(score, rating, markPos)` 那个重载，否则
   「填到 A 刻度右边、牌上写着 B」）。附 sprite 导出的正确姿势：**不过滤地
   全量导**，`--filter-by-name` 会漏掉 atlas 子 sprite。
+- `RESULT-SCORE.md` —— **结算页的 prefab 几何对照（2026-11-01）**：原作结算其实是
+  **三段**（`MusicInfo` 常驻顶栏 + summary + score），第二段每个节点的实测坐标与
+  换算值、判定行/徽章的 prefab 值、以及**哪些故意没跟着改**（右半边原作留给 Live2D，
+  我们不用 Live2D，所以总分/COMBO 保持宽屏版式）。**再动结算布局先看这篇。**
 - `CREDITS.md` —— 借用清单：每个来源是谁的、什么许可、放在哪（含 Fontworks 字体这条独立风险）。
 - `COPYRIGHT.md` —— 版权与风险：什么能发、什么不能发。
 - `README.md` —— 面向玩家的说明（只放用户最需要的东西，技术细节一律挪到本文件，别往 README 加）。
