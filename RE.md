@@ -308,6 +308,13 @@ json.dump(idx, open('sprite_sizes.json', 'w'))
 - **颜色是线性空间**，当 sRGB 用会得到近黑色块。
 - 纹理序列帧模块序列化成 **`UVModule`**，不叫 `TextureSheetAnimationModule`。
 - prefab 里的 `anchoredPosition` 常是占位值（运行时代码排版）。
+- **`m_LocalScale` 经常不是 1**（`ScreenLayerFreeLiveResult` 里 185 个节点不是）。
+  算几何时只累加 `anchoredPosition` 会得到**大一倍/小一圈**的尺寸 —— 实测
+  `RankImage` / `ScoreRankText` 是 **0.5**，`Circle*` 是 0.667。
+  先把缩放乘进去，再乘以画布基准系数。踩过一次：把评级字母算成两倍大、直接顶出屏幕。
+- **`UVModule` 的 `tilesX/tilesY` 不代表在用**：要看它上面那行 `enabled`。
+  多数结果特效是 `enabled: 0`，贴图就是**一张单帧**（`tex_common_kira_v2_01` 是
+  16x16 的柔光点），不是四宫格。`fx_result_ps.py` 只打 tiles 不看 enabled，会误导。
 
 ### 环境
 - 含中文/日文的文件名经 bash 传给 python 会乱码 → 用 python `glob` 定位再传。
