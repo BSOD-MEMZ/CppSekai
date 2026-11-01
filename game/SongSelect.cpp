@@ -2433,7 +2433,7 @@ namespace
                     const float nx = (static_cast<float>(x) + 0.5f) / kSize * 2.0f - 1.0f;
                     const float ny = (static_cast<float>(y) + 0.5f) / kSize * 2.0f - 1.0f;
                     const float d = std::max(std::fabs(nx), std::fabs(ny));
-                    const float t = std::clamp((1.0f - d) / 0.52f, 0.0f, 1.0f);
+                    const float t = std::clamp((1.0f - d) / 0.38f, 0.0f, 1.0f);
                     const float fade = t * t * (3.0f - 2.0f * t);
                     unsigned char* o = &smooth[(static_cast<size_t>(y) * kSize + x) * 4];
                     o[3] = static_cast<unsigned char>(static_cast<float>(o[3]) * fade);
@@ -3150,26 +3150,24 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
 
     // ------------------------------------------------------------------
     // Left: song list
-    //
-    // Numbers below are pjsk's own, straight out of the prefab
-    // (ScreenLayerFreeLiveMusicSelect / MusicSelectSingleListCell) — the game's
-    // CanvasScaler is 1920x1080, so they need no conversion. See SELECT-UI.md
-    // for where each one comes from.
     // ------------------------------------------------------------------
-    const float listX = 212.0f * k;   // MusicSelectListContent left edge
-    const float listTop = 28.0f * k;  // UIPartsSearchField: 28 from the top
-    const float listW = 912.0f * k;   // MusicSelectListContent width
+    const float listX = 150.0f * k;
+    const float listTop = 30.0f * k;
+    const float listW = 450.0f * k;
 
     // Search bar (top of the list, like the reference UI). Filters by
     // title / artist substring.
     static char searchBuf[64] = "";
-    const float searchW = 760.8f * k; // UIPartsSearchField width
+    const float searchW = listW;
     // One top edge for the whole header row (search box, combos, 刷新 / 音乐商店 /
     // 猜歌, level chip): equal heights only read as a row if they also start at
     // the same y, and the official top bar does exactly that.
     const float headerRowY = listTop;
-    // 72 is the official field height (UIPartsSearchField 760.8 x 72).
-    const float searchH = 72.0f * k;
+    // Same height as the combos and the level chip (17k font + 2x8k frame
+    // padding = 33k, and ui::playerLevelChip is 33k too): the official top bar
+    // lines the whole row up at one height and only varies the corner radius,
+    // which is what the search pill (fully round) and the combos (12k) do here.
+    const float searchH = 33.0f * k;
     // 多人游玩 member: the header row stays fully usable. Only the *list* is
     // the host's (see `listHovered` below and the veil at the end of the list);
     // the tools above it are per-window and were never the room's business -
@@ -3188,7 +3186,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     // field exactly searchH tall (font + 2x padding).
     const float searchIconBox = searchH * 0.86f;
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(searchIconBox, searchH * 0.25f));
-    ImGui::PushFont(body, 26.0f * k);
+    ImGui::PushFont(body, 17.0f * k);
     // Full width: the icon lives inside the field, so the field has to be the
     // whole pill. (It used to be shortened by searchH and the magnifier drawn
     // past its right edge, which left it hanging outside the box.)
@@ -3293,17 +3291,9 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     if (groupMode < 0 || groupMode >= kGroupCount) {
         groupMode = 0;
     }
-    // The header row has nowhere to go on the right: pjsk puts the handset at
-    // x 1145..1899, so anything to the right of the search box lands on top of
-    // it. The official screen solves that with a 136-wide vertical tab strip at
-    // x 44 (MusicSelectUnitTabList) - we do not have "units", so that strip
-    // carries our own tools instead: sort, group, 刷新, 音乐商店, 猜歌, 设置.
-    const float toolX = 44.0f * k;
-    const float toolW = 160.0f * k;
-    const float toolH = searchH;
-    const float toolGap = 12.0f * k;
-    const auto toolSlotY = [&](int slot) { return listTop + static_cast<float>(slot) * (toolH + toolGap); };
-    const float comboW = toolW;
+    const float comboW = 168.0f * k;
+    const float comboX0 = listX + searchW + 18.0f * k;
+    const float comboGap = 12.0f * k;
     // 原生菜单栏开着的时候（设置 > 系统），排序 / 分组也搬进 视图 菜单了 ——
     // 两个下拉一起收起来，不然同一件事有两个入口，改一边看不出另一边动。
     // 值本身还是 settings.sortMode / groupMode，菜单和这里读写的是同一个字段。
@@ -3311,22 +3301,22 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     if (headerSelectors) {
         const char* kSortLabels[2] = {"按名称", "按难度"};
         const char* kGroupLabels[kGroupCount] = {"关闭", "按难度段", "按读音", "按首字", "按收藏"};
-        const std::string sortPreview = std::string("排序·") + kSortLabels[sortMode];
-        const std::string groupPreview = std::string("分组·") + kGroupLabels[groupMode];
+        const std::string sortPreview = std::string("排序：") + kSortLabels[sortMode];
+        const std::string groupPreview = std::string("分组：") + kGroupLabels[groupMode];
         // No colours here any more: ui::combo brings the pjsk look itself (white
         // box, translucent white list, faint shadow). Only the metrics are the
         // caller's - rounding is what the shadow follows, padding is the height.
-        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 18.0f * k);
-        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(16.0f * k, 25.0f * k));
-        ImGui::PushFont(body, 18.0f * k);
-        ImGui::SetCursorScreenPos(ImVec2(toolX, toolSlotY(0)));
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 12.0f * k);
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(14.0f * k, 8.0f * k));
+        ImGui::PushFont(body, 17.0f * k);
+        ImGui::SetCursorScreenPos(ImVec2(comboX0, headerRowY));
         ImGui::SetNextItemWidth(comboW);
         // ui::combo is the same popup plus a fade-in and a rotating chevron;
         // `k` is handed over because this screen has its own px-per-unit scale.
         const std::vector<std::string> sortItems{kSortLabels[0], kSortLabels[1]};
         ui::combo("##sortby", sortPreview.c_str(), sortItems, &sortMode, comboW,
             ImGuiComboFlags_HeightSmall, k);
-        ImGui::SetCursorScreenPos(ImVec2(toolX, toolSlotY(1)));
+        ImGui::SetCursorScreenPos(ImVec2(comboX0 + comboW + comboGap, headerRowY));
         const std::vector<std::string> groupItems(kGroupLabels, kGroupLabels + kGroupCount);
         ui::combo("##groupby", groupPreview.c_str(), groupItems, &groupMode, comboW,
             ImGuiComboFlags_HeightSmall, k);
@@ -3337,67 +3327,69 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     // Rescan button, in the same row as the selectors. F5 has always done this
     // but nothing on screen said so; a chart dropped into charts/ while the
     // game is running is exactly what a player reaches for.
-    const float headerRowH = searchH; // one row: search box, combos, buttons, chip
+    const float headerRowH = 33.0f * k; // same as the search box / combos / chip
     // 原生菜单栏开着的时候（设置 > 系统），刷新 / 音乐商店 / 设置 三个窗口级操作已经
     // 收进窗口顶部的菜单里了 —— 顶栏只留 猜歌，不然两处重复。位置从一个游标往后排，
     // 省得为"哪几个按钮在"写两套坐标。
     const bool headerFileButtons = !nativeMenuBar;
-    // The strip packs from the top: whoever is on screen takes the next slot, so
-    // the native-menu-bar mode leaves no hole where the combos were.
-    int toolSlot = headerSelectors ? 2 : 0;
-    const float rescanW = toolW;
-    const float rescanY = toolSlotY(toolSlot);
+    // 下拉收起来的时候按钮跟着往左站（不然中间空出两个下拉的宽度）。
+    float headerX = comboX0
+        + (headerSelectors ? (comboW + comboGap) * 2.0f + 4.0f * k : 0.0f);
+    // 下载谱面 sits right of 刷新: the downloader was reachable from the empty-list
+    // state and from the settings, but on a full list there was nothing.
+    const float rescanW = 104.0f * k;
+    const float rescanX = headerX;
     if (headerFileButtons) {
-        ++toolSlot;
+        headerX += rescanW + 10.0f * k;
     }
-    const float storeW = toolW;
-    const float storeY = toolSlotY(toolSlot);
+    const float storeW = 144.0f * k;
+    const float storeX = headerX;
     if (headerFileButtons) {
-        ++toolSlot;
+        headerX += storeW + 10.0f * k;
     }
-    // 猜歌 is the one button here that does not touch the filesystem - it opens a
-    // card, so it does not queue an action for main.cpp to run (see the 猜歌 card
-    // at the end of this function).
-    const float guessW = toolW;
-    const float guessY = toolSlotY(toolSlot);
-    ++toolSlot;
-    // 设置 的位置。
-    const float settingsW = toolW;
-    const float settingsY = toolSlotY(toolSlot);
+    // 猜歌 sits right of 音乐商店. It is the one button here that does not touch
+    // the filesystem - it opens a card, so it does not queue an action for
+    // main.cpp to run (see the 猜歌 card at the end of this function).
+    const float guessW = 104.0f * k;
+    const float guessX = headerX;
+    headerX += guessW + 10.0f * k;
+    // 设置 的位置（只在顶栏还留着它的时候用）。
+    const float settingsW = 104.0f * k;
+    const float settingsX = headerX;
     // 刷新 / 音乐商店 / 猜歌: one pjsk-style header button each - white capsule,
     // faint shadow, dark label - i.e. the same chrome as the search box and the
     // combos beside them. The shipped icons (assets/select/*.png) are white on
     // transparent, so the navy comes from the tint (same trick as the intro
     // card's skip key).
-    auto headerButton = [&](const char* id, float x, float y, float w, const char* iconKey,
+    auto headerButton = [&](const char* id, float x, float w, const char* iconKey,
                             const char* label) -> bool {
         const float rowH = headerRowH;
-        ui::dropShadow(dl, ImVec2(x, y), ImVec2(x + w, y + rowH), rowH * 0.5f, k);
+        ui::dropShadow(dl, ImVec2(x, headerRowY), ImVec2(x + w, headerRowY + rowH), rowH * 0.5f, k);
         ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(255, 255, 255, 244));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(255, 255, 255, 255));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(232, 232, 242, 255));
         ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, rowH * 0.5f);
-        ImGui::SetCursorScreenPos(ImVec2(x, y));
+        ImGui::SetCursorScreenPos(ImVec2(x, headerRowY));
         const bool clicked = ImGui::Button(id, ImVec2(w, rowH));
         const bool hovered = ImGui::IsItemHovered();
         // Tutorial anchor: "##rescan" -> "rescan" (the button's own id carries
         // the ## so ImGui keeps the label out of the id stack).
         if (id != nullptr && id[0] == '#' && id[1] == '#') {
-            ui::setAnchor(id + 2, ImVec2(x, y), ImVec2(x + w, y + rowH));
+            ui::setAnchor(id + 2, ImVec2(x, headerRowY), ImVec2(x + w, headerRowY + rowH));
         }
         ImGui::PopStyleVar();
         ImGui::PopStyleColor(3);
         const ImU32 labelCol = hovered ? IM_COL32(38, 38, 58, 255) : IM_COL32(60, 60, 82, 255);
-        const ImVec2 c(x + 25.0f * k, y + rowH * 0.5f);
+        const ImVec2 c(x + 26.0f * k, headerRowY + rowH * 0.5f);
         const GLuint icon = selectTex(renderer, iconKey);
         if (icon != 0) {
-            const float iconSize = 26.0f * k;
+            const float iconSize = 20.0f * k;
             dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(icon)),
                 ImVec2(c.x - iconSize * 0.5f, c.y - iconSize * 0.5f),
                 ImVec2(c.x + iconSize * 0.5f, c.y + iconSize * 0.5f), ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f),
                 labelCol);
         }
-        addTextLeft(dl, body, 22.0f * k, ImVec2(x + 42.0f * k, c.y), labelCol, label);
+        addTextLeft(dl, body, 17.0f * k, ImVec2(c.x + 18.0f * k, c.y), labelCol, label);
         // The drawer paints over this row but is not opaque, so the button stays
         // *visible* through it - and ImGui would still hand a click to it, since
         // it was submitted first. Swallow the click instead: the drawer is the
@@ -3408,16 +3400,16 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     // glyphs, so a Chinese tooltip renders as a row of '?'; the label already
     // says what the button does (刷新 also has F5 in the empty-state hint).
     if (headerFileButtons) {
-        if (headerButton("##rescan", toolX, rescanY, rescanW, "refresh", "刷新")) {
+        if (headerButton("##rescan", rescanX, rescanW, "refresh", "刷新")) {
             ui::se(ui::SeClick);
             action = SelectRescan;
         }
-        if (headerButton("##store", toolX, storeY, storeW, "store", "音乐商店")) {
+        if (headerButton("##store", storeX, storeW, "store", "音乐商店")) {
             ui::se(ui::SeClick);
             action = SelectDownload;
         }
     }
-    if (headerButton("##guess", toolX, guessY, guessW, "guess", "猜歌")) {
+    if (headerButton("##guess", guessX, guessW, "guess", "猜歌")) {
         ui::se(ui::SeClick);
         newGuessQuestion();
     }
@@ -3430,7 +3422,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     // 原生菜单栏开着的时候它不在这儿 —— 菜单的 文件 > 设置… 就是它（位置照旧留给
     // 猜歌右边，只是不画）。多人游玩成员的窗口也一样：菜单栏是每个窗口自己的。
     if (headerFileButtons
-        && headerButton("##abssettings", toolX, settingsY, settingsW, "musicsetting", "设置")) {
+        && headerButton("##abssettings", settingsX, settingsW, "musicsetting", "设置")) {
         ui::se(ui::SeClick);
         action = SelectSettings;
     }
@@ -3499,12 +3491,10 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     // first one, so there is no bottom to hit. Wheel, mouse drag and touch
     // drag all feed the same momentum model.
     // ------------------------------------------------------------------
-    // MusicSelectSingleListCell is 912 x 144; the pitch keeps an 8px gap so the
-    // thin rule between rows still reads as a separator.
-    const float pitch = 152.0f * k;   // distance between two row centres
-    const float compactH = 144.0f * k; // compact row height (the official one)
-    const float cardH = 208.0f * k;    // expanded (selected) card height
-    const float listY = listTop + searchH + 28.0f * k;
+    const float pitch = 104.0f * k;    // distance between two row centres
+    const float compactH = 84.0f * k;  // compact row height
+    const float cardH = 128.0f * k;    // expanded (selected) card height
+    const float listY = listTop + searchH + 14.0f * k;
     const float listH = h - listY - 24.0f * k;
     ui::setAnchor("songlist", ImVec2(listX, listY), ImVec2(listX + listW, listY + listH));
 
@@ -3878,7 +3868,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             ImGui::PopTextWrapPos();
             ImGui::PopStyleVar();
         };
-        ImGui::PushFont(body, 28.0f * k);
+        ImGui::PushFont(body, 19.0f * k);
         emptyText(rowX, rowY + 20.0f * k, ImVec4(0.75f, 0.75f, 0.82f, 1.0f),
             "没有找到谱面。把 .sus 放到 charts/ 目录下，再按 F5 重新扫描");
         ImGui::PopFont();
@@ -3886,16 +3876,16 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         // charts at all, so offer the bundled downloader right here instead of
         // making them find chartdl.exe in the folder by hand. The host launches
         // it (main.cpp polls the process and re-scans when it exits).
-        ImGui::SetCursorScreenPos(ImVec2(rowX, rowY + 108.0f * k));
-        ImGui::PushFont(body, 28.0f * k);
-        if (ui::capsuleButton("下载谱面", ImVec2(320.0f * k, 72.0f * k), true)) {
+        ImGui::SetCursorScreenPos(ImVec2(rowX, rowY + 78.0f * k));
+        ImGui::PushFont(body, 19.0f * k);
+        if (ui::capsuleButton("下载谱面", ImVec2(268.0f * k, 46.0f * k), true)) {
             emptyAction = SelectDownload;
             std::printf("[select] 下载谱面 pressed\n");
             std::fflush(stdout);
         }
         ImGui::PopFont();
-        ImGui::PushFont(body, 26.0f * k);
-        emptyText(rowX, rowY + 196.0f * k, ImVec4(0.6f, 0.6f, 0.68f, 1.0f),
+        ImGui::PushFont(body, 17.0f * k);
+        emptyText(rowX, rowY + 138.0f * k, ImVec4(0.6f, 0.6f, 0.68f, 1.0f),
             "这会跳转到音乐商店。");
         ImGui::PopFont();
     }
@@ -3926,12 +3916,12 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             // button that turns the list into the jump panel, so it lights up
             // on hover and carries a small chevron.
             ImFont* headFont = title != nullptr ? title : body;
-            const float headSize = 34.0f * k;
+            const float headSize = 22.0f * k;
             const bool hovered = indexAnim < 0.5f && slot == hoverSlot;
             // Same eased hover as the song rows, so the plate, the left marker bar
             // and the chevron all come up together.
             const float headHot = ui::anim(0x4a551000u + static_cast<ImGuiID>(slot + 0x100000), hovered, 18.0f);
-            const float headX = rowX + 48.0f * k;
+            const float headX = rowX + 30.0f * k;
             if (headHot > 0.01f) {
                 listDl->AddRectFilled(ImVec2(rowX + 6.0f * k, centerY - pitch * 0.34f),
                     ImVec2(rowX + listW, centerY + pitch * 0.34f),
@@ -4001,42 +3991,42 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             // Level badge: the level number of the selected difficulty in a
             // filled circle, with the "歌曲等级" caption plate resting on the
             // circle's upper edge (as in the official list).
-            const float badgeL = p0.x + 28.0f * k;
-            const float tagY = p0.y + 40.0f * k;
-            const float tagW = 96.0f * k;
+            const float badgeL = p0.x + 14.0f * k;
+            const float tagY = p0.y + 22.0f * k;
+            const float tagW = 62.0f * k;
             const float tagH = tagW * 48.0f / 128.0f;
             const float ccx = badgeL + tagW * 0.5f;
-            const float ccy = tagY + tagH + 26.0f * k;
-            listDl->AddCircleFilled(ImVec2(ccx, ccy), 48.0f * k, diffColor);
-            addTextCentered(listDl, title, 48.0f * k, ImVec2(ccx, ccy - 2.0f * k), white, rowLevel);
+            const float ccy = tagY + tagH + 16.0f * k;
+            listDl->AddCircleFilled(ImVec2(ccx, ccy), 27.0f * k, diffColor);
+            addTextCentered(listDl, title, 28.0f * k, ImVec2(ccx, ccy - 1.0f * k), white, rowLevel);
             if (levelTex != 0) {
                 listDl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(levelTex)),
                     ImVec2(badgeL, tagY), ImVec2(badgeL + tagW, tagY + tagH),
                     ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), IM_COL32(255, 255, 255, 255));
             } else {
                 // Fallback when the sprite is missing: the drawn plate.
-                listDl->AddRectFilled(ImVec2(badgeL, tagY), ImVec2(badgeL + tagW, tagY + 34.0f * k),
-                    diffColor, 6.0f * k);
-                addTextCentered(listDl, body, 20.0f * k, ImVec2(ccx, tagY + 17.0f * k), white, "歌曲等级");
+                listDl->AddRectFilled(ImVec2(badgeL, tagY), ImVec2(badgeL + tagW, tagY + 22.0f * k),
+                    diffColor, 4.0f * k);
+                addTextCentered(listDl, body, 13.0f * k, ImVec2(ccx, tagY + 11.0f * k), white, "歌曲等级");
             }
 
-            const float textL = p0.x + 168.0f * k;
+            const float textL = p0.x + 96.0f * k;
             const std::string vo = g.vocal.empty() ? std::string() : "Vo. " + g.vocal;
             if (title != nullptr) {
-                listDl->AddText(title, 40.0f * k, ImVec2(textL, p0.y + 26.0f * k), IM_COL32(60, 60, 80, 255),
+                listDl->AddText(title, 26.0f * k, ImVec2(textL, p0.y + 14.0f * k), IM_COL32(60, 60, 80, 255),
                     g.title.c_str());
             }
-            listDl->AddText(body, 24.0f * k, ImVec2(textL, p0.y + 82.0f * k), IM_COL32(120, 120, 140, 255),
+            listDl->AddText(body, 16.0f * k, ImVec2(textL, p0.y + 48.0f * k), IM_COL32(120, 120, 140, 255),
                 g.artist.c_str());
             if (!vo.empty()) {
-                listDl->AddText(body, 22.0f * k, ImVec2(textL, p0.y + 120.0f * k), IM_COL32(140, 140, 160, 255),
+                listDl->AddText(body, 15.0f * k, ImVec2(textL, p0.y + 70.0f * k), IM_COL32(140, 140, 160, 255),
                     vo.c_str());
             }
-            float dx = textL + 6.0f * k;
-            const float dy = p1.y - 46.0f * k;
+            float dx = textL + 4.0f * k;
+            const float dy = p1.y - 18.0f * k;
             for (int d = 0; d < kDiffCount; ++d) {
-                addDiamondSlot(listDl, backTex, ImVec2(dx, dy), 38.0f * k, g.idx[d] >= 0, badgeFor(d));
-                dx += 39.0f * k;
+                addDiamondSlot(listDl, backTex, ImVec2(dx, dy), 20.0f * k, g.idx[d] >= 0, badgeFor(d));
+                dx += 20.0f * k;
             }
         } else {
             // Compact row: no card fill - the entries are separated by a thin
@@ -4056,33 +4046,33 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             }
 
             const float cy = centerY;
-            listDl->AddCircleFilled(ImVec2(p0.x + 112.0f * k, cy), 48.0f * k, diffColor);
-            addTextCentered(listDl, body, 40.0f * k, ImVec2(p0.x + 112.0f * k, cy - 2.0f * k), white, rowLevel);
+            listDl->AddCircleFilled(ImVec2(p0.x + 30.0f * k, cy), 24.0f * k, diffColor);
+            addTextCentered(listDl, body, 20.0f * k, ImVec2(p0.x + 30.0f * k, cy - 1.0f * k), white, rowLevel);
 
-            const float jx = p0.x + 176.0f * k;
-            const float js = 96.0f * k;
+            const float jx = p0.x + 62.0f * k;
+            const float js = 60.0f * k;
             addJacket(listDl, thumbFor(renderer, g.coverPath), ImVec2(jx, cy - js * 0.5f),
-                ImVec2(jx + js, cy + js * 0.5f), 10.0f * k);
+                ImVec2(jx + js, cy + js * 0.5f), 6.0f * k);
 
-            const float textL = jx + js + 24.0f * k;
-            listDl->AddText(body, 36.0f * k, ImVec2(textL, cy - 62.0f * k), white, g.title.c_str());
-            float dx = textL + 6.0f * k;
+            const float textL = jx + js + 14.0f * k;
+            listDl->AddText(body, 20.0f * k, ImVec2(textL, cy - 26.0f * k), white, g.title.c_str());
+            float dx = textL + 4.0f * k;
             for (int d = 0; d < kDiffCount; ++d) {
-                addDiamondSlot(listDl, backTex, ImVec2(dx, cy + 10.0f * k), 38.0f * k, g.idx[d] >= 0, badgeFor(d));
-                dx += 39.0f * k;
+                addDiamondSlot(listDl, backTex, ImVec2(dx, cy + 6.0f * k), 18.0f * k, g.idx[d] >= 0, badgeFor(d));
+                dx += 18.0f * k;
             }
 
             // Optional 2D / 3D MV tag from the sidecar.
             if (rowEntry != nullptr && !rowEntry->mv.empty()) {
                 const std::string& mv = rowEntry->mv;
                 const ImVec2 ts = ImGui::CalcTextSize(mv.c_str());
-                const float bw = ts.x + 26.0f * k;
-                const float bx = p1.x - bw - 20.0f * k;
-                const float by = p1.y - 50.0f * k;
+                const float bw = ts.x + 16.0f * k;
+                const float bx = p1.x - bw - 12.0f * k;
+                const float by = p1.y - 30.0f * k;
                 const bool is3d = mv.find('3') != std::string::npos;
-                listDl->AddRectFilled(ImVec2(bx, by), ImVec2(bx + bw, by + 34.0f * k),
-                    is3d ? IM_COL32(242, 200, 70, 255) : IM_COL32(90, 140, 255, 255), 6.0f * k);
-                listDl->AddText(body, 22.0f * k, ImVec2(bx + 13.0f * k, by + 4.0f * k),
+                listDl->AddRectFilled(ImVec2(bx, by), ImVec2(bx + bw, by + 22.0f * k),
+                    is3d ? IM_COL32(242, 200, 70, 255) : IM_COL32(90, 140, 255, 255), 4.0f * k);
+                listDl->AddText(body, 14.0f * k, ImVec2(bx + 8.0f * k, by + 3.0f * k),
                     IM_COL32(40, 36, 20, 255), mv.c_str());
             }
         }
@@ -4304,32 +4294,31 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     ImGui::EndChild();
 
     // ------------------------------------------------------------------
-    // Right: the handset (ScreenLayerFreeLiveCellPhone) with the jacket, the
-    // difficulty buttons and 确定 / 随机 / 切换歌手. Everything below is laid out
-    // flat and then rotated about the phone's centre.
-    //
-    // Geometry is pjsk's own (SELECT-UI.md 3.6): CellPhone 754.3 x 1416.7,
-    // centred 562 right / 202 below the screen centre, tilted 3 degrees
-    // anticlockwise. It is taller than the screen on purpose - the bottom of
-    // the panel runs off the display, only the top 74% is ever seen.
+    // Right: tilted-phone panel (img_smartphone.png) with the jacket, the
+    // difficulty buttons and 确定 / 随机 / 切换歌手. The whole block is laid out
+    // flat and then rotated about the phone's centre, like the reference UI.
     // ------------------------------------------------------------------
-    const float phoneAspect = 1034.0f / 1942.0f; // sprite ratio = 754.3/1416.7
-    const float phoneH = 1416.7f * k;
-    const float phoneW = phoneH * phoneAspect;
-    const float phoneX = w * 0.5f + 562.0f * k - phoneW * 0.5f;
-    const float phoneY = h * 0.5f + 202.0f * k - phoneH * 0.5f;
+    const float phoneAspect = 1034.0f / 1942.0f;
+    float phoneH = (h - 24.0f * kBase) * scale;
+    float phoneW = phoneH * phoneAspect;
+    if (phoneW > w * 0.46f * scale) {
+        phoneW = w * 0.46f * scale;
+        phoneH = phoneW / phoneAspect;
+    }
+    const float phoneX = w - phoneW - 30.0f * k;
+    // Nudged down on purpose: in the reference UI the phone runs off the
+    // bottom of the screen (its home bar is never visible), which also buys
+    // the content room for the vocal chip row.
+    const float phoneY = (h - phoneH) * 0.5f + 78.0f * k;
     // Tutorial anchor: the phone panel is the "pick a song here" surface, and a
     // spotlight around the whole panel reads far better than one around the
-    // EASY circle (which also used to dim 确定). Clamped to the screen so the
-    // spot does not try to cover the 370px that hangs below it.
-    ui::setAnchor("phone",
-        ImVec2(std::max(0.0f, phoneX - 10.0f * k), std::max(0.0f, phoneY - 10.0f * k)),
-        ImVec2(phoneX + phoneW + 10.0f * k, std::min(h, phoneY + phoneH)));
+    // EASY circle (which also used to dim 确定).
+    ui::setAnchor("phone", ImVec2(phoneX - 10.0f * k, phoneY - 10.0f * k),
+        ImVec2(phoneX + phoneW + 10.0f * k, phoneY + phoneH + 10.0f * k));
 
-    // Tilt: -3 degrees. Screen y grows down, so a negative angle here is the
-    // anticlockwise rotation Unity stores (+3 on z), i.e. the right edge rides
-    // up - the opposite of what this code did before 2026-11-01.
-    constexpr float kTiltDeg = -3.0f;
+    // Tilt: +5 degrees, i.e. the left edge rides up and the phone leans right
+    // (screen y grows down).
+    constexpr float kTiltDeg = 5.0f;
     const float tiltRad = kTiltDeg * 3.14159265358979f / 180.0f;
     const ImVec2 tiltPivot(phoneX + phoneW * 0.5f, phoneY + phoneH * 0.5f);
     const float tiltCos = std::cos(tiltRad);
@@ -4359,62 +4348,54 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             IM_COL32(46, 40, 84, 255));
     }
 
-    // Screen area inside the phone frame (bezel is baked into the image). pjsk's
-    // content box is 700 wide inside a 754.3 panel: 27.15 a side.
-    const float scrX0 = phoneX + phoneW * 0.036f;
-    const float scrX1 = phoneX + phoneW * 0.964f;
+    // Screen area inside the phone frame (bezel is baked into the image).
+    const float scrX0 = phoneX + phoneW * 0.034f;
+    const float scrX1 = phoneX + phoneW * 0.966f;
+    const float scrY0 = phoneY + phoneH * 0.030f;
     const float cx = (scrX0 + scrX1) * 0.5f;
     const float sw = scrX1 - scrX0;
-    // The jacket sits 229px below the top of the handset (JacketMask's top edge
-    // is 42 down, the art is centred in that 700 box).
-    const float jacketTop = phoneY + phoneH * 0.1616f;
 
     if (!groups.empty() && selected >= 0) {
         const ChartEntry& item = entries[static_cast<size_t>(selected)];
         const SongGroup& group = groups[static_cast<size_t>(groupIndex)];
 
-        // Jacket: 376 x 376 in pjsk, i.e. 49.9% of the panel's width.
-        const float jw = phoneW * 0.4987f;
+        // Jacket (top of the phone screen)
+        const float jw = sw * 0.62f;
         const float jh = jw;
-        const ImVec2 j0(cx - jw * 0.5f, jacketTop);
+        const ImVec2 j0(cx - jw * 0.5f, scrY0 + phoneH * 0.020f);
 
         // UIPartsBlurMusicJacket: the *same* jacket, blown up and smeared,
         // sitting immediately behind the art - it does NOT fill the phone.
         // (It lives inside JacketContent > JacketMask > Jacket, i.e. it is part
-        // of the jacket block, and the sharp thumbnail covers its middle.)
-        //
-        // The quad is wider than the handset, so it used to paint over the
-        // bezel and over the notch. The mask pass inside blurredJacketTex now
-        // clips it to the screen shape (mask_smartphone.png), which is what the
-        // game itself does with that asset - the soft edge is baked into the
-        // texture, so there is nothing left to layer here.
+        // of the jacket block, and the sharp thumbnail covers its middle.) Three
+        // concentric copies with falling alpha are what turns the hard edge of
+        // an enlarged quad into a soft bleed, since a draw list cannot blur.
         {
-            // JacketMask is 700x700 with its top 42 below the panel's top edge,
-            // and the smear fills a 700x574 box hanging from that same top edge
-            // (Jacket is stretched to 574 high). So it covers the art and roughly
-            // one art-height below it - not the whole screen.
-            const float bleedW = phoneW * 0.928f;   // 700 / 754.3
-            const float bleedH = phoneH * 0.405f;   // 574 / 1416.7
-            const ImVec2 jc(cx, jacketTop - phoneH * 0.132f + bleedH * 0.5f);
-            const float p0x = jc.x - bleedW * 0.5f;
-            const float p0y = jc.y - bleedH * 0.5f;
-            const float u0 = (p0x - phoneX) / phoneW;
-            const float v0 = (p0y - phoneY) / phoneH;
-            const float u1 = (p0x + bleedW - phoneX) / phoneW;
-            const float v1 = (p0y + bleedH - phoneY) / phoneH;
+            const float bleedW = phoneW * 1.05f;
+            const float hw = bleedW * 0.5f;
+            const float hh = bleedW * 0.5f;
+            const ImVec2 jc(j0.x + jw * 0.5f, j0.y + jh * 0.5f);
+            // The quad is wider than the handset. It used to paint over the
+            // bezel and the notch (rounded corners cannot clip to a screen
+            // shape); blurredJacketTex now multiplies the texture by
+            // mask_smartphone.png, so whatever falls outside the screen is
+            // simply gone and the corners come from the mask, not from here.
+            const float u0 = (jc.x - hw - phoneX) / phoneW;
+            const float v0 = (jc.y - hh - phoneY) / phoneH;
+            const float u1 = (jc.x + hw - phoneX) / phoneW;
+            const float v1 = (jc.y + hh - phoneY) / phoneH;
             const GLuint blurTex = blurredJacketTex(renderer, group.coverPath, u0, v0, u1, v1);
             if (blurTex != 0) {
                 dl->AddImage(
                     reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(blurTex)),
-                    ImVec2(p0x, p0y), ImVec2(p0x + bleedW, p0y + bleedH),
+                    ImVec2(jc.x - hw, jc.y - hh), ImVec2(jc.x + hw, jc.y + hh),
                     ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), IM_COL32(255, 255, 255, 235));
             }
         }
 
-        // mask_smartphone_jacket has a ~40/960 corner, i.e. 16 at this size.
         addJacket(dl, renderer.cover() != nullptr ? renderer.cover()->id : thumbFor(renderer, group.coverPath),
-            j0, ImVec2(j0.x + jw, j0.y + jh), 16.0f * k);
-        dl->AddRect(j0, ImVec2(j0.x + jw, j0.y + jh), IM_COL32(255, 255, 255, 60), 16.0f * k, 0, 2.0f);
+            j0, ImVec2(j0.x + jw, j0.y + jh), 12.0f * k);
+        dl->AddRect(j0, ImVec2(j0.x + jw, j0.y + jh), IM_COL32(255, 255, 255, 60), 12.0f * k, 0, 2.0f);
 
         // Title / artist / vocal. Everything below is laid out in flow: the
         // vocal chip row is conditional, and the old fixed fractions let the
@@ -4429,27 +4410,23 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         // Panel content width: the difficulty pads below use it, and the
         // credits / chips have to stay inside it (a 5-singer セカイver line
         // is easily wider than the phone screen).
-        // Panel content box: pjsk's text block is 440.2 wide and its left edge
-        // sits 295.4 left of the handset's centre (the right side is left blank
-        // for the score-rank badge).
-        const float textLeft = cx - phoneW * 0.3916f;
-        const float panelW = phoneW * 0.5835f;
-        const float contentL = textLeft;
-        const float contentR = textLeft + panelW;
-        const float badgeD = phoneW * 0.1485f; // RankBase 112
-        const float textMaxW = contentR - contentL;
+        const float panelW = 336.0f * k;
+        const float contentL = cx - panelW * 0.5f;
+        const float contentR = cx + panelW * 0.5f;
+        const float badgeD = 64.0f * k;
+        const float textMaxW = contentR - contentL - badgeD - 12.0f * k;
 
-        float ty = j0.y + jh + phoneH * 0.030f;
+        float ty = j0.y + jh + phoneH * 0.022f;
         const float metaTop = ty;
         if (title != nullptr) {
-            const std::string text = ellipsize(title, 34.0f * k, group.title, textMaxW);
-            addTextLeft(dl, title, 34.0f * k, ImVec2(contentL, ty + 16.0f * k), white, text.c_str());
+            const std::string text = ellipsize(title, 26.0f * k, group.title, textMaxW);
+            addTextLeft(dl, title, 26.0f * k, ImVec2(contentL, ty + 13.0f * k), white, text.c_str());
         }
-        ty += 56.0f * k;
+        ty += 46.0f * k;
         if (!item.artist.empty()) {
-            const std::string text = ellipsize(body, 26.0f * k, item.artist, textMaxW);
-            addTextLeft(dl, body, 26.0f * k, ImVec2(contentL, ty), grayText, text.c_str());
-            ty += 42.0f * k;
+            const std::string text = ellipsize(body, 20.0f * k, item.artist, textMaxW);
+            addTextLeft(dl, body, 20.0f * k, ImVec2(contentL, ty), grayText, text.c_str());
+            ty += 35.0f * k;
         }
         // The "Vo." line follows the version picked in the 切换歌手 panel (the
         // chip row that used to sit here is gone - the panel replaced it, see
@@ -4488,14 +4465,14 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             // 5-singer セカイver line still fits next to the badge.
             if (!vocalText.empty()) {
                 std::string vo = "Vo. " + vocalText;
-                float voSize = 24.0f * k;
+                float voSize = 18.0f * k;
                 ImVec2 ts = body->CalcTextSizeA(voSize, FLT_MAX, 0.0f, vo.c_str());
                 if (ts.x > textMaxW) {
                     voSize *= textMaxW / ts.x;
                 }
                 vo = ellipsize(body, voSize, vo, textMaxW);
                 addTextLeft(dl, body, voSize, ImVec2(contentL, ty), grayText, vo.c_str());
-                ty += 40.0f * k;
+                ty += 32.0f * k;
             }
             // Best-score rank badge: right-aligned to the content box and
             // centred on the metadata block that just ended. In the reference
@@ -4512,16 +4489,13 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         // click is reported to the caller rather than moving the (read-only)
         // list. Only the five difficulties the list can name are offered.
         const bool partyPick = partyReadOnly;
-        // pjsk's difficulty pads are 96 squares in a 576-wide strip (step 120).
-        const float dcD = phoneW * 0.1273f;
-        const float dcGap = phoneW * 0.0318f;
+        const float dcD = 60.0f * k;
+        const float dcGap = 9.0f * k;
         const float rowW = kDiffCount * dcD + (kDiffCount - 1) * dcGap;
         float dx = cx - rowW * 0.5f + dcD * 0.5f;
         // Anchored to the content flow (with the old fraction as the floor for a
         // song whose metadata block is short), so the two can never overlap.
-        // 123.85px below the jacket's bottom edge in pjsk, but never on top of
-        // the credits block (a long title pushes it down instead).
-        const float dcY = std::max(j0.y + jh + phoneH * 0.0874f, ty + dcD * 0.5f + 26.0f * k);
+        const float dcY = std::max(scrY0 + phoneH * 0.500f, ty + dcD * 0.5f + 34.0f * k);
         for (int d = 0; d < kDiffCount; ++d) {
             const bool avail = group.idx[d] >= 0;
             const bool active = avail && (partyPick ? party->myDifficulty == d : d == diffIndex);
@@ -4569,8 +4543,8 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             if (avail) {
                 lvText = levelText(entries[static_cast<size_t>(group.idx[d])], lvBuf, sizeof(lvBuf));
             }
-            addTextCentered(dl, body, 38.0f * k, c, white, lvText);
-            addTextCentered(dl, body, 24.0f * k, ImVec2(dx, dcY + dcD * 0.5f + 26.0f * k),
+            addTextCentered(dl, body, 24.0f * k, c, white, lvText);
+            addTextCentered(dl, body, 15.0f * k, ImVec2(dx, dcY + dcD * 0.5f + 16.0f * k),
                 active ? white : (avail ? kDiffColors[d] : IM_COL32(130, 126, 156, 255)), kDiffNames[d]);
             dx += dcD + dcGap;
         }
@@ -4582,10 +4556,9 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         // nothing to confirm yet (no song from the host, or no difficulty
         // picked), so the rule is visible instead of just rejected.
         const bool okReady = !partyPick || (partyPickable && party->myDifficulty >= 0);
-        // PositiveButton is 258 x 96 in pjsk.
-        const float okW = phoneW * 0.342f;
-        const float okH = phoneH * 0.0678f;
-        const float okTop = std::max(dcY + dcD * 0.5f + 72.0f * k, phoneY + phoneH * 0.620f);
+        const float okW = sw * 0.58f;
+        const float okH = 56.0f * k;
+        const float okTop = std::max(scrY0 + phoneH * 0.600f, dcY + dcD * 0.5f + 44.0f * k);
         const ImVec2 okA(cx - okW * 0.5f, okTop);
         const ImVec2 okB(okA.x + okW, okA.y + okH);
         ImGui::SetCursorScreenPos(tiltedItemPos(ImVec2(cx, (okA.y + okB.y) * 0.5f), ImVec2(okW, okH)));
@@ -4614,7 +4587,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         } else {
             dl->AddRectFilled(okA, okB, IM_COL32(70, 74, 104, 210), okH * 0.5f);
             dl->AddRect(okA, okB, IM_COL32(126, 138, 156, 255), okH * 0.5f, 0, 2.0f * k);
-            addTextCentered(dl, body, 34.0f * k, ImVec2(cx, (okA.y + okB.y) * 0.5f),
+            addTextCentered(dl, body, 22.0f * k, ImVec2(cx, (okA.y + okB.y) * 0.5f),
                 IM_COL32(178, 184, 202, 255), "确定");
         }
         // Where the button actually lands on screen (it is tilted with the phone),
@@ -4644,9 +4617,8 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         // header row with the other buttons (a per-window dialog, not a property
         // of the song), and the spot it left is exactly where a song-level
         // control belongs.
-        // The two round buttons are 80x80 in pjsk's CommonButtonContent strip.
-        const float ibD = phoneW * 0.1273f;
-        const float ibY = std::max(okB.y + 96.0f * k, phoneY + phoneH * 0.760f);
+        const float ibD = 64.0f * k;
+        const float ibY = std::max(scrY0 + phoneH * 0.700f, okB.y + 62.0f * k);
         const float ibGap = ibD * 1.7f;
         for (int i = 0; i < 2; ++i) {
             const bool lockedOut = partyReadOnly && i == 0;
@@ -4700,8 +4672,8 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         // 玩家" / "本窗口没有这首曲子"). Mint once this window has confirmed.
         if (partyRoom && !party->status.empty()) {
             const float statusY = ibY + ibD * 0.5f + 26.0f * k;
-            const std::string line = ellipsize(body, 24.0f * k, party->status, sw * 0.96f);
-            addTextCentered(dl, body, 24.0f * k, ImVec2(cx, statusY),
+            const std::string line = ellipsize(body, 16.0f * k, party->status, sw * 0.96f);
+            addTextCentered(dl, body, 16.0f * k, ImVec2(cx, statusY),
                 party->confirmed ? IM_COL32(106, 232, 208, 255) : IM_COL32(178, 178, 198, 255),
                 line.c_str());
         }
@@ -4773,11 +4745,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     if (account != nullptr) {
         const double need = game::expToNextRank(account->rank);
         const float expRatio = need > 0.0 ? static_cast<float>(account->exp / need) : 1.0f;
-        // Between the search box and the handset: the top-right corner is the
-        // phone now (it starts at x 1145).
-        // Right edge of the strip between the search box (ends at 957) and the
-        // handset (starts at 1145).
-        const ImVec2 chipAnchor(listX + searchW + 176.0f * k, headerRowY + 20.0f * k);
+        const ImVec2 chipAnchor(w - 26.0f * k, headerRowY);
         const ImVec4 chip = ui::playerLevelChip(dl, body, chipAnchor, account->rank, k, true, expRatio);
         const ImVec2 mouse = ImGui::GetIO().MousePos;
         // Manual hit test (the chip is not an ImGui item), so it needs its own
