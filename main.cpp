@@ -3099,6 +3099,11 @@ int main(int argc, char** argv)
 
     // Reports the current song to Windows (SMTC) and sizes the taskbar bar.
     double trackDurationSec = 0.0;
+    // How long after the chart's last note the LIVE CLEAR banner is due. The
+    // original fires it as soon as the chart is over - a moment for the ringing
+    // tail and the hold release, not the instrumental outro the mp3 carries.
+    // Used both by the trigger below and by the "[play] chart end" line.
+    constexpr double kLiveClearDelaySec = 1.6;
     auto announceTrack = [&]() {
         if (!session.active) {
             return;
@@ -3124,6 +3129,16 @@ int main(int argc, char** argv)
             duration = core_api::getChartEndTimeSec();
         }
         trackDurationSec = std::max(0.0, duration);
+        // The chart's own end vs the track's - a wide gap is exactly the case the
+        // end-of-song trigger has to handle (see the kAfterLastNoteSec comment).
+        {
+            const double chartEnd = core_api::getChartEndTimeSec();
+            std::printf("[play] chart end %.2fs, track %.2fs (banner at %.2fs)\n", chartEnd,
+                trackDurationSec,
+                chartEnd > 1.0 ? std::min(trackDurationSec - 0.15, chartEnd + kLiveClearDelaySec)
+                               : trackDurationSec - 0.15);
+            std::fflush(stdout);
+        }
         // 多人游玩: the host is the one with the BGM, so it is the one Windows
         // should hear about - two windows announcing the same live fight over
         // the media widget and the taskbar bar.
@@ -9621,12 +9636,30 @@ int main(int argc, char** argv)
             // screen for 1.5 s and drives the blackout itself (it only starts at
             // 1.25 s into the banner, otherwise the fade would swallow the letters).
             // A failed run has no banner and keeps the plain fade.
-            const double effectiveEnd = resultAtSec > 0.0 ? resultAtSec : trackDurationSec - 0.15;
+            // kLiveClearDelaySec lives next to announceTrack: the trigger and the
+            // startup log have to agree on it.
+            const double naturalEnd = trackDurationSec - 0.15;
+            // trackDurationSec is the **BGM's** length (announceTrack prefers
+            // audio.musicDurationSec()), and the official mp3s run well past the last
+            // note, so waiting for it puts LIVE CLEAR on screen long after the chart
+            // ended (user report 2026-11-01: the banner belongs right after the last
+            // note is judged). The chart's own end comes from core's maxTicks; take
+            // whichever is earlier. `--result-at` still wins over both.
+            const double chartEnd = core_api::getChartEndTimeSec();
+            const double effectiveEnd = resultAtSec > 0.0
+                ? resultAtSec
+                : (chartEnd > 1.0 ? std::min(naturalEnd, chartEnd + kLiveClearDelaySec)
+                                  : naturalEnd);
             const bool clearedSoFar = judgement.stats().life > 0.0f;
             if (state == AppState::Play && trackDurationSec > 1.0 && !liveClearBannerArmed
                 && !resultScheduled && songTime >= effectiveEnd && clearedSoFar) {
                 liveClearBannerArmed = true;
                 liveClearBanner.start();
+                // Says which of the two ends won - a chart that ends much earlier
+                // than the track is exactly what this change is about.
+                std::printf("[play] LIVE CLEAR at %.2fs (chart end %.2fs, track %.2fs, trigger %.2fs)\n",
+                    songTime, chartEnd, trackDurationSec, effectiveEnd);
+                std::fflush(stdout);
                 // The sting that ships with the effect (assets/se/LIVE_CLEAR.mp3).
                 // Played straight off the banner, not through ui::se: that queue is
                 // for widget feedback and would drop this on any frame where a
@@ -9662,9 +9695,7 @@ int main(int argc, char** argv)
             const bool bannerDone = liveClearBannerArmed
                 && liveClearBanner.time() >= game::LiveClearBanner::kDuration;
             const bool resultDue = state == AppState::Play && trackDurationSec > 1.0
-                && (liveClearBannerArmed ? bannerDone
-                                         : songTime >= (resultAtSec > 0.0 ? resultAtSec
-                                                                          : trackDurationSec - 0.15));
+                && (liveClearBannerArmed ? bannerDone : songTime >= effectiveEnd);
             if (resultDue && !resultScheduled) {
                 resultScheduled = true;
                 const auto& st = judgement.stats();
