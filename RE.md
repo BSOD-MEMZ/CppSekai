@@ -186,8 +186,28 @@ python ms_geom.py 702  ms_freelive # ScreenLayerFreeLiveMusicSelect
 ```
 
 `ms_geom.py` 输出每行：`名字  anchoredPosition  sizeDelta  anchorMin-anchorMax`，
-并按 `m_Father` 还原成缩进树。**`anchoredPosition` 只当参考**（选曲是代码排版），
+并按 `m_Father` 还原成缩进树。**`anchoredPosition` 只当参考**（内容排版是运行时代码做的），
 尺寸和层级才可信 —— 理由见 [SELECT-UI.md](SELECT-UI.md) §2。
+
+**找 prefab（别靠猜名字）**：`python arip_search.py <关键词> PrefabHierarchyObject`。
+同名资产有三份（`PrefabHierarchyObject` / `PrefabInstance` / `GameObject`），
+只有第一类是能展开的 prefab 树。
+
+**读组件字段（CanvasScaler / Canvas 这类没在 RectTransform 里的东西）**：
+
+```bash
+# 1) prefab 页面里的 GameObjects[] 表 -> 根 GO 的 PathID
+# 2) /Assets/View?Path=<同上 prefix>,"D":<GO PathID>  -> 页面里的 Components[] PathID
+# 3) /Assets/Yaml?Path=<prefix>,"D":<组件 PathID>    -> 组件原文
+```
+
+**画布基准（2026-11-01 实测，结论先记住）**：`CanvasRoot`（prefab 426）根上的
+`ScreenCanvasScaler`（组件 PathID 45）写着 `m_UiScaleMode: 1`（ScaleWithScreenSize）、
+`m_ReferenceResolution: {x: 1920, y: 1080}`、`m_ScreenMatchMode: 0`、`m_MatchWidthOrHeight: 0`
+（按宽度匹配）。**所以 prefab 里的 rect 数值就是 1920×1080 上的像素，不需要任何换算。**
+早先按 `bg1/bg2` sprite 的 1334×750 推出「×1.44」是错的 —— 那是贴图分辨率，
+显示尺寸由 sizeDelta + 父级 anchor 决定（`Background` 的 1820×980 挂在 100×100 的
+占位父节点下，实际正好 1920×1080）。
 
 ### 4.3 读粒子系统参数（触摸特效就是这么来的）
 
@@ -298,7 +318,9 @@ json.dump(idx, open('sprite_sizes.json', 'w'))
 
 ### AssetRipper
 - **必须用 `127.0.0.1`**，`localhost` 会解析到 IPv6 连不上。
-- 进程要常驻（后台任务），否则随命令结束被带走。
+- 进程要常驻（后台任务），否则随命令结束被带走。**2026-11-01 实测**：用
+  `( exe & )` 起的实例，下一条 Bash 调用里就 `000`（连不上）了 —— 必须用
+  `run_in_background` 起，之后跨调用才活着。
 - `POST /LoadFolder` 的 form 字段是**小写 `path`**（不是 `Path`）；返回 302 = 受理。
 - 首页一直显示 "Welcome" 不代表没加载，看 `/Bundles/View?Path={"P":[]}`。
 - **prefab 自身**路径是 `{"C":{"B":{"P":[0]},"I":0},"D":<prefabPathId>}`，
@@ -310,6 +332,8 @@ json.dump(idx, open('sprite_sizes.json', 'w'))
   python 用 `urllib.request.build_opener(urllib.request.ProxyHandler({}))`。
 - **Git Bash 的 `/tmp` 写不进去**（沙箱），`curl -o /tmp/x` 静默不落盘，之后 `cat` 读到的是
   几天前的同名旧文件 —— 排查时会以为是服务返回了怪东西。临时文件一律写进项目 `build/`。
+- **搜索结果页是一整行 HTML**，`grep -c "Assets/View"` 永远得 1（不是"没结果"）。
+  数条目要 `grep -o "Assets/View" | wc -l`，或者直接用 `arip_search.py` 解析表格。
 - **搜索结果里同名资产有三份**：`PrefabHierarchyObject`（collection `I:0`，**这才是 prefab**）、
   `PrefabInstance`（`I:1`）、根 `GameObject`（`I:49xx`）。只有第一类页面有 `GameObjects[]`
   列表；拿 GameObject 的链接去导会得到「no GameObjects[]」。
@@ -349,7 +373,8 @@ json.dump(idx, open('sprite_sizes.json', 'w'))
 | mesh 几何 | `jp/mesh_out/*.txt`（`sekai_PT_05` 是触摸特效的三角） |
 | 触摸特效贴图 | `jp/tex_tap/`、`jp/tex_sekai/` |
 | 粒子参数（YAML 原文） | `jp/fx_touch/*.yml` + `manifest.json` |
-| 选曲界面几何 | `jp/ms_freelive.*`、`ms_info.*`、`ms_row.*`、`ms_diffbtn.*`、`ms_bg.*` |
+| 选曲界面几何 | `jp/ms_freelive.*`（列表层）、`ms_info.*`（详情）、`ms_row.*`（行）、`ms_diffbtn.*`（难度页签）、`ms_bg.*`（背景层）、**`ms_phone.*`（手机面板 704，317 节点）**、`ms_canvasroot.*`（UI 根，CanvasScaler） |
+| 选曲界面里"手机"是什么 | `ScreenLayerFreeLiveCellPhone`（prefab **704**）：754.3×1416.7、中心 (562,-202)、3° 逆时针；规矩见 [SELECT-UI.md](SELECT-UI.md) §3.6 |
 | 结论汇总 | `jp/RE-report-jp.md`（§8 触摸特效参数、§11 选曲界面几何） |
 | 曲末特效（2026-10-31） | `jp/fx_result_*/`（树 + 组件 YAML）、`jp/clip_{liveclear,fullcombo,allperfect}.txt`、`jp/tex_result/{FullCombo,AllPerfect}.png`；规格见 [RESULT-FX.md](RESULT-FX.md) |
 | 对项目的落地规格 | [SELECT-UI.md](SELECT-UI.md)（选曲）、[RESULT-FX.md](RESULT-FX.md)（曲末特效）、AGENTS.md「触摸特效」一节 |
