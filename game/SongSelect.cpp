@@ -2369,6 +2369,23 @@ namespace
                     o[3] = static_cast<unsigned char>(a / n);
                 }
             }
+            // Bake a soft edge into the alpha. The jacket is drawn on top of
+            // this, so only the band *outside* the art is ever visible - and a
+            // quad with a hard edge reads as a pasted rectangle. Chevron
+            // (max of |dx|,|dy|) distance keeps the shape rectangular while
+            // fading the last ~45% out to nothing, which is what an enlarged,
+            // blurred copy looks like once it has been through a blur radius.
+            for (int y = 0; y < kSize; ++y) {
+                for (int x = 0; x < kSize; ++x) {
+                    const float nx = (static_cast<float>(x) + 0.5f) / kSize * 2.0f - 1.0f;
+                    const float ny = (static_cast<float>(y) + 0.5f) / kSize * 2.0f - 1.0f;
+                    const float d = std::max(std::fabs(nx), std::fabs(ny));
+                    const float t = std::clamp((1.0f - d) / 0.38f, 0.0f, 1.0f);
+                    const float fade = t * t * (3.0f - 2.0f * t);
+                    unsigned char* o = &smooth[(static_cast<size_t>(y) * kSize + x) * 4];
+                    o[3] = static_cast<unsigned char>(static_cast<float>(o[3]) * fade);
+                }
+            }
             tex = renderer.createTextureFromRgba(smooth.data(), kSize, kSize);
         }
         if (px != nullptr) {
@@ -4240,38 +4257,6 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     const float cx = (scrX0 + scrX1) * 0.5f;
     const float sw = scrX1 - scrX0;
 
-    // Vertex index where the content block starts (jacket, metadata, difficulty
-    // pads, rank badge). The frame drawn above stays outside it, so a song change
-    // can animate the content while the phone itself holds still.
-    const int phoneContentVtxFirst = dl->VtxBuffer.Size;
-
-    // ------------------------------------------------------------------
-    // Phone screen backdrop: the song's own jacket, blurred, filling the
-    // screen under a dark scrim - ScreenLayerFreeLiveCellPhone's
-    // UIPartsBlurMusicJacket. It goes on before any content, and it is clipped
-    // to the screen's own rounded corners (the frame image already paints the
-    // bezel, so a square quad would poke out at the four corners).
-    //
-    // The scrim is what buys the contrast: the panel's text is white, and a
-    // blurred sleeve can be anything from black to near-white.
-    // ------------------------------------------------------------------
-    const float scrY1 = phoneY + phoneH * 0.972f;
-    const float screenRound = phoneW * 0.055f;
-    if (!groups.empty() && selected >= 0) {
-        const SongGroup& bgGroup = groups[static_cast<size_t>(groupIndex)];
-        const GLuint blurTex = blurredJacketTex(renderer, bgGroup.coverPath);
-        if (blurTex != 0) {
-            dl->AddImageRounded(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(blurTex)),
-                ImVec2(scrX0, scrY0), ImVec2(scrX1, scrY1), ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f),
-                IM_COL32(255, 255, 255, 255), screenRound);
-        }
-        // Navy scrim. One solid capsule-cornered rect rather than a gradient:
-        // AddRectFilledMultiColor cannot round its corners, and a square scrim
-        // would square off the screen the frame image had just rounded.
-        dl->AddRectFilled(ImVec2(scrX0, scrY0), ImVec2(scrX1, scrY1), IM_COL32(22, 18, 44, 152),
-            screenRound);
-    }
-
     if (!groups.empty() && selected >= 0) {
         const ChartEntry& item = entries[static_cast<size_t>(selected)];
         const SongGroup& group = groups[static_cast<size_t>(groupIndex)];
@@ -4280,6 +4265,31 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         const float jw = sw * 0.62f;
         const float jh = jw;
         const ImVec2 j0(cx - jw * 0.5f, scrY0 + phoneH * 0.020f);
+
+        // UIPartsBlurMusicJacket: the *same* jacket, blown up and smeared,
+        // sitting immediately behind the art - it does NOT fill the phone.
+        // (It lives inside JacketContent > JacketMask > Jacket, i.e. it is part
+        // of the jacket block, and the sharp thumbnail covers its middle.) Three
+        // concentric copies with falling alpha are what turns the hard edge of
+        // an enlarged quad into a soft bleed, since a draw list cannot blur.
+        {
+            const GLuint blurTex = blurredJacketTex(renderer, group.coverPath);
+            if (blurTex != 0) {
+                // One quad; the soft edge is baked into the texture's alpha, so
+                // there is nothing to layer and no hard rectangle to see. 1.55x
+                // puts roughly half a jacket width of bleed around the art.
+                constexpr float kBleedScale = 1.32f;
+                const float hw = jw * 0.5f * kBleedScale;
+                const float hh = jh * 0.5f * kBleedScale;
+                const ImVec2 jc(j0.x + jw * 0.5f, j0.y + jh * 0.5f);
+                dl->AddImageRounded(
+                    reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(blurTex)),
+                    ImVec2(jc.x - hw, jc.y - hh), ImVec2(jc.x + hw, jc.y + hh),
+                    ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), IM_COL32(255, 255, 255, 235),
+                    12.0f * k * kBleedScale);
+            }
+        }
+
         addJacket(dl, renderer.cover() != nullptr ? renderer.cover()->id : thumbFor(renderer, group.coverPath),
             j0, ImVec2(j0.x + jw, j0.y + jh), 12.0f * k);
         dl->AddRect(j0, ImVec2(j0.x + jw, j0.y + jh), IM_COL32(255, 255, 255, 60), 12.0f * k, 0, 2.0f);
@@ -4566,20 +4576,6 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         }
     }
 
-    // Song change: the content block rises into place and fades up while the
-    // phone frame stays where it is. Same trick as the entry animation below -
-    // it only needs the vertex index the content started at.
-    static int lastPanelSong = -1;
-    static float panelIn = 1.0f;
-    if (groupIndex != lastPanelSong) {
-        lastPanelSong = groupIndex;
-        panelIn = 0.0f;
-    }
-    panelIn = std::min(1.0f, panelIn + static_cast<float>(ImGui::GetIO().DeltaTime) / 0.22f);
-    const float panelEase = easeOutCubic(panelIn);
-    const float panelRise = (1.0f - panelEase) * 16.0f * k;
-    const int panelAlpha = static_cast<int>(std::clamp(panelEase, 0.0f, 1.0f) * 255.0f);
-
     // Tilt the phone: rotate every vertex the block above produced about the
     // phone's centre. Text, images, rounded shapes - all rotate together. The
     // same pass runs the intro animation: on entry the whole phone slides in
@@ -4594,11 +4590,14 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     // drawer is up (the Dummy gates below).
     for (int i = phoneVtxFirst; i < dl->VtxBuffer.Size; ++i) {
         ImVec2& p = dl->VtxBuffer[i].pos;
-        const bool isContent = i >= phoneContentVtxFirst;
+        // No per-song animation: the original swaps the phone's contents in
+        // place, with no rise and no fade (only the screen's own entry - the
+        // phone sliding in - is animated). Changing songs feels a lot snappier
+        // for it, and identical to the reference.
         const float dx = p.x + phoneSlide - tiltPivot.x;
-        const float dy = p.y + (isContent ? panelRise : 0.0f) - tiltPivot.y;
+        const float dy = p.y - tiltPivot.y;
         p = ImVec2(tiltPivot.x + dx * tiltCos - dy * tiltSin, tiltPivot.y + dx * tiltSin + dy * tiltCos);
-        const int vtxAlpha = isContent ? std::min(enterAlpha, panelAlpha) : enterAlpha;
+        const int vtxAlpha = enterAlpha;
         if (vtxAlpha < 255) {
             ImU32& col = dl->VtxBuffer[i].col;
             const ImU32 a = (col >> IM_COL32_A_SHIFT) & 0xFF;
