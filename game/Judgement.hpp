@@ -64,6 +64,41 @@ struct HitNote
     std::size_t holdMarkerIndex = static_cast<std::size_t>(-1);
 };
 
+// One grade's tolerance window. `earlyMs` is how early a press may land,
+// `lateMs` how late; both are positive magnitudes. The official table
+// (master/ingameJudgeFrames.json, units of 60 fps frames) is asymmetric for
+// flick / long_end / friction, which is the whole reason this is a pair.
+struct JudgeWindow
+{
+    float earlyMs = 0.0f;
+    float lateMs = 0.0f;
+};
+
+// Which row of the official window table a note reads. pjsk keys it by note
+// type plus "critical", not by a single global setting.
+enum class WindowType : std::uint8_t
+{
+    Normal,
+    NormalCritical,
+    Flick,
+    FlickCritical,
+    LongEnd,
+    LongEndCritical,
+    LongEndFlick,
+    Friction,
+    FrictionCritical,
+    FrictionLongEnd,
+    FrictionFlick,
+};
+
+struct TypeWindows
+{
+    JudgeWindow perfect;
+    JudgeWindow great;
+    JudgeWindow good;
+    JudgeWindow bad;
+};
+
 struct JudgementWindows
 {
     // Defaults = the 宽松 preset from 设置 > 判定 (见 game/SongSelect.hpp 里
@@ -86,7 +121,14 @@ struct JudgementWindows
     // break. Both used to be hard-coded (180 / 140 ms).
     float holdTailGraceMs = 180.0f;
     float holdStartGraceMs = 140.0f;
+
+    TypeWindows windowsFor(WindowType type) const;
+    // Widest BAD the game can give any note type, used as the look-ahead bound
+    // when scanning for a candidate.
+    float widestBadMs() const;
 };
+
+
 
 // Life pool. pjsk starts every live at 1000 life (skills can push it to
 // 2000, which we do not model). Judgement costs, from the official table:

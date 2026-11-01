@@ -20,6 +20,60 @@ namespace
     // (holdTailGraceMs / holdStartGraceMs) so they can be tuned in the settings
     // dialog; see Judgement.hpp.
 
+    // ------------------------------------------------------------------
+    // Official judgement windows.
+    //
+    // master/ingameJudgeFrames.json (the runtime copy of dump.cs's
+    // MasterIngameJudgeFrame) lists one row per note type, in units of 60 fps
+    // frames, with EARLY and LATE tolerances split. They are genuinely
+    // asymmetric: a flick forgives a late swipe by 1 frame more than an early
+    // one, a hold END is looser when you let go late, and every friction note
+    // uses one width for all four grades because the gesture is pass/fail.
+    //
+    // The engine used to have a single symmetric window and graded everything
+    // with it, which is why a late tap could still count as BAD at 200 ms.
+    constexpr float kFrameMs = 1000.0f / 60.0f;
+
+    struct RawWindow
+    {
+        float pEarly, pLate, gEarly, gLate, gdEarly, gdLate, bEarly, bLate;
+    };
+
+    // Indexed by WindowType (Judgement.hpp). Values are frames.
+    constexpr RawWindow kOfficialWindows[11] = {
+        {2.5f, 2.5f, 5.0f, 5.0f, 6.5f, 6.5f, 7.5f, 7.5f}, // Normal
+        {3.3f, 3.3f, 4.5f, 4.5f, 6.5f, 6.5f, 7.5f, 7.5f}, // NormalCritical
+        {2.5f, 2.5f, 6.5f, 7.5f, 7.0f, 8.0f, 7.5f, 8.5f}, // Flick
+        {3.5f, 3.5f, 6.5f, 7.5f, 7.0f, 8.0f, 7.5f, 8.5f}, // FlickCritical
+        {3.5f, 4.0f, 6.5f, 8.0f, 7.5f, 8.5f, 7.5f, 8.5f}, // LongEnd
+        {3.5f, 4.0f, 6.5f, 8.0f, 7.5f, 8.5f, 7.5f, 8.5f}, // LongEndCritical
+        {3.5f, 4.0f, 6.5f, 8.0f, 7.5f, 8.5f, 7.5f, 8.5f}, // LongEndFlick
+        {5.0f, 5.0f, 5.0f, 5.0f, 5.0f, 5.0f, 5.0f, 5.0f}, // Friction
+        {5.0f, 5.0f, 5.0f, 5.0f, 5.0f, 5.0f, 5.0f, 5.0f}, // FrictionCritical
+        {6.5f, 8.0f, 6.5f, 8.0f, 6.5f, 8.0f, 6.5f, 8.0f}, // FrictionLongEnd
+        {6.5f, 7.5f, 6.5f, 7.5f, 6.5f, 7.5f, 6.5f, 7.5f}, // FrictionFlick
+    };
+
+    // Which row a note reads. `critical` is flags bit 0; hold tails get their
+    // own family because the official table grades them on the release, not on
+    // the press.
+    WindowType windowTypeFor(float kind, bool critical, bool holdTail)
+    {
+        if (holdTail) {
+            if (kind == 2.0f) {
+                return WindowType::LongEndFlick;
+            }
+            return critical ? WindowType::LongEndCritical : WindowType::LongEnd;
+        }
+        if (kind == 3.0f) {
+            return critical ? WindowType::FrictionCritical : WindowType::Friction;
+        }
+        if (kind == 2.0f) {
+            return critical ? WindowType::FlickCritical : WindowType::Flick;
+        }
+        return critical ? WindowType::NormalCritical : WindowType::Normal;
+    }
+
     // Lane coordinates: `center` is the middle of the note, `width` its span.
     // Two notes whose spans touch belong to the same lane area - which is how
     // a sliding long note's tail is matched to its marker (see load()).
@@ -33,6 +87,62 @@ namespace
     // Bit 3 of a HitEvent's flags word: the core says this event is a long
     // note's tail (SUS NoteType::HoldEnd). See mmw_preview.cpp.
     constexpr int kFlagHoldTail = 8;
+} // namespace
+
+TypeWindows JudgementWindows::windowsFor(WindowType type) const
+{
+    const RawWindow& raw = kOfficialWindows[static_cast<int>(type)];
+    // The four settings numbers describe the NORMAL note. Everything else is
+    // the official row plus the same offset, so dragging a slider still moves
+    // the whole table (宽松 / 标准 / 严格 all stay meaningful) without throwing
+    // away the per-type shape.
+    const RawWindow& base = kOfficialWindows[static_cast<int>(WindowType::Normal)];
+    const float dp = perfectMs - base.pEarly * kFrameMs;
+    const float dg = greatMs - base.gEarly * kFrameMs;
+    const float dgd = goodMs - base.gdEarly * kFrameMs;
+    const float db = badMs - base.bEarly * kFrameMs;
+
+    auto pair = [](float earlyFrames, float lateFrames, float delta) {
+        JudgeWindow w;
+        w.earlyMs = std::max(1.0f, earlyFrames * kFrameMs + delta);
+        w.lateMs = std::max(1.0f, lateFrames * kFrameMs + delta);
+        return w;
+    };
+
+    TypeWindows out;
+    out.perfect = pair(raw.pEarly, raw.pLate, dp);
+    out.great = pair(raw.gEarly, raw.gLate, dg);
+    out.good = pair(raw.gdEarly, raw.gdLate, dgd);
+    out.bad = pair(raw.bEarly, raw.bLate, db);
+    return out;
+}
+
+float JudgementWindows::widestBadMs() const
+{
+    float widest = 0.0f;
+    for (int i = 0; i < 11; ++i) {
+        const TypeWindows w = windowsFor(static_cast<WindowType>(i));
+        widest = std::max(widest, std::max(w.bad.earlyMs, w.bad.lateMs));
+    }
+    return widest;
+}
+
+namespace
+{
+    // deltaMs > 0 means the press landed LATE (after the note).
+    Judge gradeFor(const TypeWindows& w, float deltaMs)
+    {
+        if (-deltaMs <= w.perfect.earlyMs && deltaMs <= w.perfect.lateMs) {
+            return Judge::Perfect;
+        }
+        if (-deltaMs <= w.great.earlyMs && deltaMs <= w.great.lateMs) {
+            return Judge::Great;
+        }
+        if (-deltaMs <= w.good.earlyMs && deltaMs <= w.good.lateMs) {
+            return Judge::Good;
+        }
+        return Judge::Bad;
+    }
 } // namespace
 
 void JudgementEngine::load(const float* packed, int count)
@@ -353,7 +463,9 @@ HitNote* JudgementEngine::findCandidate(float lanePos, float songTimeSec, float 
     HitNote* best = nullptr;
     float bestAbsDt = std::numeric_limits<float>::max();
 
-    const float badSec = mWindows.badMs / 1000.0f;
+    // Look-ahead bound: the widest BAD any note type can have, since the row
+    // is only known once we reach the note.
+    const float badSec = mWindows.widestBadMs() / 1000.0f;
     const std::size_t scanEnd = std::min(mNotes.size(), mCursor + 256);
 
     for (std::size_t i = mCursor; i < scanEnd; ++i) {
@@ -403,8 +515,18 @@ HitNote* JudgementEngine::findCandidate(float lanePos, float songTimeSec, float 
         if (!laneCovers(note, lanePos, margin)) {
             continue;
         }
-        const float dt = std::fabs(note.timeSec - songTimeSec);
-        if (dt <= badSec && dt < bestAbsDt) {
+        // Signed distance: positive means the press is late. A note only
+        // takes the press inside its own BAD window - outside it the note is
+        // gone (MISS), and grading it BAD anyway is exactly the old bug.
+        const float deltaMs = (songTimeSec - note.timeSec) * 1000.0f;
+        const bool noteCritical = (static_cast<int>(note.flags) & 1) != 0;
+        const JudgeWindow noteBad
+            = mWindows.windowsFor(windowTypeFor(note.kind, noteCritical, note.holdTail)).bad;
+        if (-deltaMs > noteBad.earlyMs || deltaMs > noteBad.lateMs) {
+            continue;
+        }
+        const float dt = std::fabs(deltaMs) / 1000.0f;
+        if (dt < bestAbsDt) {
             bestAbsDt = dt;
             best = &note;
         }
@@ -413,17 +535,12 @@ HitNote* JudgementEngine::findCandidate(float lanePos, float songTimeSec, float 
     if (best == nullptr) {
         return nullptr;
     }
-    const float dtMs = bestAbsDt * 1000.0f;
-    Judge judge;
-    if (dtMs <= mWindows.perfectMs) {
-        judge = Judge::Perfect;
-    } else if (dtMs <= mWindows.greatMs) {
-        judge = Judge::Great;
-    } else if (dtMs <= mWindows.goodMs) {
-        judge = Judge::Good;
-    } else {
-        judge = Judge::Bad;
-    }
+    // Signed: positive = the press was late. The official table gives every
+    // note type its own early/late pair, so the grade comes from that row.
+    const bool bestCritical = (static_cast<int>(best->flags) & 1) != 0;
+    const TypeWindows bestWindows
+        = mWindows.windowsFor(windowTypeFor(best->kind, bestCritical, best->holdTail));
+    const Judge judge = gradeFor(bestWindows, (songTimeSec - best->timeSec) * 1000.0f);
     best->state = 1;
     mHitEventIndices.push_back(static_cast<int>(best - mNotes.data()));
     // Critical is bit0 only - bits 1-2 carry the flick direction, so a
@@ -648,7 +765,13 @@ void JudgementEngine::update(float songTimeSec)
             continue;
         }
 
-        if (note.timeSec < songTimeSec - missSec) {
+        // A note gives up when it is past its own LATE BAD bound. Using one
+        // shared number here would keep a normal note alive 30 ms longer than
+        // the game does while cutting a flick short.
+        const bool noteCritical = (static_cast<int>(note.flags) & 1) != 0;
+        const TypeWindows noteWindows
+            = mWindows.windowsFor(windowTypeFor(note.kind, noteCritical, note.holdTail));
+        if (note.timeSec < songTimeSec - noteWindows.bad.lateMs / 1000.0f) {
             note.state = 2;
             registerMiss(songTimeSec, kLifeMiss);
             continue;
@@ -774,16 +897,16 @@ void JudgementEngine::update(float songTimeSec)
             }
             Judge judge = Judge::Perfect;
             if (hold.released && hold.releaseTimeSec >= 0.0f) {
-                const float dtMs = (hold.endTimeSec - hold.releaseTimeSec) * 1000.0f;
-                if (dtMs <= mWindows.perfectMs) {
-                    judge = Judge::Perfect;
-                } else if (dtMs <= mWindows.greatMs) {
-                    judge = Judge::Great;
-                } else if (dtMs <= mWindows.goodMs) {
-                    judge = Judge::Good;
-                } else {
-                    judge = Judge::Bad;
-                }
+                // Graded on the release, so it reads the long_end row - which
+                // is deliberately lopsided (a late release is forgiven a frame
+                // more than an early one).
+                const std::size_t tailIdx = hold.tailIndex;
+                const bool tailFlick = tailIdx < mNotes.size() && mNotes[tailIdx].kind == 2.0f;
+                const bool tailCritical = tailIdx < mNotes.size()
+                    && (static_cast<int>(mNotes[tailIdx].flags) & 1) != 0;
+                const TypeWindows tailWindows = mWindows.windowsFor(
+                    windowTypeFor(tailFlick ? 2.0f : 0.0f, tailCritical, true));
+                judge = gradeFor(tailWindows, (hold.releaseTimeSec - hold.endTimeSec) * 1000.0f);
             }
             judgeHoldTail(hold, judge, songTimeSec);
         }

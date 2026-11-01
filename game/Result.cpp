@@ -42,7 +42,10 @@ namespace
 // Palette (sampled from the reference).
 // ---------------------------------------------------------------------------
 constexpr ImU32 kPanelFill = IM_COL32(255, 255, 255, 150); // white @ ~59%
-constexpr ImU32 kTagFill = IM_COL32(255, 255, 255, 16);    // judge row plate
+// Judge row plate. The prefab's Grid/{Perfect..Miss}/Base is a CustomImage on
+// the game's generic white round-base sprite (`bg_base_round_h56_wh`, 66x56,
+// 9-slice border 33/28/33/28 - see RESULT-SCORE.md) tinted #444466 at 70%.
+constexpr ImU32 kTagFill = IM_COL32(68, 68, 102, 178);
 constexpr ImU32 kPlateFill = IM_COL32(50, 50, 76, 255);    // SCORERANK plate
 constexpr ImU32 kTrackFill = IM_COL32(50, 50, 76, 255);    // score bar track
 constexpr ImU32 kDarkPill = IM_COL32(68, 68, 102, 255);    // 歌曲等级 pill
@@ -150,7 +153,9 @@ constexpr float kRowPitch = 48.5f;
 constexpr float kTagX = 549.7f;
 constexpr float kTagW = 288.0f;
 constexpr float kTagH = 42.0f;
-constexpr float kTagRound = 14.0f;
+// The sprite's 9-slice border is 28 design units tall on a 56-tall plate, i.e.
+// fully rounded ends; x0.75 to the 1080 canvas = 21 px.
+constexpr float kTagRound = 21.0f;
 constexpr float kRowLabelX = 570.0f;
 // The rows reuse the game's own judgement words (judge/v3/<1..5>.png, the
 // same sprites the in-game judge text uses - PERFECT even carries the rainbow

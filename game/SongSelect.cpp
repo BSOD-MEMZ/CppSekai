@@ -1115,6 +1115,25 @@ void loadUserData(const std::string& path, UserSettings& settings,
     } catch (...) {
         // malformed file: keep the defaults
     }
+    // Profiles written before 2026-11-01 carry the old "标准" preset
+    // (40 / 90 / 140 / 200), which was never the official table - it let a
+    // press 200 ms late count as BAD. Those four numbers are not a choice
+    // anybody made, they were the default, so move them to the real one
+    // (42 / 83 / 108 / 125) and say so once.
+    if (std::fabs(settings.perfectMs - 40.0f) < 0.01f
+        && std::fabs(settings.greatMs - 90.0f) < 0.01f
+        && std::fabs(settings.goodMs - 140.0f) < 0.01f
+        && std::fabs(settings.badMs - 200.0f) < 0.01f) {
+        settings.perfectMs = 42.0f;
+        settings.greatMs = 83.0f;
+        settings.goodMs = 108.0f;
+        settings.badMs = 125.0f;
+        if (std::fabs(settings.missMs - 200.0f) < 0.01f) {
+            settings.missMs = 125.0f;
+        }
+        std::printf("[settings] judgement windows migrated to the official table "
+                    "(42/83/108/125)\n");
+    }
     // Same ordering rules the settings UI enforces.
     settings.perfectMs = std::clamp(settings.perfectMs, 10.0f, 100.0f);
     settings.greatMs = std::max(settings.greatMs, settings.perfectMs + 10.0f);

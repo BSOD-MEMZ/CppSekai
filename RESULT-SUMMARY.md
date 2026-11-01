@@ -136,12 +136,20 @@ summary 的入场全在这一条 clip 里。**`_00` 是静态初始姿态**（11
 | `rank_label.png` | `txt_scoreRank_wh` | 168×22 | `SCORERANK` 字标，`m_Color` 粉 **#FF8EC6** |
 | `livefailed_line.png` | `txt_livefailed_line_dgr` | 1352×166 | 失败局的**空心描边副本**（和 `liveresult_line` 不是同一张，宽 1352 不是 1272） |
 
-**分数条底槽没有贴图**：`ScoreView/ScoreGauge` 的 `frame` 子节点 `m_Sprite` 是
-`{0,0}`，颜色 `m_Color = (50,50,76)` = **#32324C**，`m_Type 1`（九宫格）。所以底槽
-就是一块圆角药丸，`game/Result.cpp` 直接用 `AddRectFilled` 画，不吃贴图。
-SCORERANK 的 `Base`（224×375）同理 —— 颜色一样是 #32324C，尺寸在首包里没有
-对得上的 sprite（搜遍 2808 张），也按圆角矩形画。**这两处是唯一"画出来"而不是
-"贴出来"的**；将来若找到原图，替换 `kGaugeTrack` / `kRankPlateFill` 两处即可。
+**更正（2026-11-01）**：这段原来写"底槽没有贴图、是画的"，**判断错了**。
+当时看的是 `frame` 子节点（那个确实 `m_Sprite = {0,0}`，但它只是 100×100 的占位
+标记）。真正画底槽的是 `ScoreGauge` 节点**自己**：
+
+```
+ScoreGauge  1359.7 x 40   m_Sprite {56,1}   m_Type 1（九宫格）  m_Color #32324C
+```
+
+也就是**游戏里所有"圆角底/药丸"都是白的圆角贴图 + 染色 + 九宫拉伸**，没有一个
+是代码画的。完整映射表现在在 [RESULT-SCORE.md](RESULT-SCORE.md) §6。
+`game/Result.cpp` 仍然用 `AddRectFilled` 画（等价形状，省一次 9-slice 实现），
+但**颜色和圆角半径改成 prefab 的实际值**：
+`kGaugeTrack` / `kRankPlateFill` = #32324C、`kTagFill` = #444466 @70%、
+`kTagRound` = 21 px（= 贴图 9-slice 边界 28 × 0.75）。
 
 ### 刻度位置和 HUD 不一样（重要）
 

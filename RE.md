@@ -239,6 +239,21 @@ $DOTNET AssetStudioModCLI.dll "D:/Tools/rea/work/jp/GameData" -m export -t sprit
 
 顺带：**喂目录，别喂单个 apk**。`GameData` 目录才是合并后的全集（194631 个资产）。
 
+#### 别人已经下过一遍：`D:\Dev\pjskassets`
+
+**先看那里，别重复下载。**（2026-11-01 发现）它不是 git 仓库，但产物很全：
+
+| 目录 | 内容 |
+|---|---|
+| `downloads_result/live/sound/live_se/default/` | **live 全套 SE 的 mp3**：`se_live_tap/flick/long/trace/perfect/great/good/critical/connect/clear/finish/full_combo/all_perfect/praise` 等 28 个 + `BGM_LIVE_RESULT_2.mp3` |
+| `downloads_se/apk_ui_se/MenuCommon/` | APK 里那 86 个 UI SE（wav）：**`SE_RESULT_SCORE_GAUGE_UP` / `SE_RESULT_COMBO_COUNT_UP` / `SE_RESULT_RECORD` / `SE_RESULT_RANK_HAPPY` / `SE_RESULT_MVP` / `SE_RESULT_SUPERSTAR`** 等 |
+| `_apk/acb/` + `_apk/vgmstream/` | 12 个未加密 acb + vgmstream-cli（能自己解 cue） |
+| `downloads_fx/mysekai/effect/common/texture/` | `tex_common_*` 共用特效贴图库（circle/kira/line/tri/grada…） |
+| `downloads_result/bg/` | 30 张结算背景原图 |
+
+⚠ 之前我按 CDN 路径去猜 `se_live_default.acb` 全部 404、并断言"音效拿不到"——
+**是错的**，那批 mp3 早就在这个目录里。查资源先翻这里。
+
 #### 按尺寸找贴图（不知道名字时的捷径）
 
 全量导出后建一张「名字 -> 尺寸」表，按 prefab 里量到的 `sizeDelta` 反查，基本一击即中
