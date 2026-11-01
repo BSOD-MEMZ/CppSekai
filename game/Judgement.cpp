@@ -1,4 +1,5 @@
 #include "Judgement.hpp"
+#include "platform/Log.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -352,7 +353,7 @@ void JudgementEngine::load(const float* packed, int count)
             ++tailsMatched;
         }
     }
-    std::printf("[judge] %d event(s): %d note(s), %d hold(s), %d tail(s) matched%s\n",
+    platform::logf(platform::LogPlay, "[judge] %d event(s): %d note(s), %d hold(s), %d tail(s) matched%s\n",
         static_cast<int>(mNotes.size()), mTotalScoreNotes, holdMarkers, tailsMatched,
         coreFlagsTails ? " (core flags tails)" : " (lane-matched tails)");
     std::fflush(stdout);

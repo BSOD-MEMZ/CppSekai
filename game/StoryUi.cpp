@@ -1,5 +1,6 @@
 // CppSekai - story UI drawing (see StoryUi.hpp / STORY-UI.md).
 #include "StoryUi.hpp"
+#include "platform/Log.hpp"
 
 // The name card needs ImGuiInputTextState to drop the select-all that ImGui
 // applies when an input is activated by code (see nameCard).
@@ -208,7 +209,7 @@ bool loadTextures(platform::Renderer& renderer, const std::string& assetDir, std
     gGlow = loadImage(renderer, pjsk + "eff_btn_round_h80_a70_wh.png");
     gArrow = loadImage(renderer, pjsk + "icon_pageForward_gn.png");
     gTri = loadImage(renderer, pjsk + "icon_triangle_h22_wh.png");
-    std::printf("[story] pjsk parts band=%d pill=%d glow=%d arrow=%d tri=%d\n", gBand.valid() ? 1 : 0,
+    platform::logf(platform::LogStory, "[story] pjsk parts band=%d pill=%d glow=%d arrow=%d tri=%d\n", gBand.valid() ? 1 : 0,
         gPill.valid() ? 1 : 0, gGlow.valid() ? 1 : 0, gArrow.valid() ? 1 : 0, gTri.valid() ? 1 : 0);
     std::fflush(stdout);
     // Nothing here is fatal: the band falls back to a hand-drawn gradient, the
@@ -224,7 +225,7 @@ Image loadImage(platform::Renderer& renderer, const std::string& path)
     const GLuint id = renderer.loadUiTexture(path, err);
     if (id == 0)
     {
-        std::printf("[story] image missing: %s\n", path.c_str());
+        platform::logf(platform::LogStory, "[story] image missing: %s\n", path.c_str());
         return img;
     }
     img.tex = reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(id));
@@ -781,7 +782,7 @@ int choices(const Canvas& c, ImFont* font, const std::vector<std::string>& optio
         const bool held = ImGui::IsItemActive();
         const bool hit = ImGui::IsItemClicked();
         if (std::getenv("CPSEKAI_UI_TRACE") != nullptr) {
-            std::printf("[story] choice %d hovered=%d any=%d mouse=%.0f,%.0f\n", i,
+            platform::logf(platform::LogStory, "[story] choice %d hovered=%d any=%d mouse=%.0f,%.0f\n", i,
                 ImGui::IsItemHovered() ? 1 : 0, ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow) ? 1 : 0,
                 ImGui::GetIO().MousePos.x, ImGui::GetIO().MousePos.y);
             std::fflush(stdout);

@@ -238,6 +238,10 @@ struct UserSettings
     // 所以设了偏好也不会让一首没下过另一个版本的歌变成放不出声。
     int vocalPref = 0;
     std::string vocalPrefSinger;
+    // 日志分类开关（设置 > 系统 > 日志输出）。位掩码，见 platform/Log.hpp：
+    // bit0 系统 / 1 选曲 / 2 剧情 / 3 演奏 / 4 音频 / 5 输入 / 6 渲染 / 7 多人。
+    // 默认 0xFF（全开 = 以前的行为）。关掉的类别连格式化都不做。
+    unsigned logMask = 0xFFu;
     // "Flick 视作 Tap" (settings > 判定): flick notes take any press instead of
     // a directional swipe, for touchscreens that can barely send an upward
     // swipe. A hold's flick TAIL is not converted - it stops being a note (see

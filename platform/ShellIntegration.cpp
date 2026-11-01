@@ -1,4 +1,5 @@
 #include "ShellIntegration.hpp"
+#include "platform/Log.hpp"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -18,7 +19,7 @@ constexpr const wchar_t* kProgIdLabel = L"SUS 谱面 (CppSekai)";
 
 void log(const char* what, bool ok, long code)
 {
-    std::printf("[shell] %s %s%s\n", what, ok ? "ok" : "FAILED",
+    platform::logf(platform::LogSystem, "[shell] %s %s%s\n", what, ok ? "ok" : "FAILED",
         ok ? "" : (" (code=" + std::to_string(code) + ")").c_str());
     std::fflush(stdout);
 }
@@ -251,8 +252,8 @@ bool associateSus(const std::wstring& exePath)
     if (!writeString(HKEY_CURRENT_USER, L"Software\\Classes\\.sus", nullptr, kProgId)) {
         return false;
     }
-    std::printf("[shell] .sus -> %ls  (HKCU\\Software\\Classes, 双击即 --sus <文件>)\n", kProgId);
-    std::printf("[shell]   command = %ls\n", command.c_str());
+    platform::logf(platform::LogSystem, "[shell] .sus -> %ls  (HKCU\\Software\\Classes, 双击即 --sus <文件>)\n", kProgId);
+    platform::logf(platform::LogSystem, "[shell]   command = %ls\n", command.c_str());
     std::fflush(stdout);
     return true;
 }
@@ -263,7 +264,7 @@ bool disassociateSus()
     // 谱面工具）就不能替他拆掉。
     const std::wstring current = readString(L"Software\\Classes\\.sus", nullptr);
     if (!current.empty() && current != kProgId) {
-        std::printf("[shell] .sus 现在指向 %ls（不是本程序），不动它\n", current.c_str());
+        platform::logf(platform::LogSystem, "[shell] .sus 现在指向 %ls（不是本程序），不动它\n", current.c_str());
         std::fflush(stdout);
         return false;
     }
@@ -273,7 +274,7 @@ bool disassociateSus()
     if (ok) {
         // 这两个返回码 0 = ERROR_SUCCESS，"没找到"也是成功（本来就没装）。别把它
         // 打成 `删除: 0` —— 读着像失败。
-        std::printf("[shell] .sus 关联已撤销（.sus=%s, ProgID=%s）\n",
+        platform::logf(platform::LogSystem, "[shell] .sus 关联已撤销（.sus=%s, ProgID=%s）\n",
             removedExt == ERROR_SUCCESS ? "removed" : "was absent",
             removedProg == ERROR_SUCCESS ? "removed" : "was absent");
         std::fflush(stdout);
@@ -339,7 +340,7 @@ bool rebuildJumpList(const std::wstring& exePath,
         removedArray->Release(removed);
         removed = nullptr;
         if (!userRemoved.empty()) {
-            std::printf("[shell] jump list: %d item(s) removed by the user - keeping them out\n",
+            platform::logf(platform::LogSystem, "[shell] jump list: %d item(s) removed by the user - keeping them out\n",
                 static_cast<int>(userRemoved.size()));
             std::fflush(stdout);
         }
@@ -424,7 +425,7 @@ bool rebuildJumpList(const std::wstring& exePath,
         return false;
     }
     dl->Release(destinationList);
-    std::printf("[shell] jump list rebuilt: %d item(s) in %d category(ies), minslots=%u\n",
+    platform::logf(platform::LogSystem, "[shell] jump list rebuilt: %d item(s) in %d category(ies), minslots=%u\n",
         addedLinks, static_cast<int>(categories.size()), minSlots);
     std::fflush(stdout);
     return true;

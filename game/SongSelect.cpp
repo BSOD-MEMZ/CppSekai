@@ -1,5 +1,6 @@
 // CppSekai - song select screen (see SongSelect.hpp).
 #include "SongSelect.hpp"
+#include "platform/Log.hpp"
 
 #include "Hud.hpp"
 #include "Intro.hpp"
@@ -609,16 +610,16 @@ void buildGuessPool()
             unreadable.push_back(entry.first);
         }
     }
-    std::printf("[guess] %zu usable alias(es) of %zu (%zu of them dropped: the font cannot "
+    platform::logf(platform::LogSelect, "[guess] %zu usable alias(es) of %zu (%zu of them dropped: the font cannot "
                 "draw part of the alias)\n",
         gGuessPool.size(), gAliasIndex.size(), unreadable.size());
     // A few examples, so "the pool shrank" can be told apart from "the font
     // broke": each line names the alias and the character that has no glyph.
     for (std::size_t i = 0; i < unreadable.size() && i < 3; ++i) {
-        std::printf("[guess]   unreadable: %s\n", unreadable[i].c_str());
+        platform::logf(platform::LogSelect, "[guess]   unreadable: %s\n", unreadable[i].c_str());
     }
     if (!unreadable.empty() && !gGuessPool.empty()) {
-        std::printf("[guess]   example kept: %s\n", gGuessPool.front().first.c_str());
+        platform::logf(platform::LogSelect, "[guess]   example kept: %s\n", gGuessPool.front().first.c_str());
     }
     std::fflush(stdout);
 }
@@ -684,7 +685,7 @@ void newGuessQuestion()
     // Logged like [aliases]: a question is generated, not read, so a headless
     // check has no other way to see what was asked (or that the four options
     // are actually distinct).
-    std::printf("[guess] \"%s\" -> %04d %s |", gGuess.alias.c_str(), answerId,
+    platform::logf(platform::LogSelect, "[guess] \"%s\" -> %04d %s |", gGuess.alias.c_str(), answerId,
         titleFor(answerId).c_str());
     for (std::size_t i = 0; i < gGuess.options.size(); ++i) {
         std::printf(" %s%s", i == static_cast<std::size_t>(gGuess.answer) ? "*" : "",
@@ -1125,6 +1126,7 @@ void loadUserData(const std::string& path, UserSettings& settings,
             settings.strictFlick = s.value("strictFlick", settings.strictFlick);
             settings.vocalPref = std::clamp(s.value("vocalPref", settings.vocalPref), 0, 2);
             settings.vocalPrefSinger = s.value("vocalPrefSinger", settings.vocalPrefSinger);
+            settings.logMask = s.value("logMask", settings.logMask) & 0xFFu;
             settings.flickAsTap = s.value("flickAsTap", settings.flickAsTap);
             settings.debugLog = s.value("debugLog", settings.debugLog);
             settings.autoplay = s.value("autoplay", settings.autoplay);
@@ -1176,7 +1178,7 @@ void loadUserData(const std::string& path, UserSettings& settings,
         if (std::fabs(settings.missMs - 200.0f) < 0.01f) {
             settings.missMs = 125.0f;
         }
-        std::printf("[settings] judgement windows migrated to the official table "
+        platform::logf(platform::LogSystem, "[settings] judgement windows migrated to the official table "
                     "(42/83/108/125)\n");
     }
     // Same ordering rules the settings UI enforces.
@@ -1290,6 +1292,7 @@ void saveUserData(const std::string& path, const UserSettings& settings,
         {"strictFlick", settings.strictFlick},
         {"vocalPref", settings.vocalPref},
         {"vocalPrefSinger", settings.vocalPrefSinger},
+        {"logMask", settings.logMask},
         {"flickAsTap", settings.flickAsTap},
         {"debugLog", settings.debugLog},
         {"autoplay", settings.autoplay},
@@ -1514,7 +1517,7 @@ std::vector<ChartEntry> scanChartFolder(const std::string& dir)
         return a.difficulty < b.difficulty;
     });
     if (scanTiming) {
-        std::printf("[scan] %d chart(s): header %.0f ms, sidecar %.0f ms\n", scanned, headerMs, metadataMs);
+        platform::logf(platform::LogSelect, "[scan] %d chart(s): header %.0f ms, sidecar %.0f ms\n", scanned, headerMs, metadataMs);
         std::fflush(stdout);
     }
     return entries;
@@ -2334,7 +2337,7 @@ namespace
             ? nullptr
             : stbi_load_from_memory(bytes.data(), static_cast<int>(bytes.size()), &w, &h, nullptr, 4);
         if (px == nullptr || w <= 0 || h <= 0) {
-            std::printf("[select] phone mask MISSING (%s)\n", path.c_str());
+            platform::logf(platform::LogSelect, "[select] phone mask MISSING (%s)\n", path.c_str());
             std::fflush(stdout);
             if (px != nullptr) {
                 stbi_image_free(px);
@@ -2343,7 +2346,7 @@ namespace
         }
         mask.w = w;
         mask.h = h;
-        std::printf("[select] phone mask %dx%d\n", w, h);
+        platform::logf(platform::LogSelect, "[select] phone mask %dx%d\n", w, h);
         std::fflush(stdout);
         mask.alpha.resize(static_cast<size_t>(w) * h);
         for (size_t i = 0; i < mask.alpha.size(); ++i) {
@@ -2889,7 +2892,7 @@ void loadMusicAliases(const std::string& path)
     }
     // Logged because a missing music-aliases.json is otherwise invisible: the
     // search just quietly loses its alias branch.
-    std::printf("[aliases] %zu aliases\n", gAliasIndex.size());
+    platform::logf(platform::LogSelect, "[aliases] %zu aliases\n", gAliasIndex.size());
     std::fflush(stdout);
 }
 
@@ -3860,7 +3863,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
                         // list into a key panel the same way.
                         ui::se(ui::SeClick);
                         indexOpen = !indexOpen;
-                        std::printf("[select] section index %s\n", indexOpen ? "opened" : "closed");
+                        platform::logf(platform::LogSelect, "[select] section index %s\n", indexOpen ? "opened" : "closed");
                         std::fflush(stdout);
                     } else {
                         // Tap: pick that row (it glides to the centre).
@@ -3953,7 +3956,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         ImGui::PushFont(body, 19.0f * k);
         if (ui::capsuleButton("下载谱面", ImVec2(268.0f * k, 46.0f * k), true)) {
             emptyAction = SelectDownload;
-            std::printf("[select] 下载谱面 pressed\n");
+            platform::logf(platform::LogSelect, "[select] 下载谱面 pressed\n");
             std::fflush(stdout);
         }
         ImGui::PopFont();
@@ -4300,7 +4303,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
                 scrolling = false;
                 lastInputTime = timeSec;
                 indexOpen = false;
-                std::printf("[select] jump to section '%s'\n", keys[static_cast<size_t>(i)].label.c_str());
+                platform::logf(platform::LogSelect, "[select] jump to section '%s'\n", keys[static_cast<size_t>(i)].label.c_str());
                 std::fflush(stdout);
             }
         }
@@ -4545,7 +4548,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             if (vocalResolved) {
                 // 每首歌唱一次：有几个可用版本、按偏好挑中哪个。排查"设置没生效"
                 // 先看这行 —— 版本数 1 就说明库里只有那一个文件，跟偏好无关。
-                std::printf("[select] vocal song=%d versions=%d choice=%d", item.musicId,
+                platform::logf(platform::LogSelect, "[select] vocal song=%d versions=%d choice=%d", item.musicId,
                     static_cast<int>(versions.size()), choice);
                 if (choice >= 0 && choice < static_cast<int>(versions.size())) {
                     std::printf(" type=%s", versions[static_cast<size_t>(choice)].type.c_str());

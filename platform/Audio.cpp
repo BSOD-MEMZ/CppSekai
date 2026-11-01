@@ -4,6 +4,7 @@
 #endif
 
 #include "Audio.hpp"
+#include "platform/Log.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -120,7 +121,7 @@ void AudioEngine::setMuted(bool muted)
     // that was playing, rather than whatever the caller would have to rebuild.
     ma_engine_set_volume(&mEngine, muted ? 0.0f : 1.0f);
     // One line, so a headless run can tell the mute actually fired (窗口最小化静音).
-    std::printf("[audio] master %s\n", muted ? "muted" : "unmuted");
+    platform::logf(platform::LogAudio, "[audio] master %s\n", muted ? "muted" : "unmuted");
     std::fflush(stdout);
 }
 
@@ -158,7 +159,7 @@ bool AudioEngine::loadSe(const std::string& dir, std::string& outError)
         == MA_SUCCESS) {
         mCountdownSeLoaded = true;
     } else {
-        std::printf("[audio] no countdown SE (%s)\n", countdownPath.c_str());
+        platform::logf(platform::LogAudio, "[audio] no countdown SE (%s)\n", countdownPath.c_str());
     }
 
     // Menu / dialog sound effects (see the UiSe enum).
@@ -203,7 +204,7 @@ void AudioEngine::loadUiSe(const std::string& dir)
         for (int voice = 0; voice < loaded; ++voice) {
             ma_sound_uninit(&mUiSe[kind][voice]);
         }
-        std::printf("[audio] no UI SE (%s)\n", path.c_str());
+        platform::logf(platform::LogAudio, "[audio] no UI SE (%s)\n", path.c_str());
     }
 }
 
@@ -395,7 +396,7 @@ bool AudioEngine::startPreview(const std::string& path, std::string& outError, b
     const auto loadMs =
         std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - loadStart)
             .count();
-    std::printf("[audio] preview streaming %s%s (%.0f ms)\n", path.c_str(),
+    platform::logf(platform::LogAudio, "[audio] preview streaming %s%s (%.0f ms)\n", path.c_str(),
         carriedSec > 0.05 ? " (continued)" : "", static_cast<double>(loadMs));
     return true;
 }
@@ -450,7 +451,7 @@ bool AudioEngine::startResultBgm(const std::string& path, float volume, std::str
     ma_sound_set_looping(&mResultBgm, MA_TRUE);
     ma_sound_start(&mResultBgm);
     mResultBgmActive = true;
-    std::printf("[audio] result bgm looping %s\n", path.c_str());
+    platform::logf(platform::LogAudio, "[audio] result bgm looping %s\n", path.c_str());
     return true;
 }
 
@@ -490,7 +491,7 @@ bool AudioEngine::startTutorialBgm(const std::string& path, float volume, std::s
     ma_sound_set_looping(&mTutorialBgm, MA_TRUE);
     ma_sound_start(&mTutorialBgm);
     mTutorialBgmActive = true;
-    std::printf("[audio] tutorial bgm looping %s\n", path.c_str());
+    platform::logf(platform::LogAudio, "[audio] tutorial bgm looping %s\n", path.c_str());
     return true;
 }
 
@@ -500,7 +501,7 @@ void AudioEngine::stopTutorialBgm()
         ma_sound_stop(&mTutorialBgm);
         ma_sound_uninit(&mTutorialBgm);
         mTutorialBgmLoaded = false;
-        std::printf("[audio] tutorial bgm stopped\n");
+        platform::logf(platform::LogAudio, "[audio] tutorial bgm stopped\n");
     }
     mTutorialBgmActive = false;
     mTutorialBgmPath.clear();

@@ -13,6 +13,7 @@
 // numerals are drawn from the game's own overlay sprites (score/digit,
 // combo/p*), so they are the exact same font as the official screen.
 #include "game/Result.hpp"
+#include "platform/Log.hpp"
 
 #include "game/Hud.hpp"
 #include "game/Intro.hpp"
@@ -935,7 +936,7 @@ void drawResult(platform::Renderer& renderer, const ResultData& data, float elap
                 watermarkTex = renderer.createTextureFromRgba(rgba.data(), builtW, builtH);
                 watermarkW = builtW;
                 watermarkH = builtH;
-                std::printf("[result] RESULT outline %dx%d from '%s'\n", builtW, builtH,
+                platform::logf(platform::LogPlay, "[result] RESULT outline %dx%d from '%s'\n", builtW, builtH,
                     request.ttfPath.c_str());
                 std::fflush(stdout);
             }

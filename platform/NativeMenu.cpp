@@ -1,4 +1,5 @@
 #include "NativeMenu.hpp"
+#include "platform/Log.hpp"
 
 #ifdef _WIN32
 #include <cstdio>
@@ -116,7 +117,7 @@ bool apply(HWND window, bool enabled)
     if (enabled) {
         HMENU bar = buildBar();
         if (bar == nullptr) {
-            std::printf("[menu] CreateMenu failed (0x%lX) - menu bar left off\n",
+            platform::logf(platform::LogSystem, "[menu] CreateMenu failed (0x%lX) - menu bar left off\n",
                 static_cast<unsigned long>(GetLastError()));
             std::fflush(stdout);
             return false;
@@ -127,7 +128,7 @@ bool apply(HWND window, bool enabled)
         // 当 SIZE_CHANGED 发出来，游戏重排（见 NativeMenu.hpp 的说明）。
         RECT client{};
         GetClientRect(window, &client);
-        std::printf("[menu] menu bar attached, client now %ldx%ld\n",
+        platform::logf(platform::LogSystem, "[menu] menu bar attached, client now %ldx%ld\n",
             client.right - client.left, client.bottom - client.top);
         std::fflush(stdout);
         return true;
@@ -141,7 +142,7 @@ bool apply(HWND window, bool enabled)
     }
     RECT client{};
     GetClientRect(window, &client);
-    std::printf("[menu] menu bar removed, client now %ldx%ld\n",
+    platform::logf(platform::LogSystem, "[menu] menu bar removed, client now %ldx%ld\n",
         client.right - client.left, client.bottom - client.top);
     std::fflush(stdout);
     return false;

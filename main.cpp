@@ -4,6 +4,7 @@
 // We provide our own console main(); tell SDL not to redefine it as SDL_main.
 #define SDL_MAIN_HANDLED
 #include <SDL.h>
+#include "platform/Log.hpp"
 #include <SDL_syswm.h>
 #include <GL/gl.h>
 
@@ -234,10 +235,10 @@ namespace
             }
             file = std::fopen("flick_debug.log", "w");
             if (file == nullptr) {
-                std::printf("[debug] cannot open flick_debug.log\n");
+                platform::logf(platform::LogSystem, "[debug] cannot open flick_debug.log\n");
                 return;
             }
-            std::printf("[debug] flick log -> %s\n", "flick_debug.log");
+            platform::logf(platform::LogSystem, "[debug] flick log -> %s\n", "flick_debug.log");
             write("=== flick debug log (touch samples in event order, all px / px-per-s) ===");
         }
 
@@ -848,7 +849,7 @@ namespace
         // 5 hold marker (endTime valid). Invaluable when a chart "looks\n        // wrong": it separates what the parser produced from what the
         // renderer did with it.
         if (dumpEvents > 0) {
-            std::printf("[events] %d total, first %d:\n", count, std::min(dumpEvents, count));
+            platform::logf(platform::LogSystem, "[events] %d total, first %d:\n", count, std::min(dumpEvents, count));
             for (int i = 0; i < count && i < dumpEvents; ++i) {
                 const float* e = events + static_cast<size_t>(i) * 7;
                 std::printf("  #%-4d t=%.3f center=%.3f w=%.2f kind=%d flags=%d end=%.3f vol=%.2f\n", i,
@@ -869,14 +870,14 @@ namespace
         if (allowMusic && !entry.bgmPath.empty()) {
             // Logged because the file now depends on the vocal version picked in
             // the song select (charts\se_0374_01.mp3 vs an_0374_02.mp3 ...).
-            std::printf("[audio] bgm: %s\n", entry.bgmPath.c_str());
+            platform::logf(platform::LogAudio, "[audio] bgm: %s\n", entry.bgmPath.c_str());
             std::fflush(stdout);
             audio.loadMusic(entry.bgmPath, error);
         } else if (!allowMusic) {
             // 多人游玩 member: no BGM here (the host is playing it), so this
             // window's chart clock comes from the wall clock instead - aimed at
             // the start instant the host published.
-            std::printf("[audio] bgm muted (multiplayer member; the host plays it)\n");
+            platform::logf(platform::LogAudio, "[audio] bgm muted (multiplayer member; the host plays it)\n");
             std::fflush(stdout);
         }
         // Official pjsk audio starts with fillerSec seconds of silence; chart
@@ -886,7 +887,7 @@ namespace
         if (allowMusic && startPos <= 0.0 && !entry.bgmPath.empty()) {
             startPos = platform::AudioEngine::detectLeadingSilence(entry.bgmPath);
             if (startPos > 0.0) {
-                std::printf("[audio] detected %.2fs of leading silence\n", startPos);
+                platform::logf(platform::LogAudio, "[audio] detected %.2fs of leading silence\n", startPos);
             }
         }
         if (gFillerSec >= 0.0) {
@@ -894,7 +895,7 @@ namespace
         }
         audio.setMusicStartPos(startPos + waveOffset);
         audio.setUserOffset(gUserOffsetSec);
-        std::printf("[audio] music starts at %.2fs (chart 0), user offset %+.3fs\n",
+        platform::logf(platform::LogAudio, "[audio] music starts at %.2fs (chart 0), user offset %+.3fs\n",
             audio.musicStartPos(), audio.userOffset());
 
         renderer.loadCover(entry.coverPath, error);
@@ -1091,7 +1092,7 @@ bool fitWindowToDesktop(int& w, int& h, int margin, bool usableArea)
     }
     const int fitW = std::max(320, limit.w - margin);
     const int fitH = std::max(240, limit.h - margin);
-    std::printf("[window] %dx%d does not fit the %dx%d desktop, using %dx%d\n", w, h, limit.w,
+    platform::logf(platform::LogSystem, "[window] %dx%d does not fit the %dx%d desktop, using %dx%d\n", w, h, limit.w,
         limit.h, std::min(w, fitW), std::min(h, fitH));
     std::fflush(stdout);
     w = std::min(w, fitW);
@@ -1643,7 +1644,7 @@ int main(int argc, char** argv)
         return static_cast<double>(SDL_GetPerformanceCounter() - bootCounter) * 1000.0 / bootFreq;
     };
     auto bootLog = [&](const char* stage) {
-        std::printf("[boot] %-22s %7.1f ms\n", stage, bootMs());
+        platform::logf(platform::LogSystem, "[boot] %-22s %7.1f ms\n", stage, bootMs());
     };
 
     // ------------------------------------------------------------------
@@ -1686,7 +1687,7 @@ int main(int argc, char** argv)
         const bool perMonitorV2 = user32 != nullptr
             && GetProcAddress(user32, "SetProcessDpiAwarenessContext") != nullptr;
         dpiScaling = perMonitorV2 && std::getenv("CPSEKAI_DPI_OFF") == nullptr;
-        std::printf("[dpi] scaling %s (%s)\n", dpiScaling ? "on" : "off",
+        platform::logf(platform::LogRender, "[dpi] scaling %s (%s)\n", dpiScaling ? "on" : "off",
             dpiScaling ? "per-monitor v2, SDL uses DPI scaled points"
                        : (perMonitorV2 ? "CPSEKAI_DPI_OFF" : "needs SetProcessDpiAwarenessContext (Win10 1607+)"));
     }
@@ -1706,7 +1707,7 @@ int main(int argc, char** argv)
     // 多人游玩同时看几个窗口时，切窗口要靠 Alt+Tab 或缩略图，不再是并排几个按钮。
     // 不想要这个就注释掉这一句（没有别的联动）。
     const HRESULT aumidHr = SetCurrentProcessExplicitAppUserModelID(L"BSOD-MEMZ.CppSekai");
-    std::printf("[shell] AppUserModelID %s (hr=0x%lX)\n",
+    platform::logf(platform::LogSystem, "[shell] AppUserModelID %s (hr=0x%lX)\n",
         aumidHr == S_OK ? "set" : "NOT set", static_cast<unsigned long>(aumidHr));
     std::fflush(stdout);
 #endif
@@ -1717,7 +1718,7 @@ int main(int argc, char** argv)
         // 一次性动作，做完就退 —— 不需要窗口，也不该顺手开一局游戏。
         const bool done = susAssocAction > 0 ? platform::shell::associateSus(exePathW)
                                              : platform::shell::disassociateSus();
-        std::printf("[shell] %s\n", done ? "done" : "failed (see the line above)");
+        platform::logf(platform::LogSystem, "[shell] %s\n", done ? "done" : "failed (see the line above)");
         std::fflush(stdout);
         return done ? 0 : 1;
     }
@@ -1736,7 +1737,7 @@ int main(int argc, char** argv)
     // 登记一个自定义 SDL 事件类型：窗口过程收到 WM_CLOSE 时用它通知主循环
     // （SDL 自己那条 SDL_WINDOWEVENT_CLOSE 到不了 —— 窗口在那之前就被销毁了）。
     closeRequestEventType = SDL_RegisterEvents(1);
-    std::printf("[window] close-request event type %u\n", closeRequestEventType);
+    platform::logf(platform::LogSystem, "[window] close-request event type %u\n", closeRequestEventType);
     std::fflush(stdout);
     // Touch must synthesize mouse events or ImGui (which only reads mouse)
     // ignores taps entirely: every UI element (song list, settings, dialogs)
@@ -1780,13 +1781,15 @@ int main(int argc, char** argv)
     std::string activeProfileId;
     std::vector<game::UserProfile> profiles = game::loadProfiles(userDataDir, activeProfileId);
     userDataFile = game::profileDataPath(userDataDir, activeProfileId);
-    std::printf("[profile] active='%s' (%zu user(s), dir %s)\n", activeProfileId.c_str(),
+    platform::logf(platform::LogSystem, "[profile] active='%s' (%zu user(s), dir %s)\n", activeProfileId.c_str(),
         profiles.size(), userDataDir.c_str());
     game::loadUserData(userDataFile, userSettings, scores, account);
     // 默认歌手偏好：选曲那边的 defaultVocalIndex 每首歌都读它，所以在这里
     // 推一次（之后每次改设置也推，见 drawVocalPrefCard）。
     game::setVocalPreference(userSettings.vocalPref, userSettings.vocalPrefSinger);
-    std::printf("[settings] vocal pref mode=%d singer=%s", userSettings.vocalPref,
+    // 日志分类掩码：越早推上去越好，后面每一次 logf 都看它。
+    platform::setLogMask(userSettings.logMask);
+    platform::logf(platform::LogSystem, "[settings] vocal pref mode=%d singer=%s", userSettings.vocalPref,
         userSettings.vocalPrefSinger.c_str());
     std::puts("");
     // The 用户 combobox lists the profile *files* (profiles/index.json), the
@@ -1803,7 +1806,7 @@ int main(int argc, char** argv)
             if (user.id == activeProfileId && user.name != account.name) {
                 user.name = account.name;
                 game::saveProfiles(userDataDir, profiles, activeProfileId);
-                std::printf("[profile] label of '%s' updated to '%s'\n", user.id.c_str(),
+                platform::logf(platform::LogSystem, "[profile] label of '%s' updated to '%s'\n", user.id.c_str(),
                     user.name.c_str());
                 std::fflush(stdout);
                 break;
@@ -1860,7 +1863,7 @@ int main(int argc, char** argv)
             const bool roomAlreadyOpen = platform::PartyLink::roomExists();
             if (alreadyRunning && roomAlreadyOpen && instanceMode == 0) {
                 instanceMode = 1;
-                std::printf("[instance] a 多人游玩 room is already open -> multi-open forced\n");
+                platform::logf(platform::LogSystem, "[instance] a 多人游玩 room is already open -> multi-open forced\n");
                 std::fflush(stdout);
             }
         }
@@ -1890,7 +1893,7 @@ int main(int argc, char** argv)
                 ShowWindow(existing, SW_RESTORE);
                 SetForegroundWindow(existing);
             }
-            std::printf("[instance] already running%s, brought it to the front and exiting\n",
+            platform::logf(platform::LogSystem, "[instance] already running%s, brought it to the front and exiting\n",
                 existing != nullptr ? "" : " (window not found)");
             std::fflush(stdout);
             SDL_Quit();
@@ -1902,7 +1905,7 @@ int main(int argc, char** argv)
         // take the same "default" profile and both would write it.
         profileLock = tryLockProfile(activeProfileId);
         if (profileLock != nullptr) {
-            std::printf("[instance] single owner of profile '%s'\n", activeProfileId.c_str());
+            platform::logf(platform::LogSystem, "[instance] single owner of profile '%s'\n", activeProfileId.c_str());
         } else if (instanceMode == 1) {
             std::string chosen;
             for (const game::UserProfile& user : profiles) {
@@ -1939,7 +1942,7 @@ int main(int argc, char** argv)
                 // profile the same label/nickname treatment as the main path.
                 syncProfileLabel();
             }
-            std::printf("[instance] multi-open -> profile '%s' (%zu user(s))\n", chosen.c_str(),
+            platform::logf(platform::LogSystem, "[instance] multi-open -> profile '%s' (%zu user(s))\n", chosen.c_str(),
                 profiles.size());
             std::fflush(stdout);
         }
@@ -1982,7 +1985,7 @@ int main(int argc, char** argv)
             }
             partyLabel = label;
             party.setName(label);
-            std::printf("[party] ready: seat %d as %s ('%s'), %d player(s) so far%s\n", party.slot(),
+            platform::logf(platform::LogParty, "[party] ready: seat %d as %s ('%s'), %d player(s) so far%s\n", party.slot(),
                 party.isHost() ? "host" : "member", label.c_str(), party.playerCount(),
                 (!partyWanted && roomOpen) ? " [joined a room this profile has switched off]"
                                            : "");
@@ -1991,11 +1994,11 @@ int main(int argc, char** argv)
             // note in the window that is not in front would simply vanish.
             SDL_SetHint(SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH, "1");
         } else {
-            std::printf("[party] shared room unavailable, continuing solo\n");
+            platform::logf(platform::LogParty, "[party] shared room unavailable, continuing solo\n");
         }
         std::fflush(stdout);
     } else {
-        std::printf("[party] off (设置 -> 系统 -> 多人游玩 没开，本机也没有别人开好的房间)\n");
+        platform::logf(platform::LogParty, "[party] off (设置 -> 系统 -> 多人游玩 没开，本机也没有别人开好的房间)\n");
         std::fflush(stdout);
     }
     if (!speedGiven) {
@@ -2046,7 +2049,7 @@ int main(int argc, char** argv)
     // Flick debug log (settings > 判定 > Flick 调试日志). Truncates the file at
     // boot when it is on, so every run starts with a clean log.
     gFlickLog.setEnabled(userSettings.debugLog || gForceFlickLog);
-    std::printf("[settings] flick debug log %s\n",
+    platform::logf(platform::LogSystem, "[settings] flick debug log %s\n",
         gFlickLog.enabled ? "on (flick_debug.log)" : "off");
     const int splashStyle = userSettings.splashStyle; // 0=image 1=classic
     // "Aero glass" background: no background fill at all, the window's own
@@ -2060,7 +2063,7 @@ int main(int argc, char** argv)
     // comes back if the same profile is used on Windows 7.
     const bool aeroGlass = aeroGlassAvailable();
     if (!aeroGlass && userSettings.bgStyle == 2) {
-        std::printf("[bg] Aero glass is not available on this system, using the wallpaper\n");
+        platform::logf(platform::LogSelect, "[bg] Aero glass is not available on this system, using the wallpaper\n");
         std::fflush(stdout);
         userSettings.bgStyle = 1;
     }
@@ -2170,7 +2173,7 @@ int main(int argc, char** argv)
                 const Margins full{-1, -1, -1, -1};
                 const Margins none{0, 0, 0, 0};
                 const long hr = extend(wmi.info.win.window, enable ? &full : &none);
-                std::printf("[window] DwmExtendFrameIntoClientArea(%s) -> 0x%lX\n",
+                platform::logf(platform::LogSystem, "[window] DwmExtendFrameIntoClientArea(%s) -> 0x%lX\n",
                     enable ? "-1 margins" : "no margins", static_cast<unsigned long>(hr));
             }
             FreeLibrary(dwm);
@@ -2208,9 +2211,9 @@ int main(int argc, char** argv)
         if (onScreen) {
             windowX = userSettings.windowX;
             windowY = userSettings.windowY;
-            std::printf("[window] restoring position %d,%d\n", windowX, windowY);
+            platform::logf(platform::LogSystem, "[window] restoring position %d,%d\n", windowX, windowY);
         } else {
-            std::printf("[window] saved position %d,%d is not on any display - centring\n",
+            platform::logf(platform::LogSystem, "[window] saved position %d,%d is not on any display - centring\n",
                 userSettings.windowX, userSettings.windowY);
         }
         std::fflush(stdout);
@@ -2246,7 +2249,7 @@ int main(int argc, char** argv)
             if (surface != nullptr) {
                 SDL_SetWindowIcon(window, surface);
                 SDL_FreeSurface(surface);
-                std::printf("[window] icon %s (%dx%d)\n", candidate.c_str(), iconW, iconH);
+                platform::logf(platform::LogSystem, "[window] icon %s (%dx%d)\n", candidate.c_str(), iconW, iconH);
                 std::fflush(stdout);
             }
             stbi_image_free(pixels);
@@ -2265,7 +2268,7 @@ int main(int argc, char** argv)
     if (windowMode == 2 && splashStyle != 0) {
         SDL_SetWindowFullscreen(window, SDL_WINDOW_FULLSCREEN_DESKTOP);
     }
-    std::printf("[window] %dx%d mode=%s\n", windowW, windowH,
+    platform::logf(platform::LogSystem, "[window] %dx%d mode=%s\n", windowW, windowH,
         windowMode == 0 ? "borderless" : windowMode == 1 ? "windowed" : "fullscreen");
 #ifdef _WIN32
     applyTouchFeedback(window, userSettings.hideTouchFeedback);
@@ -2299,7 +2302,7 @@ int main(int argc, char** argv)
         const char* glVersion = reinterpret_cast<const char*>(glGetString(GL_VERSION));
         const char* glRenderer = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
         const char* glVendor = reinterpret_cast<const char*>(glGetString(GL_VENDOR));
-        std::printf("[gl] %d.%d | version='%s' renderer='%s' vendor='%s'\n", glMajor, glMinor,
+        platform::logf(platform::LogRender, "[gl] %d.%d | version='%s' renderer='%s' vendor='%s'\n", glMajor, glMinor,
             glVersion != nullptr ? glVersion : "?",
             glRenderer != nullptr ? glRenderer : "?",
             glVendor != nullptr ? glVendor : "?");
@@ -2318,7 +2321,7 @@ int main(int argc, char** argv)
         glGetIntegerv(0x0D55, &framebufferAlpha); // GL_ALPHA_BITS
         glGetIntegerv(0x0D56, &framebufferDepth); // GL_DEPTH_BITS
         glGetIntegerv(0x0D33, &maxTexture);       // GL_MAX_TEXTURE_SIZE
-        std::printf("[gl] framebuffer alpha=%d (asked %d) depth=%d maxTexture=%d\n",
+        platform::logf(platform::LogRender, "[gl] framebuffer alpha=%d (asked %d) depth=%d maxTexture=%d\n",
             framebufferAlpha, requestedAlpha, framebufferDepth, maxTexture);
         std::fflush(stdout);
     }
@@ -2375,7 +2378,7 @@ int main(int argc, char** argv)
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
         }
         gCrashGlassMode = glassMode;
-        std::printf("[window] glass mode %d (%s), frameless %d, per-pixel alpha %s\n", glassMode,
+        platform::logf(platform::LogSystem, "[window] glass mode %d (%s), frameless %d, per-pixel alpha %s\n", glassMode,
             glassMode == 0 ? "extend frame only" :
             glassMode == 1 ? "DWM NCR off" : "own custom frame", noFrameMode,
             enable ? "on" : "off");
@@ -2612,7 +2615,7 @@ int main(int argc, char** argv)
         winCanvasW = renderer.windowWidth();
         winCanvasH = renderer.windowHeight();
         core_api::resize(windowW, windowH, 1.0f);
-        std::printf("[window] window=%dx%d points=%dx%d render=%dx%d scaleMode=%s dpi=%.2f\n",
+        platform::logf(platform::LogSystem, "[window] window=%dx%d points=%dx%d render=%dx%d scaleMode=%s dpi=%.2f\n",
             winPixelW, winPixelH, winCanvasW, winCanvasH, windowW, windowH,
             userSettings.renderScale == 1 ? "fixed" : "window",
             winCanvasW > 0 ? static_cast<float>(winPixelW) / static_cast<float>(winCanvasW) : 1.0f);
@@ -2626,7 +2629,7 @@ int main(int argc, char** argv)
         tapEffect.setFrozen(true);
         tapEffect.debugHoldAt(static_cast<float>(windowW) * 0.30f,
             static_cast<float>(windowH) * 0.50f, tapFxAge);
-        std::printf("[tap-fx] held press frozen at %.2fs\n", static_cast<double>(tapFxAge));
+        platform::logf(platform::LogPlay, "[tap-fx] held press frozen at %.2fs\n", static_cast<double>(tapFxAge));
         std::fflush(stdout);
     } else if (tapFxTest) {
         // Three real bursts side by side, all frozen at --tap-fx-age. The
@@ -2639,7 +2642,7 @@ int main(int argc, char** argv)
             tapEffect.spawnAt(static_cast<float>(windowW) * xs[i],
                 static_cast<float>(windowH) * 0.5f, tapFxAge);
         }
-        std::printf("[tap-fx] 3 bursts frozen at %.2fs\n", static_cast<double>(tapFxAge));
+        platform::logf(platform::LogPlay, "[tap-fx] 3 bursts frozen at %.2fs\n", static_cast<double>(tapFxAge));
         std::fflush(stdout);
     }
 
@@ -2648,7 +2651,7 @@ int main(int argc, char** argv)
     core_api::setEffectAutoplay(autoPlay);
     // 弱化打击特效 (settings > 画面): only the basic hit layer is spawned.
     core_api::setSimpleEffect(simpleEffects);
-    std::printf("[settings] simple effects %s\n", simpleEffects ? "on" : "off");
+    platform::logf(platform::LogSystem, "[settings] simple effects %s\n", simpleEffects ? "on" : "off");
     bootLog("chart core");
     drawSplash(0.85f, "preparing");
 
@@ -2683,7 +2686,7 @@ int main(int argc, char** argv)
     // seeds every session from its own copy on reset(), so it is pushed once here
     // and again whenever the slider moves.
     judgement.setInitialLife(userSettings.initialLife);
-    std::printf("[settings] initialLife setting=%.0f engine=%.0f\n", userSettings.initialLife,
+    platform::logf(platform::LogSystem, "[settings] initialLife setting=%.0f engine=%.0f\n", userSettings.initialLife,
         judgement.initialLife());
     std::fflush(stdout);
 
@@ -2702,13 +2705,13 @@ int main(int argc, char** argv)
         judgement.setFlickAsTap(flickAsTapGiven || userSettings.flickAsTap);
         // One line that says exactly what is in force, so a "the judgement feels\n        // wrong" report can be checked against the numbers without opening the
         // dialog. missAfter is what an untouched note waits for.
-        std::printf("[settings] windows perfect=%.0f great=%.0f good=%.0f bad=%.0f missAfter=%.0f "
+        platform::logf(platform::LogSystem, "[settings] windows perfect=%.0f great=%.0f good=%.0f bad=%.0f missAfter=%.0f "
                     "holdTail=%.0f holdStart=%.0f linked=%d\n",
             windows.perfectMs, windows.greatMs, windows.goodMs, windows.badMs, windows.missAfterMs,
             windows.holdTailGraceMs, windows.holdStartGraceMs, userSettings.linkBadMiss ? 1 : 0);
         // 演出能量单独一行：结算经验 = 评级经验 x 这个倍率，"打了一首歌经验不对"
         // 第一眼看它。倍率的来历见 game::liveBonusExpMultiplier。
-        std::printf("[settings] live bonus %d -> exp x%.0f\n",
+        platform::logf(platform::LogSystem, "[settings] live bonus %d -> exp x%.0f\n",
             userSettings.liveBonus, game::liveBonusExpMultiplier(userSettings.liveBonus));
         std::fflush(stdout);
     }
@@ -2724,7 +2727,7 @@ int main(int argc, char** argv)
         std::string storyError;
         if (!story::load(renderer, baseDir + "assets", storyError))
         {
-            std::printf("[story] disabled: %s\n", storyError.c_str());
+            platform::logf(platform::LogStory, "[story] disabled: %s\n", storyError.c_str());
             std::fflush(stdout);
         }
     }
@@ -2735,7 +2738,7 @@ int main(int argc, char** argv)
         levelIcon != 0) {
         ui::setLevelIconTexture(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(levelIcon)));
     } else {
-        std::printf("[ui] no level icon (%s)\n", error.c_str());
+        platform::logf(platform::LogRender, "[ui] no level icon (%s)\n", error.c_str());
         error.clear();
     }
 
@@ -2766,7 +2769,7 @@ int main(int argc, char** argv)
         if (path.empty()) {
             if (!backdropReported) {
                 backdropReported = true;
-                std::printf("[bg] no desktop wallpaper found, keeping the built-in background\n");
+                platform::logf(platform::LogSelect, "[bg] no desktop wallpaper found, keeping the built-in background\n");
             }
             game::setSelectBackdrop(0, 0, 0, 0.0f);
             return;
@@ -2782,11 +2785,11 @@ int main(int argc, char** argv)
                 }
                 backdropTex = tex;
                 backdropKey = key;
-                std::printf("[bg] wallpaper '%s' -> %dx%d texture (blur %.2f)\n", path.c_str(),
+                platform::logf(platform::LogSelect, "[bg] wallpaper '%s' -> %dx%d texture (blur %.2f)\n", path.c_str(),
                     backdropW, backdropH, static_cast<double>(userSettings.bgBlur));
                 std::fflush(stdout);
             } else {
-                std::printf("[bg] %s\n", bgError.c_str());
+                platform::logf(platform::LogSelect, "[bg] %s\n", bgError.c_str());
                 std::fflush(stdout);
                 game::setSelectBackdrop(0, 0, 0, 0.0f);
                 return;
@@ -3032,11 +3035,11 @@ int main(int argc, char** argv)
         chartsDir = chartCandidates.front();
     }
     bootLog("chart scan");
-    std::printf("[select] %d chart(s) under %s\n", static_cast<int>(entries.size()), chartsDir.c_str());
+    platform::logf(platform::LogSelect, "[select] %d chart(s) under %s\n", static_cast<int>(entries.size()), chartsDir.c_str());
     if (entries.empty()) {
-        std::printf("[select] no .sus found. Looked in:\n");
+        platform::logf(platform::LogSelect, "[select] no .sus found. Looked in:\n");
         for (const std::string& candidate : chartCandidates) {
-            std::printf("[select]   %s\n", candidate.c_str());
+            platform::logf(platform::LogSelect, "[select]   %s\n", candidate.c_str());
         }
     }
     // 谱面列表的每曲状态（成绩 + 收藏）重新贴一遍。entries 在多条路径上会被重建
@@ -3139,7 +3142,7 @@ int main(int argc, char** argv)
         // end-of-song trigger has to handle (see the kAfterLastNoteSec comment).
         {
             const double chartEnd = core_api::getChartEndTimeSec();
-            std::printf("[play] chart end %.2fs, track %.2fs (banner at %.2fs)\n", chartEnd,
+            platform::logf(platform::LogPlay, "[play] chart end %.2fs, track %.2fs (banner at %.2fs)\n", chartEnd,
                 trackDurationSec,
                 chartEnd > 1.0 ? std::min(trackDurationSec - 0.15, chartEnd + kLiveClearDelaySec)
                                : trackDurationSec - 0.15);
@@ -3346,7 +3349,7 @@ int main(int argc, char** argv)
             }
             if (chartDlPath.empty()) {
                 chartDlMissing = true;
-                std::printf("[chartdl] chartdl.exe not found next to %s\n", baseDir.c_str());
+                platform::logf(platform::LogSelect, "[chartdl] chartdl.exe not found next to %s\n", baseDir.c_str());
                 std::fflush(stdout);
                 return false;
             }
@@ -3369,11 +3372,11 @@ int main(int argc, char** argv)
                 &si, &pi)) {
             CloseHandle(pi.hThread);
             chartDlProcess = pi.hProcess;
-            std::printf("[chartdl] launched %s\n", chartDlPath.c_str());
+            platform::logf(platform::LogSelect, "[chartdl] launched %s\n", chartDlPath.c_str());
             std::fflush(stdout);
             return true;
         }
-        std::printf("[chartdl] CreateProcessW failed (%lu)\n",
+        platform::logf(platform::LogSelect, "[chartdl] CreateProcessW failed (%lu)\n",
             static_cast<unsigned long>(GetLastError()));
         std::fflush(stdout);
         return false;
@@ -3396,7 +3399,7 @@ int main(int argc, char** argv)
         GetExitCodeProcess(process, &code);
         CloseHandle(process);
         chartDlProcess = nullptr;
-        std::printf("[chartdl] exited (%lu); re-scanning charts\n",
+        platform::logf(platform::LogSelect, "[chartdl] exited (%lu); re-scanning charts\n",
             static_cast<unsigned long>(code));
         std::fflush(stdout);
         return true;
@@ -3468,7 +3471,7 @@ int main(int argc, char** argv)
                         // or a packet from another run. Ignore it - taking it
                         // would throw this window's chart clock into the future
                         // and mark every remaining note as a miss.
-                        std::printf("[party] clock sample rejected (%.3fs off)\n", error);
+                        platform::logf(platform::LogParty, "[party] clock sample rejected (%.3fs off)\n", error);
                         std::fflush(stdout);
                     } else if (!mpClockSynced || local < 0.5) {
                         // First packet, and everything before the chart starts
@@ -3625,7 +3628,7 @@ int main(int argc, char** argv)
         }
         if (party.active() && !party.isHost()) {
             mpStatus = "多人游玩中：暂停由房主控制";
-            std::printf("[party] pause ignored (only the host can pause a shared live)\n");
+            platform::logf(platform::LogParty, "[party] pause ignored (only the host can pause a shared live)\n");
             std::fflush(stdout);
             return;
         }
@@ -3733,7 +3736,7 @@ int main(int argc, char** argv)
         // player (one seat claimed), so that test is always true and turned
         // this button into a no-op. An explicit replay is the player's call.
         if (state == AppState::Select && story::start("tutorial")) {
-            std::printf("[story] replayed\n");
+            platform::logf(platform::LogStory, "[story] replayed\n");
             std::fflush(stdout);
             return true;
         }
@@ -3894,7 +3897,7 @@ int main(int argc, char** argv)
             party.setName(account.name.empty() ? partyLabel : account.name);
         }
         applyProfileLive();
-        std::printf("[profile] switched to '%s' (%zu score(s))\n", id.c_str(), scores.size());
+        platform::logf(platform::LogSystem, "[profile] switched to '%s' (%zu score(s))\n", id.c_str(), scores.size());
         std::fflush(stdout);
         persistUserData();
     };
@@ -4063,14 +4066,14 @@ int main(int argc, char** argv)
             }
             syncWindowTitle();
             persistUserData();
-            std::printf("[story] nickname set to '%s'\n", account.name.c_str());
+            platform::logf(platform::LogStory, "[story] nickname set to '%s'\n", account.name.c_str());
             std::fflush(stdout);
         };
         host.command = [&](const std::string& command) {
             if (command == "openSettings") {
                 showDebug = true;
                 settingsTab = 0;
-                std::printf("[story] open settings (tab 0)\n");
+                platform::logf(platform::LogStory, "[story] open settings (tab 0)\n");
                 std::fflush(stdout);
             } else if (command == "closeSettings") {
                 showDebug = false;
@@ -4193,7 +4196,7 @@ int main(int argc, char** argv)
         // real cwd - the log and the relative `charts` candidate live there.
         wchar_t exePath[MAX_PATH * 2] = {};
         if (GetModuleFileNameW(nullptr, exePath, static_cast<DWORD>(std::size(exePath))) == 0) {
-            std::printf("[restart] GetModuleFileNameW failed (%lu)\n",
+            platform::logf(platform::LogSystem, "[restart] GetModuleFileNameW failed (%lu)\n",
                 static_cast<unsigned long>(GetLastError()));
             std::fflush(stdout);
             return;
@@ -4211,11 +4214,11 @@ int main(int argc, char** argv)
         if (CreateProcessW(exePath, cmdBuf.data(), nullptr, nullptr, FALSE, 0, nullptr, cwdBuf, &si, &pi)) {
             CloseHandle(pi.hThread);
             CloseHandle(pi.hProcess);
-            std::printf("[restart] relaunched, exiting this instance\n");
+            platform::logf(platform::LogSystem, "[restart] relaunched, exiting this instance\n");
             std::fflush(stdout);
             running = false;
         } else {
-            std::printf("[restart] CreateProcessW failed (%lu)\n",
+            platform::logf(platform::LogSystem, "[restart] CreateProcessW failed (%lu)\n",
                 static_cast<unsigned long>(GetLastError()));
             std::fflush(stdout);
         }
@@ -4313,6 +4316,24 @@ int main(int argc, char** argv)
     };
     bool vocalPrefCardOpen = false;
     bool vocalPrefCardAlive = false;
+    // 日志分类开关卡片（设置 > 系统 > 诊断 > 日志输出）。分类定义见 platform/Log.hpp。
+    bool logCardOpen = false;
+    bool logCardAlive = false;
+    static const char* kLogCatLabels[platform::LogCatCount] = {
+        "系统（启动/窗口/菜单）",
+        "选曲（界面/下载/猜歌）",
+        "剧情（教学/脚本）",
+        "演奏（判定/暂停/结算）",
+        "音频（播放/音效）",
+        "输入（手柄/键盘/触摸）",
+        "渲染（OpenGL/帧统计）",
+        "多人游玩（房间同步）",
+    };
+#ifdef _WIN32
+    if (std::getenv("CPSEKAI_LOGCARD") != nullptr) {
+        logCardOpen = true;
+    }
+#endif
 #ifdef _WIN32
     // 无头检查（CPSEKAI_VOCALPREF=1）：和 CPSEKAI_KEYMAP 一个路子，截图能看这张卡。
     if (std::getenv("CPSEKAI_VOCALPREF") != nullptr) {
@@ -4379,7 +4400,8 @@ int main(int argc, char** argv)
             if (closeClicked) {
                 showDebug = false;
                 keymapCardOpen = false;
-                vocalPrefCardOpen = false; // 副卡片跟着收，别留一张孤零零的浮着
+                vocalPrefCardOpen = false;
+                logCardOpen = false; // 副卡片跟着收，别留一张孤零零的浮着
             }
             const float cardLeft = cardCenter.x - cardSize.x * 0.5f;
             const float cardTop = cardCenter.y - cardSize.y * 0.5f;
@@ -4501,20 +4523,47 @@ int main(int argc, char** argv)
             ImGui::SetCursorPos(ImVec2(padX, tabSlide));
 
             if (tab == 0) {
-                // 演奏: 音频与手感 / 玩法与奖励 / 输入与外设 三组（2026-10-11 分组）。
-                contentLeft();
-                ui::sectionLabel("音频与手感", interior);
+                // 演奏页：两栏各自成组（2026-11-01）。原来是"一条通栏灰条 + 两列控件" ——
+                // 宽屏上标题一路撑到 864 宽，控件也被拉成一长条，看着很空。
+                // 现在每组标题只占自己那一栏（sectionLabel 收列宽），视线按左右两列走，
+                // 和原作设置页一个样子。
                 twoCols(
                     [&](float w) {
                         colSet(0);
-                        ImGui::Text("音频偏移");
-                        static float offsetMs = static_cast<float>(gUserOffsetSec * 1000.0);
+                        ui::sectionLabel("音量", w);
                         colSet(0);
-                        if (ui::slider("offset", &offsetMs, -2000.0f, 2000.0f, 5.0f, "%+.0f ms", w)) {
-                            audio.setUserOffset(static_cast<double>(offsetMs) / 1000.0);
+                        ImGui::Text("BGM 音量");
+                        float bgmPct = userSettings.bgmVolume * 100.0f;
+                        colSet(0);
+                        if (ui::slider("bgmvol", &bgmPct, 0.0f, 100.0f, 5.0f, "%.0f%%", w)) {
+                            userSettings.bgmVolume = std::clamp(bgmPct / 100.0f, 0.0f, 1.0f);
+                            // Takes effect immediately: the chart track, the select
+                            // preview and the result BGM all read this master.
+                            audio.setBgmVolume(userSettings.bgmVolume);
+                            persistUserData();
+                        }
+                        colSet(0);
+                        ImGui::Text("音效音量");
+                        float sePct = seVolume * 100.0f;
+                        colSet(0);
+                        if (ui::slider("sevol", &sePct, 0.0f, 100.0f, 5.0f, "%.0f%%", w)) {
+                            seVolume = std::clamp(sePct / 100.0f, 0.0f, 1.0f);
+                            // Hit SE read `seVolume` directly; the UI clicks are bound
+                            // with their own base gain, so re-bind them here.
+                            ui::bindSe(&audio, 0.8f * seVolume);
+                            persistUserData();
                         }
                     },
                     [&](float w) {
+                        colSet(1);
+                        ui::sectionLabel("手感", w);
+                        colSet(1);
+                        ImGui::Text("音频偏移");
+                        static float offsetMs = static_cast<float>(gUserOffsetSec * 1000.0);
+                        colSet(1);
+                        if (ui::slider("offset", &offsetMs, -2000.0f, 2000.0f, 5.0f, "%+.0f ms", w)) {
+                            audio.setUserOffset(static_cast<double>(offsetMs) / 1000.0);
+                        }
                         colSet(1);
                         ImGui::Text("音符速度");
                         float speed = noteSpeed;
@@ -4531,50 +4580,7 @@ int main(int argc, char** argv)
                 twoCols(
                     [&](float w) {
                         colSet(0);
-                        ImGui::Text("BGM 音量");
-                        float bgmPct = userSettings.bgmVolume * 100.0f;
-                        colSet(0);
-                        if (ui::slider("bgmvol", &bgmPct, 0.0f, 100.0f, 5.0f, "%.0f%%", w)) {
-                            userSettings.bgmVolume = std::clamp(bgmPct / 100.0f, 0.0f, 1.0f);
-                            // Takes effect immediately: the chart track, the select
-                            // preview and the result BGM all read this master.
-                            audio.setBgmVolume(userSettings.bgmVolume);
-                            persistUserData();
-                        }
-                    },
-                    [&](float w) {
-                        colSet(1);
-                        ImGui::Text("音效音量");
-                        float sePct = seVolume * 100.0f;
-                        colSet(1);
-                        if (ui::slider("sevol", &sePct, 0.0f, 100.0f, 5.0f, "%.0f%%", w)) {
-                            seVolume = std::clamp(sePct / 100.0f, 0.0f, 1.0f);
-                            // Hit SE read `seVolume` directly; the UI clicks are bound
-                            // with their own base gain, so re-bind them here.
-                            ui::bindSe(&audio, 0.8f * seVolume);
-                            persistUserData();
-                        }
-                    });
-                // 默认歌手（2026-11-01）：这里只留一行摘要 + 打开，26 个歌手
-                // 塞不进设置页（那七个页都是不滚的），选项在独立卡片里。
-                {
-                    contentLeft();
-                    const std::string vocalLabel = "默认歌手　" + vocalPrefSummary();
-                    if (ui::capsuleButton(vocalLabel.c_str(), ImVec2(interior, 40.0f * s), false)) {
-                        vocalPrefCardOpen = true;
-                    }
-                }
-                // 演出能量（演出 > 演出能量）。结算经验 = 评级经验 x 这个倍率，
-                // 跟官方 live bonus 对奖励做的事一样（官方那里一局给
-                // 「评级经验 x bonus 倍率」）。
-                //
-                // 倍率的来历见 game::liveBonusExpMultiplier：0..10 是官方表，
-                // 11 以上是本项目照官方 6..10 档那条直线外推的。卡片上必须留着
-                // 那句说明 —— 不写清楚就成了"我们瞎编的数值"。
-                contentLeft();
-                ui::sectionLabel("玩法与奖励", interior);
-                twoCols(
-                    [&](float w) {
+                        ui::sectionLabel("奖励", w);
                         colSet(0);
                         // 倍率直接写进标题，省掉原来下面那行说明（2026-10-11 精简）。
                         ImGui::Text("演出能量（经验 ×%.0f）",
@@ -4588,8 +4594,7 @@ int main(int argc, char** argv)
                     },
                     [&](float w) {
                         colSet(1);
-                        // 空一行，跟左列的标题行对齐（checkbox 自带文字，不需要标题）。
-                        ImGui::Dummy(ImVec2(1.0f, ImGui::GetTextLineHeightWithSpacing()));
+                        ui::sectionLabel("玩法", w);
                         colSet(1);
                         // 自动演出 (moved here from 画面): it is a play-mode switch,
                         // not a display one. checkBox returns the *new* value, so
@@ -4603,10 +4608,10 @@ int main(int argc, char** argv)
                             persistUserData();
                         }
                     });
-                contentLeft();
-                ui::sectionLabel("输入与外设", interior);
                 twoCols(
                     [&](float w) {
+                        colSet(0);
+                        ui::sectionLabel("输入", w);
                         colSet(0);
                         ImGui::Text("按键映射");
                         colSet(0);
@@ -4616,13 +4621,23 @@ int main(int argc, char** argv)
                         for (int lane = 0; lane < 12; ++lane) {
                             keySummary += SDL_GetKeyName(laneKeys[lane]);
                         }
-                        if (keySummary.size() > 16) {
-                            keySummary = keySummary.substr(0, 15) + "…";
+                        // 现在这一栏只有半张卡片宽（292 而不是 864），摘要得再短一点，
+                        // 否则"按键映射"四个字后面直接被切掉。
+                        if (keySummary.size() > 12) {
+                            keySummary = keySummary.substr(0, 11) + "…";
                         }
                         char keyLabel[96];
                         std::snprintf(keyLabel, sizeof(keyLabel), "按键映射　%s", keySummary.c_str());
                         if (ui::capsuleButton(keyLabel, ImVec2(w, 40.0f * s), false)) {
                             keymapCardOpen = true;
+                        }
+                        colSet(0);
+                        ImGui::Text("默认歌手");
+                        colSet(0);
+                        // 26 个歌手塞不进设置页（那七个页都是不滚的），选项在独立卡片里。
+                        const std::string vocalLabel = vocalPrefSummary();
+                        if (ui::capsuleButton(vocalLabel.c_str(), ImVec2(w, 40.0f * s), false)) {
+                            vocalPrefCardOpen = true;
                         }
                     },
                     [&](float w) {
@@ -4637,6 +4652,8 @@ int main(int argc, char** argv)
                         if (!padConnected) {
                             return;
                         }
+                        colSet(1);
+                        ui::sectionLabel("手柄", w);
                         colSet(1);
                         ImGui::Text("手柄震动");
                         // Scales the song-start buzz and the result screen's score
@@ -5347,7 +5364,7 @@ int main(int argc, char** argv)
                                 // leaving a switch that can never do anything.
                                 if (userSettings.instanceMode == 0 && userSettings.multiplayer) {
                                     userSettings.multiplayer = false;
-                                    std::printf("[settings] multiplayer off (single instance)\n");
+                                    platform::logf(platform::LogSystem, "[settings] multiplayer off (single instance)\n");
                                     std::fflush(stdout);
                                 }
                                 persistUserData();
@@ -5380,7 +5397,7 @@ int main(int argc, char** argv)
                                 if (partyBox) {
                                     userSettings.instanceMode = 1;
                                 }
-                                std::printf("[settings] multiplayer %s\n", partyBox ? "on" : "off");
+                                platform::logf(platform::LogSystem, "[settings] multiplayer %s\n", partyBox ? "on" : "off");
                                 std::fflush(stdout);
                                 persistUserData();
                                 // 刚打开：直接问一句要不要现在就重开（房间是启动时
@@ -5404,7 +5421,7 @@ int main(int argc, char** argv)
                 {
                     const float btnW = (interior - 8.0f * s) * 0.5f;
                     if (ui::capsuleButton("结束当前实例", ImVec2(btnW, 40.0f * s), false)) {
-                        std::printf("[instance] quit requested from the settings card\n");
+                        platform::logf(platform::LogSystem, "[instance] quit requested from the settings card\n");
                         std::fflush(stdout);
                         running = false; // the ordinary shutdown path: profile saved on the way out
                     }
@@ -5418,13 +5435,31 @@ int main(int argc, char** argv)
 #else
                             const int asked = 0;
 #endif
-                            std::printf("[instance] closed %d window(s) on request\n", asked);
+                            platform::logf(platform::LogSystem, "[instance] closed %d window(s) on request\n", asked);
                             std::fflush(stdout);
                             running = false; // ...this window included
                         }
                         --killAllFrames;
                     } else if (ui::capsuleButton("结束所有实例", ImVec2(btnW, 40.0f * s), false)) {
                         killAllFrames = 180; // the second press has to land within ~3s
+                    }
+                }
+                contentLeft();
+                ui::sectionLabel("诊断", interior);
+                {
+                    // 日志输出：一行摘要 + 独立卡片（8 类共 287 个输出点，卡片里勾）。
+                    int onCount = 0;
+                    for (int i = 0; i < platform::LogCatCount; ++i) {
+                        if ((userSettings.logMask & (1u << i)) != 0u) {
+                            ++onCount;
+                        }
+                    }
+                    char logLabel[96];
+                    std::snprintf(logLabel, sizeof(logLabel), "日志输出　%d/%d 类", onCount,
+                        static_cast<int>(platform::LogCatCount));
+                    colSet(0);
+                    if (ui::capsuleButton(logLabel, ImVec2(interior, 40.0f * s), false)) {
+                        logCardOpen = true;
                     }
                 }
             } else if (tab == 5) {
@@ -5511,7 +5546,7 @@ int main(int argc, char** argv)
                             activateProfile(user.id);
                             // New account: clear the mirrored text buffers by
                             // renaming through the profile id change.
-                            std::printf("[profile] created '%s' as %s\n", label.c_str(), user.id.c_str());
+                            platform::logf(platform::LogSystem, "[profile] created '%s' as %s\n", label.c_str(), user.id.c_str());
                         }
                     },
                     [&](float w) {
@@ -5547,7 +5582,7 @@ int main(int argc, char** argv)
                                     // The file is left on disk on purpose: removing a
                                     // user from the list must never destroy their
                                     // scores. It sits in profiles/ as <id>.json.
-                                    std::printf("[profile] removed '%s' (%s) from the list; file kept\n",
+                                    platform::logf(platform::LogSystem, "[profile] removed '%s' (%s) from the list; file kept\n",
                                         victimName.c_str(), victim.c_str());
                                 }
                             }
@@ -5655,7 +5690,7 @@ int main(int argc, char** argv)
                                 game::saveUserData(path, userSettings, scores, account);
                                 profileIoStatus = "已导出：" + fileLabel(path);
                                 profileIoStatusFrames = 300;
-                                std::printf("[profile] exported '%s' to %s\n", activeProfileId.c_str(),
+                                platform::logf(platform::LogSystem, "[profile] exported '%s' to %s\n", activeProfileId.c_str(),
                                     path.c_str());
                                 std::fflush(stdout);
                             }
@@ -5677,12 +5712,12 @@ int main(int argc, char** argv)
                                     importWho = probeAccount.name.empty() ? "(无昵称)" : probeAccount.name;
                                     importScores = probeScores.size();
                                     importAsk = true;
-                                    std::printf("[profile] import candidate %s (user '%s', %zu score(s))\n",
+                                    platform::logf(platform::LogSystem, "[profile] import candidate %s (user '%s', %zu score(s))\n",
                                         path.c_str(), importWho.c_str(), importScores);
                                 } else {
                                     profileIoStatus = "不是用户数据文件：" + fileLabel(path);
                                     profileIoStatusFrames = 300;
-                                    std::printf("[profile] import rejected %s (not user data)\n", path.c_str());
+                                    platform::logf(platform::LogSystem, "[profile] import rejected %s (not user data)\n", path.c_str());
                                 }
                                 std::fflush(stdout);
                             }
@@ -5784,7 +5819,7 @@ int main(int argc, char** argv)
                         const ImVec2 hi = ImGui::GetItemRectMax();
                         const ImVec2 mp = ImGui::GetIO().MousePos;
                         const ImVec2 ds = ImGui::GetIO().DisplaySize;
-                        std::printf("[ui] replay pill %.0f,%.0f..%.0f,%.0f mouse=%.0f,%.0f display=%.0fx%.0f\n",
+                        platform::logf(platform::LogRender, "[ui] replay pill %.0f,%.0f..%.0f,%.0f mouse=%.0f,%.0f display=%.0fx%.0f\n",
                             lo.x, lo.y, hi.x, hi.y, mp.x, mp.y, ds.x, ds.y);
                         std::fflush(stdout);
                     }
@@ -5792,7 +5827,7 @@ int main(int argc, char** argv)
                         static int hovLogs = 0;
                         if (hovLogs < 3) {
                             ++hovLogs;
-                            std::printf("[ui] replay pill hovered\n");
+                            platform::logf(platform::LogRender, "[ui] replay pill hovered\n");
                             std::fflush(stdout);
                         }
                     }
@@ -5812,7 +5847,7 @@ int main(int argc, char** argv)
             // child and clipped - which is what "the settings do not fit" looks
             // like, and what a scrollbar has to cover.
             if (std::getenv("CPSEKAI_UI_TRACE") != nullptr) {
-                std::printf("[ui] tab %d view=%.0f used=%.0f scrollMax=%.0f\n", tab,
+                platform::logf(platform::LogRender, "[ui] tab %d view=%.0f used=%.0f scrollMax=%.0f\n", tab,
                     ImGui::GetWindowHeight(), ImGui::GetCursorPosY(), ImGui::GetScrollMaxY());
                 std::fflush(stdout);
             }
@@ -5854,7 +5889,7 @@ int main(int argc, char** argv)
         if (storyKeymapRequest) {
             storyKeymapRequest = false;
             keymapCardOpen = true;
-            std::printf("[story] keymap card opened from the tutorial");
+            platform::logf(platform::LogStory, "[story] keymap card opened from the tutorial");
             std::fflush(stdout);
             std::puts("");
         }
@@ -6062,6 +6097,84 @@ int main(int argc, char** argv)
     };
 
     // ------------------------------------------------------------------
+    // 日志输出卡片（设置 > 系统 > 诊断 > 日志输出）。
+    // 8 类 checkbox，改一张表就同时改了 287 个输出点（都走 platform::logf）。
+    // ------------------------------------------------------------------
+    auto drawLogCard = [&]() {
+        if (logCardOpen) {
+            logCardAlive = true;
+        }
+        if (!logCardAlive) {
+            return;
+        }
+        ui::PadScope padScope(logCardOpen);
+        const float s = ui::scale();
+        ImGuiIO& io = ImGui::GetIO();
+        ImVec2 cardSize = ImVec2(680.0f * s, 460.0f * s);
+        ImVec2 cardCenter = ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f);
+        const float interior = cardSize.x - 56.0f * s;
+        const float padX = 28.0f * s;
+        bool closeClicked = false;
+        if (!ui::beginCard("##logcats", &cardCenter, &cardSize, true, false, &closeClicked, logCardOpen)) {
+            logCardAlive = false;
+            return;
+        }
+        if (closeClicked) {
+            logCardOpen = false;
+        }
+        const float cardLeft = cardCenter.x - cardSize.x * 0.5f;
+        const float cardTop = cardCenter.y - cardSize.y * 0.5f;
+        ImGui::SetCursorScreenPos(ImVec2(cardLeft + padX, cardTop + 16.0f * s));
+        ui::cardTitle("日志输出", interior);
+
+        ImGui::PushStyleColor(ImGuiCol_Text, ui::kBodyText);
+        ImGui::PushFont(game::bodyFont(), 18.0f * s);
+        const float gap = 12.0f * s;
+        const float cellW = (interior - gap) * 0.5f;
+        for (int i = 0; i < platform::LogCatCount; ++i) {
+            if (i % 2 == 0) {
+                ImGui::SetCursorScreenPos(ImVec2(cardLeft + padX,
+                    cardTop + (66.0f + static_cast<float>(i / 2) * 48.0f) * s));
+            } else {
+                ImGui::SameLine(0.0f, gap);
+            }
+            bool on = (userSettings.logMask & (1u << i)) != 0u;
+            if (ui::checkBox(kLogCatLabels[i], &on, cellW)) {
+                if (on) {
+                    userSettings.logMask |= (1u << i);
+                } else {
+                    userSettings.logMask &= ~(1u << i);
+                }
+                platform::setLogMask(userSettings.logMask);
+                persistUserData();
+            }
+        }
+        ImGui::PopFont();
+        ImGui::PopStyleColor();
+
+        ImGui::SetCursorScreenPos(ImVec2(cardLeft + padX,
+            cardCenter.y + cardSize.y * 0.5f - 68.0f * s));
+        const float bw = (interior - 16.0f * s) / 3.0f;
+        const unsigned allMask = (1u << platform::LogCatCount) - 1u;
+        if (ui::capsuleButton("全部启用", ImVec2(bw, 46.0f * s), false)) {
+            userSettings.logMask = allMask;
+            platform::setLogMask(userSettings.logMask);
+            persistUserData();
+        }
+        ImGui::SameLine(0.0f, 8.0f * s);
+        if (ui::capsuleButton("全部关闭", ImVec2(bw, 46.0f * s), false)) {
+            userSettings.logMask = 0u;
+            platform::setLogMask(userSettings.logMask);
+            persistUserData();
+        }
+        ImGui::SameLine(0.0f, 8.0f * s);
+        if (ui::capsuleButton("关闭", ImVec2(bw, 46.0f * s), true)) {
+            logCardOpen = false;
+        }
+        ui::endCard();
+    };
+
+    // ------------------------------------------------------------------
     // 开启多开（实验性）的确认框。
     //
     // 多开 / 多人游玩 都是实验性功能：同一个游戏开好几份窗口靠共享内存总线
@@ -6108,7 +6221,7 @@ int main(int argc, char** argv)
         }
         if (action == 0) {
             // 取消：什么也不存。combo / 复选框下一帧自己从 userSettings 归位。
-            std::printf("[instance] multi-open declined\n");
+            platform::logf(platform::LogSystem, "[instance] multi-open declined\n");
             std::fflush(stdout);
             multiInstanceAsk = false;
             multiInstanceAskFromParty = false;
@@ -6120,7 +6233,7 @@ int main(int argc, char** argv)
                 // 用户点的是多人游玩：紧接着问一句要不要现在就重开进房。
                 restartAsk = true;
             }
-            std::printf("[instance] multi-open accepted (fromParty=%d)\n",
+            platform::logf(platform::LogSystem, "[instance] multi-open accepted (fromParty=%d)\n",
                 multiInstanceAskFromParty ? 1 : 0);
             std::fflush(stdout);
             persistUserData();
@@ -6157,11 +6270,11 @@ int main(int argc, char** argv)
             return;
         }
         if (action == 0) {
-            std::printf("[close] stay (the live is kept)\n");
+            platform::logf(platform::LogSystem, "[close] stay (the live is kept)\n");
             std::fflush(stdout);
             closeAsk = false;
         } else if (action == 1) {
-            std::printf("[close] quit confirmed while playing\n");
+            platform::logf(platform::LogSystem, "[close] quit confirmed while playing\n");
             std::fflush(stdout);
             running = false;
         }
@@ -6299,15 +6412,15 @@ int main(int argc, char** argv)
     auto requestDelete = [&](int index) {
         const DeleteTargets targets = collectDeleteTargets(index);
         if (targets.files.empty()) {
-            std::printf("[delete] nothing to delete (index=%d)\n", index);
+            platform::logf(platform::LogSelect, "[delete] nothing to delete (index=%d)\n", index);
             std::fflush(stdout);
             return;
         }
         // 清单先打出来：用户"删了什么"、脚本验证"该删的删没删"都看这几行。
-        std::printf("[delete] will remove %d file(s) for '%s':\n",
+        platform::logf(platform::LogSelect, "[delete] will remove %d file(s) for '%s':\n",
             static_cast<int>(targets.files.size()), targets.label.c_str());
         for (const std::string& file : targets.files) {
-            std::printf("[delete]   %s\n", file.c_str());
+            platform::logf(platform::LogSelect, "[delete]   %s\n", file.c_str());
         }
         std::fflush(stdout);
         deleteAsk = true;
@@ -6349,7 +6462,7 @@ int main(int argc, char** argv)
             return;
         }
         if (action == 0) {
-            std::printf("[delete] cancelled\n");
+            platform::logf(platform::LogSelect, "[delete] cancelled\n");
             std::fflush(stdout);
             deleteAsk = false;
         } else if (action == 1) {
@@ -6365,9 +6478,9 @@ int main(int argc, char** argv)
                 if (ok) {
                     ++removed;
                 }
-                std::printf("[delete] %s %s\n", ok ? "removed" : "FAILED", file.c_str());
+                platform::logf(platform::LogSelect, "[delete] %s %s\n", ok ? "removed" : "FAILED", file.c_str());
             }
-            std::printf("[delete] %d/%d file(s) gone\n", removed,
+            platform::logf(platform::LogSelect, "[delete] %d/%d file(s) gone\n", removed,
                 static_cast<int>(deleteAskFiles.size()));
             std::fflush(stdout);
             deleteAsk = false;
@@ -6382,7 +6495,7 @@ int main(int argc, char** argv)
                 ? -1
                 : std::clamp(want, 0, static_cast<int>(entries.size()) - 1);
             loadedCoverPath.clear();
-            std::printf("[select] %d chart(s) after delete\n", static_cast<int>(entries.size()));
+            platform::logf(platform::LogSelect, "[select] %d chart(s) after delete\n", static_cast<int>(entries.size()));
             std::fflush(stdout);
         }
     };
@@ -6417,7 +6530,7 @@ int main(int argc, char** argv)
             return;
         }
         if (action == 0) {
-            std::printf("[profile] import cancelled\n");
+            platform::logf(platform::LogSystem, "[profile] import cancelled\n");
             std::fflush(stdout);
             importAsk = false;
         } else if (action == 1) {
@@ -6431,7 +6544,7 @@ int main(int argc, char** argv)
             if (ec) {
                 profileIoStatus = "导入失败：" + ec.message();
                 profileIoStatusFrames = 300;
-                std::printf("[profile] import failed: %s\n", ec.message().c_str());
+                platform::logf(platform::LogSystem, "[profile] import failed: %s\n", ec.message().c_str());
                 std::fflush(stdout);
                 return;
             }
@@ -6456,7 +6569,7 @@ int main(int argc, char** argv)
             ++profileDataGeneration;
             profileIoStatus = "已导入：" + fileLabel(importPath);
             profileIoStatusFrames = 300;
-            std::printf("[profile] imported '%s' into '%s' (%zu score(s))\n", importPath.c_str(),
+            platform::logf(platform::LogSystem, "[profile] imported '%s' into '%s' (%zu score(s))\n", importPath.c_str(),
                 activeProfileId.c_str(), scores.size());
             std::fflush(stdout);
         }
@@ -6488,7 +6601,7 @@ int main(int argc, char** argv)
             return;
         }
         if (action == 0) {
-            std::printf("[restart] declined\n");
+            platform::logf(platform::LogSystem, "[restart] declined\n");
             std::fflush(stdout);
             restartAsk = false;
         } else if (action == 1) {
@@ -6539,7 +6652,7 @@ int main(int argc, char** argv)
             return false;
         }
         if (paused || pauseDialogOpen || countdownActive) {
-            std::printf("[pause] press ignored (paused=%d dialog=%d countdown=%d)\n",
+            platform::logf(platform::LogPlay, "[pause] press ignored (paused=%d dialog=%d countdown=%d)\n",
                 paused ? 1 : 0, pauseDialogOpen ? 1 : 0, countdownActive ? 1 : 0);
             std::fflush(stdout);
             return true;
@@ -6551,7 +6664,7 @@ int main(int argc, char** argv)
             // The HUD is not drawn yet (opening card): the press lands on
             // empty screen, so there is nothing to react to. Say so, otherwise
             // a "dead" button is invisible in the log.
-            std::printf("[pause] press ignored (HUD hidden behind the opening card)\n");
+            platform::logf(platform::LogPlay, "[pause] press ignored (HUD hidden behind the opening card)\n");
             std::fflush(stdout);
             return true;
         }
@@ -6829,7 +6942,7 @@ int main(int argc, char** argv)
         state = AppState::Result;
         resultShownAt = uiClock;
         resultSeStage = 0;
-        std::printf("[result] preview mode (reference numbers)\n");
+        platform::logf(platform::LogPlay, "[result] preview mode (reference numbers)\n");
         std::fflush(stdout);
         std::fflush(stdout);
     }
@@ -6932,7 +7045,7 @@ int main(int argc, char** argv)
             }
             pad = SDL_GameControllerOpen(i);
             if (pad != nullptr) {
-                std::printf("[pad] %s connected (menu navigation)\n", SDL_GameControllerName(pad));
+                platform::logf(platform::LogInput, "[pad] %s connected (menu navigation)\n", SDL_GameControllerName(pad));
                 std::fflush(stdout);
                 return;
             }
@@ -6965,7 +7078,7 @@ int main(int argc, char** argv)
         // this line is the only way to check *when* the two buzz moments fire.
         const bool canRumble = pad != nullptr && userSettings.padRumble > 0.0f
             && SDL_GameControllerHasRumble(pad) != SDL_FALSE;
-        std::printf("[pad] rumble '%s' strength %.2f %ums -> %s\n", why, strength, ms,
+        platform::logf(platform::LogInput, "[pad] rumble '%s' strength %.2f %ums -> %s\n", why, strength, ms,
             canRumble ? "buzz" : (pad == nullptr ? "no pad" : "off / no motors"));
         std::fflush(stdout);
         if (!canRumble) {
@@ -7009,13 +7122,13 @@ int main(int argc, char** argv)
                 - static_cast<Uint64>((leadInSec - kSkipRemainingLeadInSec)
                     * static_cast<double>(perfFreq));
         }
-        std::printf("[intro] lead-in trimmed to 0.55s%s\n", party.active() ? " (the whole room)" : "");
+        platform::logf(platform::LogSelect, "[intro] lead-in trimmed to 0.55s%s\n", party.active() ? " (the whole room)" : "");
         std::fflush(stdout);
     };
     auto skipIntro = [&]() {
         if (party.active()) {
             party.requestSkip();
-            std::printf("[intro] lead-in skip requested (the host performs it)\n");
+            platform::logf(platform::LogSelect, "[intro] lead-in skip requested (the host performs it)\n");
             std::fflush(stdout);
             return;
         }
@@ -7057,7 +7170,7 @@ int main(int argc, char** argv)
         party.clearPlayingScore();
         systemMedia.setTaskbarProgress(-1.0, false);
         state = AppState::Select;
-        std::printf("[party] left the live: %s\n", status.c_str());
+        platform::logf(platform::LogParty, "[party] left the live: %s\n", status.c_str());
         std::fflush(stdout);
     };
 
@@ -7089,19 +7202,19 @@ int main(int argc, char** argv)
         // 卡片还开着（或正在做退场动画）的时候再来一次请求就当没看见 —— X 连点两下
         // 不该等于"确认退出"。
         if (closeAsk || closeAskAlive) {
-            std::printf("[close] already asking - ignoring\n");
+            platform::logf(platform::LogSystem, "[close] already asking - ignoring\n");
             std::fflush(stdout);
             return;
         }
         if (state == AppState::Play && session.active && !forceQuitRequested
             && screenshotPath.empty()) {
             // 全屏下按错 Alt+F4 会把这一局连同还没写进档案的成绩一起扔掉。
-            std::printf("[close] window close during a live -> asking first\n");
+            platform::logf(platform::LogSystem, "[close] window close during a live -> asking first\n");
             std::fflush(stdout);
             closeAsk = true;
             return;
         }
-        std::printf("[instance] window close -> exiting\n");
+        platform::logf(platform::LogSystem, "[instance] window close -> exiting\n");
         std::fflush(stdout);
         running = false;
     };
@@ -7181,7 +7294,7 @@ int main(int argc, char** argv)
                 frameSum += lastFrameDeltaSec;
                 framePeak = std::max(framePeak, lastFrameDeltaSec);
                 if (++frameCount >= 120) {
-                    std::printf("[framestats] avg=%.2f ms  peak=%.2f ms  (%.1f fps)\n",
+                    platform::logf(platform::LogRender, "[framestats] avg=%.2f ms  peak=%.2f ms  (%.1f fps)\n",
                         frameSum / static_cast<double>(frameCount) * 1000.0, framePeak * 1000.0,
                         1000.0 / (frameSum / static_cast<double>(frameCount) * 1000.0));
                     std::fflush(stdout);
@@ -7205,7 +7318,7 @@ int main(int argc, char** argv)
         if (glassToggleSec >= 0.0 && !glassToggleDone && uiClock >= glassToggleSec) {
             glassToggleDone = true;
             glassMode = (glassMode == 2) ? 0 : 2;
-            std::printf("[glass] probe: switching to mode %d now\n", glassMode);
+            platform::logf(platform::LogRender, "[glass] probe: switching to mode %d now\n", glassMode);
             std::fflush(stdout);
             requestGlassWindowMode(true); // same path the settings card uses
         }
@@ -7264,12 +7377,12 @@ int main(int argc, char** argv)
             if (uiClock >= sampleNextAtSec) {
                 sampleNextAtSec = uiClock + 1.0;
                 if (sampleMovedPx > 0.5) {
-                    std::printf("[frame] geometry changed: %d frame(s)/s, longest frame %.0f ms, "
+                    platform::logf(platform::LogRender, "[frame] geometry changed: %d frame(s)/s, longest frame %.0f ms, "
                                 "window moved %.0f px (state=%d)\n",
                         sampleFrames, sampleLongestMs, sampleMovedPx, static_cast<int>(state));
                     std::fflush(stdout);
                 } else if (sampleLongestMs > kHitchMs) {
-                    std::printf("[frame] %d frame(s)/s, longest frame %.0f ms (state=%d)\n", sampleFrames,
+                    platform::logf(platform::LogRender, "[frame] %d frame(s)/s, longest frame %.0f ms (state=%d)\n", sampleFrames,
                         sampleLongestMs, static_cast<int>(state));
                     std::fflush(stdout);
                 }
@@ -7291,7 +7404,7 @@ int main(int argc, char** argv)
                 platform::PartyLink::nowCounter());
             if (alivePrintAtSec < 0.0 || qpcSec - alivePrintAtSec >= 1.0) {
                 alivePrintAtSec = qpcSec;
-                std::printf("[alive] seat %d %s qpc=%.3f frame %.1f ms uiClock=%.3f loop=run\n", party.slot(),
+                platform::logf(platform::LogPlay, "[alive] seat %d %s qpc=%.3f frame %.1f ms uiClock=%.3f loop=run\n", party.slot(),
                     party.isHost() ? "host" : "member", qpcSec, lastFrameDeltaSec * 1000.0, uiClock);
                 std::fflush(stdout);
             }
@@ -7315,7 +7428,7 @@ int main(int argc, char** argv)
             if (mpFollowing && !party.hostAlive()) {
                 mpFollowing = false;
                 mpClockSynced = false;
-                std::printf("[party] host gone: running on the local clock\n");
+                platform::logf(platform::LogParty, "[party] host gone: running on the local clock\n");
                 std::fflush(stdout);
             }
             const bool hostHeld = mpFollowing && party.read().paused;
@@ -7323,7 +7436,7 @@ int main(int argc, char** argv)
                 // The host owns the chart clock, so a pause there has to stop
                 // this window's picture too - otherwise the notes keep sliding
                 // past while the music is silent.
-                std::printf("[party] host %s\n", hostHeld ? "paused: picture frozen" : "resumed");
+                platform::logf(platform::LogParty, "[party] host %s\n", hostHeld ? "paused: picture frozen" : "resumed");
                 std::fflush(stdout);
             }
             mpHostPaused = hostHeld;
@@ -7351,7 +7464,7 @@ int main(int argc, char** argv)
                         peers += " " + player.name + "=" + std::to_string(
                             static_cast<long long>(player.score)) + "/" + std::to_string(player.combo);
                     }
-                    std::printf("[sync] qpc=%.6f t=%.6f offset=%+.6f %s%s%s\n", qpcSec, frameSongTime,
+                    platform::logf(platform::LogPlay, "[sync] qpc=%.6f t=%.6f offset=%+.6f %s%s%s\n", qpcSec, frameSongTime,
                         mpClockOffset, mpFollowing ? "follow" : "host", mpHostPaused ? " PAUSED" : "",
                         peers.c_str());
                     std::fflush(stdout);
@@ -7466,11 +7579,11 @@ int main(int argc, char** argv)
                     io.AddMousePosEvent(static_cast<float>(fakeClick.first),
                         static_cast<float>(fakeClick.second));
                     io.AddMouseButtonEvent(0, true);
-                    std::printf("[debug] fake click down at %d,%d\n", fakeClick.first, fakeClick.second);
+                    platform::logf(platform::LogSystem, "[debug] fake click down at %d,%d\n", fakeClick.first, fakeClick.second);
                     std::fflush(stdout);
                 } else if (fakeClickStage == 1) {
                     io.AddMouseButtonEvent(0, false);
-                    std::printf("[debug] fake click up\n");
+                    platform::logf(platform::LogSystem, "[debug] fake click up\n");
                     std::fflush(stdout);
                 }
                 ++fakeClickStage;
@@ -7499,7 +7612,7 @@ int main(int argc, char** argv)
                     if (pad != nullptr) {
                         SDL_Joystick* js = SDL_GameControllerGetJoystick(pad);
                         if (js != nullptr && SDL_JoystickInstanceID(js) == event.cdevice.which) {
-                            std::printf("[pad] %s disconnected\n", SDL_GameControllerName(pad));
+                            platform::logf(platform::LogInput, "[pad] %s disconnected\n", SDL_GameControllerName(pad));
                             std::fflush(stdout);
                             SDL_GameControllerClose(pad);
                             pad = nullptr;
@@ -7594,10 +7707,10 @@ int main(int argc, char** argv)
                             && (t[2] == 'u' || t[2] == 'U') && (t[3] == 's' || t[3] == 'S');
                     };
                     if (!endsWithSus(dropped)) {
-                        std::printf("[drop] ignored (not a .sus): %s\n", dropped.c_str());
+                        platform::logf(platform::LogInput, "[drop] ignored (not a .sus): %s\n", dropped.c_str());
                         std::fflush(stdout);
                     } else if (state != AppState::Select) {
-                        std::printf("[drop] ignored (only the song list takes a drop): %s\n",
+                        platform::logf(platform::LogInput, "[drop] ignored (only the song list takes a drop): %s\n",
                             dropped.c_str());
                         std::fflush(stdout);
                     } else {
@@ -7612,7 +7725,7 @@ int main(int argc, char** argv)
                     // 就是靠它看出媒体键走进来的是 SDLK_UNKNOWN（winsend 的 lParam 是 0，
                     // SDL 拿不到扫描码）。
                     if (std::getenv("CPSEKAI_KEY_LOG") != nullptr) {
-                        std::printf("[key] sym=0x%X (%s) scancode=%d mod=0x%X repeat=%d\n",
+                        platform::logf(platform::LogInput, "[key] sym=0x%X (%s) scancode=%d mod=0x%X repeat=%d\n",
                             static_cast<unsigned>(event.key.keysym.sym),
                             SDL_GetKeyName(event.key.keysym.sym),
                             static_cast<int>(event.key.keysym.scancode),
@@ -7641,7 +7754,7 @@ int main(int argc, char** argv)
                                     static_cast<int>(laneKeys[i]);
                             }
                             persistUserData();
-                            std::printf("[keys] lane %d -> %s\n", rebindLane + 1,
+                            platform::logf(platform::LogInput, "[keys] lane %d -> %s\n", rebindLane + 1,
                                 SDL_GetKeyName(picked));
                             std::fflush(stdout);
                         }
@@ -7955,7 +8068,7 @@ int main(int argc, char** argv)
                     // where a swallowed event and a mis-measured hit box look
                     // exactly the same from the outside.
                     if (std::getenv("CPSEKAI_UI_TRACE") != nullptr) {
-                        std::printf("[ui] mouse down at %d,%d (button %d)\n", event.button.x,
+                        platform::logf(platform::LogRender, "[ui] mouse down at %d,%d (button %d)\n", event.button.x,
                             event.button.y, event.button.button);
                         std::fflush(stdout);
                     }
@@ -8118,10 +8231,10 @@ int main(int argc, char** argv)
                     ? static_cast<EXECUTION_STATE>(ES_CONTINUOUS | ES_DISPLAY_REQUIRED | ES_SYSTEM_REQUIRED)
                     : static_cast<EXECUTION_STATE>(ES_CONTINUOUS);
                 if (SetThreadExecutionState(requested) == 0) {
-                    std::printf("[power] SetThreadExecutionState(0x%lX) failed\n",
+                    platform::logf(platform::LogPlay, "[power] SetThreadExecutionState(0x%lX) failed\n",
                         static_cast<unsigned long>(requested));
                 } else {
-                    std::printf("[power] %s screen saver / display sleep / system sleep\n",
+                    platform::logf(platform::LogPlay, "[power] %s screen saver / display sleep / system sleep\n",
                         wantInhibit ? "blocking" : "allowing");
                 }
                 std::fflush(stdout);
@@ -8157,7 +8270,7 @@ int main(int argc, char** argv)
                 break;
             case platform::menu::CmdDownload:
                 if (!launchChartDownloader()) {
-                    std::printf("[chartdl] could not start the downloader\n");
+                    platform::logf(platform::LogSelect, "[chartdl] could not start the downloader\n");
                     std::fflush(stdout);
                 }
                 break;
@@ -8169,7 +8282,7 @@ int main(int argc, char** argv)
                 }
                 const std::string picked = browseForChart(gameWindow, chartsDir);
                 if (picked.empty()) {
-                    std::printf("[open] cancelled\n");
+                    platform::logf(platform::LogSystem, "[open] cancelled\n");
                     std::fflush(stdout);
                     break;
                 }
@@ -8182,7 +8295,7 @@ int main(int argc, char** argv)
                 // 所以两边永远不会打架 —— 菜单开着的时候那个下拉会收起来。
                 userSettings.sortMode = cmd == platform::menu::CmdSortByName ? 0 : 1;
                 persistUserData();
-                std::printf("[menu] sort = %d\n", userSettings.sortMode);
+                platform::logf(platform::LogSystem, "[menu] sort = %d\n", userSettings.sortMode);
                 std::fflush(stdout);
                 break;
             case platform::menu::CmdGroupOff:
@@ -8193,7 +8306,7 @@ int main(int argc, char** argv)
                 // 0 关闭 / 1 按难度段 / 2 按读音 / 3 按首字 / 4 按收藏
                 userSettings.groupMode = static_cast<int>(cmd - platform::menu::CmdGroupOff);
                 persistUserData();
-                std::printf("[menu] group = %d\n", userSettings.groupMode);
+                platform::logf(platform::LogSystem, "[menu] group = %d\n", userSettings.groupMode);
                 std::fflush(stdout);
                 break;
             case platform::menu::CmdFavorite:
@@ -8217,12 +8330,12 @@ int main(int argc, char** argv)
                         }
                         refreshEntryFlags();
                         persistUserData();
-                        std::printf("[favorite] %s musicId=%d (menu bar, %d total)\n",
+                        platform::logf(platform::LogSelect, "[favorite] %s musicId=%d (menu bar, %d total)\n",
                             added ? "added" : "removed", cur.musicId,
                             static_cast<int>(favorites.size()));
                         std::fflush(stdout);
                     } else {
-                        std::printf("[favorite] 这一首没有 musicId，收藏不了\n");
+                        platform::logf(platform::LogSelect, "[favorite] 这一首没有 musicId，收藏不了\n");
                         std::fflush(stdout);
                     }
                 } else {
@@ -8231,7 +8344,7 @@ int main(int argc, char** argv)
                 break;
             }
             case platform::menu::CmdQuitInstance:
-                std::printf("[instance] quit requested from the menu bar\n");
+                platform::logf(platform::LogSystem, "[instance] quit requested from the menu bar\n");
                 std::fflush(stdout);
                 running = false; // 普通退出路径：走的时候会把档案存回去
                 break;
@@ -8244,7 +8357,7 @@ int main(int argc, char** argv)
                     L"结束所有实例", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2);
                 if (answer == IDYES) {
                     const int asked = postCloseToAllInstances();
-                    std::printf("[instance] closed %d window(s) on request (menu bar)\n", asked);
+                    platform::logf(platform::LogSystem, "[instance] closed %d window(s) on request (menu bar)\n", asked);
                     std::fflush(stdout);
                     running = false; // ...this window included
                 }
@@ -8336,10 +8449,12 @@ int main(int argc, char** argv)
                 // （rebindLane >= 0）根本走不到这里 —— 那一笔 SDL_KEYDOWN 在更前面
                 // 就被绑键分支吃掉了，escapePressed 压根没被置位。没有这一支的话，
                 // 卡片开着时按 ESC 会一路落到最后的 else，把游戏关掉。
-                std::printf("[keymap] ESC -> close\n");
+                platform::logf(platform::LogInput, "[keymap] ESC -> close\n");
                 std::fflush(stdout);
                 keymapCardOpen = false;
                 rebindLane = -1;
+            } else if (logCardAlive) {
+                logCardOpen = false;
             } else if (vocalPrefCardAlive) {
                 // 「默认歌手」卡片：ESC = 关掉它。它在设置卡片之上，所以排在
                 // showDebug 前面 —— 否则 ESC 会把底下的设置卡片也收掉。
@@ -8348,7 +8463,7 @@ int main(int argc, char** argv)
                 // 设置卡片自己（2026-10-11）：ESC = 关掉它，副卡片跟着收。
                 // 它以前**不在这条链里**：卡片开着按 ESC 会一路落到最后的 else，
                 // 而那个 else 是「退出游戏」—— 用户只是想退出设置却把游戏关了。
-                std::printf("[settings] ESC -> close\n");
+                platform::logf(platform::LogSystem, "[settings] ESC -> close\n");
                 std::fflush(stdout);
                 showDebug = false;
                 keymapCardOpen = false;
@@ -8356,7 +8471,7 @@ int main(int argc, char** argv)
                 // 「删除谱面文件？」开着的时候 ESC = 取消（这种问题的默认答案显然
                 // 是"不删"）。跟 closeAsk 一样走 forcedChoice：卡片是按钮驱动的，
                 // 光把标志收回它下一帧照样画。
-                std::printf("[delete] ESC -> %s\n", "cancelled");
+                platform::logf(platform::LogSelect, "[delete] ESC -> %s\n", "cancelled");
                 std::fflush(stdout);
                 deleteAskPadChoice = 0;
             } else if (closeAskAlive) {
@@ -8365,7 +8480,7 @@ int main(int argc, char** argv)
                 // 注意不能只是把 closeAsk 置回 false：卡片是**按钮驱动的**，光收回标志
                 // 它下一帧照样画（出场动画是它自己的内部状态，见 game/Ui.cpp 的
                 // st.open）。所以这里走 forcedChoice 那条路，等于替用户按了第一颗。
-                std::printf("[close] ESC -> 继续演出\n");
+                platform::logf(platform::LogSystem, "[close] ESC -> 继续演出\n");
                 std::fflush(stdout);
                 closeAskPadChoice = 0;
             } else if (pauseDialogOpen) {
@@ -8499,7 +8614,7 @@ int main(int argc, char** argv)
                 if (mediaConfirmRequested) {
                     pulse(SDL_SCANCODE_RETURN);
                 }
-                std::printf("[media] select: prev=%d next=%d play=%d\n", mediaPrevRequested ? 1 : 0,
+                platform::logf(platform::LogAudio, "[media] select: prev=%d next=%d play=%d\n", mediaPrevRequested ? 1 : 0,
                     mediaNextRequested ? 1 : 0, mediaConfirmRequested ? 1 : 0);
                 std::fflush(stdout);
             }
@@ -8523,7 +8638,7 @@ int main(int argc, char** argv)
                 std::memcpy(dropBuf, dropTestPath.c_str(), dropLen);
                 dropEvent.drop.file = dropBuf; // 收的一方负责 SDL_free
                 SDL_PushEvent(&dropEvent);
-                std::printf("[drop] --drop-test pushed %s\n", dropTestPath.c_str());
+                platform::logf(platform::LogInput, "[drop] --drop-test pushed %s\n", dropTestPath.c_str());
                 std::fflush(stdout);
             }
         }
@@ -8538,7 +8653,7 @@ int main(int argc, char** argv)
             // catch whatever screen is up in the first second, and the dialogs
             // this has to check open much later.
             if (!fakePad.empty() && (++fakePadFrames % 30) == 0) {
-                std::printf("[pad] fake cycle %d\n", fakePadFrames / 30);
+                platform::logf(platform::LogInput, "[pad] fake cycle %d\n", fakePadFrames / 30);
                 std::fflush(stdout);
             }
             auto pressed = [&](SDL_GameControllerButton button, bool& prev) {
@@ -8613,7 +8728,7 @@ int main(int argc, char** argv)
                 if (settingsTab < 0) {
                     settingsTab += kSettingsTabCount;
                 }
-                std::printf("[pad] settings tab -> %d\n", settingsTab);
+                platform::logf(platform::LogInput, "[pad] settings tab -> %d\n", settingsTab);
                 std::fflush(stdout);
             }
             const bool padA = pressed(SDL_CONTROLLER_BUTTON_A, padPrevA);
@@ -8665,7 +8780,7 @@ int main(int argc, char** argv)
                     }
                 }
                 if (padA || padStart || padB || padX) {
-                    std::printf("[pad] modal card -> choice %d\n",
+                    platform::logf(platform::LogInput, "[pad] modal card -> choice %d\n",
                         deleteAsk ? deleteAskPadChoice
                                   : (closeAsk ? closeAskPadChoice
                                               : (multiInstanceAsk ? multiAskPadChoice
@@ -8689,7 +8804,7 @@ int main(int argc, char** argv)
                     pauseDialogChoice = 1; // 放弃
                 }
                 if (pauseDialogChoice >= 0) {
-                    std::printf("[pad] pause dialog -> choice %d\n", pauseDialogChoice);
+                    platform::logf(platform::LogInput, "[pad] pause dialog -> choice %d\n", pauseDialogChoice);
                     std::fflush(stdout);
                 }
             } else if (padA) {
@@ -8791,7 +8906,7 @@ int main(int argc, char** argv)
                     // One line per focus change: this is the only thing that can
                     // be checked from a log (whether the candidate list shows up
                     // is for the player's eyes - it needs a real IME).
-                    std::printf("[ime] text input on (candidate list enabled)\n");
+                    platform::logf(platform::LogInput, "[ime] text input on (candidate list enabled)\n");
                     std::fflush(stdout);
                 } else {
                     SDL_StopTextInput();
@@ -8823,7 +8938,7 @@ int main(int argc, char** argv)
                     mpEntryIndex = -1;
                     party.setDifficulty(-1);
                     party.setReady(false);
-                    std::printf("[party] host picked '%s' (%s) - pick a difficulty in the phone panel\n",
+                    platform::logf(platform::LogParty, "[party] host picked '%s' (%s) - pick a difficulty in the phone panel\n",
                         mpSnap.songTitle.c_str(), mpSnap.songKey.c_str());
                     std::fflush(stdout);
                 }
@@ -8910,7 +9025,7 @@ int main(int argc, char** argv)
                     static_cast<int>(game::availableVocals(entries[static_cast<size_t>(selected)]).size());
                 if (versionCount > 1) {
                     selectedVocal = (std::max(selectedVocal, 0) + 1) % versionCount;
-                    std::printf("[t] switched to vocal version %d\n", selectedVocal);
+                    platform::logf(platform::LogSystem, "[t] switched to vocal version %d\n", selectedVocal);
                     std::fflush(stdout);
                 }
             }
@@ -9031,7 +9146,7 @@ int main(int argc, char** argv)
                 const bool testing = !storyTestId.empty();
                 if (replayTest && uiClock > 2.0 && showDebug) {
                     replayTest = false;
-                    std::printf("[story] replay simulated\n");
+                    platform::logf(platform::LogStory, "[story] replay simulated\n");
                     std::fflush(stdout);
                     restartTutorial();
                 }
@@ -9057,7 +9172,7 @@ int main(int argc, char** argv)
                         if (storyTestStep >= 0) {
                             story::debugJump(storyTestStep);
                         }
-                        std::printf("[story] started '%s'%s\n", id,
+                        platform::logf(platform::LogStory, "[story] started '%s'%s\n", id,
                             tutorialMenuBarWasOn ? " (menu bar off for the tutorial)" : "");
                         std::fflush(stdout);
                     } else {
@@ -9132,7 +9247,7 @@ int main(int argc, char** argv)
                     }
                     refreshEntryFlags();
                     persistUserData();
-                    std::printf("[favorite] %s musicId=%d (%d total)\n", added ? "added" : "removed",
+                    platform::logf(platform::LogSelect, "[favorite] %s musicId=%d (%d total)\n", added ? "added" : "removed",
                         musicId, static_cast<int>(favorites.size()));
                     std::fflush(stdout);
                 }
@@ -9155,13 +9270,13 @@ int main(int argc, char** argv)
                 } else {
                     action = selected;
                 }
-                std::printf("[party] auto-confirm chart #%d (debug)\n", selected);
+                platform::logf(platform::LogParty, "[party] auto-confirm chart #%d (debug)\n", selected);
                 std::fflush(stdout);
             }
             // Diagnostic (CPSEKAI_UI_TRACE=1): where the 确定 button landed, in
             // window pixels - what an input-driving script has to click.
             if (std::getenv("CPSEKAI_UI_TRACE") != nullptr) {
-                std::printf("[ui] confirm button at %.0f,%.0f (window %dx%d)\n", selectConfirmCenter.x,
+                platform::logf(platform::LogRender, "[ui] confirm button at %.0f,%.0f (window %dx%d)\n", selectConfirmCenter.x,
                     selectConfirmCenter.y, windowW, windowH);
                 std::fflush(stdout);
             }
@@ -9213,7 +9328,7 @@ int main(int argc, char** argv)
                 // again once the downloader exits, which is exactly what the
                 // player expects after picking songs in it.
                 if (!launchChartDownloader()) {
-                    std::printf("[chartdl] could not start the downloader\n");
+                    platform::logf(platform::LogSelect, "[chartdl] could not start the downloader\n");
                     std::fflush(stdout);
                     // Say it on screen too: "I clicked 音乐商店 and nothing
                     // happened" is what a silent failure looks like.
@@ -9228,7 +9343,7 @@ int main(int argc, char** argv)
             if (chartDlTestAtSec >= 0.0 && uiClock >= chartDlTestAtSec && entries.empty()
                 && !chartDlTestFired) {
                 chartDlTestFired = true;
-                std::printf("[chartdl] auto-pressed 下载谱面 (debug)\n");
+                platform::logf(platform::LogSelect, "[chartdl] auto-pressed 下载谱面 (debug)\n");
                 std::fflush(stdout);
                 launchChartDownloader();
             } else if (wantRescan) {
@@ -9236,7 +9351,7 @@ int main(int argc, char** argv)
                 selected = entries.empty() ? -1 : 0;
                 refreshEntryFlags();
                 loadedCoverPath.clear();
-                std::printf("[select] %d chart(s)\n", static_cast<int>(entries.size()));
+                platform::logf(platform::LogSelect, "[select] %d chart(s)\n", static_cast<int>(entries.size()));
             }
 
             // Debug (--confirm-flash): play the 确定 burst on its own, so a
@@ -9248,7 +9363,7 @@ int main(int argc, char** argv)
                 confirmFlashOrigin = selectConfirmCenter;
                 ui::se(ui::SeStart);
                 rumble(0.90f, 200, "confirm");
-                std::printf("[ui] confirm flash at %.0f,%.0f (debug)\n", selectConfirmCenter.x,
+                platform::logf(platform::LogRender, "[ui] confirm flash at %.0f,%.0f (debug)\n", selectConfirmCenter.x,
                     selectConfirmCenter.y);
                 std::fflush(stdout);
             }
@@ -9262,7 +9377,7 @@ int main(int argc, char** argv)
                 if (!host && selPartyOut.difficulty >= 0) {
                     mpMyDifficulty = selPartyOut.difficulty;
                     party.setDifficulty(mpMyDifficulty);
-                    std::printf("[party] difficulty %s (%d)\n", game::difficultyName(mpMyDifficulty),
+                    platform::logf(platform::LogParty, "[party] difficulty %s (%d)\n", game::difficultyName(mpMyDifficulty),
                         mpMyDifficulty);
                     std::fflush(stdout);
                 }
@@ -9272,7 +9387,7 @@ int main(int argc, char** argv)
                     if (roundOn) {
                         // A round is already loading or running: 确定 cannot
                         // start a second one (that is what the phase is for).
-                        std::printf("[party] confirm ignored (the round is already on)\n");
+                        platform::logf(platform::LogParty, "[party] confirm ignored (the round is already on)\n");
                         std::fflush(stdout);
                     } else if (host) {
                         if (selected >= 0 && selected < static_cast<int>(entries.size())) {
@@ -9287,23 +9402,23 @@ int main(int argc, char** argv)
                             mpConfirmed = true;
                             mpConfirmedEpoch = party.read().epoch;
                             party.setReady(true);
-                            std::printf("[party] host confirmed (epoch %d)\n", mpConfirmedEpoch);
+                            platform::logf(platform::LogParty, "[party] host confirmed (epoch %d)\n", mpConfirmedEpoch);
                             std::fflush(stdout);
                         }
                     } else if (mpSnap.phase == platform::PartyLobby || mpLocked < 0) {
                         mpStatus = "房主还没有定下本窗口能打的曲子";
-                        std::printf("[party] confirm ignored (no playable song in this window)\n");
+                        platform::logf(platform::LogParty, "[party] confirm ignored (no playable song in this window)\n");
                         std::fflush(stdout);
                     } else if (mpMyDifficulty < 0) {
                         mpStatus = "先在手机上选择难度";
-                        std::printf("[party] confirm ignored (no difficulty picked)\n");
+                        platform::logf(platform::LogParty, "[party] confirm ignored (no difficulty picked)\n");
                         std::fflush(stdout);
                     } else {
                         mpConfirmed = true;
                         party.setSeat(platform::PartySeatReady);
                         party.setReady(true);
                         party.setDifficulty(mpMyDifficulty);
-                        std::printf("[party] confirmed, %s (%d)\n", game::difficultyName(mpMyDifficulty),
+                        platform::logf(platform::LogParty, "[party] confirmed, %s (%d)\n", game::difficultyName(mpMyDifficulty),
                             mpMyDifficulty);
                         std::fflush(stdout);
                     }
@@ -9323,7 +9438,7 @@ int main(int argc, char** argv)
                         if (findPartyEntry(mpSnap.musicId, mpSnap.songKey, partyAutoDiff) >= 0) {
                             mpMyDifficulty = partyAutoDiff;
                             party.setDifficulty(mpMyDifficulty);
-                            std::printf("[party] auto difficulty %s (debug)\n",
+                            platform::logf(platform::LogParty, "[party] auto difficulty %s (debug)\n",
                                 game::difficultyName(mpMyDifficulty));
                             std::fflush(stdout);
                         } else {
@@ -9333,7 +9448,7 @@ int main(int argc, char** argv)
                         mpConfirmed = true;
                         party.setSeat(platform::PartySeatReady);
                         party.setReady(true);
-                        std::printf("[party] auto confirm (debug)\n");
+                        platform::logf(platform::LogParty, "[party] auto confirm (debug)\n");
                         std::fflush(stdout);
                     }
                 }
@@ -9359,7 +9474,7 @@ int main(int argc, char** argv)
                     // frame, so frame time would hide the very thing this is
                     // here to measure.
                     mpChargeStartCounter = platform::PartyLink::nowCounter();
-                    std::printf("[party] all ready -> loading%s\n",
+                    platform::logf(platform::LogParty, "[party] all ready -> loading%s\n",
                         party.playerCount() < 2 ? " [solo in the room]" : "");
                     std::fflush(stdout);
                 }
@@ -9382,7 +9497,7 @@ int main(int argc, char** argv)
                         party.setSeat(platform::PartySeatLobby);
                         party.setReady(false);
                         mpStatus = late ? "本曲已经开始" : "房主已开始，你未确定";
-                        std::printf("[party] charge skipped (%s)\n",
+                        platform::logf(platform::LogParty, "[party] charge skipped (%s)\n",
                             late ? "joined after the start" : "not confirmed");
                         std::fflush(stdout);
                     } else {
@@ -9394,7 +9509,7 @@ int main(int argc, char** argv)
                                             : findPartyEntry(mpSnap.musicId, mpSnap.songKey, mpMyDifficulty);
                         if (mpEntryIndex < 0 || mpEntryIndex >= static_cast<int>(entries.size())) {
                             mpStatus = "本窗口没有这首曲子";
-                            std::printf("[party] charge failed: chart missing\n");
+                            platform::logf(platform::LogParty, "[party] charge failed: chart missing\n");
                             std::fflush(stdout);
                         } else {
                             mpEntry = entries[static_cast<size_t>(mpEntryIndex)];
@@ -9411,7 +9526,7 @@ int main(int argc, char** argv)
                             if (!startSession(session, mpEntry, renderer, audio, judgement, noteSpeed, error,
                                     host)) {
                                 mpStatus = "谱面加载失败";
-                                std::printf("[party] charge failed: %s\n", error.c_str());
+                                platform::logf(platform::LogParty, "[party] charge failed: %s\n", error.c_str());
                                 std::fflush(stdout);
                                 error.clear();
                                 mpConfirmed = false;
@@ -9467,7 +9582,7 @@ int main(int argc, char** argv)
                                 // A window that never gets here simply is not
                                 // waited for past the watchdog below.
                                 party.setSeat(platform::PartySeatLoaded);
-                                std::printf("[party] chart loaded (%s, %s), waiting for the shared start\n",
+                                platform::logf(platform::LogParty, "[party] chart loaded (%s, %s), waiting for the shared start\n",
                                     mpEntry.susPath.c_str(), mpEntry.difficulty.c_str());
                                 std::fflush(stdout);
                             }
@@ -9504,7 +9619,7 @@ int main(int argc, char** argv)
                         // The waited-for figure is the number that matters when
                         // the start feels slow: it is the slowest window's load.
                         // It used to be a flat 5.8s whatever the load took.
-                        std::printf("[party] start in %.2fs (%s; the room waited %.2fs for the loads)\n",
+                        platform::logf(platform::LogParty, "[party] start in %.2fs (%s; the room waited %.2fs for the loads)\n",
                             kPartyStartFuseSec,
                             allIn ? "every chart loaded" : "watchdog: somebody never loaded", waited);
                         std::fflush(stdout);
@@ -9537,7 +9652,7 @@ int main(int argc, char** argv)
                         party.setPhase(platform::PartyRunning);
                     }
                     state = AppState::Play;
-                    std::printf("[party] go (lead-in %.1fs, start counter %llu)\n", leadInSec,
+                    platform::logf(platform::LogParty, "[party] go (lead-in %.1fs, start counter %llu)\n", leadInSec,
                         static_cast<unsigned long long>(mpSnap.startCounter));
                     std::fflush(stdout);
                 }
@@ -9549,6 +9664,8 @@ int main(int argc, char** argv)
             drawKeymapCard();
             // 默认歌手卡片（同一个入口，独立一张）。
             drawVocalPrefCard();
+            // 日志分类开关（系统页那一行点出来的）。
+            drawLogCard();
             // 演奏中点 X / Alt+F4 的确认卡。
             drawCloseAskDialog();
             // 多开的实验性功能确认框（设置卡片里点出来的）。
@@ -9650,7 +9767,7 @@ int main(int argc, char** argv)
                 const double sharedEnd = party.readTrackEnd();
                 if (sharedEnd > 1.0 && std::fabs(sharedEnd - trackDurationSec) > 0.05) {
                     trackDurationSec = sharedEnd;
-                    std::printf("[party] run length from the host: %.2fs\n", sharedEnd);
+                    platform::logf(platform::LogParty, "[party] run length from the host: %.2fs\n", sharedEnd);
                     std::fflush(stdout);
                 }
             }
@@ -9672,7 +9789,7 @@ int main(int argc, char** argv)
             // engine. This is the sequence that used to freeze the process.
             if (testRestart && !restartDone && !entries.empty() && songTime >= restartAtSec) {
                 restartDone = true;
-                std::printf("[restart] give up at %.2fs, loading another chart\n", songTime);
+                platform::logf(platform::LogSystem, "[restart] give up at %.2fs, loading another chart\n", songTime);
                 std::fflush(stdout);
                 audio.stopMusic();
                 audio.setHoldLoop(false, false, 0.0f);
@@ -9688,7 +9805,7 @@ int main(int argc, char** argv)
                 beginSessionClock();
                 lastSeenJudgeTime = -100.0f;
                 hudState = game::HudState{};
-                    std::printf("[restart] second session started ok (music=%s)\n",
+                    platform::logf(platform::LogSystem, "[restart] second session started ok (music=%s)\n",
                         entries[static_cast<size_t>(next)].bgmPath.c_str());
                     std::fflush(stdout);
                 } else {
@@ -9802,7 +9919,7 @@ int main(int argc, char** argv)
                 static std::size_t lastMissedKeys = 0;
                 if (missed.size() != lastMissedKeys) {
                     lastMissedKeys = missed.size();
-                    std::printf("[hold] %d long note(s) now marked missed\n",
+                    platform::logf(platform::LogPlay, "[hold] %d long note(s) now marked missed\n",
                         static_cast<int>(missed.size() / 2));
                     std::fflush(stdout);
                 }
@@ -9868,7 +9985,7 @@ int main(int argc, char** argv)
                 liveClearBanner.start();
                 // Says which of the two ends won - a chart that ends much earlier
                 // than the track is exactly what this change is about.
-                std::printf("[play] LIVE CLEAR at %.2fs (chart end %.2fs, track %.2fs, trigger %.2fs)\n",
+                platform::logf(platform::LogPlay, "[play] LIVE CLEAR at %.2fs (chart end %.2fs, track %.2fs, trigger %.2fs)\n",
                     songTime, chartEnd, trackDurationSec, effectiveEnd);
                 std::fflush(stdout);
                 // The sting that ships with the effect (assets/se/LIVE_CLEAR.mp3).
@@ -9965,11 +10082,11 @@ int main(int argc, char** argv)
                         refreshEntryFlags();
                     }
                     persistUserData();
-                    std::printf("[score] %s %s%s (life=%.0f/%.0f) (%s)\n", key.c_str(),
+                    platform::logf(platform::LogPlay, "[score] %s %s%s (life=%.0f/%.0f) (%s)\n", key.c_str(),
                         cleared ? "cleared" : "failed", fullCombo ? " (full combo)" : "",
                         static_cast<double>(st.life), static_cast<double>(game::kMaxLife),
                         userDataFile.c_str());
-                    std::printf("[rank] %c +%d exp -> rank %d (%d/%d)%s\n", sr.rank, resultExpGain,
+                    platform::logf(platform::LogPlay, "[rank] %c +%d exp -> rank %d (%d/%d)%s\n", sr.rank, resultExpGain,
                         account.rank, static_cast<int>(account.exp),
                         static_cast<int>(game::expToNextRank(account.rank)),
                         resultRankUps > 0 ? " (rank up)" : "");
@@ -10009,7 +10126,7 @@ int main(int argc, char** argv)
                 state = AppState::Result;
                 resultShownAt = uiClock;
                 resultSeStage = 0;
-                std::printf("[result] shown (score=%.0f best=%.0f newRecord=%d)\n",
+                platform::logf(platform::LogPlay, "[result] shown (score=%.0f best=%.0f newRecord=%d)\n",
                     resultData.score, resultData.highScore, resultData.newRecord ? 1 : 0);
                 std::fflush(stdout);
             }
@@ -10165,13 +10282,13 @@ int main(int argc, char** argv)
                     const auto buildMs = std::chrono::duration_cast<std::chrono::milliseconds>(
                         std::chrono::steady_clock::now() - buildStart)
                                              .count();
-                    std::printf("[stage] %s plate %dx%d in %lld ms\n", plate.empty() ? "no" : "built",
+                    platform::logf(platform::LogPlay, "[stage] %s plate %dx%d in %lld ms\n", plate.empty() ? "no" : "built",
                         plateW, plateH, static_cast<long long>(buildMs));
                     std::fflush(stdout);
                 }
                 if (!dumpStageBgPath.empty() && !plate.empty()) {
                     stbi_write_png(dumpStageBgPath.c_str(), plateW, plateH, 4, plate.data(), plateW * 4);
-                    std::printf("[stage] wrote %s\n", dumpStageBgPath.c_str());
+                    platform::logf(platform::LogPlay, "[stage] wrote %s\n", dumpStageBgPath.c_str());
                     std::fflush(stdout);
                 }
                 renderer.setSongBackground(plate.empty() ? nullptr : plate.data(), plateW, plateH, error);
@@ -10325,7 +10442,7 @@ int main(int argc, char** argv)
             // The dialog is custom-drawn, so the choice is handed to
             // ui::messageDialog as a forced click (same close animation).
             if (pauseDialogChoice >= 0) {
-                std::printf("[pause] pad choice %d (state=%d paused=%d dialog=%d)\n", pauseDialogChoice,
+                platform::logf(platform::LogPlay, "[pause] pad choice %d (state=%d paused=%d dialog=%d)\n", pauseDialogChoice,
                     static_cast<int>(state), paused ? 1 : 0, pauseDialogOpen ? 1 : 0);
                 std::fflush(stdout);
             }
@@ -10508,7 +10625,7 @@ int main(int argc, char** argv)
                 userSettings.uiScale);
             if (resultContinueRequested) {
                 audio.stopResultBgm();
-                std::printf("[result] continue -> song select\n");
+                platform::logf(platform::LogPlay, "[result] continue -> song select\n");
                 std::fflush(stdout);
                 resultContinueRequested = false;
                 resultScheduled = false;
@@ -10516,7 +10633,7 @@ int main(int argc, char** argv)
                 lastSeenJudgeTime = -100.0f;
                 hudState = game::HudState{};
                 state = AppState::Select;
-                std::printf("[result] continue -> song select\n");
+                platform::logf(platform::LogPlay, "[result] continue -> song select\n");
                 std::fflush(stdout);
             }
             // Debug (--party-auto): press 继续 a couple of seconds in, so a
@@ -10596,7 +10713,7 @@ int main(int argc, char** argv)
                         userSettings.eulaAccepted = eulaNoShow;
                         persistUserData();
                     }
-                    std::printf("[eula] dismissed (noShow=%d)\n", eulaNoShow ? 1 : 0);
+                    platform::logf(platform::LogSystem, "[eula] dismissed (noShow=%d)\n", eulaNoShow ? 1 : 0);
                     std::fflush(stdout);
                     eulaDismissedThisRun = true;
                 } else if (eulaAction == -2) {
@@ -10864,7 +10981,7 @@ int main(int argc, char** argv)
                 std::string bgmError;
                 audio.startTutorialBgm(tutorialBgmPath, 0.7f, bgmError);
                 if (!bgmError.empty() && std::getenv("CPSEKAI_AUDIO_TRACE") != nullptr) {
-                    std::printf("[audio] %s\n", bgmError.c_str());
+                    platform::logf(platform::LogAudio, "[audio] %s\n", bgmError.c_str());
                     std::fflush(stdout);
                 }
             } else {
@@ -10887,7 +11004,7 @@ int main(int argc, char** argv)
                 tutorialMenuBarWasOn = false;
             }
             persistUserData();
-            std::printf("[story] marked seen; profile saved\n");
+            platform::logf(platform::LogStory, "[story] marked seen; profile saved\n");
             std::fflush(stdout);
         }
         ImGui::Render();
@@ -10919,14 +11036,14 @@ int main(int argc, char** argv)
             wantScreenshot = false;
             {
                 const auto& st = judgement.stats();
-                std::printf("[stats] perfect=%d great=%d good=%d bad=%d miss=%d combo=%d maxCombo=%d tails=%d breaks=%d score=%.0f life=%.0f (%.1f%%)\n",
+                platform::logf(platform::LogRender, "[stats] perfect=%d great=%d good=%d bad=%d miss=%d combo=%d maxCombo=%d tails=%d breaks=%d score=%.0f life=%.0f (%.1f%%)\n",
                     st.perfect, st.great, st.good, st.bad, st.miss, st.combo, st.maxCombo, st.holdTails, st.holdBreaks,
                     st.score, st.life, 100.0f * judgement.lifeRatio());
             }
             if (showFps) {
                 // 左下角那一行显示的就是这个数（截图自检时不用靠眼睛读图 —— 10 px 的
                 // "60.0" 和 "0.0" 在图上根本分不出来）。
-                std::printf("[fps] %.1f (frame %.1f ms)\n", fpsDisplay, lastFrameDeltaSec * 1000.0);
+                platform::logf(platform::LogRender, "[fps] %.1f (frame %.1f ms)\n", fpsDisplay, lastFrameDeltaSec * 1000.0);
             }
             saveScreenshot();
             running = false;
@@ -10953,13 +11070,13 @@ int main(int argc, char** argv)
         const double swapMs
             = static_cast<double>(SDL_GetPerformanceCounter() - swapBegin) / perfFreqD * 1000.0;
         if (swapMs > 150.0) {
-            std::printf("[gl] slow swap %.0f ms (present waited on the GPU)\n", swapMs);
+            platform::logf(platform::LogRender, "[gl] slow swap %.0f ms (present waited on the GPU)\n", swapMs);
             std::fflush(stdout);
         }
         // A lost context means the driver already reset. Reporting it separately
         // tells "the picture froze" apart from "the GPU was taken away".
         if (glGetError() == 0x0507) { // GL_CONTEXT_LOST
-            std::printf("[gl] context lost - the driver reset the device (TDR)\n");
+            platform::logf(platform::LogRender, "[gl] context lost - the driver reset the device (TDR)\n");
             std::fflush(stdout);
         }
 
@@ -11079,7 +11196,7 @@ int main(int argc, char** argv)
                         return DefWindowProcW(hwnd, message, wParam, lParam);
                     }
                     if (st->logMessages) {
-                        std::printf("[msg] 0x%04X wparam=%llu lparam=%lld\n", message,
+                        platform::logf(platform::LogSystem, "[msg] 0x%04X wparam=%llu lparam=%lld\n", message,
                             static_cast<unsigned long long>(wParam),
                             static_cast<long long>(lParam));
                         std::fflush(stdout);
@@ -11182,7 +11299,7 @@ int main(int argc, char** argv)
                         st->fromSizing = 0;
                         st->lastServedMs = 0;
                         SetTimer(hwnd, kDragTimerId, kDragFrameMs, nullptr);
-                        std::printf("[menu] WM_ENTERMENULOOP: pump parked, feeding frames from a "
+                        platform::logf(platform::LogSystem, "[menu] WM_ENTERMENULOOP: pump parked, feeding frames from a "
                                     "%u ms WM_TIMER\n",
                             kDragFrameMs);
                         std::fflush(stdout);
@@ -11194,7 +11311,7 @@ int main(int argc, char** argv)
                         st->dragging = false;
                         *st->dragPacing = false;
                         KillTimer(hwnd, kDragTimerId);
-                        std::printf("[menu] WM_EXITMENULOOP: %d frame(s) served while the menu was "
+                        platform::logf(platform::LogSystem, "[menu] WM_EXITMENULOOP: %d frame(s) served while the menu was "
                                     "open (timer=%d)\n",
                             st->fromMoving + st->fromSizing + st->fromTimer, st->fromTimer);
                         std::fflush(stdout);
@@ -11269,7 +11386,7 @@ int main(int argc, char** argv)
                         st->fromSizing = 0;
                         st->lastServedMs = 0;
                         SetTimer(hwnd, kDragTimerId, kDragFrameMs, nullptr);
-                        std::printf("[window] WM_ENTERSIZEMOVE: pump parked, feeding frames from "
+                        platform::logf(platform::LogSystem, "[window] WM_ENTERSIZEMOVE: pump parked, feeding frames from "
                                     "WM_MOVING/WM_SIZING + a %u ms WM_TIMER\n",
                             kDragFrameMs);
                         std::fflush(stdout);
@@ -11277,7 +11394,7 @@ int main(int argc, char** argv)
                         st->dragging = false;
                         *st->dragPacing = false;
                         KillTimer(hwnd, kDragTimerId);
-                        std::printf("[window] WM_EXITSIZEMOVE: %d frame(s) served during the drag "
+                        platform::logf(platform::LogSystem, "[window] WM_EXITSIZEMOVE: %d frame(s) served during the drag "
                                     "(moving=%d sizing=%d timer=%d)\n",
                             st->fromMoving + st->fromSizing + st->fromTimer, st->fromMoving,
                             st->fromSizing, st->fromTimer);
@@ -11299,7 +11416,7 @@ int main(int argc, char** argv)
                             || message == WM_WINDOWPOSCHANGED) {
                             if (!st->dragging && st->servedOutside < 8) {
                                 ++st->servedOutside;
-                                std::printf("[window] %s outside a drag (frameless=%d) - not served\n",
+                                platform::logf(platform::LogSystem, "[window] %s outside a drag (frameless=%d) - not served\n",
                                     message == WM_MOVE ? "WM_MOVE" :
                                     message == WM_SIZE ? "WM_SIZE" :
                                     message == WM_NCCALCSIZE ? "WM_NCCALCSIZE" : "WM_WINDOWPOSCHANGED",
@@ -11320,7 +11437,7 @@ int main(int argc, char** argv)
                                 KillTimer(hwnd, kDragTimerId);
                                 st->dragging = false;
                                 *st->dragPacing = false;
-                                std::printf("[window] drag over (button released): %d frame(s) served "
+                                platform::logf(platform::LogSystem, "[window] drag over (button released): %d frame(s) served "
                                             "(moving=%d sizing=%d timer=%d)\n",
                                     st->fromMoving + st->fromSizing + st->fromTimer, st->fromMoving,
                                     st->fromSizing, st->fromTimer);
@@ -11356,7 +11473,7 @@ int main(int argc, char** argv)
                     }
                     return CallWindowProcW(st->chain, hwnd, message, wParam, lParam);
                 })));
-        std::printf("[window] window procedure subclassed for drag frames\n");
+        platform::logf(platform::LogSystem, "[window] window procedure subclassed for drag frames\n");
         std::fflush(stdout);
         if (noFrameMode != 0) {
             // The window was created long before this subclass existed, so the
@@ -11370,7 +11487,7 @@ int main(int argc, char** argv)
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
             RECT after{};
             GetClientRect(gameWindow, &after);
-            std::printf("[window] frameless: client %ldx%ld -> %ldx%ld\n",
+            platform::logf(platform::LogSystem, "[window] frameless: client %ldx%ld -> %ldx%ld\n",
                 before.right, before.bottom, after.right, after.bottom);
             std::fflush(stdout);
         }

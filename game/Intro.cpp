@@ -3,6 +3,7 @@
 // openingPlayfieldVisibility() / loadIntroFonts() from
 // core/native/src/mmw_overlay_player.cpp (sekai-mmw-preview-web, AGPL-3.0).
 #include "Intro.hpp"
+#include "platform/Log.hpp"
 
 #include "Hud.hpp" // lifePauseRect - the skip key lines up with the pause key
 #include "Ui.hpp"  // ui::anim - the skip button's hover / press easing
@@ -494,7 +495,7 @@ void loadIntroFonts()
             std::snprintf(config.Name, sizeof(config.Name), "%s", fileName);
             outFont = io.Fonts->AddFontFromFileTTF(path.c_str(), 42.0f, &config, ranges);
             if (outFont != nullptr) {
-                std::printf("[intro] result %s face %s loaded\n", label, fileName);
+                platform::logf(platform::LogSelect, "[intro] result %s face %s loaded\n", label, fileName);
             }
         };
         // Heavy CJK (得分 / 最高得分 / 歌曲等级 / 继续).
@@ -574,9 +575,9 @@ void loadIntroFonts()
         for (const auto& candidate : systemFontCandidates()) {
             candidates.push_back(candidate);
         }
-        std::printf("[intro] %d system font candidate(s)\n", static_cast<int>(candidates.size()));
+        platform::logf(platform::LogSelect, "[intro] %d system font candidate(s)\n", static_cast<int>(candidates.size()));
         for (const auto& candidate : candidates) {
-            std::printf("[intro]   candidate %s -> %s\n", candidate.face.c_str(), candidate.path.c_str());
+            platform::logf(platform::LogSelect, "[intro]   candidate %s -> %s\n", candidate.face.c_str(), candidate.path.c_str());
         }
 
         for (const auto& candidate : candidates) {
@@ -584,7 +585,7 @@ void loadIntroFonts()
             // "cannot parse", and on Win7 those two have completely different
             // causes. Tell them apart in the log.
             if (std::FILE* probe = std::fopen(candidate.path.c_str(), "rb"); probe == nullptr) {
-                std::printf("[intro] system font %s not readable (%s)\n", candidate.face.c_str(),
+                platform::logf(platform::LogSelect, "[intro] system font %s not readable (%s)\n", candidate.face.c_str(),
                     candidate.path.c_str());
                 continue;
             } else {
@@ -602,12 +603,12 @@ void loadIntroFonts()
             ImFont* font = io.Fonts->AddFontFromFileTTF(candidate.path.c_str(), 42.0f, &config,
                 mergedBodyRanges(*io.Fonts));
             if (font == nullptr) {
-                std::printf("[intro] system font %s rejected by the rasterizer\n", candidate.path.c_str());
+                platform::logf(platform::LogSelect, "[intro] system font %s rejected by the rasterizer\n", candidate.path.c_str());
                 continue;
             }
             const ImWchar missing = missingCjkGlyph(font, 42.0f);
             if (missing != 0) {
-                std::printf("[intro] system font %s lacks U+%04X, trying the next one\n",
+                platform::logf(platform::LogSelect, "[intro] system font %s lacks U+%04X, trying the next one\n",
                     candidate.face.c_str(), static_cast<unsigned>(missing));
                 continue;
             }
@@ -617,11 +618,11 @@ void loadIntroFonts()
             gBodyFontPath = candidate.path;
             addResultFonts();
             io.Fonts->Build();
-            std::printf("[intro] system font %s @42px loaded (%s)\n", candidate.face.c_str(),
+            platform::logf(platform::LogSelect, "[intro] system font %s @42px loaded (%s)\n", candidate.face.c_str(),
                 candidate.path.c_str());
             return;
         }
-        std::printf("[intro] no usable system font, falling back to ImGui's built-in face\n");
+        platform::logf(platform::LogSelect, "[intro] no usable system font, falling back to ImGui's built-in face\n");
     }
 #endif
 

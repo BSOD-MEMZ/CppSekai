@@ -13,6 +13,7 @@
 // imgui_internal.h: the toolbar hit-test hole is a window field
 // (HitTestHoleSize / HitTestHoleOffset) and has no public setter.
 #include "imgui_internal.h"
+#include "platform/Log.hpp"
 
 #include "Story.hpp"
 
@@ -206,7 +207,7 @@ namespace
             step.layout = storyui::layoutText(font, size, step.text, width);
         }
         step.revealBytes = 0;
-        std::printf("[story] step %zu/%zu id=%s type=%s wait=%s\n", gIndex + 1, gCur->steps.size(),
+        platform::logf(platform::LogStory, "[story] step %zu/%zu id=%s type=%s wait=%s\n", gIndex + 1, gCur->steps.size(),
             step.id.c_str(), step.type.c_str(), step.wait.c_str());
         std::fflush(stdout);
     }
@@ -216,7 +217,7 @@ namespace
         gActive = false;
         gFinished = true;
         gCur = nullptr;
-        std::printf("[story] finished\n");
+        platform::logf(platform::LogStory, "[story] finished\n");
         std::fflush(stdout);
     }
 
@@ -236,7 +237,7 @@ namespace
                 return;
             }
         }
-        std::printf("[story] missing label '%s' - stopping\n", label.c_str());
+        platform::logf(platform::LogStory, "[story] missing label '%s' - stopping\n", label.c_str());
         std::fflush(stdout);
         finish();
     }
@@ -370,7 +371,7 @@ bool load(platform::Renderer& renderer, const std::string& assetDir, std::string
     gScripts.clear();
     gImages.clear();
 
-    std::printf("[story] asset dir: %s\n", assetDir.c_str());
+    platform::logf(platform::LogStory, "[story] asset dir: %s\n", assetDir.c_str());
     storyui::loadTextures(renderer, assetDir, err);
 
     const std::string path = assetDir + "\\story\\scripts\\tutorial.json";
@@ -378,7 +379,7 @@ bool load(platform::Renderer& renderer, const std::string& assetDir, std::string
     if (file == nullptr)
     {
         err = "cannot open " + path;
-        std::printf("[story] %s\n", err.c_str());
+        platform::logf(platform::LogStory, "[story] %s\n", err.c_str());
         return false;
     }
     std::string text;
@@ -466,14 +467,14 @@ bool load(platform::Renderer& renderer, const std::string& assetDir, std::string
                 }
                 script.steps.push_back(std::move(step));
             }
-            std::printf("[story] script '%s' with %zu steps\n", script.id.c_str(), script.steps.size());
+            platform::logf(platform::LogStory, "[story] script '%s' with %zu steps\n", script.id.c_str(), script.steps.size());
             gScripts.push_back(std::move(script));
         }
     }
     catch (const std::exception& ex)
     {
         err = std::string("bad script json: ") + ex.what();
-        std::printf("[story] %s\n", err.c_str());
+        platform::logf(platform::LogStory, "[story] %s\n", err.c_str());
         return false;
     }
     return true;
@@ -510,7 +511,7 @@ bool start(const char* id)
             return true;
         }
     }
-    std::printf("[story] no script '%s'\n", id);
+    platform::logf(platform::LogStory, "[story] no script '%s'\n", id);
     return false;
 }
 
@@ -666,7 +667,7 @@ void stop()
 {
     if (gActive)
     {
-        std::printf("[story] stopped by host\n");
+        platform::logf(platform::LogStory, "[story] stopped by host\n");
         std::fflush(stdout);
     }
     gActive = false;
@@ -934,7 +935,7 @@ void draw(float windowW, float windowH)
             {
                 gHost.commitName(picked);
             }
-            std::printf("[story] name='%s'\n", picked.c_str());
+            platform::logf(platform::LogStory, "[story] name='%s'\n", picked.c_str());
             std::fflush(stdout);
             next();
             ImGui::End();
@@ -1042,7 +1043,7 @@ void draw(float windowW, float windowH)
         const float press = ui::anim(0x5717a002u, held, 30.0f);
         storyui::skipKey(dl, c, center, hover, press, storyui::skipIcon());
         if (std::getenv("CPSEKAI_UI_TRACE") != nullptr && (over || ImGui::IsMouseClicked(0))) {
-            std::printf("[story] skip over=%d clicked=%d mouse=%.0f,%.0f center=%.0f,%.0f\n",
+            platform::logf(platform::LogStory, "[story] skip over=%d clicked=%d mouse=%.0f,%.0f center=%.0f,%.0f\n",
                 over ? 1 : 0, ImGui::IsMouseClicked(0) ? 1 : 0, mouse.x, mouse.y, center.x, center.y);
             std::fflush(stdout);
         }

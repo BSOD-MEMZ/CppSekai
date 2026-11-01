@@ -1,4 +1,5 @@
 #include "Renderer.hpp"
+#include "platform/Log.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -896,7 +897,7 @@ bool Renderer::loadAssets(const std::string& assetDir, std::string& outError)
     }
 
     buildStaticVertices();
-    std::printf("[tex] %.1f MB uploaded%s\n", textureBytes() / 1048576.0,
+    platform::logf(platform::LogRender, "[tex] %.1f MB uploaded%s\n", textureBytes() / 1048576.0,
         keepRawTextures() ? " (full size)" : " (shrunk, CPSEKAI_TEX_RAW=0)");
     std::fflush(stdout);
     return true;
@@ -939,7 +940,7 @@ bool Renderer::loadHud(const std::string& overlayDir, std::string& outError)
         const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
         static const bool traceTextures = std::getenv("CPSEKAI_ASSET_TIMING") != nullptr;
         if (traceTextures && ms > 15.0) {
-            std::printf("[hud] %-28s %6.1f ms (%dx%d)\n", relativePath.c_str(), ms,
+            platform::logf(platform::LogPlay, "[hud] %-28s %6.1f ms (%dx%d)\n", relativePath.c_str(), ms,
                 texture.width, texture.height);
         }
         if (texture.id == 0) {
@@ -1529,7 +1530,7 @@ void Renderer::renderFrame(const float* packedQuads, int quadCount, float backgr
             ++frameGarbage;
             if (glitchTraceEnabled() && frameGarbageDumped < 8) {
                 ++frameGarbageDumped;
-                std::printf("[gl] dropped quad #%d/%d tex=%d kind=%s:", quad, quadCount,
+                platform::logf(platform::LogRender, "[gl] dropped quad #%d/%d tex=%d kind=%s:", quad, quadCount,
                     rawTextureId, isEffect ? "effect" : "note");
                 for (int field = 0; field < 25; ++field) {
                     std::printf(" %.3f", packedQuads[offset + field]);
@@ -1578,7 +1579,7 @@ void Renderer::renderFrame(const float* packedQuads, int quadCount, float backgr
         // The first few frames in full, then every 300th, so a long session
         // cannot bury the rest of the log in one line per frame.
         if (stats.framesWithGarbage <= 5 || (stats.framesWithGarbage % 300) == 0) {
-            std::printf("[gl] dropped %d garbage quad(s) this frame (%d over %d frame(s))\n",
+            platform::logf(platform::LogRender, "[gl] dropped %d garbage quad(s) this frame (%d over %d frame(s))\n",
                 frameGarbage, stats.quadsDropped, stats.framesWithGarbage);
             std::fflush(stdout);
         }

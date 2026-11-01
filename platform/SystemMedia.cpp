@@ -7,6 +7,7 @@
 // (C:\Windows\System32\WinMetadata\Windows.Media.winmd) - the declaration
 // order of an interface's methods in metadata is its ABI vtable order.
 #include "SystemMedia.hpp"
+#include "platform/Log.hpp"
 
 #include "path_utf8.hpp"
 
@@ -648,7 +649,7 @@ bool SystemMedia::init(SDL_Window* window)
         SDL_SysWMinfo info{};
         SDL_VERSION(&info.version);
         if (SDL_GetWindowWMInfo(window, &info) != SDL_TRUE) {
-            std::printf("[media] SDL_GetWindowWMInfo failed: %s\n", SDL_GetError());
+            platform::logf(platform::LogAudio, "[media] SDL_GetWindowWMInfo failed: %s\n", SDL_GetError());
         } else {
             mWindow = info.info.win.window;
         }
@@ -664,12 +665,12 @@ bool SystemMedia::init(SDL_Window* window)
             &taskbar))) {
         vt<ITaskbarList3Vtbl>(taskbar)->HrInit(taskbar);
         mTaskbar = taskbar;
-        std::printf("[media] taskbar progress ready\n");
+        platform::logf(platform::LogAudio, "[media] taskbar progress ready\n");
     }
 
     // ---- SMTC -------------------------------------------------------------
     if (gRoGetActivationFactory == nullptr || mWindow == nullptr) {
-        std::printf("[media] SMTC unavailable (no WinRT or no window)\n");
+        platform::logf(platform::LogAudio, "[media] SMTC unavailable (no WinRT or no window)\n");
         return true;
     }
 
@@ -677,7 +678,7 @@ bool SystemMedia::init(SDL_Window* window)
     HString className(L"Windows.Media.SystemMediaTransportControls");
     if (FAILED(gRoGetActivationFactory(className.handle, &IID_ISystemMediaTransportControlsInterop, &factory))
         || factory == nullptr) {
-        std::printf("[media] SMTC: activation factory unavailable\n");
+        platform::logf(platform::LogAudio, "[media] SMTC: activation factory unavailable\n");
         return true;
     }
 
@@ -686,7 +687,7 @@ bool SystemMedia::init(SDL_Window* window)
         &IID_ISystemMediaTransportControls, &controls);
     safeRelease(factory);
     if (FAILED(hr) || controls == nullptr) {
-        std::printf("[media] SMTC: GetForWindow failed (0x%08lX)\n", static_cast<unsigned long>(hr));
+        platform::logf(platform::LogAudio, "[media] SMTC: GetForWindow failed (0x%08lX)\n", static_cast<unsigned long>(hr));
         return true;
     }
     mSmtc = controls;
@@ -705,7 +706,7 @@ bool SystemMedia::init(SDL_Window* window)
     // live and the system media flyout will pick the session up.
     unsigned char enabled = 0;
     v->get_IsEnabled(mSmtc, &enabled);
-    std::printf("[media] SMTC ready (IsEnabled readback = %d)\n", static_cast<int>(enabled));
+    platform::logf(platform::LogAudio, "[media] SMTC ready (IsEnabled readback = %d)\n", static_cast<int>(enabled));
 #else
     (void)window;
 #endif
@@ -753,7 +754,7 @@ void SystemMedia::setTrack(const std::string& title, const std::string& artist, 
     static bool s_metaDiagLogged = false;
     const auto diag = [&](const char* what, HRESULT hr) {
         if (!s_metaDiagLogged) {
-            std::printf("[media] %s hr=0x%08lX (title='%s' artist='%s')\n", what,
+            platform::logf(platform::LogAudio, "[media] %s hr=0x%08lX (title='%s' artist='%s')\n", what,
                 static_cast<unsigned long>(hr), title.c_str(), artist.c_str());
             std::fflush(stdout);
         }
@@ -792,7 +793,7 @@ void SystemMedia::setTrack(const std::string& title, const std::string& artist, 
                 // MinGW printf here mangles a %ls of a UTF-16 buffer, and what
                 // matters for the round trip is whether the property took the
                 // value at all.
-                std::printf("[media] Title readback: %u chars, first=U+%04X\n", len,
+                platform::logf(platform::LogAudio, "[media] Title readback: %u chars, first=U+%04X\n", len,
                     (text != nullptr && len > 0) ? static_cast<unsigned>(text[0]) : 0u);
                 std::fflush(stdout);
             }
@@ -818,7 +819,7 @@ void SystemMedia::setTrack(const std::string& title, const std::string& artist, 
             diag("put_Thumbnail SKIPPED (no stream reference)", E_FAIL);
         }
         if (!s_metaDiagLogged) {
-            std::printf("[media] cover -> %s (%s; %s)\n", mThumbnail == nullptr ? "FAILED" : "ok",
+            platform::logf(platform::LogAudio, "[media] cover -> %s (%s; %s)\n", mThumbnail == nullptr ? "FAILED" : "ok",
                 coverPath.c_str(), info.c_str());
             std::fflush(stdout);
         }
@@ -860,7 +861,7 @@ void SystemMedia::setReporting(bool on)
     // ignoring us (the same reason setTrack reads its own properties back).
     unsigned char enabled = 7;
     v->get_IsEnabled(mSmtc, &enabled);
-    std::printf("[media] reporting %s (IsEnabled readback = %d)\n", on ? "on" : "off",
+    platform::logf(platform::LogAudio, "[media] reporting %s (IsEnabled readback = %d)\n", on ? "on" : "off",
         static_cast<int>(enabled));
     std::fflush(stdout);
     // Whatever the cached state says, the shell has just been reset: force the
@@ -894,7 +895,7 @@ void SystemMedia::updatePlayback(bool playing, bool paused, double positionSec, 
     static bool s_diagLogged = false;
     const auto diag = [&](const char* what, HRESULT hr) {
         if (!s_diagLogged) {
-            std::printf("[media] %s hr=0x%08lX (pos=%.2fs end=%.2fs status=%d)\n", what,
+            platform::logf(platform::LogAudio, "[media] %s hr=0x%08lX (pos=%.2fs end=%.2fs status=%d)\n", what,
                 static_cast<unsigned long>(hr), positionSec, mLastDurationSec, status);
             std::fflush(stdout);
         }
@@ -910,7 +911,7 @@ void SystemMedia::updatePlayback(bool playing, bool paused, double positionSec, 
     if (!s_diagLogged) {
         int readback = -1;
         if (SUCCEEDED(vt<ISMTCVtbl>(mSmtc)->get_PlaybackStatus(mSmtc, &readback))) {
-            std::printf("[media] PlaybackStatus readback = %d (wrote %d)\n", readback, status);
+            platform::logf(platform::LogAudio, "[media] PlaybackStatus readback = %d (wrote %d)\n", readback, status);
             std::fflush(stdout);
         }
     }

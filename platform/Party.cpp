@@ -1,5 +1,6 @@
 // CppSekai - multi-instance co-op transport (see Party.hpp).
 #include "Party.hpp"
+#include "platform/Log.hpp"
 
 #include <windows.h>
 
@@ -164,12 +165,12 @@ bool PartyLink::init()
     const HANDLE mapping = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr,
         PAGE_READWRITE, 0, static_cast<DWORD>(sizeof(SharedBlock)), kMappingName);
     if (mapping == nullptr) {
-        std::printf("[party] CreateFileMappingW failed (%lu)\n", GetLastError());
+        platform::logf(platform::LogParty, "[party] CreateFileMappingW failed (%lu)\n", GetLastError());
         return false;
     }
     void* view = MapViewOfFile(mapping, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(SharedBlock));
     if (view == nullptr) {
-        std::printf("[party] MapViewOfFile failed (%lu)\n", GetLastError());
+        platform::logf(platform::LogParty, "[party] MapViewOfFile failed (%lu)\n", GetLastError());
         CloseHandle(mapping);
         return false;
     }
@@ -216,7 +217,7 @@ bool PartyLink::init()
         break;
     }
     if (mSlot < 0) {
-        std::printf("[party] no free seat (%d players already)\n", kPartyMaxSlots);
+        platform::logf(platform::LogParty, "[party] no free seat (%d players already)\n", kPartyMaxSlots);
         UnmapViewOfFile(view);
         CloseHandle(mapping);
         mView = nullptr;
@@ -231,7 +232,7 @@ bool PartyLink::init()
     if (host < 0 || host >= kPartyMaxSlots || !gBlock->seats[host].alive) {
         gBlock->hostSlot = mSlot;
     }
-    std::printf("[party] seat %d claimed (%d player(s), host seat %ld)\n", mSlot, playerCount(),
+    platform::logf(platform::LogParty, "[party] seat %d claimed (%d player(s), host seat %ld)\n", mSlot, playerCount(),
         static_cast<long>(gBlock->hostSlot));
     std::fflush(stdout);
     return true;
@@ -258,7 +259,7 @@ void PartyLink::shutdown()
         gBlock->hostSlot = next;
     }
     InterlockedExchange(&gBlock->seats[mSlot].alive, 0);
-    std::printf("[party] left seat %d\n", mSlot);
+    platform::logf(platform::LogParty, "[party] left seat %d\n", mSlot);
     std::fflush(stdout);
     gBlock = nullptr;
     mActive = false;
@@ -298,18 +299,18 @@ void PartyLink::update()
                 CloseHandle(static_cast<HANDLE>(mMapping));
                 mMapping = nullptr;
             }
-            std::printf("[party] seat %d went to somebody else, rejoining\n", mSlot);
+            platform::logf(platform::LogParty, "[party] seat %d went to somebody else, rejoining\n", mSlot);
             std::fflush(stdout);
             if (init()) {
-                std::printf("[party] rejoined as seat %d (%s)\n", mSlot,
+                platform::logf(platform::LogParty, "[party] rejoined as seat %d (%s)\n", mSlot,
                     isHost() ? "host" : "member");
             } else {
-                std::printf("[party] rejoin failed, continuing solo\n");
+                platform::logf(platform::LogParty, "[party] rejoin failed, continuing solo\n");
             }
             std::fflush(stdout);
             return;
         }
-        std::printf("[party] seat %d reclaimed after a stall\n", mSlot);
+        platform::logf(platform::LogParty, "[party] seat %d reclaimed after a stall\n", mSlot);
         std::fflush(stdout);
     }
     gBlock->seats[mSlot].heartbeat = tick;
@@ -328,7 +329,7 @@ void PartyLink::update()
             }
             if (static_cast<LONG>(tick - hb) > kStaleMs) {
                 InterlockedExchange(&gBlock->seats[i].alive, 0);
-                std::printf("[party] seat %d timed out\n", i);
+                platform::logf(platform::LogParty, "[party] seat %d timed out\n", i);
                 std::fflush(stdout);
             }
         }
@@ -339,7 +340,7 @@ void PartyLink::update()
             if (gBlock->seats[i].alive) {
                 gBlock->hostSlot = i;
                 if (i == mSlot) {
-                    std::printf("[party] host role taken over by seat %d\n", i);
+                    platform::logf(platform::LogParty, "[party] host role taken over by seat %d\n", i);
                     std::fflush(stdout);
                 }
                 break;
@@ -511,7 +512,7 @@ void PartyLink::lockSong(int musicId, const std::string& songKey, const std::str
     gBlock->epoch = gBlock->epoch + 1;
     gBlock->phase = PartySongLocked;
     InterlockedIncrement(&gBlock->seq);
-    std::printf("[party] song locked: %s (%s) diff %d\n", songKey.c_str(), title.c_str(), difficulty);
+    platform::logf(platform::LogParty, "[party] song locked: %s (%s) diff %d\n", songKey.c_str(), title.c_str(), difficulty);
     std::fflush(stdout);
 }
 
@@ -531,7 +532,7 @@ void PartyLink::beginLoading()
     gBlock->epoch = gBlock->epoch + 1;
     gBlock->phase = PartyCharging;
     InterlockedIncrement(&gBlock->seq);
-    std::printf("[party] loading: everybody ready, charts loading (epoch %ld)\n",
+    platform::logf(platform::LogParty, "[party] loading: everybody ready, charts loading (epoch %ld)\n",
         static_cast<long>(gBlock->epoch));
     std::fflush(stdout);
 }
@@ -550,7 +551,7 @@ void PartyLink::armStart(std::uint64_t startCounter)
     gBlock->startHi = static_cast<LONG>(static_cast<std::uint32_t>(startCounter >> 32));
     gBlock->hostClockValid = 0;
     InterlockedIncrement(&gBlock->seq);
-    std::printf("[party] start armed: counter %llu (epoch %ld)\n",
+    platform::logf(platform::LogParty, "[party] start armed: counter %llu (epoch %ld)\n",
         static_cast<unsigned long long>(startCounter), static_cast<long>(gBlock->epoch));
     std::fflush(stdout);
 }
@@ -582,7 +583,7 @@ void PartyLink::publishTrackEnd(double seconds)
     }
     gBlock->trackEndMs = static_cast<LONG>(std::llround(std::max(0.0, seconds) * 1000.0));
     if (seconds > 1.0) {
-        std::printf("[party] run length %.2fs published\n", seconds);
+        platform::logf(platform::LogParty, "[party] run length %.2fs published\n", seconds);
         std::fflush(stdout);
     }
 }
@@ -610,7 +611,7 @@ void PartyLink::releaseSong()
     gBlock->hostClockValid = 0;
     gBlock->trackEndMs = 0;
     InterlockedIncrement(&gBlock->seq);
-    std::printf("[party] back to the lobby\n");
+    platform::logf(platform::LogParty, "[party] back to the lobby\n");
     std::fflush(stdout);
 }
 

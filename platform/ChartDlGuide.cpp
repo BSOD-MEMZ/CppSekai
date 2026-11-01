@@ -4,6 +4,7 @@
 #define UNICODE
 #define _UNICODE
 #include <windows.h>
+#include "platform/Log.hpp"
 
 #include <commctrl.h>
 
@@ -282,7 +283,7 @@ void chartDlArrange()
         return;
     }
     SetWindowPos(window, HWND_TOP, x, y, width, height, SWP_NOACTIVATE);
-    std::printf("[guide] chartdl arranged to %d,%d %dx%d\n", x, y, width, height);
+    platform::logf(platform::LogStory, "[guide] chartdl arranged to %d,%d %dx%d\n", x, y, width, height);
     std::fflush(stdout);
 }
 

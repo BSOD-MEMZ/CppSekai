@@ -4,6 +4,7 @@
 // primary buttons, dark close X). Cards scale in/out and can be dragged by
 // their header strip.
 #include "Ui.hpp"
+#include "platform/Log.hpp"
 
 #include "Intro.hpp"
 #include "platform/Audio.hpp"
@@ -75,7 +76,7 @@ void flushSe()
         if (std::getenv("CPSEKAI_SE_TRACE") != nullptr) {
             static const char* kNames[kSeRequestCount] = {"click", "select", "slide", "level_choose",
                 "window_open", "window_close", "start", "choice_open", "choice_decide"};
-            std::printf("[se] %s\n", kNames[pick]);
+            platform::logf(platform::LogAudio, "[se] %s\n", kNames[pick]);
             std::fflush(stdout);
         }
         gSeAudio->playUiSe(static_cast<platform::AudioEngine::UiSe>(pick), gSeVolume);
@@ -395,7 +396,7 @@ namespace
         reply.focused = true;
         const int action = gPadPending;
         gPadPending = -1; // consumed: one press moves exactly one widget
-        std::printf("[pad] focus action %d -> widget kind %d\n", action, kind);
+        platform::logf(platform::LogInput, "[pad] focus action %d -> widget kind %d\n", action, kind);
         std::fflush(stdout);
         const bool left = action == ui::PadLeft;
         const bool right = action == ui::PadRight;
@@ -1262,9 +1263,9 @@ void padNav(PadAction action)
         if (next >= 0) {
             gPadFocus = items[static_cast<std::size_t>(next)].id;
             se(SeSelect); // the tick the keyboard's list navigation plays
-            std::printf("[pad] focus row %d / %d\n", next, static_cast<int>(items.size()));
+            platform::logf(platform::LogInput, "[pad] focus row %d / %d\n", next, static_cast<int>(items.size()));
         } else {
-            std::printf("[pad] focus already at the %s (%d rows)\n",
+            platform::logf(platform::LogInput, "[pad] focus already at the %s (%d rows)\n",
                 action == PadDown ? "bottom" : "top", static_cast<int>(items.size()));
         }
         std::fflush(stdout);
@@ -1272,7 +1273,7 @@ void padNav(PadAction action)
         // Nothing focused yet (the first press after the card opened): land on
         // the first widget, so left / right / A do something visible.
         gPadFocus = items[0].id;
-        std::printf("[pad] focus -> first of %d rows\n", static_cast<int>(items.size()));
+        platform::logf(platform::LogInput, "[pad] focus -> first of %d rows\n", static_cast<int>(items.size()));
         std::fflush(stdout);
     }
     gPadPending = static_cast<int>(action);
