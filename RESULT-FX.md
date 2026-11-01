@@ -3,9 +3,7 @@
 > 2026-10-31。日服 7.1.0（`GameData` 624MB，AssetRipper 2.0.0）。
 > 这份文档替代 AGENTS.md 里「待办：五支 fx_result_* 的 prefab 内容」那一条。
 
-## 0. 先纠正命名：五支里只有三支是 prefab
-
-`stringliteral.json` 里那一族（`fx_result_finish` / `fx_result_clear_v2` /
+## 0. 先纠正命名：五支里只有三支是 prefab`stringliteral.json` 里那一族（`fx_result_finish` / `fx_result_clear_v2` /
 `fx_result_failed_v2` / `fx_result_full_combo_v2` / `fx_result_all_perfect_v2`）
 是**代码里的字符串**，不是资产名。资产里的真名是 PascalCase，而且只有三支：
 
@@ -164,3 +162,60 @@ python clip_dump.py '<path>' clip_fullcombo.txt
 - [ ] 定位 `fx_result_finish` 的字符串引用（见 §5）。
 - [ ] `fx_result_MVP` / `_ace` / `_SuperStar` / `rank_*` 是**多人模式**的结算特效，
       和单人结算不是一回事，要单独确认它们挂在哪个界面。
+
+---
+
+## 8. 2026-11-01 更正（用户给了实机截图）
+
+用户提供了曲末的真实截图：**白色到浅蓝渐变的 `LIVE FINISH`**，样式和 `LIVE CLEAR` 一致。
+这一条推翻了上面几处推断，记下来：
+
+### 8.1 `LIVE CLEAR` 用的是「Sprite 拼字母」，不是整张图
+
+`fx_result_LiveClear` 的 10 个字母节点，`MonoBehaviour` 里是 **`m_Sprite`**（不是
+`m_Texture`），指向 `tex_LiveClear` 这张 1236×182 atlas 切出来的 10 个 Sprite：
+
+```
+tex_LiveClear_I(2)  _E2(3)  _L2(4)  _R(5)  _E!(6)
+tex_LiveClear_V(7)  _L1(8)  _C(9)   _!(10) _A(11)
+```
+
+字母宽度各不相同（`I` 39 / `A` 134），**是按字形裁的独立 Sprite**，所以可以按任意顺序
+和间距摆放 —— 这才是"字母从中心炸开"那支能做到的原因。
+
+### 8.2 但 `FullCombo` / `AllPerfect` 是整张 `m_Texture`
+
+这两支的 `FullCombo` / `AllPerfect` 节点是 **`m_Texture`（RawImage）**，300×56 / 320×56，
+**没有字母节点**。对照 `LIVE CLEAR` 的字母高 147，这两张只有 56 —— **差 2.6 倍**。
+
+**所以它们很可能不是曲末那层大字**，而是别的层级（结算页小字/即时提示）。
+§2、§3 里"这就是曲末 FC/AP 大字"的隐含结论**站不住**，先别照着做。
+
+旁证：`SUPERSTAR` 那支用的是 **`text_superstar` 整条 Sprite**，不是字母拼 ——
+说明「整条文字图」才是通用做法，字母拼是 `LIVE CLEAR` 为了炸开单独做的。
+
+### 8.3 `fx_result_finish` 仍然不在包里
+
+复查（这次服务正常、`--noproxy`、GameData 全量 194631 资产）：
+
+- `fx_result` 前缀的 prefab **21 个**，一个 `finish` 都没有；
+- `ac_result` 前缀的 AnimatorController **38 个**，没有 `finish`；
+- `liveclear` 搜出 13 个 Sprite / 2 个 Texture2D，`Finish` 在 tex2d 里 **0 命中**
+  （`UnityDataAssetPack.apk` 和合并后的 `GameData` 都试过）；
+- 没有 `TimelineAsset` 资产（只有类型定义）。
+
+**结论：`fx_result_finish` 的 prefab / controller / 贴图都不在首包。** pjsk 的 bundle
+是按需从 CDN 下的，`assets/data/` 里只有清单 —— 这一支要么是后续版本加的，要么属于
+下载资源。**如果要做，只能自己拼。**
+
+### 8.4 所以现在有两条路
+
+1. **不等资产，照 `LiveClearBanner` 的机制自己画**：那支已经实现了"根 → 本体层 +
+   加法光层 → 10 个字母按 x 从中心散开"，把文字换成 `LIVE FINISH` / `FULL COMBO` /
+   `ALL PERFECT`，字母用系统字体渲染（项目里 `FontOutline` 已经在用），渐变用两条
+   顶点色。**不需要那几张缺失的贴图，也不需要字母 Sprite。**
+2. 等 CDN 索引（Moesekai 的 asset-viewer 是 Next.js 客户端渲染，HTML 里没有数据，
+   要抓它的 API 或跑浏览器；`agent-browser` 在这台机器上开那个站 3 分钟没出画面，
+   已放弃）。
+
+**推荐 1** —— 观感能对上（截图就是白字 + 浅蓝渐变 + 光晕），而且不受资产缺失影响。
