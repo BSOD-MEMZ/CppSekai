@@ -186,6 +186,32 @@ struct JudgementStats
     float lastHitTimeSec = -1.0f; // the hit note's own time (HitEvent timeSec)
     std::uint8_t lastHitFlickDir = 0; // the note's flick direction (FlickDir)
     bool lastHitFriction = false;
+
+    // 一帧里**每一次**成功命中的原始数据（2026-11-01）。
+    //
+    // lastHit* 那组只能描述"这一帧的最后一个 note"：双押 / 三押在同一帧判完时，
+    // 前面那几个的打击特效就被吃掉了 —— 玩家打双押 flick 时看到的是"两个都判对、
+    // 只冒一个特效"，而 Auto 走的是谱面核心自己的时间轴，所以不缺。
+    // host 每帧取走并清空（JudgementEngine::freshHits()）。
+    struct FreshHit
+    {
+        float kind = -1.0f;
+        float center = 0.0f;
+        float width = 0.0f;
+        float timeSec = -1.0f;
+        std::uint8_t flickDir = 0;
+        bool friction = false;
+        bool critical = false;
+    };
+    std::vector<FreshHit> freshHits;
+
+    // 把当前 lastHit* 打包进队列。调用点是"刚写完那组字段"的地方 ——
+    // registerJudge() 内部不行，那里 lastHit* 还是**上一条** note 的值。
+    void pushFreshHit(bool critical)
+    {
+        freshHits.push_back(FreshHit{lastHitKind, lastHitCenter, lastHitWidth, lastHitTimeSec,
+            lastHitFlickDir, lastHitFriction, critical});
+    }
 };
 
 class JudgementEngine
@@ -239,6 +265,8 @@ class JudgementEngine
     [[nodiscard]] bool anyActiveHold(bool* criticalOut = nullptr) const;
 
     [[nodiscard]] const JudgementStats& stats() const { return mStats; }
+    // 本帧的命中队列（见 JudgementStats::freshHits）。host 读完要 clear()。
+    [[nodiscard]] std::vector<JudgementStats::FreshHit>& freshHits() { return mStats.freshHits; }
 
     // Debug: every flick note (kind 2) within +-windowSec of songTimeSec, so a
     // touch flick that cleared nothing can be explained in the log. Only call

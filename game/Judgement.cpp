@@ -575,6 +575,7 @@ HitNote* JudgementEngine::findCandidate(float lanePos, float songTimeSec, float 
     mStats.lastHitFlickDir = noteFlickDir(*best);
     mStats.lastHitFriction = best->kind == 3.0f; // kind 3 = trace / friction
     registerJudge(judge, critical, best->volume, best->kind, best->timeSec);
+    mStats.pushFreshHit(critical);
     return best;
 }
 
@@ -619,6 +620,7 @@ void JudgementEngine::judgeHoldTail(ActiveHold& hold, Judge judge, float songTim
     mStats.lastHitFlickDir = noteFlickDir(tail);
     mStats.lastHitFriction = tail.kind == 3.0f;
     registerJudge(judge, critical, tail.volume, tail.kind, tail.timeSec);
+    mStats.pushFreshHit(critical);
     mStats.lastJudgeTimeSec = songTimeSec;
 }
 
@@ -702,6 +704,7 @@ void JudgementEngine::update(float songTimeSec)
                 mStats.lastHitTimeSec = note.timeSec;
                 mStats.lastHitFlickDir = noteFlickDir(note);
                 mStats.lastHitFriction = false;
+                mStats.pushFreshHit((static_cast<int>(note.flags) & 1) != 0);
             } else if (startState == 2 || holdBroken) {
                 // The hold's own MISS / break already counted; swallow the
                 // tick without judging it again.
@@ -765,6 +768,7 @@ void JudgementEngine::update(float songTimeSec)
                 mStats.lastHitTimeSec = note.timeSec;
                 mStats.lastHitFlickDir = noteFlickDir(note);
                 mStats.lastHitFriction = true;
+                mStats.pushFreshHit((static_cast<int>(note.flags) & 1) != 0);
                 continue;
             }
             // Not covered: fall through to the normal miss timing below.
@@ -784,6 +788,7 @@ void JudgementEngine::update(float songTimeSec)
             mStats.lastHitTimeSec = note.timeSec;
             mStats.lastHitFlickDir = noteFlickDir(note);
             mStats.lastHitFriction = note.kind == 3.0f;
+            mStats.pushFreshHit((static_cast<int>(note.flags) & 1) != 0);
             continue;
         }
 

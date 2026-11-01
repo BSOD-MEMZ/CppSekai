@@ -3848,6 +3848,10 @@ int main(int argc, char** argv)
     // runs the blackout is driven by the banner instead of the fade above.
     game::LiveClearBanner liveClearBanner;
     bool liveClearBannerArmed = false;
+    // 横幅出现时的谱面时间（2026-11-01）。横幅要一直挂到歌放完，而"歌末还有多
+    // 久"只能用这个差值算 —— 音乐一停 songTime 就不走了，拿它当计时器会卡在
+    // 半黑。横幅自己的钟（liveClearBanner.time()）是帧累积，暂停时一起停。
+    float liveClearBannerAtSec = 0.0f;
     double resultPreviousBest = 0.0;
     // Player rank bookkeeping for the run that is currently ending: what the
     // score granted and how many ranks it rolled over (see the result screen).
@@ -9970,9 +9974,13 @@ int main(int argc, char** argv)
                 : (chartEnd > 1.0 ? std::min(naturalEnd, chartEnd + kLiveClearDelaySec)
                                   : naturalEnd);
             const bool clearedSoFar = judgement.stats().life > 0.0f;
+            // 2026-11-01：**不看血量**。原版不论打成什么样，最后一个音符判完就出
+            // LIVE CLEAR；原来这里要求 life > 0，掉血掉光的局就没有横幅、直接
+            // 黑场进结算，用户要的是统一。
             if (state == AppState::Play && trackDurationSec > 1.0 && !liveClearBannerArmed
-                && !resultScheduled && songTime >= effectiveEnd && clearedSoFar) {
+                && !resultScheduled && songTime >= effectiveEnd) {
                 liveClearBannerArmed = true;
+                liveClearBannerAtSec = static_cast<float>(songTime);
                 liveClearBanner.start();
                 // Says which of the two ends won - a chart that ends much earlier
                 // than the track is exactly what this change is about.
@@ -9985,14 +9993,25 @@ int main(int argc, char** argv)
                 // widget also fired.
                 audio.playUiSe(platform::AudioEngine::UiSeLiveClear, 0.8f);
             }
+            // 横幅的时间轴（出现后过了多少秒）。歌末那一刀挂在这上面：
+            //   bannerFadeStart = max(横幅播完 1.5 s, 歌末前 kSongEndFadeSec)
+            // 也就是"横幅没播完不许黑"、"歌没到最后几秒也不许黑"，两者取晚的。
+            const float bannerT = liveClearBannerArmed ? liveClearBanner.time() : 0.0f;
+            const float bannerFadeStart = std::max(game::LiveClearBanner::kDuration,
+                static_cast<float>(naturalEnd) - liveClearBannerAtSec - kSongEndFadeSec);
+            const float bannerFadeEnd = bannerFadeStart + kSongEndFadeSec;
             if (trackDurationSec > 1.0) {
                 if (liveClearBannerArmed) {
-                    // The banner owns the fade once it is up: it holds the screen
-                    // clear until 1.25 s, then hands over to black. Assigning
-                    // (instead of max) also lets it *clear* a fade that had
-                    // already started, which is what makes a cleared run skip
-                    // the plain fade entirely.
-                    songEndBlackout = liveClearBanner.blackout();
+                    // 横幅只负责把舞台压到 scrim（字要看清），**全黑推迟到歌末**
+                    // （2026-11-01）：横幅出现时歌往往还有几十秒，原来它 1.4 s 就
+                    // 黑透，于是 LIVE CLEAR 之后再没东西可看。现在两段各管一段：
+                    //   scrim  —— 横幅一出现就压下去，一直保持
+                    //   全黑  —— 从 bannerFadeStart 起算，kSongEndFadeSec 秒推到 1，
+                    //            推满才切结算（见下面的 resultDue），Result 再用
+                    //            0.6 s 把这层黑抬起来 = 第一屏是渐亮的
+                    const float u = std::clamp(
+                        (bannerT - bannerFadeStart) / kSongEndFadeSec, 0.0f, 1.0f);
+                    songEndBlackout = std::max(liveClearBanner.blackout(), u);
                 } else if (!clearedSoFar) {
                     // A failed run has no banner - it keeps the plain fade. A
                     // living run deliberately does not start fades here: the
@@ -10009,12 +10028,17 @@ int main(int argc, char** argv)
             // chart keeps running past the last note while the track plays
             // out), then the result screen takes over with its own clock.
             // ----------------------------------------------------------
-            // The banner runs on its own clock (the audio clock stops with the
-            // track), so the switch waits for *it*, not for songTime.
-            const bool bannerDone = liveClearBannerArmed
-                && liveClearBanner.time() >= game::LiveClearBanner::kDuration;
+            // 2026-11-01：切场不再等横幅播完 —— 用户要的是「LIVE CLEAR 一直挂到
+            // 歌放完」，所以跟着音乐走（naturalEnd）。到那儿黑场已经是 1，切过去的
+            // 那一帧就是全黑，Result 用 0.6 s 把黑抬起来，第一屏因此是渐亮的。
+            // 两个条件都要满足：歌放完了，**并且**横幅自己也播够了 1.5 s。
+            // 后者只在"最后一个音符离歌末不到 1.5 s"的谱面上起作用 —— 否则
+            // 字还没落位就黑屏切走了。
+            // 横幅"播完"= 已经黑透（bannerFadeEnd 是黑场推到 1 的时刻）。
+            const bool bannerFinished = !liveClearBannerArmed || bannerT >= bannerFadeEnd;
+            const bool songOver = resultAtSec > 0.0 ? songTime >= resultAtSec : songTime >= naturalEnd;
             const bool resultDue = state == AppState::Play && trackDurationSec > 1.0
-                && (liveClearBannerArmed ? bannerDone : songTime >= effectiveEnd);
+                && songOver && bannerFinished;
             if (resultDue && !resultScheduled) {
                 resultScheduled = true;
                 const auto& st = judgement.stats();
@@ -10214,15 +10238,25 @@ int main(int argc, char** argv)
                     if (static_cast<int>(std::lround(stats.lastHitKind)) <= 3) {
                         playHitSe(audio, judgement, seVolume);
                     }
-                } else if (stats.lastJudge != game::Judge::Miss && stats.lastJudge != game::Judge::None) {
+                } else {
                     // Original hit effect: the chart core's own particle system,
-                    // played for the note that was just judged (same sprites and
-                    // timings the autoplay preview uses).
-                    core_api::triggerNoteEffect(stats.lastHitCenter, stats.lastHitWidth, stats.lastHitTimeSec,
-                        static_cast<int>(std::lround(stats.lastHitKind)), stats.lastJudgeCritical,
-                        static_cast<int>(stats.lastHitFlickDir), stats.lastHitFriction);
+                    // played **once per judged note of this frame** (same sprites
+                    // and timings the autoplay preview uses).
+                    //
+                    // 2026-11-01：原来只用 lastHit* 播一次 —— 那只描述这一帧的
+                    // **最后一个** note，所以双押 / 三押（两根手指、同一帧判完）
+                    // 只冒一个特效。用户报的就是"双押 flick 两个都判对、只出一个
+                    // 特效"，Auto 不缺是因为它走核心自己的时间轴。
+                    for (const game::JudgementStats::FreshHit& hit : judgement.freshHits()) {
+                        core_api::triggerNoteEffect(hit.center, hit.width, hit.timeSec,
+                            static_cast<int>(std::lround(hit.kind)), hit.critical,
+                            static_cast<int>(hit.flickDir), hit.friction);
+                    }
                 }
             }
+            // 队列每帧都要清：不是每次判定都会走到上面的分支（Auto 的命中也在
+            // 队列里），残留会让下一帧重播同一个特效。
+            judgement.freshHits().clear();
             hudState.lifeRatio = judgement.lifeRatio();
             // The digits show the raw pool (5000 stays 5000); the bar keeps the
             // 0..1 ratio. See game/Hud.hpp.

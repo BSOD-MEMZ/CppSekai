@@ -275,7 +275,10 @@ void LiveClearBanner::update(float dt)
     {
         return;
     }
-    mTime = std::min(mTime + std::max(dt, 0.0f), kDuration);
+    // 不 clamp（2026-11-01）：横幅落位之后还要一直挂在屏幕上，直到整首歌放完，
+    // 主循环要用 mTime 当"横幅出现后过了多少秒"来推歌末的黑场。动画本身在
+    // draw()/blackout() 里各自用 min(mTime, kDuration) 冻在终态。
+    mTime += std::max(dt, 0.0f);
 }
 
 float LiveClearBanner::blackout() const
@@ -284,20 +287,13 @@ float LiveClearBanner::blackout() const
     {
         return 0.0f;
     }
-    // Flash, then let go. The scrim comes down with the letters so the word
-    // reads against the stage, and it is released again once the additive
-    // bloom has died (0.683 s in clip_result_LiveClear) - the stage goes back to
-    // its normal brightness and the word just sits there. Holding the scrim (or
-    // going to black, which is what this used to do) reads as "the effect never
-    // ends"; the result view brings its own dim, so nothing needs to fade to
-    // black here.
+    // 只把舞台压到半透明的 scrim，**不再走向全黑**（2026-11-01 用户要求）。
+    // kDuration 那 1.5 s 是进场动画的长度，不是这个横幅在屏幕上的寿命：字落位
+    // 之后要一直挂着，直到整首歌放完，所以黑场必须停在能看清字的位置。
+    // 「歌末渐暗到全黑 → 结算第一屏渐亮」由主循环的 songEndBlackout 负责推，
+    // 那边知道歌什么时候结束，这里不知道。
     constexpr float kScrim = 0.5f;
-    const float in = kScrim * smoothstep(span(mTime, kOn, 0.20f));
-    // Then on down to pure black, which is what the result view brightens out
-    // of. (The word stops glowing on its own: the additive layer is at zero
-    // after 0.683 s, per the clip.)
-    const float black = kScrim + (1.0f - kScrim) * smoothstep(span(mTime, 0.95f, 0.45f));
-    return std::max(in, black);
+    return kScrim * smoothstep(span(std::min(mTime, kDuration), kOn, 0.20f));
 }
 
 void LiveClearBanner::draw(platform::Renderer& renderer, int windowW, int windowH,
@@ -313,7 +309,8 @@ void LiveClearBanner::draw(platform::Renderer& renderer, int windowW, int window
         return;
     }
     const Canvas c = makeCanvas(ImGui::GetForegroundDrawList(), windowW, windowH, uiScale);
-    const float t = mTime;
+    // 冻结在片段终点：mTime 会一直涨（横幅要在屏上等歌放完），动画不能跟着涨。
+    const float t = std::min(mTime, kDuration);
 
     // Letters slide out of a single point: same start, same end, different
     // distances (the clip has no scale curve at all).
