@@ -4276,17 +4276,21 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             const GLuint blurTex = blurredJacketTex(renderer, group.coverPath);
             if (blurTex != 0) {
                 // One quad; the soft edge is baked into the texture's alpha, so
-                // there is nothing to layer and no hard rectangle to see. 1.55x
-                // puts roughly half a jacket width of bleed around the art.
-                constexpr float kBleedScale = 1.32f;
-                const float hw = jw * 0.5f * kBleedScale;
-                const float hh = jh * 0.5f * kBleedScale;
+                // there is nothing to layer and no hard rectangle to see.
+                // Sized off the phone, not the jacket: slightly wider than the
+                // handset, and square (the jacket is square, so "wider" and
+                // "taller" scale together - no stretching). The falloff has
+                // already reached zero before the quad's edge, so the part that
+                // would run over the bezel is invisible anyway.
+                const float bleedW = phoneW * 1.05f;
+                const float hw = bleedW * 0.5f;
+                const float hh = bleedW * 0.5f;
                 const ImVec2 jc(j0.x + jw * 0.5f, j0.y + jh * 0.5f);
                 dl->AddImageRounded(
                     reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(blurTex)),
                     ImVec2(jc.x - hw, jc.y - hh), ImVec2(jc.x + hw, jc.y + hh),
                     ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), IM_COL32(255, 255, 255, 235),
-                    12.0f * k * kBleedScale);
+                    12.0f * k * (bleedW / jw));
             }
         }
 
