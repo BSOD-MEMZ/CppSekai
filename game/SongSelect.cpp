@@ -2745,13 +2745,43 @@ int defaultVocalIndex(int musicId, const std::vector<VocalVersion>& available)
     }
     // 0) 设置 > 演奏 > 默认歌手 里的偏好。只在这首歌真有那个版本、而且音频
     //    已经在本地时才生效（available 里只放得下"有文件"的），否则往下走。
+    //
+    //    这里**不能"含这个歌手就返回"**：セカイver 的 singers 里也有她
+    //    （チームメイト 的 se_0374_01 是 5 个人，含花里みのり），那样永远不会
+    //    选到 an_0374_01 那个独唱版。按"独唱度"打分：
+    //      another_vocal +4、singers 只有一个 +2、sekai / virtual_singer -1。
+    //    an_0374_01 = 6，se_0374_01 = -1 —— 独唱版胜出（2026-11-01 用户报的）。
     if (gVocalPrefMode == 2 && !gVocalPrefSinger.empty()) {
+        int best = -1;
+        int bestScore = -1;
         for (size_t i = 0; i < available.size(); ++i) {
+            bool hasSinger = false;
             for (const std::string& singer : available[i].singers) {
                 if (singer == gVocalPrefSinger) {
-                    return static_cast<int>(i);
+                    hasSinger = true;
+                    break;
                 }
             }
+            if (!hasSinger) {
+                continue;
+            }
+            int score = 0;
+            if (available[i].type == "another_vocal") {
+                score += 4;
+            }
+            if (available[i].singers.size() == 1) {
+                score += 2;
+            }
+            if (available[i].type == "sekai" || available[i].type == "virtual_singer") {
+                score -= 1;
+            }
+            if (score > bestScore) {
+                bestScore = score;
+                best = static_cast<int>(i);
+            }
+        }
+        if (best >= 0) {
+            return best;
         }
     }
     if (gVocalPrefMode == 1) {
