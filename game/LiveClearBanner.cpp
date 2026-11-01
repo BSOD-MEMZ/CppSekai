@@ -292,8 +292,11 @@ float LiveClearBanner::blackout() const
     // 之后要一直挂着，直到整首歌放完，所以黑场必须停在能看清字的位置。
     // 「歌末渐暗到全黑 → 结算第一屏渐亮」由主循环的 songEndBlackout 负责推，
     // 那边知道歌什么时候结束，这里不知道。
-    constexpr float kScrim = 0.5f;
-    return kScrim * smoothstep(span(std::min(mTime, kDuration), kOn, 0.20f));
+    // 0.06 s 就压到位（原来 0.20 s）：用户可以看见的"先暗一下、字再出来、
+    // 画面又亮一下"就是这两段错开造成的 —— 暗场还在爬坡时字的光爆出来把中间
+    // 提亮。现在暗和字同时发生，之后一直保持。
+    constexpr float kScrim = 0.55f;
+    return kScrim * smoothstep(span(std::min(mTime, kDuration), kOn, 0.06f));
 }
 
 void LiveClearBanner::draw(platform::Renderer& renderer, int windowW, int windowH,

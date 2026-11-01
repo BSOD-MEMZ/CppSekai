@@ -210,9 +210,6 @@ constexpr float kBadgeBoxH = 72.0f;     // 76 px sprite, drawn a touch smaller
 constexpr float kBadgeSlide = 40.0f;    // the clip's 4.2 -> 44.2 travel
 constexpr float kBadgeStart = 2.05f;    // after the last judge row (~2.13)
 constexpr float kBadgeDur = 2.0f;       // clip duration
-// LIVE FAILED wordmark (1352x166) takes the same slot on a failed run. Wider than
-// the badge, so it is drawn shorter to keep the same footprint.
-constexpr float kFailedBoxH = 58.0f;
 
 // ---------------------------------------------------------------------------
 // Helpers.
@@ -1195,26 +1192,10 @@ void drawResult(platform::Renderer& renderer, const ResultData& data, float elap
                     ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), tint);
             }
         }
-    } else if (data.failed) {
-        // Failed run: pjsk's own LIVE FAILED wordmark (`txt_livefailed_wh`) takes
-        // the same slot. The two states are mutually exclusive, so the free band
-        // right of the combo is never asked to hold both.
-        const platform::Renderer::HudSprite* failed = renderer.hud("result_livefailed");
-        if (failed != nullptr && failed->id != 0 && failed->height > 0) {
-            const float p = easeOutCubic(span(t, kBadgeStart, kBadgeDur * 0.5f));
-            if (p > 0.002f) {
-                const float h = kFailedBoxH;
-                const float w = h * static_cast<float>(failed->width)
-                    / static_cast<float>(failed->height);
-                c.dl->AddImage(
-                    reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(failed->id)),
-                    c.p(kBadgeCenterX - w * 0.5f, kBadgeCenterY - h * 0.5f),
-                    c.p(kBadgeCenterX + w * 0.5f, kBadgeCenterY + h * 0.5f),
-                    ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), withAlpha(kWhite, p));
-            }
-        }
     }
-
+    // 失败局不画 LIVE FAILED 大字（2026-11-01 用户要求）：第二屏只留 FULL COMBO /
+    // ALL PERFECT 两个徽章，没有徽章的普通通关 / 失败都留空 —— 比分和判定行本身
+    // 已经说明成绩，多一个 wordmark 反而像在强调"你没打好"。
     // -----------------------------------------------------------------------
     // Player level (the account). The chip is the same component the song
     // select draws, so the two screens cannot drift apart - including the exp

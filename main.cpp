@@ -10864,7 +10864,12 @@ int main(int argc, char** argv)
             // second, covered by the confirm burst. The 5.8s "即将开始 5.8" that
             // used to sit here was a fixed wait dressed up as a countdown.
             if (confirmFlashActive) {
-                const float t = confirmFlashTime;
+                // 夹到 0（2026-11-01）：`kDecideLead` 那 0.22 s 是用**负的**
+                // confirmFlashTime 表示的，而下面两个 smoothstep 只在 [0,1] 上
+                // 成立 —— 负值会让 a*a*(3-2a) 算出 40 多倍，第一帧就把屏幕糊成
+                // 纯白（用户报的"没有任何转场直接变纯白"）。夹到 0 时 env/cover
+                // 正好都是 0，也就是这一帧什么都不画。
+                const float t = std::max(0.0f, confirmFlashTime);
                 // Envelope: soft onset -> plateau (the session loads inside it) ->
                 // soft tail. The attack is the half of "it looks hard" the old
                 // version missed: it jumped to full brightness on frame 0.
