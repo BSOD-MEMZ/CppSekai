@@ -94,7 +94,26 @@ game/Judgement.*  # 判定引擎（本项目新增，判定逻辑都在这）
                   # 另有 `LongHoldCombo : NoteBase`（`LongNote.AddHoldCombo`），长按期间的
                   # 每个 combo tick 都是独立可判的 note。所以松手只会丢掉"当前那一段"，
                   # 再按下去后面的段还能判 —— 这就是"接上去"。
-                  # 我们还是一次性判到尾（`mTailClaimed`，松手即 MISS），没实现重抓。
+                  # **三条实测行为（2026-11-01 用户实机确认，别再靠推断）**：
+                  #   ① 中途松手 → 头钉在判定线、整体半透明、MISS 字样常驻，再按回去
+                  #      就接上（丢掉松手那几段，后面的段照常判）；
+                  #   ② **起点就没按上**也一样 —— 整条**不掉出屏幕**，同样钉住 + 半透明 +
+                  #      MISS 常驻，中途按下来还能接（丢掉起点到接上之间的段）；
+                  #   ③ 一直不接才在 endTime 之后彻底结束。
+                  # 实现要点：
+                  # - `ActiveHold::broken` = "现在没抓着"，`dimmed` = 洗白态，二者都由
+                  #   core 渲染（`segmentStartScaled = max(headTime, currentTime)` 把头钉住）。
+                  # - **起点漏按不进 `mMissedHoldKeys`**（那条路是"掉出屏幕"），改走 dimmed。
+                  # - tick（kind 4）不能只看起点 note 的 state —— 起点 miss 后它永远是 2，
+                  #   接上了也判不出来。要看 hold 自己：`!broken && !finished` → `holdLive`。
+                  # - 断连只扣 `kLifeHoldBreak`(-40)，起点的 MISS(-80) 不再叠加；尾判先挂起，
+                  #   reconnect 时恢复成 pending。
+                  # - MISS 常驻：`JudgementStats::pinMiss`（hold 循环每帧置位）→
+                  #   `HudState::holdMissPinned` → Hud 在判定字过期后补回 MISS 并定格在
+                  #   "动画刚做完"那一帧。
+                  # - 无头验证：`CPSEKAI_HOLD_TEST=1` 把所有长条起点强制 MISS；
+                  #   值写 `reconnect` 再模拟"走到一半按回去"（日志 `[play] hold pinMiss=0`，
+                  #   `[stats]` 的 `tails=` 跟着涨）。两者都不影响正常游玩与 --auto 基线。
                   # **2026-09-19 修（真 bug，`--auto` 会 miss）**：① 一个尾判只能被**一条** hold
                   # 认领（新成员 `mTailClaimed`）—— 原来 spawn 挑 tail 用「距 hold 起点 lane
                   # 最近」，而**滑动长条的尾判在终点 lane**，两条长条同一 tick 结束时会**抢同一个**

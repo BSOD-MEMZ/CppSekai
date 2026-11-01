@@ -10240,6 +10240,8 @@ int main(int argc, char** argv)
             const game::ScoreRank rank = game::scoreRankAndBar(stats.score, judgement.chartRating());
             hudState.rank = rank.rank;
             hudState.scoreBarRatio = rank.bar;
+            // 没接上的 hold 让 MISS 常驻（原作行为，见 JudgementStats::pinMiss）。
+            hudState.holdMissPinned = stats.pinMiss;
             if (stats.lastJudgeTimeSec != lastSeenJudgeTime) {
                 lastSeenJudgeTime = stats.lastJudgeTimeSec;
                 hudState.lastJudge = stats.lastJudge;

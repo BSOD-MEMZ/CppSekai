@@ -193,6 +193,10 @@ struct JudgementStats
     // 前面那几个的打击特效就被吃掉了 —— 玩家打双押 flick 时看到的是"两个都判对、
     // 只冒一个特效"，而 Auto 走的是谱面核心自己的时间轴，所以不缺。
     // host 每帧取走并清空（JudgementEngine::freshHits()）。
+    // 本帧存在"没接上的 hold"（起点漏按还没按回来，或者中途松手还没接回）。
+    // HUD 靠它把 MISS 字样常驻 —— 原作的未接上 hold 整段期间一直显示 MISS。
+    bool pinMiss = false;
+
     struct FreshHit
     {
         float kind = -1.0f;
@@ -302,8 +306,12 @@ class JudgementEngine
     // frame and hand the result to core_api::setDimmedHolds().
     void appendDimmedHoldKeys(std::vector<float>& out) const;
 
-    // CppSekai: holds whose start note was never hit at all. Same flat
-    // (center, hold start time) key layout as the dimmed list. The renderer
+    // CppSekai: holds that never got a hold to claim them at all (a tail event
+    // with no matching kind-5 marker). Same flat (center, hold start time) key
+    // layout as the dimmed list. **A hold whose START was missed does not go
+    // here any more** (2026-11-01): pjsk parks it on the line, washed out, and
+    // lets the player re-grab it - so that path uses the dimmed list instead.
+    // The renderer
     // lets these keep scrolling past the judgement line instead of parking on
     // it (pjsk: a missed hold falls off the screen like any missed note).
     // Append-only per session; cleared by reset().

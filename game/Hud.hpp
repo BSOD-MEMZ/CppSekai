@@ -29,6 +29,8 @@ struct HudState
     float scoreDeltaAtSec = -100.0f;
     game::Judge lastJudge = game::Judge::None;
     float lastJudgeAtSec = -100.0f;
+    // 有没接上的 hold 时把 MISS 字样常驻（原作整条期间一直显示 MISS）。
+    bool holdMissPinned = false;
     // The bar is driven by lifeRatio (0..1, normalised against the pool the run
     // started with), but the digit readout next to it shows the *real* life
     // value - with 初始血量 = 5000 the panel used to print 1000 * ratio, i.e.

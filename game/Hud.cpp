@@ -435,7 +435,7 @@ void drawHud(platform::Renderer& renderer, const HudState& state, float songTime
     constexpr float kJudgeCenterX = 960.0f;
     constexpr float kJudgeCenterY = 667.5f;
 
-    const float since = songTimeSec - state.lastJudgeAtSec;
+    float since = songTimeSec - state.lastJudgeAtSec;
     int judgeSprite = 0;
     if (state.lastJudge == game::Judge::Perfect) judgeSprite = 1;
     else if (state.lastJudge == game::Judge::Great) judgeSprite = 2;
@@ -445,6 +445,14 @@ void drawHud(platform::Renderer& renderer, const HudState& state, float songTime
     // Autoplay preview shows AUTO (sprite 6) with the same pop-in animation.
     if (state.autoJudge && judgeSprite > 0) {
         judgeSprite = 6;
+    }
+
+    // 未接上的 hold：判定字已经过期的话，把 MISS 补回来并定格在"动画刚做完"
+    // 那一帧（5 帧 = 0.083 s）。不抢新判定：别人刚打的 PERFECT 还在窗口内时
+    // since <= kJudgeVisibleSec，这里不进来。
+    if (state.holdMissPinned && since > kJudgeVisibleSec) {
+        judgeSprite = 5;
+        since = 5.0f / 60.0f;
     }
 
     if (judgeSprite > 0 && since >= 0.0f && since <= kJudgeVisibleSec) {

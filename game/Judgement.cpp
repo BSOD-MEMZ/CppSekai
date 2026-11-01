@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <cmath>
 #include <limits>
 
@@ -11,6 +12,14 @@ namespace game
 
 namespace
 {
+    // 无头验证开关（2026-11-01）：CPSEKAI_HOLD_TEST=1 时所有长条的起点强制
+    // MISS、Auto 也不再当"按着"，用来截"没接上的 hold"该长什么样（钉在判定线、
+    // 半透明、MISS 常驻）。正常游玩和 --auto 基线都不受影响。
+    // 值写 "reconnect" 时再模拟"中途按回去"，用来验证接上之后 tick 继续判。
+    const char* gHoldTestEnv = std::getenv("CPSEKAI_HOLD_TEST");
+    const bool gHoldTest = gHoldTestEnv != nullptr;
+    const bool gHoldReconnect = gHoldTestEnv != nullptr && gHoldTestEnv[0] == 'r';
+
     // Life costs, from the official pjsk judgement table: a whole-note MISS
     // costs 80, a BAD costs 50, and a hold broken mid-way costs 40.
     constexpr float kLifeMiss = -80.0f;
@@ -651,6 +660,7 @@ void JudgementEngine::update(float songTimeSec)
         if (note.kind == 4.0f) {
             std::uint8_t startState;
             bool holdBroken = false;
+            bool holdLive = false;
             if (note.holdMarkerIndex >= mNotes.size()) {
                 // Guide / hidden hold ticks (竹节): no kind-5 marker exists,
                 // so there is no hold tracker to ask. Official behaviour is
@@ -679,17 +689,26 @@ void JudgementEngine::update(float songTimeSec)
                 startState = note.holdStartIndex < mNotes.size()
                     ? mNotes[note.holdStartIndex].state
                     : static_cast<std::uint8_t>(1);
+                // holdLive (2026-11-01): 这条 hold 现在是否"抓着"。起点没按上
+                // 的 hold 之后 startState 永远是 2（note.state 不回退），光看它
+                // 会把接上之后的 tick 也吞掉 -- 而原作接上之后后面照常判。
+                // 所以额外看 hold 自己的状态：没 broken 且没 finished 就是活着。
                 if (note.holdMarkerIndex < mNotes.size()) {
                     for (const ActiveHold& hold : mActiveHolds) {
-                        if (hold.noteIndex == note.holdMarkerIndex && hold.broken) {
-                            holdBroken = true;
-                            break;
+                        if (hold.noteIndex != note.holdMarkerIndex) {
+                            continue;
                         }
+                        if (hold.broken) {
+                            holdBroken = true;
+                        } else if (!hold.finished) {
+                            holdLive = true;
+                        }
+                        break;
                     }
                 }
             }
 
-            if (startState == 1 && !holdBroken) {
+            if ((startState == 1 || holdLive) && !holdBroken) {
                 note.state = 1;
                 mHitEventIndices.push_back(static_cast<int>(i));
                 registerJudge(Judge::Perfect, (static_cast<int>(note.flags) & 1) != 0, note.volume, note.kind,
@@ -706,8 +725,9 @@ void JudgementEngine::update(float songTimeSec)
                 mStats.lastHitFriction = false;
                 mStats.pushFreshHit((static_cast<int>(note.flags) & 1) != 0);
             } else if (startState == 2 || holdBroken) {
-                // The hold's own MISS / break already counted; swallow the
-                // tick without judging it again.
+                // The hold is unattached right now (start missed and not yet
+                // re-grabbed, or let go mid-way): swallow the tick without
+                // judging it. Nothing is deducted a second time.
                 note.state = 2;
             }
             // startState == 0: the start note is still pending (the player may
@@ -774,6 +794,13 @@ void JudgementEngine::update(float songTimeSec)
             // Not covered: fall through to the normal miss timing below.
         }
 
+        if (gHoldTest && note.endTimeSec > 0.0f) {
+            // 调试：长条起点直接判 MISS，好让后面那段"没接上"的分支跑起来。
+            note.state = 2;
+            registerMiss(songTimeSec, kLifeMiss);
+            continue;
+        }
+
         if (mAutoPlay) {
             // Autoplay preview: every note is a timed PERFECT, so the HUD /
             // score / combo machinery shows a flawless run without input.
@@ -807,14 +834,24 @@ void JudgementEngine::update(float songTimeSec)
 
     // Hold tracking: judge the tail on release, break the hold when the lane
     // is let go too early.
+    //
+    // pinMiss: 本帧有"没接上的 hold"就让 HUD 把 MISS 常驻（原作是整条期间一直
+    // 挂着 MISS 字样），重连或结束就撤。
+    const bool pinMissPrev = mStats.pinMiss;
+    mStats.pinMiss = false;
     for (auto& hold : mActiveHolds) {
         if (hold.finished) {
             continue;
         }
 
         // In autoplay the lane is always considered held: holds never break
-        // and tails hold through for a PERFECT.
-        const bool held = mAutoPlay || laneHeld(hold);
+        // and tails hold through for a PERFECT. (CPSEKAI_HOLD_TEST 例外：那个
+        // 开关就是要把 hold 卡在"没人按"的状态上。)
+        bool held = (!gHoldTest && mAutoPlay) || laneHeld(hold);
+        if (gHoldReconnect && songTimeSec >= hold.startTimeSec
+            + (hold.endTimeSec - hold.startTimeSec) * 0.5f) {
+            held = true; // 测试：长条走到一半"按回去"
+        }
 
         if (hold.broken) {
             if (held && songTimeSec < hold.endTimeSec) {
@@ -833,6 +870,7 @@ void JudgementEngine::update(float songTimeSec)
                 // lane is up and puts it back to normal as soon as the player
                 // presses again.
                 hold.dimmed = !held;
+                mStats.pinMiss = true;
                 if (songTimeSec >= hold.endTimeSec) {
                     hold.finished = true;
                 }
@@ -849,17 +887,20 @@ void JudgementEngine::update(float songTimeSec)
         const bool engaged = startState == 1;
 
         if (startState == 2) {
-            // Never grabbed: the start's own MISS already counted for the
-            // whole hold, so the tail is consumed silently. The renderer is
-            // told the hold was missed so its body keeps scrolling past the
-            // line instead of parking on it like a held hold.
+            // 起点没按上（2026-11-01 用户实测原作）：整条**不掉下去**，头钉在判定
+            // 线上、整体半透明、MISS 字样一直挂着，玩家中途按下来还能接上 --
+            // 表现和"按上了又松手"完全一样。所以这里既不 finish 也不进
+            // missedHoldKeys（那是"掉出屏幕"），只打破 + 洗白，交给上面那段
+            // broken 分支去等 reconnect。
+            //
+            // 起点的自动 MISS 已经付过整条的账（kLifeMiss），这里不再扣分；尾判
+            // 先挂起，接上时 broken 分支会把它恢复成 pending 再正常判。
             hold.broken = true;
-            hold.finished = true;
+            hold.dimmed = true;
+            mStats.pinMiss = true;
             if (hold.tailIndex < mNotes.size() && mNotes[hold.tailIndex].state == 0) {
                 mNotes[hold.tailIndex].state = 2;
             }
-            mMissedHoldKeys.push_back(hold.center);
-            mMissedHoldKeys.push_back(hold.startTimeSec);
             continue;
         }
 
@@ -939,6 +980,10 @@ void JudgementEngine::update(float songTimeSec)
             }
             judgeHoldTail(hold, judge, songTimeSec);
         }
+    }
+    if (gHoldTest && mStats.pinMiss != pinMissPrev) {
+        platform::logf(platform::LogPlay, "[play] hold pinMiss=%d at %.2fs\n",
+            mStats.pinMiss ? 1 : 0, songTimeSec);
     }
 
     // Spawn hold tracking from the kind 5 markers. The marker sits at the
