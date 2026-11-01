@@ -422,10 +422,16 @@ std::string gSelectAssetDir; // set via setSelectAssetDir()
     // defaultVocalIndex 每首歌都要读，所以不放参数里传。
     int gVocalPrefMode = 0;
     std::string gVocalPrefSinger;
+    // 每次改偏好就 +1，选曲那边靠它判断"偏好变了，把每首歌记住的版本丢掉重挑"。
+    int gVocalPrefStamp = 0;
 
     void setVocalPreference(int mode, const std::string& singer)
     {
-        gVocalPrefMode = std::clamp(mode, 0, 2);
+        const int clamped = std::clamp(mode, 0, 2);
+        if (clamped != gVocalPrefMode || singer != gVocalPrefSinger) {
+            ++gVocalPrefStamp;
+        }
+        gVocalPrefMode = clamped;
         gVocalPrefSinger = singer;
     }
 void setSelectAssetDir(const std::string& dir)
@@ -4475,16 +4481,48 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         // the round singer button at the bottom of this panel).
         {
             const std::vector<VocalVersion>& versions = vocalVersions;
+            // 换歌（或者刚改过默认歌手偏好）就把手上这个版本号丢掉，否则它会
+            // 一路挂着 —— 上一首选的是虚拟歌手 ver，换到下一首还是它，
+            // defaultVocalIndex 永远轮不到（2026-11-01 用户报的"设置没生效"）。
+            // 丢掉之后先看这首歌自己记过没有（在 切换歌手 面板里手动点过的），
+            // 没有才交给偏好。
+            static int vocalSongId = -1;
+            static int vocalPrefStamp = -1;
+            if (vocalPrefStamp != gVocalPrefStamp) {
+                vocalPrefStamp = gVocalPrefStamp;
+                gVocalChoiceBySong.clear();
+                vocalSongId = -1;
+                vocalIndex = -1;
+            }
+            bool vocalResolved = false;
+            if (item.musicId != vocalSongId) {
+                vocalSongId = item.musicId;
+                vocalResolved = true;
+                const auto memo = gVocalChoiceBySong.find(item.musicId);
+                vocalIndex = memo != gVocalChoiceBySong.end() ? memo->second : -1;
+            }
             // The caller's value wins when it is valid for this song, so the
             // version can be driven from outside (--select-vocal, a hand-off,
             // or a test); otherwise fall back to what the player last picked
-            // in the panel, then to the セカイver.
+            // in the panel, then to the default vocal preference.
             int choice = defaultVocalIndex(item.musicId, versions);
             if (vocalIndex >= 0 && vocalIndex < static_cast<int>(versions.size())) {
                 choice = vocalIndex;
                 gVocalChoiceBySong[item.musicId] = choice;
             } else if (const auto it = gVocalChoiceBySong.find(item.musicId); it != gVocalChoiceBySong.end()) {
                 choice = it->second;
+            }
+            if (vocalResolved) {
+                // 每首歌唱一次：有几个可用版本、按偏好挑中哪个。排查"设置没生效"
+                // 先看这行 —— 版本数 1 就说明库里只有那一个文件，跟偏好无关。
+                std::printf("[select] vocal song=%d versions=%d choice=%d", item.musicId,
+                    static_cast<int>(versions.size()), choice);
+                if (choice >= 0 && choice < static_cast<int>(versions.size())) {
+                    std::printf(" type=%s", versions[static_cast<size_t>(choice)].type.c_str());
+                }
+                std::printf(" pref=%d", gVocalPrefMode);
+                std::puts("");
+                std::fflush(stdout);
             }
             // The panel shows the *chosen* version's singers, not the sidecar's
             // (that one is the sekai ver by construction).

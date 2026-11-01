@@ -5959,7 +5959,7 @@ int main(int argc, char** argv)
         ui::PadScope padScope(vocalPrefCardOpen);
         const float s = ui::scale();
         ImGuiIO& io = ImGui::GetIO();
-        ImVec2 cardSize = ImVec2(920.0f * s, 700.0f * s);
+        ImVec2 cardSize = ImVec2(920.0f * s, 620.0f * s);
         ImVec2 cardCenter = ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f);
         const float interior = cardSize.x - 56.0f * s;
         const float padX = 28.0f * s;
@@ -6006,59 +6006,56 @@ int main(int argc, char** argv)
             }
             ImGui::PopFont();
         }
-        ImGui::SetCursorScreenPos(ImVec2(cardLeft + padX, cardTop + 118.0f * s));
-        ImGui::PushFont(game::bodyFont(), 18.0f * s);
-        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(88, 88, 110, 255));
-        ImGui::TextUnformatted("选曲时自动挑这个版本；这首歌没有（或音频不在本地）就回落到セカイver。");
-        ImGui::PopStyleColor();
-        ImGui::PopFont();
-
-        // 歌手网格：一组一行，六列。
-        const float gap = 8.0f * s;
-        const float cellW = (interior - gap * 5.0f) / 6.0f;
-        const float cellH = 40.0f * s;
-        float y = cardTop + 156.0f * s;
+        // 歌手：一组一个 radioRow，六组。没选「指定歌手」时整片都是禁用态
+        // （灰的、点不动）—— 那不是"没意义"，而是"先把上面那档选上"。
+        const bool singerEnabled = userSettings.vocalPref == 2;
+        float y = cardTop + 122.0f * s;
         for (int unit = 0; unit < 6; ++unit) {
             ImGui::SetCursorScreenPos(ImVec2(cardLeft + padX, y));
             ImGui::PushFont(game::bodyFont(), 18.0f * s);
+            ImGui::PushStyleColor(ImGuiCol_Text,
+                singerEnabled ? IM_COL32(110, 110, 132, 255) : IM_COL32(158, 158, 176, 255));
             ImGui::TextUnformatted(kVocalPrefUnits[unit]);
+            ImGui::PopStyleColor();
             ImGui::PopFont();
-            y += 26.0f * s;
-            int col = 0;
+            y += 24.0f * s;
+
+            std::vector<std::string> labels;
+            int groupSel = -1;
             for (const VocalPrefSinger& row : kVocalPrefSingers) {
                 if (row.unit != unit) {
                     continue;
                 }
-                if (col == 0) {
-                    ImGui::SetCursorScreenPos(ImVec2(cardLeft + padX, y));
-                } else {
-                    ImGui::SameLine(0.0f, gap);
+                if (singerEnabled && userSettings.vocalPrefSinger == row.jp) {
+                    groupSel = static_cast<int>(labels.size());
                 }
-                const bool sel = userSettings.vocalPref == 2
-                    && userSettings.vocalPrefSinger == row.jp;
-                ImGui::PushFont(game::bodyFont(), 19.0f * s);
-                if (ui::capsuleButton(row.zh, ImVec2(cellW, cellH), sel)) {
-                    userSettings.vocalPref = 2;
-                    userSettings.vocalPrefSinger = row.jp;
-                    game::setVocalPreference(2, userSettings.vocalPrefSinger);
-                    persistUserData();
-                }
-                ImGui::PopFont();
-                ++col;
+                labels.push_back(row.zh);
             }
-            y += cellH + 10.0f * s;
+            ImGui::SetCursorScreenPos(ImVec2(cardLeft + padX, y));
+            char rid[16];
+            std::snprintf(rid, sizeof(rid), "vu%d", unit);
+            if (ui::radioRow(rid, labels, &groupSel, interior, singerEnabled)) {
+                int i = 0;
+                for (const VocalPrefSinger& row : kVocalPrefSingers) {
+                    if (row.unit != unit) {
+                        continue;
+                    }
+                    if (i == groupSel) {
+                        userSettings.vocalPref = 2;
+                        userSettings.vocalPrefSinger = row.jp;
+                        game::setVocalPreference(2, userSettings.vocalPrefSinger);
+                        persistUserData();
+                        break;
+                    }
+                    ++i;
+                }
+            }
+            y += 42.0f * s;
         }
         ImGui::PopStyleColor();
 
-        // 底部：重置 + 关闭
         ImGui::SetCursorScreenPos(ImVec2(cardLeft + padX, cardCenter.y + cardSize.y * 0.5f - 68.0f * s));
-        const float btnW = (interior - 8.0f * s) * 0.5f;
-        if (ui::capsuleButton("恢复默认（跟随歌曲）", ImVec2(btnW, 46.0f * s), false)) {
-            userSettings.vocalPrefSinger.clear();
-            pickMode(0);
-        }
-        ImGui::SameLine();
-        if (ui::capsuleButton("关闭", ImVec2(btnW, 46.0f * s), true)) {
+        if (ui::capsuleButton("关闭", ImVec2(interior, 46.0f * s), true)) {
             vocalPrefCardOpen = false;
         }
         ui::endCard();

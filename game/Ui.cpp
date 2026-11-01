@@ -1456,7 +1456,8 @@ bool checkBox(const char* label, bool* value, float rowWidth, bool enabled)
     return checked;
 }
 
-bool radioRow(const char* id, const std::vector<std::string>& labels, int* selected, float rowWidth)
+bool radioRow(const char* id, const std::vector<std::string>& labels, int* selected, float rowWidth,
+    bool enabled)
 {
     if (selected == nullptr || labels.empty()) {
         return false;
@@ -1500,7 +1501,7 @@ bool radioRow(const char* id, const std::vector<std::string>& labels, int* selec
         const bool hovered = ImGui::IsItemHovered();
         const ImGuiID key = ImGui::GetItemID();
         const bool picked = *selected == i;
-        if (clicked && !picked) {
+        if (clicked && !picked && enabled) {
             *selected = i;
             changed = true;
             se(SeClick);
@@ -1513,21 +1514,25 @@ bool radioRow(const char* id, const std::vector<std::string>& labels, int* selec
         // `t` drives the dot, so switching options reads as one dot growing
         // while the other shrinks.
         const float t = animValue(key ^ 0x61u, picked ? 1.0f : 0.0f, 20.0f);
-        const float hov = animToggle(key ^ 0x62u, hovered && !picked, 16.0f);
+        const float hov = animToggle(key ^ 0x62u, hovered && !picked && enabled, 16.0f);
         dl->AddCircleFilled(ImVec2(circle.x, circle.y + 2.0f * s), dotR * 1.02f,
             IM_COL32(68, 68, 102, 70), 40); // shadow
-        dl->AddCircleFilled(circle, dotR, mixColor(kWhiteBtn, IM_COL32(234, 235, 246, 255), hov), 40);
+        dl->AddCircleFilled(circle, dotR,
+            enabled ? mixColor(kWhiteBtn, IM_COL32(234, 235, 246, 255), hov)
+                    : IM_COL32(222, 223, 234, 255), 40);
         if (t > 0.02f) {
-            dl->AddCircleFilled(circle, dotR * 0.72f * t, withAlpha(kPrimary, t), 40);
+            dl->AddCircleFilled(circle, dotR * 0.72f * t,
+                withAlpha(enabled ? kPrimary : IM_COL32(170, 172, 190, 255), t), 40);
         }
         dl->AddText(font, fontSize,
             ImVec2(circle.x + dotR + dotGap, pos.y + (rowH - textSize.y) * 0.5f),
-            mixColor(kTitleText, kBodyText, t), label.c_str());
+            enabled ? mixColor(kTitleText, kBodyText, t) : IM_COL32(150, 152, 170, 255),
+            label.c_str());
     }
 
     // Wrap-around is deliberately not offered: the row is three options wide and
     // the ring already shows where it is.
-    if (pad.delta != 0 && count > 0) {
+    if (pad.delta != 0 && count > 0 && enabled) {
         const int from = (*selected >= 0 && *selected < count) ? *selected : (pad.delta > 0 ? -1 : count);
         const int next = std::clamp(from + pad.delta, 0, count - 1);
         if (next != *selected) {

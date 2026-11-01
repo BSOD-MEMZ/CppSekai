@@ -262,7 +262,7 @@ bool checkBox(const char* label, bool* value, float rowWidth = 0.0f, bool enable
 // reads as "nothing picked" (i.e. the value under it was customised). Returns
 // true on the frames the selection changed.
 bool radioRow(const char* id, const std::vector<std::string>& labels, int* selected,
-    float rowWidth = 0.0f);
+    float rowWidth = 0.0f, bool enabled = true);
 
 // pjsk number stepper: a row of small white capsules with the +/- deltas
 // around a gray pill showing the current value, all centered in rowWidth.
