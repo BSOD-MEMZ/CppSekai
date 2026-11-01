@@ -519,7 +519,7 @@ TAB6 = r'''                // 关于: what this is, who made it, what it is buil
                         const float x0 = cardLeft + padX;
                         aboutLine(w, x0, "CppSekai");
                         ImGui::PushFont(game::bodyFont(), 19.0f * s);
-                        aboutLine(w, x0, "版本 1.0.0.5");
+                        aboutLine(w, x0, "版本 1.0.0.6");
                         aboutLine(w, x0, "许可 AGPL-3.0-only");
                         aboutGap();
                         aboutLine(w, x0, "策划 / 开发");

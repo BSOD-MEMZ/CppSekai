@@ -4397,7 +4397,7 @@ int main(int argc, char** argv)
             }
             return std::string("指定歌手　") + userSettings.vocalPrefSinger;
         }
-        return "跟随歌曲（セカイver）";
+        return "セカイver";
     };
 #ifdef _WIN32
     // Headless check (CPSEKAI_KEYMAP=1): raise the 按键映射 card at boot, the way
@@ -5770,7 +5770,7 @@ int main(int argc, char** argv)
                 contentLeft();
                 ImGui::PushFont(game::bodyFont(), 22.0f * s);
                 ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(122, 122, 148, 255));
-                ImGui::TextUnformatted("版本 1.0.0.5 · 许可 AGPL-3.0-only");
+                ImGui::TextUnformatted("版本 1.0.0.6 · 许可 AGPL-3.0-only");
                 ImGui::PopStyleColor();
                 ImGui::PopFont();
 
@@ -6033,7 +6033,7 @@ int main(int argc, char** argv)
             const float modeW = (interior - gap * 2.0f) / 3.0f;
             ImGui::PushFont(game::bodyFont(), 22.0f * s);
             ImGui::SetCursorScreenPos(ImVec2(cardLeft + padX, cardTop + 62.0f * s));
-            if (ui::capsuleButton("跟随歌曲（セカイver）", ImVec2(modeW, 46.0f * s),
+            if (ui::capsuleButton("セカイver", ImVec2(modeW, 46.0f * s),
                     userSettings.vocalPref == 0)) {
                 pickMode(0);
             }
