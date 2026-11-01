@@ -645,14 +645,18 @@ bash build.sh          # 仅需 Git Bash；产物 build/cppsekai.exe + SDL2.dll 
   （`kDiffColors[diffIndex]`），不是固定粉色。五个难度格子是 `assets/select/indicate_back_new.png`
   并排（原图不染色，没有的难度调 84 透明度压暗），再按该难度唱片记录把 `clear_indicate.png`
   （金）/ `fullcombo_indicate.png`（粉）盖在同一个矩形上——三张图都是 38x38，直接同尺寸叠加。
-  **尺寸对齐的权威依据是 [`SELECT-UI.md`](SELECT-UI.md)**（原作实测：行 912×144、等级球/曲绘
-  各 96、5 个通关指示 38 方块横排；我们目前整体只有原作的 0.41×，放大方案与数值都在那份文档里）。
+  **尺寸对齐的权威依据是 [`SELECT-UI.md`](SELECT-UI.md)**。2026-11-01 起**已经是 1:1**：
+  行 912×144 / pitch 152、等级球与曲绘各 96、标题 36 号、通关指示 38 方块步距 39、
+  列表 x 212 宽 912、搜索框 760.8×72。原作画布就是 1920×1080（CanvasScaler 实测），
+  **别再乘 1.44**。
 - 右侧手机整体倾斜：先按正放坐标画完整块（手机框、封面、文字、难度圆、按钮），再用
-  `dl->VtxBuffer` 把这一段的顶点统一绕手机中心旋转 **+5°**（2026-09-22 之前是 -5°，
-  用户要求换成"向右倾"，就是取正号：顶边左高右低）。命中框不能旋转，所以难度圆 /
-  图标按钮 / 确定按钮的 `InvisibleButton` 用 `tiltedItemPos()` 放到旋转后的中心；
-  「确定」原来用 `ui::capsuleButton`，为了跟着倾斜改成手绘圆角矩形（同色 `ui::kPrimary`）。
-  验证"倒向哪边"别靠肉眼：取手机框顶边在左右两个 x 上的 y，左高就是右倾
+  `dl->VtxBuffer` 把这一段的顶点统一绕手机中心旋转。**角度和方向都来自 prefab**：
+  `CellPhone.m_LocalEulerAnglesHint.z = 3`（Unity 逆时针），在 y 向下的绘制坐标里对应
+  **`kTiltDeg = -3.0f`**，即**右端上翘**。
+  （2026-09-22～11-01 期间是 +5°「向右倾」，那是用户当时的偏好；11-01 做 1:1 时按原作改回来了。
+  想改回右倾就把符号取正，别改别的。）命中框不能旋转，所以难度圆 / 图标按钮 / 确定按钮的
+  `InvisibleButton` 用 `tiltedItemPos()` 放到旋转后的中心。
+  验证"倒向哪边"别靠肉眼：取手机框顶边在左右两个 x 上的 y
   （`.workbuddy/tools/pngcrop.py` + 扫列找框的浅紫 `6c6ca6`）。
 - HUD 分数与血量是真的：分数 = 上游 overlay 的公式（`(kTeamPower / Σ权重) * 4 * 权重 *
   levelFactor * comboFactor`，权重表见 `JudgementEngine::hudWeight`，levelFactor 用该谱面难度定数，
