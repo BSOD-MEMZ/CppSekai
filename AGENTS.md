@@ -78,6 +78,16 @@ game/Judgement.*  # 判定引擎（本项目新增，判定逻辑都在这）
                   # 提前松手才算断连 —— 具体窗口可调（`holdTailGraceMs` / `holdStartGraceMs`，
                   # 设置 → 判定 → 长条容错；默认 180 / 140，就是原来的硬编码常量）。
                   # holdTail 事件不走 findCandidate / 自动 miss。
+                  # **原作允许 hold 断连后重新抓住（2026-11-01 从 dump.cs 得到的结构证据）**：
+                  # `NoteState = {Wait, Playing, InputBegan, Input, Release, Last, Done}` ——
+                  # **`Release` 不是终态**，松手后状态机还能回到 `InputBegan`；
+                  # `NoteCategory = {..., Long=1, Connection=2, ...}` 且 `LongNote` 有
+                  # `AddConnectionNote` / `ConnectionNoteJudgment` / `IsJudgmentChild` ——
+                  # 长条是**一串 connection note 逐段判**，不是整体一次性判；
+                  # 另有 `LongHoldCombo : NoteBase`（`LongNote.AddHoldCombo`），长按期间的
+                  # 每个 combo tick 都是独立可判的 note。所以松手只会丢掉"当前那一段"，
+                  # 再按下去后面的段还能判 —— 这就是"接上去"。
+                  # 我们还是一次性判到尾（`mTailClaimed`，松手即 MISS），没实现重抓。
                   # **2026-09-19 修（真 bug，`--auto` 会 miss）**：① 一个尾判只能被**一条** hold
                   # 认领（新成员 `mTailClaimed`）—— 原来 spawn 挑 tail 用「距 hold 起点 lane
                   # 最近」，而**滑动长条的尾判在终点 lane**，两条长条同一 tick 结束时会**抢同一个**

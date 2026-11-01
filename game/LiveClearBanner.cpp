@@ -284,15 +284,17 @@ float LiveClearBanner::blackout() const
     {
         return 0.0f;
     }
-    // Two stages, like the original: a translucent scrim comes down with the
-    // letters (the stage stays readable behind them), it holds, and only then
-    // does the screen go fully black for the hand-over to the result view.
+    // Flash, then let go. The scrim comes down with the letters so the word
+    // reads against the stage, and it is released again once the additive
+    // bloom has died (0.683 s in clip_result_LiveClear) - the stage goes back to
+    // its normal brightness and the word just sits there. Holding the scrim (or
+    // going to black, which is what this used to do) reads as "the effect never
+    // ends"; the result view brings its own dim, so nothing needs to fade to
+    // black here.
     constexpr float kScrim = 0.5f;
-    const float dim = kScrim * smoothstep(span(mTime, kOn, 0.23f));
-    // The tail picks up where the scrim left off (0.5 -> 1.0), so there is no
-    // dead stretch where the screen neither brightens nor darkens.
-    const float fade = kScrim + (1.0f - kScrim) * smoothstep(span(mTime, 1.25f, kDuration - 1.25f));
-    return std::max(dim, fade);
+    const float in = smoothstep(span(mTime, kOn, 0.20f));
+    const float out = 1.0f - smoothstep(span(mTime, kAddGoneAt, 0.35f));
+    return kScrim * in * out;
 }
 
 void LiveClearBanner::draw(platform::Renderer& renderer, int windowW, int windowH,
