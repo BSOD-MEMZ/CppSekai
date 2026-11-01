@@ -417,6 +417,17 @@ namespace
 } // namespace
 
 std::string gSelectAssetDir; // set via setSelectAssetDir()
+
+    // 默认歌手偏好。main.cpp 改完设置就推过来（setVocalPreference），
+    // defaultVocalIndex 每首歌都要读，所以不放参数里传。
+    int gVocalPrefMode = 0;
+    std::string gVocalPrefSinger;
+
+    void setVocalPreference(int mode, const std::string& singer)
+    {
+        gVocalPrefMode = std::clamp(mode, 0, 2);
+        gVocalPrefSinger = singer;
+    }
 void setSelectAssetDir(const std::string& dir)
 {
     gSelectAssetDir = dir;
@@ -1106,6 +1117,8 @@ void loadUserData(const std::string& path, UserSettings& settings,
             settings.holdStartGraceMs = s.value("holdStartGraceMs", settings.holdStartGraceMs);
             settings.initialLife = s.value("initialLife", settings.initialLife);
             settings.strictFlick = s.value("strictFlick", settings.strictFlick);
+            settings.vocalPref = std::clamp(s.value("vocalPref", settings.vocalPref), 0, 2);
+            settings.vocalPrefSinger = s.value("vocalPrefSinger", settings.vocalPrefSinger);
             settings.flickAsTap = s.value("flickAsTap", settings.flickAsTap);
             settings.debugLog = s.value("debugLog", settings.debugLog);
             settings.autoplay = s.value("autoplay", settings.autoplay);
@@ -1269,6 +1282,8 @@ void saveUserData(const std::string& path, const UserSettings& settings,
         {"holdStartGraceMs", settings.holdStartGraceMs},
         {"initialLife", settings.initialLife},
         {"strictFlick", settings.strictFlick},
+        {"vocalPref", settings.vocalPref},
+        {"vocalPrefSinger", settings.vocalPrefSinger},
         {"flickAsTap", settings.flickAsTap},
         {"debugLog", settings.debugLog},
         {"autoplay", settings.autoplay},
@@ -2313,6 +2328,8 @@ namespace
             ? nullptr
             : stbi_load_from_memory(bytes.data(), static_cast<int>(bytes.size()), &w, &h, nullptr, 4);
         if (px == nullptr || w <= 0 || h <= 0) {
+            std::printf("[select] phone mask MISSING (%s)\n", path.c_str());
+            std::fflush(stdout);
             if (px != nullptr) {
                 stbi_image_free(px);
             }
@@ -2320,6 +2337,8 @@ namespace
         }
         mask.w = w;
         mask.h = h;
+        std::printf("[select] phone mask %dx%d\n", w, h);
+        std::fflush(stdout);
         mask.alpha.resize(static_cast<size_t>(w) * h);
         for (size_t i = 0; i < mask.alpha.size(); ++i) {
             mask.alpha[i] = px[i * 4 + 3];
@@ -2717,6 +2736,24 @@ int defaultVocalIndex(int musicId, const std::vector<VocalVersion>& available)
 {
     if (available.empty()) {
         return -1;
+    }
+    // 0) 设置 > 演奏 > 默认歌手 里的偏好。只在这首歌真有那个版本、而且音频
+    //    已经在本地时才生效（available 里只放得下"有文件"的），否则往下走。
+    if (gVocalPrefMode == 2 && !gVocalPrefSinger.empty()) {
+        for (size_t i = 0; i < available.size(); ++i) {
+            for (const std::string& singer : available[i].singers) {
+                if (singer == gVocalPrefSinger) {
+                    return static_cast<int>(i);
+                }
+            }
+        }
+    }
+    if (gVocalPrefMode == 1) {
+        for (size_t i = 0; i < available.size(); ++i) {
+            if (available[i].type == "virtual_singer") {
+                return static_cast<int>(i);
+            }
+        }
     }
     // The セカイver is what the plain <id4>.mp3 download is (unipjsk serves
     // se_<id>_01 there), so it keeps an existing library sounding the same.
@@ -4352,6 +4389,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     const float scrX0 = phoneX + phoneW * 0.034f;
     const float scrX1 = phoneX + phoneW * 0.966f;
     const float scrY0 = phoneY + phoneH * 0.030f;
+    const float scrY1 = phoneY + phoneH * 0.970f;
     const float cx = (scrX0 + scrX1) * 0.5f;
     const float sw = scrX1 - scrX0;
 
@@ -4380,16 +4418,20 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             // shape); blurredJacketTex now multiplies the texture by
             // mask_smartphone.png, so whatever falls outside the screen is
             // simply gone and the corners come from the mask, not from here.
-            const float u0 = (jc.x - hw - phoneX) / phoneW;
-            const float v0 = (jc.y - hh - phoneY) / phoneH;
-            const float u1 = (jc.x + hw - phoneX) / phoneW;
-            const float v1 = (jc.y + hh - phoneY) / phoneH;
+            // Normalised against the *screen* rect, not the handset: the mask
+            // describes the glass, so mapping it to the whole phone (bezel
+            // included) put the clip line inside the bezel and the smear still
+            // ran over the top edge.
+            const float u0 = (jc.x - hw - scrX0) / (scrX1 - scrX0);
+            const float v0 = (jc.y - hh - scrY0) / (scrY1 - scrY0);
+            const float u1 = (jc.x + hw - scrX0) / (scrX1 - scrX0);
+            const float v1 = (jc.y + hh - scrY0) / (scrY1 - scrY0);
             const GLuint blurTex = blurredJacketTex(renderer, group.coverPath, u0, v0, u1, v1);
             if (blurTex != 0) {
                 dl->AddImage(
                     reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(blurTex)),
                     ImVec2(jc.x - hw, jc.y - hh), ImVec2(jc.x + hw, jc.y + hh),
-                    ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), IM_COL32(255, 255, 255, 235));
+                    ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), IM_COL32(255, 255, 255, 190));
             }
         }
 

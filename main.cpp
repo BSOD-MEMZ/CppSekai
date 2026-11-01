@@ -1783,6 +1783,12 @@ int main(int argc, char** argv)
     std::printf("[profile] active='%s' (%zu user(s), dir %s)\n", activeProfileId.c_str(),
         profiles.size(), userDataDir.c_str());
     game::loadUserData(userDataFile, userSettings, scores, account);
+    // 默认歌手偏好：选曲那边的 defaultVocalIndex 每首歌都读它，所以在这里
+    // 推一次（之后每次改设置也推，见 drawVocalPrefCard）。
+    game::setVocalPreference(userSettings.vocalPref, userSettings.vocalPrefSinger);
+    std::printf("[settings] vocal pref mode=%d singer=%s", userSettings.vocalPref,
+        userSettings.vocalPrefSinger.c_str());
+    std::puts("");
     // The 用户 combobox lists the profile *files* (profiles/index.json), the
     // nickname lives inside the profile data - two labels for one user. If the
     // file still carries an older label (renamed before this was tied
@@ -4277,6 +4283,57 @@ int main(int argc, char** argv)
     // alive 和 eulaAlive 一样，是为了让关闭动画播完再停手（见 beginCard）。
     bool keymapCardOpen = false;
     bool keymapCardAlive = false;
+    // 默认歌手偏好（2026-11-01）：演奏页那一行点开的就是它。
+    // jp 是 music-vocals.json 里 singers 数组的原文（defaultVocalIndex 逐字比），
+    // zh 只用于显示。表按组合排，卡片照着 unit 分组画。
+    struct VocalPrefSinger
+    {
+        const char* jp;
+        const char* zh;
+        int unit; // 0 Leo/need 1 MMJ 2 VBS 3 WxS 4 25 時 5 虚拟歌手
+    };
+    static const VocalPrefSinger kVocalPrefSingers[] = {
+        {"星乃一歌", "星乃一歌", 0}, {"天馬咲希", "天马咲希", 0},
+        {"望月穂波", "望月穗波", 0}, {"日野森志歩", "日野森志步", 0},
+        {"花里みのり", "花里实乃里", 1}, {"桐谷遥", "桐谷遥", 1},
+        {"桃井愛莉", "桃井爱莉", 1}, {"日野森雫", "日野森雫", 1},
+        {"小豆沢こはね", "小豆泽心羽", 2}, {"白石杏", "白石杏", 2},
+        {"東雲彰人", "东云彰人", 2}, {"青柳冬弥", "青柳冬弥", 2},
+        {"天馬司", "天马司", 3}, {"鳳えむ", "凤笑梦", 3},
+        {"草薙寧々", "草薙宁宁", 3}, {"神代類", "神代类", 3},
+        {"宵崎奏", "宵崎奏", 4}, {"朝比奈まふゆ", "朝比奈真冬", 4},
+        {"東雲絵名", "东云绘名", 4}, {"暁山瑞希", "晓山瑞希", 4},
+        {"初音ミク", "初音未来", 5}, {"鏡音リン", "镜音铃", 5},
+        {"鏡音レン", "镜音连", 5}, {"巡音ルカ", "巡音流歌", 5},
+        {"MEIKO", "MEIKO", 5}, {"KAITO", "KAITO", 5},
+    };
+    static const char* kVocalPrefUnits[6] = {
+        "Leo/need", "MORE MORE JUMP!", "Vivid BAD SQUAD",
+        "Wonderlands×Showtime", "25時、ナイトコードで。", "虚拟歌手",
+    };
+    bool vocalPrefCardOpen = false;
+    bool vocalPrefCardAlive = false;
+#ifdef _WIN32
+    // 无头检查（CPSEKAI_VOCALPREF=1）：和 CPSEKAI_KEYMAP 一个路子，截图能看这张卡。
+    if (std::getenv("CPSEKAI_VOCALPREF") != nullptr) {
+        vocalPrefCardOpen = true;
+    }
+#endif
+    // 演奏页那一行按钮显示什么：当前偏好的中文摘要。
+    auto vocalPrefSummary = [&]() -> std::string {
+        if (userSettings.vocalPref == 1) {
+            return "虚拟歌手 ver";
+        }
+        if (userSettings.vocalPref == 2 && !userSettings.vocalPrefSinger.empty()) {
+            for (const VocalPrefSinger& row : kVocalPrefSingers) {
+                if (userSettings.vocalPrefSinger == row.jp) {
+                    return std::string("指定歌手　") + row.zh;
+                }
+            }
+            return std::string("指定歌手　") + userSettings.vocalPrefSinger;
+        }
+        return "跟随歌曲（セカイver）";
+    };
 #ifdef _WIN32
     // Headless check (CPSEKAI_KEYMAP=1): raise the 按键映射 card at boot, the way
     // CPSEKAI_MULTIASK raises its own - a posted click does not reach an ImGui
@@ -4321,7 +4378,8 @@ int main(int argc, char** argv)
                 /*tabBandH=*/tabH)) {
             if (closeClicked) {
                 showDebug = false;
-                keymapCardOpen = false; // 副卡片跟着收，别留一张孤零零的浮着
+                keymapCardOpen = false;
+                vocalPrefCardOpen = false; // 副卡片跟着收，别留一张孤零零的浮着
             }
             const float cardLeft = cardCenter.x - cardSize.x * 0.5f;
             const float cardTop = cardCenter.y - cardSize.y * 0.5f;
@@ -4497,6 +4555,15 @@ int main(int argc, char** argv)
                             persistUserData();
                         }
                     });
+                // 默认歌手（2026-11-01）：这里只留一行摘要 + 打开，26 个歌手
+                // 塞不进设置页（那七个页都是不滚的），选项在独立卡片里。
+                {
+                    contentLeft();
+                    const std::string vocalLabel = "默认歌手　" + vocalPrefSummary();
+                    if (ui::capsuleButton(vocalLabel.c_str(), ImVec2(interior, 40.0f * s), false)) {
+                        vocalPrefCardOpen = true;
+                    }
+                }
                 // 演出能量（演出 > 演出能量）。结算经验 = 评级经验 x 这个倍率，
                 // 跟官方 live bonus 对奖励做的事一样（官方那里一局给
                 // 「评级经验 x bonus 倍率」）。
@@ -5871,6 +5938,130 @@ int main(int argc, char** argv)
             // 里已经清过了 —— 这里只负责收动画状态。）
             keymapCardAlive = false;
         }
+    };
+
+    // ------------------------------------------------------------------
+    // 默认歌手偏好的卡片（设置 > 演奏 > 默认歌手）。
+    //
+    // 三档：跟随歌曲（官方的セカイver，也就是一直以来的行为）/ 虚拟歌手 ver /
+    // 指定歌手。指定歌手按组合分组列出来 —— 26 个人塞六列，一行一组。
+    // 偏好只在"这首歌真有那个版本、而且音频在本地"时生效（见 defaultVocalIndex），
+    // 所以设了也不会让一首没下过另一个版本的歌变成放不出声。
+    // ------------------------------------------------------------------
+    auto drawVocalPrefCard = [&]() {
+        if (vocalPrefCardOpen) {
+            vocalPrefCardAlive = true;
+        }
+        if (!vocalPrefCardAlive) {
+            return;
+        }
+        // Only this card's widgets join the pad's focus ring while it is up.
+        ui::PadScope padScope(vocalPrefCardOpen);
+        const float s = ui::scale();
+        ImGuiIO& io = ImGui::GetIO();
+        ImVec2 cardSize = ImVec2(920.0f * s, 700.0f * s);
+        ImVec2 cardCenter = ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f);
+        const float interior = cardSize.x - 56.0f * s;
+        const float padX = 28.0f * s;
+        bool closeClicked = false;
+        if (!ui::beginCard("##vocalpref", &cardCenter, &cardSize, true, false, &closeClicked,
+                vocalPrefCardOpen)) {
+            vocalPrefCardAlive = false;
+            return;
+        }
+        if (closeClicked) {
+            vocalPrefCardOpen = false;
+        }
+        const float cardLeft = cardCenter.x - cardSize.x * 0.5f;
+        const float cardTop = cardCenter.y - cardSize.y * 0.5f;
+        ImGui::SetCursorScreenPos(ImVec2(cardLeft + padX, cardTop + 16.0f * s));
+        ui::cardTitle("默认歌手", interior);
+
+        ImGui::PushStyleColor(ImGuiCol_Text, ui::kBodyText);
+
+        // 三档模式。`sel` 直接用 userSettings，点一下立刻写盘 + 推给选曲。
+        const auto pickMode = [&](int mode) {
+            userSettings.vocalPref = mode;
+            game::setVocalPreference(mode, userSettings.vocalPrefSinger);
+            persistUserData();
+        };
+        {
+            const float gap = 8.0f * s;
+            const float modeW = (interior - gap * 2.0f) / 3.0f;
+            ImGui::PushFont(game::bodyFont(), 22.0f * s);
+            ImGui::SetCursorScreenPos(ImVec2(cardLeft + padX, cardTop + 62.0f * s));
+            if (ui::capsuleButton("跟随歌曲（セカイver）", ImVec2(modeW, 46.0f * s),
+                    userSettings.vocalPref == 0)) {
+                pickMode(0);
+            }
+            ImGui::SameLine(0.0f, gap);
+            if (ui::capsuleButton("虚拟歌手 ver", ImVec2(modeW, 46.0f * s),
+                    userSettings.vocalPref == 1)) {
+                pickMode(1);
+            }
+            ImGui::SameLine(0.0f, gap);
+            if (ui::capsuleButton("指定歌手", ImVec2(modeW, 46.0f * s),
+                    userSettings.vocalPref == 2)) {
+                pickMode(2);
+            }
+            ImGui::PopFont();
+        }
+        ImGui::SetCursorScreenPos(ImVec2(cardLeft + padX, cardTop + 118.0f * s));
+        ImGui::PushFont(game::bodyFont(), 18.0f * s);
+        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(88, 88, 110, 255));
+        ImGui::TextUnformatted("选曲时自动挑这个版本；这首歌没有（或音频不在本地）就回落到セカイver。");
+        ImGui::PopStyleColor();
+        ImGui::PopFont();
+
+        // 歌手网格：一组一行，六列。
+        const float gap = 8.0f * s;
+        const float cellW = (interior - gap * 5.0f) / 6.0f;
+        const float cellH = 40.0f * s;
+        float y = cardTop + 156.0f * s;
+        for (int unit = 0; unit < 6; ++unit) {
+            ImGui::SetCursorScreenPos(ImVec2(cardLeft + padX, y));
+            ImGui::PushFont(game::bodyFont(), 18.0f * s);
+            ImGui::TextUnformatted(kVocalPrefUnits[unit]);
+            ImGui::PopFont();
+            y += 26.0f * s;
+            int col = 0;
+            for (const VocalPrefSinger& row : kVocalPrefSingers) {
+                if (row.unit != unit) {
+                    continue;
+                }
+                if (col == 0) {
+                    ImGui::SetCursorScreenPos(ImVec2(cardLeft + padX, y));
+                } else {
+                    ImGui::SameLine(0.0f, gap);
+                }
+                const bool sel = userSettings.vocalPref == 2
+                    && userSettings.vocalPrefSinger == row.jp;
+                ImGui::PushFont(game::bodyFont(), 19.0f * s);
+                if (ui::capsuleButton(row.zh, ImVec2(cellW, cellH), sel)) {
+                    userSettings.vocalPref = 2;
+                    userSettings.vocalPrefSinger = row.jp;
+                    game::setVocalPreference(2, userSettings.vocalPrefSinger);
+                    persistUserData();
+                }
+                ImGui::PopFont();
+                ++col;
+            }
+            y += cellH + 10.0f * s;
+        }
+        ImGui::PopStyleColor();
+
+        // 底部：重置 + 关闭
+        ImGui::SetCursorScreenPos(ImVec2(cardLeft + padX, cardCenter.y + cardSize.y * 0.5f - 68.0f * s));
+        const float btnW = (interior - 8.0f * s) * 0.5f;
+        if (ui::capsuleButton("恢复默认（跟随歌曲）", ImVec2(btnW, 46.0f * s), false)) {
+            userSettings.vocalPrefSinger.clear();
+            pickMode(0);
+        }
+        ImGui::SameLine();
+        if (ui::capsuleButton("关闭", ImVec2(btnW, 46.0f * s), true)) {
+            vocalPrefCardOpen = false;
+        }
+        ui::endCard();
     };
 
     // ------------------------------------------------------------------
@@ -8152,6 +8343,10 @@ int main(int argc, char** argv)
                 std::fflush(stdout);
                 keymapCardOpen = false;
                 rebindLane = -1;
+            } else if (vocalPrefCardAlive) {
+                // 「默认歌手」卡片：ESC = 关掉它。它在设置卡片之上，所以排在
+                // showDebug 前面 —— 否则 ESC 会把底下的设置卡片也收掉。
+                vocalPrefCardOpen = false;
             } else if (showDebug) {
                 // 设置卡片自己（2026-10-11）：ESC = 关掉它，副卡片跟着收。
                 // 它以前**不在这条链里**：卡片开着按 ESC 会一路落到最后的 else，
@@ -9355,6 +9550,8 @@ int main(int argc, char** argv)
             drawSettingsCard();
             // 按键映射卡片（演奏页那一行点出来的），画在设置卡片之上。
             drawKeymapCard();
+            // 默认歌手卡片（同一个入口，独立一张）。
+            drawVocalPrefCard();
             // 演奏中点 X / Alt+F4 的确认卡。
             drawCloseAskDialog();
             // 多开的实验性功能确认框（设置卡片里点出来的）。

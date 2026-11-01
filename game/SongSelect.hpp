@@ -229,6 +229,15 @@ struct UserSettings
     // seeds its stats from it on every reset.
     float initialLife = 1000.0f;
     bool strictFlick = true;
+    // 默认歌手偏好（设置 > 演奏 > 默认歌手，独立卡片）。
+    //   0 = 跟随歌曲 —— 官方的セカイver，也就是一直以来的行为
+    //   1 = 优先虚拟歌手 ver（type == "virtual_singer"）
+    //   2 = 优先指定歌手（vocalPrefSinger，**日文原名**，和 music-vocals.json
+    //       里 singers 数组逐字比对）
+    // 只在"这首歌真有这个版本、而且音频在本地"时才生效，否则回落到 0 ——
+    // 所以设了偏好也不会让一首没下过另一个版本的歌变成放不出声。
+    int vocalPref = 0;
+    std::string vocalPrefSinger;
     // "Flick 视作 Tap" (settings > 判定): flick notes take any press instead of
     // a directional swipe, for touchscreens that can barely send an upward
     // swipe. A hold's flick TAIL is not converted - it stops being a note (see
@@ -408,6 +417,9 @@ std::string vocalShortLabel(const VocalVersion& version);
 // Index of the version to start with: the セカイver when there is one (that is
 // also what the legacy <id4>.mp3 download is), else the first.
 int defaultVocalIndex(int musicId, const std::vector<VocalVersion>& available);
+// 设置 > 演奏 > 默认歌手：0 = 跟随歌曲（セカイver）, 1 = 虚拟歌手ver, 2 = 指定歌手
+// （singer 是 music-vocals.json 里的日文原名）。改完设置推一次即可。
+void setVocalPreference(int mode, const std::string& singer);
 
 // Points `entry` at a version's audio (and its singers, for the "Vo." line).
 // Returns false when that version has no file, in which case entry is left with

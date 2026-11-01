@@ -734,6 +734,12 @@ bash build.sh          # 仅需 Git Bash；产物 build/cppsekai.exe + SDL2.dll 
     正文连成一体，不是浮在白底上的白块），块顶距卡片顶约带高的 1/5；未选中页签是白字。
   - 12 个按键映射格子搬进独立的「按键映射」卡片（演奏页只留一行摘要 + 编辑入口，
     卡片由 `CPSEKAI_KEYMAP=1` 无头打开）。
+  - **默认歌手**（2026-11-01）同样是一行摘要 + 独立卡片（`CPSEKAI_VOCALPREF=1` 无头打开，
+    920x700、26 个歌手按组合六列排）。三档：跟随歌曲（セカイver，默认）/ 虚拟歌手 ver /
+    指定歌手；存 `UserSettings::vocalPref` + `vocalPrefSinger`（**日文原名**，和
+    music-vocals.json 的 singers 逐字比），选曲那边的 `defaultVocalIndex` 读全局
+    `game::setVocalPreference()` 推过去的副本。只在"这首歌真有那个版本、且音频在本地"
+    时生效，否则回落 —— 别把它做成"放不出声"。
   - 卡片带阴影（`shadowLayers`，spreadScale 3.0，比控件的 1.0 远得多）。
   高度用 `CPSEKAI_UI_TRACE=1` 量（@1080p view = 796，最高的判定页 768，不滚）。
   `--settings` + `--settings-tab <0-6>` 无头打开（按键没法送进无头运行），配合 `--screenshot` 截图。
