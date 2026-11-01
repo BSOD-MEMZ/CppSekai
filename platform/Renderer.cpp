@@ -1007,6 +1007,7 @@ bool Renderer::loadHud(const std::string& overlayDir, std::string& outError)
     // is the score page, which otherwise says nothing at all about a run that
     // died with the life bar at zero.
     add("result_livefailed", "result/livefailed_wh.png");
+    add("result_livefailed_line", "result/livefailed_line.png");
     // Summary page (the first of the two result screens): the LIVE RESULT banner
     // and the rule line that sits above/below it. Both cut out of the
     // LiveResultAtlas - provenance in RESULT-SUMMARY.md.
@@ -1014,6 +1015,24 @@ bool Renderer::loadHud(const std::string& overlayDir, std::string& outError)
     add("result_liveresult_cc", "result/liveresult_cc.png");
     add("result_liveresult_line", "result/liveresult_line.png");
     add("result_liveclear_cc", "result/liveclear_cc.png");
+    // Summary score gauge + SCORERANK plate, all straight out of the game:
+    //   liveresult_bar      gauge_bar_result_freeLive (1360x40, rainbow gradient,
+    //                       clipped left-to-right by the score)
+    //   rank_tick_tri       icon_triangle_wh (28x22) - the notch under each mark
+    //   rank_tick_{c,b,a,s} icon_scoreRank_s_*  (68x76) - the C/B/A/S labels
+    //   rank_{s,a,b,c,d}    txt_scoreRank_*     (224x266) - the filled letter
+    //   rank_line_{...}     txt_scoreRank_line_* (224x266) - its outline copy
+    //   rank_label          txt_scoreRank_wh    (168x22) - the SCORERANK wordmark
+    add("result_liveresult_bar", "result/liveresult_bar.png");
+    add("result_rank_tick_tri", "result/rank_tick_tri.png");
+    for (const char* letter : {"c", "b", "a", "s"}) {
+        add(std::string("result_rank_tick_") + letter, std::string("result/rank_tick_") + letter + ".png");
+    }
+    for (const char* letter : {"s", "a", "b", "c", "d"}) {
+        add(std::string("result_rank_") + letter, std::string("result/rank_") + letter + ".png");
+        add(std::string("result_rank_line_") + letter, std::string("result/rank_line_") + letter + ".png");
+    }
+    add("result_rank_label", "result/rank_label.png");
 
     outError.clear();
     return !mHudSprites.empty();

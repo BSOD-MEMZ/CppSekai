@@ -38,8 +38,11 @@ CppSekai：Project SEKAI 风格 SUS 谱面 Windows 原生游玩器。
   贴图尺寸。**做曲末大字前必读**，别按 stringliteral 里那五个名字去找资产。
 - `RESULT-SUMMARY.md` —— **两段结算的第一段（summary）规格（2026-11-01）**：
   `SoloLiveScoreSummary` 的节点树与换算（2520×1440 → 1920×1080，×0.75）、
-  `LIVE RESULT` 大字的坐标、以及**从 ASTC SpriteAtlas 切图的方法**
-  （按 sprite 名导会失败，要导整张 atlas 再按 `m_Rect` 自己切）。
+  `LIVE RESULT` 大字的坐标、`clip_result_summary_v2_01` 的逐条关键帧，
+  以及**分数条 C/B/A/S 刻度用的比例尺和打歌 HUD 不是同一套**这条坑
+  （填充必须走 `scoreRankAndBar(score, rating, markPos)` 那个重载，否则
+  「填到 A 刻度右边、牌上写着 B」）。附 sprite 导出的正确姿势：**不过滤地
+  全量导**，`--filter-by-name` 会漏掉 atlas 子 sprite。
 - `CREDITS.md` —— 借用清单：每个来源是谁的、什么许可、放在哪（含 Fontworks 字体这条独立风险）。
 - `COPYRIGHT.md` —— 版权与风险：什么能发、什么不能发。
 - `README.md` —— 面向玩家的说明（只放用户最需要的东西，技术细节一律挪到本文件，别往 README 加）。
@@ -1284,6 +1287,14 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
 - 结算页的 `txt_liveclear_wh`(1220×166) / `txt_livefailed_wh`(1352×166) /
   `txt_liveresult_wh`(1272×166) 属于 summary 页（`LiveResultClear="liveclear"` /
   `LiveResultFailed="livefailed"`）。
+- **第一段 summary 已实现（2026-11-01）**：`Result.cpp` 的 `drawSummary()`，`drawResult()`
+  按 `kSummarySec = 2.6` 分两段（摘要 → 分数页，分数页的入场动画整体后移 2.6s）。
+  内容是：标题 + **两条空心描边副本**（起始叠在标题正中、按曲线一上一下滑开；
+  以前当成"装饰线只画一次"是误读）+ 彩虹分数条 + C/B/A/S 刻度 + SCORERANK 牌。
+  ⚠ **刻度的比例尺和打歌 HUD 不是同一套**（结算条 C/B/A/S = 0.303/0.434/0.597/0.664，
+  HUD = 0.452/0.600/0.748/0.896），填充必须走
+  `scoreRankAndBar(score, rating, markPos)` 那个重载，否则「填到 A 刻度右边、牌上写 B」。
+  几何 / 曲线 / 贴图来源全在 `RESULT-SUMMARY.md`。
 - 我们现在的状态：曲末只有 `LiveClearBanner`（= clear 那支）；**finish / failed / FC / AP
   四支曲末特效都还没做**。结算页的徽章 + LIVE FAILED 已按 `ResultData::failed/fullCombo/
   allPerfect` 接上（见下）。

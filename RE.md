@@ -215,8 +215,45 @@ $DOTNET AssetStudioModCLI.dll <apk> -m dump -t sprite,textAsset -o <目录> \
   --assembly-folder "D:/Tools/rea/work/jp/dump/DummyDll" --unity-version 2022.3.62f2
 
 # 导贴图（按名字过滤）
-$DOTNET AssetStudioModCLI.dll <apk> -m export -t tex2d --filter-by-name "tap" -o <目录> \
-  --unity-version 2022.3.62f2
+$DOTNET AssetStudioModCLI.dll <apk> -m export -t tex2d --filter-by-name "tap" -o <目录>
+```
+
+#### 导 sprite 的两种方式（2026-11-01 更正）
+
+**导全部 sprite 是可靠的，而且 atlas 里的子 sprite 也一并切好了**：
+
+```bash
+$DOTNET AssetStudioModCLI.dll "D:/Tools/rea/work/jp/GameData" -m export -t sprite -o "D:/Tools/rea/work/jp/tex_all_sprite" --unity-version 2022.3.62f2
+# -> 2808 个 PNG，文件名就是 sprite 名，透明边已经裁好
+```
+
+实测 `tex_all_sprite/txt_liveresult_wh.png` 和「导整张 ASTC atlas 再按 `m_Rect` 手切」
+的结果**逐像素一致**（`ImageChops.difference` bbox `None`）。所以**优先用这条路**：
+不用查 `m_Rect`、不用处理「Unity 的 y 从底部算」。
+
+⚠ 但 **`--filter-by-name` 配 `-t sprite` 不可靠**：它会漏掉 atlas 里的子 sprite
+（`--filter-by-name txt_liveresult` 只吐出 `_line_dgr` 一张，而全量导出里两张都有）。
+**所以「某个 sprite 导不出来」不等于它不存在** —— 先跑一遍不过滤的全量导出再下结论。
+2026-10-31 那次误判 `fx_result_finish` 不存在，一半原因就是这个，另一半是只喂了
+`UnityDataAssetPack.apk`（那个 split 只有 776 个资产）。
+
+顺带：**喂目录，别喂单个 apk**。`GameData` 目录才是合并后的全集（194631 个资产）。
+
+#### 按尺寸找贴图（不知道名字时的捷径）
+
+全量导出后建一张「名字 -> 尺寸」表，按 prefab 里量到的 `sizeDelta` 反查，基本一击即中
+（结算页那批图就是这么找出来的，比猜名字快得多）：
+
+```python
+from PIL import Image
+import os, json
+idx = {}
+for f in os.listdir('tex_all_sprite'):
+    if f.endswith('.png'):
+        with Image.open(os.path.join('tex_all_sprite', f)) as im:
+            idx[f] = list(im.size)
+json.dump(idx, open('sprite_sizes.json', 'w'))
+# 之后筛 v == [1360, 40] 这类就行
 ```
 
 ## 5. 坑清单（都是踩过的，别再踩）

@@ -54,6 +54,15 @@ HudRect lifePauseRect()
 
 ScoreRank scoreRankAndBar(double score, float rating)
 {
+    // Positions measured off the in-live HUD bar (see kMarkerPos in Result.cpp
+    // for the score page, which copies the same art).
+    static const float kHudMarks[5] = {746.0f / 1650.0f, 990.0f / 1650.0f, 1234.0f / 1650.0f,
+        1478.0f / 1650.0f, 1.0f};
+    return scoreRankAndBar(score, rating, kHudMarks);
+}
+
+ScoreRank scoreRankAndBar(double score, float rating, const float markPos[5])
+{
     // 1:1 port of the upstream overlay player (native/src/mmw_overlay_player.cpp:
     // scoreRankAndBar). The thresholds scale with the chart's level.
     const double r = static_cast<double>(rating > 0.0f ? rating : 26.0f);
@@ -63,11 +72,11 @@ ScoreRank scoreRankAndBar(double score, float rating)
     const double rankB = 400000.0 + (r - 5.0) * 2000.0;
     const double rankC = 20000.0 + (r - 5.0) * 100.0;
 
-    constexpr float rankBorderPos = 1.0f;
-    constexpr float rankSPos = 1478.0f / 1650.0f;
-    constexpr float rankAPos = 1234.0f / 1650.0f;
-    constexpr float rankBPos = 990.0f / 1650.0f;
-    constexpr float rankCPos = 746.0f / 1650.0f;
+    const float rankBorderPos = markPos[4];
+    const float rankSPos = markPos[3];
+    const float rankAPos = markPos[2];
+    const float rankBPos = markPos[1];
+    const float rankCPos = markPos[0];
 
     const auto lerpRatio = [](double value, double start, double end, float startPos, float endPos) {
         if (end <= start) {

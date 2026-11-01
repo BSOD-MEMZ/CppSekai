@@ -423,20 +423,122 @@ void drawSpriteInkCentered(const Canvas& c, const platform::Renderer::HudSprite*
 }
 
 // ---------------------------------------------------------------------------
-// First of the two result screens: the summary that plays before the score
-// page (LIVE RESULT / LIVE FAILED banner + its two rule lines).
+// First of the two result screens: the summary - LIVE RESULT / LIVE FAILED
+// heading, the score gauge with its C/B/A/S marks, and the SCORERANK plate.
 //
 // Geometry comes from ScreenLayerFreeLiveResult's SoloLiveScoreSummary ->
 // ScoreView, whose parents are all (0,0) so these are offsets from the screen
-// centre (see RESULT-SUMMARY.md):
-//     ResultImage     centre (-132.1, 35.6), 1220x166
-//     ResultLine_01   +(0, 73.6)   - both carry the `line` sprite, which is
-//     ResultLine_02   +(0, -88.5)    drawn once (see drawSummary)
-// The design canvas is the 2520x1440 Background, converted by height
-// (1080/1440 = 0.75) because 2520:1440 is not quite 16:9.
+// centre. The design canvas is the 2520x1440 Background, converted by height
+// (1080/1440 = 0.75) because 2520:1440 is not quite 16:9:
+//     ResultImage      centre (-132.1,   35.6), 1220x166
+//     ResultLine_01/02  +(0, 73.6) / +(0, -88.5) at rest (both are the outline
+//                       copy of the same words - see the timing note below)
+//     ScoreGauge       centre (-132.9, -168.2), 1359.7x40
+//     Rank/Base        centre ( 701.1,   -0.5), 224x375
+// Timing comes from clip_result_summary_v2_01 (1.0 s). Every track in it is an
+// alpha or an anchoredPosition.y, and every key tangent is zero, so each move
+// eases in and out with no overshoot.
 constexpr float kSummaryTitleX = 960.0f - 132.1f * 0.75f; // 860.9
 constexpr float kSummaryTitleY = 540.0f - 35.6f * 0.75f;  // 513.3
 constexpr float kSummaryTitleH = 166.0f * 0.75f;          // 124.5
+
+// Score gauge. The track is a fully rounded pill tinted #32324C (the m_Color of
+// the CustomImage on ScoreView/ScoreGauge); its own sprite never resolved, and
+// a flat pill is what it renders as anyway. The fill is the game's rainbow
+// sprite gauge_bar_result_freeLive (1360x40), revealed left to right.
+constexpr float kGaugeCx = 960.0f - 132.9f * 0.75f;  // 860.3
+constexpr float kGaugeCy = 540.0f + 168.2f * 0.75f;  // 666.2
+constexpr float kGaugeW = 1359.7f * 0.75f;           // 1019.8
+constexpr float kGaugeH = 40.0f * 0.75f;             // 30.0
+constexpr ImU32 kGaugeTrack = IM_COL32(50, 50, 76, 255);
+
+// C/B/A/S tick centres as fractions of the gauge width (local x 412 / 590 / 812
+// / 903.5 out of 1359.7). These are NOT the in-live HUD bar's fractions - the
+// result gauge covers a different stretch of the score range - so the fill is
+// mapped through these same numbers with scoreRankAndBar's markPos overload;
+// otherwise the fill would end up past the mark it is supposed to reach.
+constexpr float kRankMarkPos[5] = {412.0f / 1359.7f, 590.0f / 1359.7f, 812.0f / 1359.7f,
+    903.5f / 1359.7f, 1.0f};
+constexpr const char* kRankMarkKey[4] = {"c", "b", "a", "s"};
+// One mark is a wide notch (icon_triangle), a thin stem running down into the
+// bar, and the rank letter above both. Local y is measured up from the gauge's
+// top edge; the sizes are the nodes' sizeDelta.
+constexpr float kTickStemUp = 11.2f;
+constexpr float kTickStemW = 4.0f;
+constexpr float kTickStemH = 53.1f;
+constexpr float kTickTriUp = 30.7f;
+constexpr float kTickTriW = 28.0f;
+constexpr float kTickTriH = 22.0f;
+constexpr float kTickLetterUp = 69.1f;
+constexpr float kTickLetterW[4] = {40.0f, 36.0f, 44.0f, 34.0f}; // C B A S
+constexpr float kTickLetterH[4] = {48.0f, 46.0f, 46.0f, 48.0f};
+
+// SCORERANK plate (ScoreView/Rank).
+constexpr float kRankPlateCx = 960.0f + 701.1f * 0.75f; // 1485.8
+constexpr float kRankPlateCy = 540.0f + 0.5f * 0.75f;   // 540.4
+constexpr float kRankPlateW = 224.0f * 0.75f;           // 168.0
+constexpr float kRankPlateH = 375.0f * 0.75f;           // 281.25
+constexpr float kRankPlateRound = 16.0f;
+constexpr ImU32 kRankPlateFill = IM_COL32(50, 50, 76, 255);
+constexpr float kRankLetterCy = 540.0f - 2.6f * 0.75f;  // 538.1
+constexpr float kRankLetterW = 224.0f * 0.75f;
+constexpr float kRankLetterH = 266.0f * 0.75f;
+// The outline letter sweeps up from -9 to +43.2 as it fades in (see kRankLineY
+// in drawSummary); its rest position is Rank(11.0) + 43.2 = the 54.2 the
+// measured geometry reports.
+constexpr float kRankLabelCy = 540.0f + 172.4f * 0.75f; // 669.3
+constexpr float kRankLabelW = 168.0f * 0.75f;
+constexpr float kRankLabelH = 22.0f * 0.75f;
+constexpr ImU32 kRankLabelTint = IM_COL32(255, 142, 198, 255);
+
+// One keyframe of a Unity curve, times in seconds.
+struct CurveKey
+{
+    float t;
+    float v;
+};
+
+// Zero-tangent Unity curve -> smoothstep between neighbouring keys. (Every
+// track in clip_result_summary_v2_01 has inSlope = outSlope = 0.)
+float curveAt(float t, const CurveKey* keys, int count)
+{
+    if (count <= 0) {
+        return 0.0f;
+    }
+    if (t <= keys[0].t) {
+        return keys[0].v;
+    }
+    for (int i = 1; i < count; ++i) {
+        if (t <= keys[i].t) {
+            const float dt = keys[i].t - keys[i - 1].t;
+            if (dt <= 0.0f) {
+                return keys[i].v;
+            }
+            const float u = clamp01((t - keys[i - 1].t) / dt);
+            const float e = u * u * (3.0f - 2.0f * u);
+            return keys[i - 1].v + (keys[i].v - keys[i - 1].v) * e;
+        }
+    }
+    return keys[count - 1].v;
+}
+
+// Blits a whole hud sprite into a virtual rect (no ink correction - these are
+// node-sized art whose transparent margin is part of the layout).
+void blitSprite(const Canvas& c, const platform::Renderer::HudSprite* sprite, float vx, float vy,
+    float vw, float vh, ImU32 tint)
+{
+    if (sprite == nullptr || sprite->id == 0 || vw <= 0.0f || vh <= 0.0f) {
+        return;
+    }
+    c.dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(sprite->id)),
+        c.p(vx, vy), c.p(vx + vw, vy + vh), ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), tint);
+}
+
+void blitSpriteCentered(const Canvas& c, const platform::Renderer::HudSprite* sprite, float centerX,
+    float centerY, float vw, float vh, ImU32 tint)
+{
+    blitSprite(c, sprite, centerX - vw * 0.5f, centerY - vh * 0.5f, vw, vh, tint);
+}
 
 void drawSummary(platform::Renderer& renderer, const ResultData& data, float t, const Canvas& c,
     float windowW, float windowH)
@@ -448,24 +550,94 @@ void drawSummary(platform::Renderer& renderer, const ResultData& data, float t, 
     dl->AddRectFilled(ImVec2(0.0f, 0.0f), ImVec2(windowW, windowH),
         IM_COL32(10, 10, 22, static_cast<int>(196.0f * in)));
 
-    const auto* line = renderer.hud("result_liveresult_line");
-    const auto* title = renderer.hud(data.failed ? "result_livefailed" : "result_liveresult");
-    if (line != nullptr && line->id != 0 && line->height > 0) {
-        // This sprite is the thin outline of the same words plus the two rules
-        // either side of them, so it goes on exactly once, centred on the title.
-        // (Drawing it twice - once per ResultLine_01/02 offset - reads as a
-        // smeared double image.)
-        drawSpriteInkCentered(c, line, 0.0f, 0.0f, static_cast<float>(line->width),
-            static_cast<float>(line->height), kSummaryTitleX, kSummaryTitleY, kSummaryTitleH,
-            IM_COL32(255, 255, 255, static_cast<int>(170.0f * in)));
+    // --- curves (clip_result_summary_v2_01) --------------------------------
+    static constexpr CurveKey kGaugeAlpha[] = {{0.0f, 0.0f}, {0.1333f, 1.0f}};
+    static constexpr CurveKey kTitleAlpha[] = {
+        {0.0f, 0.0029f}, {0.4167f, 0.8783f}, {0.8667f, 1.0f}, {1.0f, 1.0f}};
+    static constexpr CurveKey kRankAlpha[] = {{0.0f, 0.0f}, {0.1667f, 0.0f}, {0.4167f, 1.0f}};
+    static constexpr CurveKey kRankLineY[] = {{0.0f, -9.0f}, {0.1667f, -7.8f}, {1.0f, 43.2f}};
+    static constexpr CurveKey kEchoUp[] = {
+        {0.0f, 0.0f}, {0.1667f, 16.875f}, {0.4167f, 48.3389f}, {1.0f, 73.6f}};
+    static constexpr CurveKey kEchoDown[] = {
+        {0.0f, 0.0f}, {0.1667f, -17.3448f}, {0.4167f, -53.4889f}, {1.0f, -88.5f}};
+
+    const float titleAlpha = curveAt(t, kTitleAlpha, 4) * in;
+    const float gaugeAlpha = curveAt(t, kGaugeAlpha, 2) * in;
+    const float rankAlpha = curveAt(t, kRankAlpha, 3) * in;
+
+    // --- SCORERANK plate ---------------------------------------------------
+    if (!data.failed) {
+        const ScoreRank rank = scoreRankAndBar(data.score, data.chartRating, kRankMarkPos);
+        const char letter = (rank.rank >= 'a' && rank.rank <= 's') ? rank.rank : 'd';
+        const std::string key(1, letter);
+
+        addRoundedRect(c, kRankPlateCx - kRankPlateW * 0.5f, kRankPlateCy - kRankPlateH * 0.5f,
+            kRankPlateW, kRankPlateH, kRankPlateRound, withAlpha(kRankPlateFill, rankAlpha));
+        blitSpriteCentered(c, renderer.hud("result_rank_" + key), kRankPlateCx, kRankLetterCy,
+            kRankLetterW, kRankLetterH, withAlpha(IM_COL32_WHITE, rankAlpha));
+        // The outline copy sweeps up from -9 to +43.2 while it fades in; its
+        // rest position is Rank(11.0) + 43.2 = the 54.2 the geometry reports.
+        blitSpriteCentered(c, renderer.hud("result_rank_line_" + key), kRankPlateCx,
+            540.0f - (11.0f + curveAt(t, kRankLineY, 3)) * 0.75f, kRankLetterW, kRankLetterH,
+            withAlpha(IM_COL32_WHITE, rankAlpha));
+        blitSpriteCentered(c, renderer.hud("result_rank_label"), kRankPlateCx, kRankLabelCy,
+            kRankLabelW, kRankLabelH, withAlpha(kRankLabelTint, rankAlpha));
     }
+
+    // --- heading + its two outline echoes ----------------------------------
+    const auto* echo = renderer.hud(data.failed ? "result_livefailed_line" : "result_liveresult_line");
+    if (echo != nullptr && echo->id != 0 && echo->height > 0) {
+        // Two copies of the hollow outline sprite; they start on top of the
+        // heading and slide apart, which is the whole point of the track. Each
+        // heading has its own outline (LIVE FAILED is 1352 wide, not 1272), so
+        // the sprite is picked together with the heading. Drawn
+        // through the same uniform ink scaling as the heading - forcing it into
+        // a 1220x166 box would stretch it (1272:166 is not 1220:166) and the
+        // echo would visibly disagree with the word it is tracing.
+        for (const CurveKey* track : {kEchoUp, kEchoDown}) {
+            drawSpriteInkCentered(c, echo, 0.0f, 0.0f, static_cast<float>(echo->width),
+                static_cast<float>(echo->height), kSummaryTitleX,
+                540.0f - (35.6f + curveAt(t, track, 4)) * 0.75f, kSummaryTitleH,
+                withAlpha(IM_COL32_WHITE, titleAlpha));
+        }
+    }
+    const auto* title = renderer.hud(data.failed ? "result_livefailed" : "result_liveresult");
     if (title != nullptr && title->id != 0 && title->height > 0) {
-        // A small overshoot on entry, matching the rest of the screen's easeOutBack.
         const float pop = easeOutBack(span(t, 0.12f, 0.45f));
         drawSpriteInkCentered(c, title, 0.0f, 0.0f, static_cast<float>(title->width),
             static_cast<float>(title->height), kSummaryTitleX, kSummaryTitleY,
             kSummaryTitleH * (0.86f + 0.14f * pop),
-            IM_COL32(255, 255, 255, static_cast<int>(255.0f * in)));
+            IM_COL32(255, 255, 255, static_cast<int>(255.0f * titleAlpha)));
+    }
+
+    // --- score gauge -------------------------------------------------------
+    const float gaugeLeft = kGaugeCx - kGaugeW * 0.5f;
+    const float gaugeTop = kGaugeCy - kGaugeH * 0.5f;
+    addRoundedRect(c, gaugeLeft, gaugeTop, kGaugeW, kGaugeH, kGaugeH * 0.5f,
+        withAlpha(kGaugeTrack, gaugeAlpha));
+
+    const ScoreRank fill = scoreRankAndBar(data.score, data.chartRating, kRankMarkPos);
+    const float ratio = fill.bar * easeOutCubic(span(t, 0.15f, 0.75f));
+    const auto* bar = renderer.hud("result_liveresult_bar");
+    if (bar != nullptr && bar->id != 0 && ratio > 0.002f) {
+        c.dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(bar->id)),
+            c.p(gaugeLeft, gaugeTop), c.p(gaugeLeft + kGaugeW * ratio, gaugeTop + kGaugeH),
+            ImVec2(0.0f, 0.0f), ImVec2(ratio, 1.0f),
+            IM_COL32(255, 255, 255, static_cast<int>(255.0f * gaugeAlpha)));
+    }
+
+    // Marks: notch, stem, letter, all hanging above the bar's top edge.
+    const auto* stemSprite = renderer.hud("result_rank_tick_line");
+    const auto* triSprite = renderer.hud("result_rank_tick_tri");
+    for (int i = 0; i < 4; ++i) {
+        const float mx = gaugeLeft + kGaugeW * kRankMarkPos[i];
+        blitSpriteCentered(c, stemSprite, mx, gaugeTop - kTickStemUp * 0.75f, kTickStemW * 0.75f,
+            kTickStemH * 0.75f, withAlpha(IM_COL32_WHITE, gaugeAlpha * 0.85f));
+        blitSpriteCentered(c, triSprite, mx, gaugeTop - kTickTriUp * 0.75f, kTickTriW * 0.75f,
+            kTickTriH * 0.75f, withAlpha(IM_COL32_WHITE, gaugeAlpha));
+        blitSpriteCentered(c, renderer.hud(std::string("result_rank_tick_") + kRankMarkKey[i]), mx,
+            gaugeTop - kTickLetterUp * 0.75f, kTickLetterW[i] * 0.75f, kTickLetterH[i] * 0.75f,
+            withAlpha(IM_COL32_WHITE, gaugeAlpha));
     }
 }
 

@@ -57,6 +57,13 @@ struct ScoreRank
 };
 ScoreRank scoreRankAndBar(double score, float rating);
 
+// Same thresholds, caller-supplied mark positions. `markPos` is {C, B, A, S,
+// border} as fractions of the bar, low to high. The in-live HUD and the result
+// summary draw their C/B/A/S ticks at different fractions of their own bars, so
+// the fill has to be mapped through whichever set of marks is on screen - a
+// fill that disagrees with the marks beside it reads as a bug.
+ScoreRank scoreRankAndBar(double score, float rating, const float markPos[5]);
+
 // Pause button zone of the life bar, in 1920x1080 virtual HUD coordinates.
 // Clicking it opens the pause dialog.
 struct HudRect
