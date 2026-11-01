@@ -13,6 +13,8 @@
 #include "imgui.h"
 
 #include <algorithm>
+
+#include "mmw_preview/vendor/stb_image.h"
 #include <array>
 #include <cctype>
 #include <cmath>
@@ -26,6 +28,7 @@
 #include <random>
 #include <sstream>
 #include <string>
+#include <vector>
 
 #include <nlohmann/json.hpp>
 
@@ -2279,6 +2282,102 @@ namespace
             ImVec2(imgCx - imgW * 0.5f, imgCy - imgH * 0.5f), ImVec2(imgCx + imgW * 0.5f, imgCy + imgH * 0.5f));
     }
 
+    // -------------------------------------------------------------------
+    // Blurred jacket for the phone screen's backdrop
+    // (ScreenLayerFreeLiveCellPhone > JacketContent > JacketMask > Jacket >
+    //  UIPartsBlurMusicJacket - the same art, scaled up and smeared).
+    //
+    // Done on the CPU, once per song: stb decodes, a box average down to 24x24
+    // *is* the blur (the GPU's linear filter turns that back into a smooth
+    // gradient when it is stretched over ~330 px), and one more 3x3 pass takes
+    // the box edges out. Re-decoding is wasteful, so the texture is cached per
+    // path - switching back and forth between two songs costs nothing.
+    GLuint blurredJacketTex(platform::Renderer& renderer, const std::string& path)
+    {
+        if (path.empty()) {
+            return 0;
+        }
+        static std::map<std::string, GLuint> cache;
+        const auto hit = cache.find(path);
+        if (hit != cache.end()) {
+            return hit->second;
+        }
+
+        GLuint tex = 0;
+        int w = 0;
+        int h = 0;
+        // Read the bytes through std::filesystem (it takes a UTF-8 path) and
+        // hand stb the buffer: stbi_load() ends up in fopen(), which on Windows
+        // cannot open anything outside the ANSI codepage, and a chart folder
+        // with a Chinese name is an obvious case.
+        std::ifstream file(path_utf8::toPath(path), std::ios::binary);
+        std::vector<unsigned char> fileBytes((std::istreambuf_iterator<char>(file)),
+            std::istreambuf_iterator<char>());
+        unsigned char* px = fileBytes.empty()
+            ? nullptr
+            : stbi_load_from_memory(fileBytes.data(), static_cast<int>(fileBytes.size()), &w, &h,
+                nullptr, 4);
+        if (px != nullptr && w > 0 && h > 0) {
+            constexpr int kSize = 24;
+            std::vector<unsigned char> small(static_cast<size_t>(kSize) * kSize * 4, 0);
+            for (int y = 0; y < kSize; ++y) {
+                const int y0 = y * h / kSize;
+                const int y1 = std::max(y0 + 1, (y + 1) * h / kSize);
+                for (int x = 0; x < kSize; ++x) {
+                    const int x0 = x * w / kSize;
+                    const int x1 = std::max(x0 + 1, (x + 1) * w / kSize);
+                    unsigned int r = 0, g = 0, b = 0, a = 0, n = 0;
+                    for (int sy = y0; sy < y1; ++sy) {
+                        for (int sx = x0; sx < x1; ++sx) {
+                            const unsigned char* p = px + (static_cast<size_t>(sy) * w + sx) * 4;
+                            r += p[0];
+                            g += p[1];
+                            b += p[2];
+                            a += p[3];
+                            ++n;
+                        }
+                    }
+                    unsigned char* o = &small[(static_cast<size_t>(y) * kSize + x) * 4];
+                    o[0] = static_cast<unsigned char>(r / n);
+                    o[1] = static_cast<unsigned char>(g / n);
+                    o[2] = static_cast<unsigned char>(b / n);
+                    o[3] = static_cast<unsigned char>(a / n);
+                }
+            }
+            // 3x3 box over the small image, so the downsample's hard block edges
+            // do not survive as visible squares once it is blown back up.
+            std::vector<unsigned char> smooth = small;
+            for (int y = 0; y < kSize; ++y) {
+                for (int x = 0; x < kSize; ++x) {
+                    unsigned int r = 0, g = 0, b = 0, a = 0, n = 0;
+                    for (int dy = -1; dy <= 1; ++dy) {
+                        for (int dx = -1; dx <= 1; ++dx) {
+                            const int sx = std::clamp(x + dx, 0, kSize - 1);
+                            const int sy = std::clamp(y + dy, 0, kSize - 1);
+                            const unsigned char* p = &small[(static_cast<size_t>(sy) * kSize + sx) * 4];
+                            r += p[0];
+                            g += p[1];
+                            b += p[2];
+                            a += p[3];
+                            ++n;
+                        }
+                    }
+                    unsigned char* o = &smooth[(static_cast<size_t>(y) * kSize + x) * 4];
+                    o[0] = static_cast<unsigned char>(r / n);
+                    o[1] = static_cast<unsigned char>(g / n);
+                    o[2] = static_cast<unsigned char>(b / n);
+                    o[3] = static_cast<unsigned char>(a / n);
+                }
+            }
+            tex = renderer.createTextureFromRgba(smooth.data(), kSize, kSize);
+        }
+        if (px != nullptr) {
+            stbi_image_free(px);
+        }
+        cache.emplace(path, tex);
+        return tex;
+    }
+
     // Cached textures from assets/select (phone frame, buttons, indicators).
     GLuint selectTex(platform::Renderer& renderer, const char* name)
     {
@@ -4146,6 +4245,33 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     // can animate the content while the phone itself holds still.
     const int phoneContentVtxFirst = dl->VtxBuffer.Size;
 
+    // ------------------------------------------------------------------
+    // Phone screen backdrop: the song's own jacket, blurred, filling the
+    // screen under a dark scrim - ScreenLayerFreeLiveCellPhone's
+    // UIPartsBlurMusicJacket. It goes on before any content, and it is clipped
+    // to the screen's own rounded corners (the frame image already paints the
+    // bezel, so a square quad would poke out at the four corners).
+    //
+    // The scrim is what buys the contrast: the panel's text is white, and a
+    // blurred sleeve can be anything from black to near-white.
+    // ------------------------------------------------------------------
+    const float scrY1 = phoneY + phoneH * 0.972f;
+    const float screenRound = phoneW * 0.055f;
+    if (!groups.empty() && selected >= 0) {
+        const SongGroup& bgGroup = groups[static_cast<size_t>(groupIndex)];
+        const GLuint blurTex = blurredJacketTex(renderer, bgGroup.coverPath);
+        if (blurTex != 0) {
+            dl->AddImageRounded(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(blurTex)),
+                ImVec2(scrX0, scrY0), ImVec2(scrX1, scrY1), ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f),
+                IM_COL32(255, 255, 255, 255), screenRound);
+        }
+        // Navy scrim. One solid capsule-cornered rect rather than a gradient:
+        // AddRectFilledMultiColor cannot round its corners, and a square scrim
+        // would square off the screen the frame image had just rounded.
+        dl->AddRectFilled(ImVec2(scrX0, scrY0), ImVec2(scrX1, scrY1), IM_COL32(22, 18, 44, 152),
+            screenRound);
+    }
+
     if (!groups.empty() && selected >= 0) {
         const ChartEntry& item = entries[static_cast<size_t>(selected)];
         const SongGroup& group = groups[static_cast<size_t>(groupIndex)];
@@ -4335,19 +4461,22 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         ui::setAnchor("confirm", okA, okB);
         const bool okPressed = !vocalPanelUp && ImGui::IsItemClicked();
         ImGui::PopID();
-        // Outline only: the capsule keeps the phone panel's own background (the
-        // reference UI fills nothing in), and only the rim carries the mint.
-        // Hovering / pressing answers with a whisper of colour inside the rim
-        // plus a slightly brighter edge, so the button still feels alive.
-        const ImU32 okEdge = okReady ? (okHovered ? ui::kPrimaryHover : ui::kPrimary)
-                                     : IM_COL32(126, 138, 156, 255);
-        if (okReady && (okHovered || okPressed)) {
-            dl->AddRectFilled(okA, okB,
-                okPressed ? IM_COL32(106, 232, 208, 72) : IM_COL32(106, 232, 208, 34),
-                okH * 0.5f);
+        // ScreenLayerFreeLiveCellPhone > MainButtonContent > PositiveButton is
+        // GlowCover + ButtonImage + Text + Cover: a *filled* capsule with a halo
+        // behind it, not an outline. ui::capsuleDraw() is this project's version
+        // of exactly that (halo + fill + hover growth + press inversion), so the
+        // 确定 button now reads like every other primary button in the app.
+        // The disabled state stays hand-drawn: a dim slate capsule, no halo, so
+        // "nothing to confirm yet" is visible rather than just rejected.
+        if (okReady) {
+            ui::capsuleDraw(dl, okA, okB, "确定", true, okHovered ? 1.0f : 0.0f,
+                okPressed ? 1.0f : 0.0f, 22.0f * k);
+        } else {
+            dl->AddRectFilled(okA, okB, IM_COL32(70, 74, 104, 210), okH * 0.5f);
+            dl->AddRect(okA, okB, IM_COL32(126, 138, 156, 255), okH * 0.5f, 0, 2.0f * k);
+            addTextCentered(dl, body, 22.0f * k, ImVec2(cx, (okA.y + okB.y) * 0.5f),
+                IM_COL32(178, 184, 202, 255), "确定");
         }
-        dl->AddRect(okA, okB, okEdge, okH * 0.5f, 0, 3.0f * k);
-        addTextCentered(dl, body, 22.0f * k, ImVec2(cx, (okA.y + okB.y) * 0.5f), okEdge, "确定");
         // Where the button actually lands on screen (it is tilted with the phone),
         // so main.cpp can start the confirm flash from it.
         if (confirmCenter != nullptr) {
