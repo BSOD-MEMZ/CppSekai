@@ -204,7 +204,7 @@ namespace
     };
 
     // ------------------------------------------------------------------
-    // Flick debug log (settings > 判定 > Flick 调试日志).
+    // Flick / touch debug log (settings > 判定 > 触摸轨迹日志).
     //
     // A missed touch flick leaves nothing to inspect afterwards: the gesture
     // is a stream of raw SDL_FINGER* events, the thresholds live in
@@ -654,9 +654,9 @@ namespace
             "--singer-panel: open the 切换歌手 vocal-version panel (the phone panel's\n"
             "          singer button) at boot. Only shows versions for a song that has a\n"
             "          vocal table, so combine with --select-id.\n"
-            "--flick-log: write flick_debug.log (every touch sample + the swipe\n"
-            "          measurement + the judgement it produced; same switch as\n"
-            "          settings > 判定 > Flick 调试日志). For touch-flick diagnosis.\n"
+            "--flick-log: write flick_debug.log ([traj] every raw finger event,\n"
+            "          [touch] every sample the classifier saw, [flick] the judgement it\n"
+            "          produced; same switch as settings > 判定 > 触摸轨迹日志).\n"
             "--player <name[:org]> / --player-rank <n> / --player-exp <0..1>: seed the\n"
             "          local account for headless checks (--player-exp = how far into the\n"
             "          current rank, i.e. the level chip's green progress bar); memory\n"
@@ -2047,7 +2047,7 @@ int main(int argc, char** argv)
     hideTouchFeedback = userSettings.hideTouchFeedback;
     simpleEffects = userSettings.simpleEffects;
     showFps = userSettings.showFps;
-    // Flick debug log (settings > 判定 > Flick 调试日志). Truncates the file at
+    // Flick / touch debug log (settings > 判定 > 触摸轨迹日志). Truncates it at
     // boot when it is on, so every run starts with a clean log.
     gFlickLog.setEnabled(userSettings.debugLog || gForceFlickLog);
     platform::logf(platform::LogSystem, "[settings] flick debug log %s\n",
@@ -3258,6 +3258,132 @@ int main(int argc, char** argv)
     auto beginSessionClock = [&]() { beginSessionClockAt(0); };
 
     std::vector<TouchTrack> touches;
+    // ------------------------------------------------------------------
+    // Raw touch trajectory (设置 > 判定 > 触摸轨迹日志 = userSettings.debugLog).
+    //
+    // The flick classifier only ever sees a finger whose *down* landed inside
+    // the playfield - beginPointer() returns false for anything outside and
+    // drops it without a word - and the move lines below are only written for
+    // fingers it adopted. That makes the commonest "flick does not register on
+    // this panel" report impossible to diagnose from flick_debug.log: you
+    // cannot tell "the panel sent no motion events at all" from "the swipe
+    // started an inch below the horizon".
+    //
+    // So every SDL finger event of a gesture is recorded here, *before* any of
+    // that gating, with its own dt and the running sample count. What the panel
+    // actually delivers then reads straight off the log: 3 samples across a
+    // whole swipe, a 40 ms gap in the middle, y quantised to 20 px steps, or a
+    // gesture that arrived as down+up only (no motion at all).
+    // ------------------------------------------------------------------
+    struct TrajTouch
+    {
+        SDL_FingerID id = 0;
+        Uint32 lastMs = 0;
+        Uint32 startMs = 0;
+        int downX = 0;
+        int downY = 0;
+        int lastX = 0;
+        int lastY = 0;
+        int samples = 0;
+        float dx = 0.0f; // running displacement, screen px (y positive = down)
+        float dy = 0.0f;
+        float peakSpeed = 0.0f; // px/s, straight-line between samples
+        int maxGapMs = 0;       // longest silence inside the gesture
+    };
+    std::vector<TrajTouch> trajTouches;
+    int trajPendingWrites = 0;
+    const auto trajAppState = [&state]() -> const char* {
+        switch (state) {
+        case AppState::Play: return "play";
+        case AppState::Select: return "select";
+        case AppState::Result: return "result";
+        }
+        return "?";
+    };
+    // One line per raw event. Down / up flush so the log can be tailed while
+    // the finger is still on the glass; moves are buffered (a 120 Hz panel
+    // would otherwise turn the flush into the bottleneck of the input path).
+    const auto trajRaw = [&](const char* kind, SDL_FingerID id, float xNorm, float yNorm, Uint32 ms) {
+        if (!gFlickLog.enabled) {
+            return;
+        }
+        const int x = static_cast<int>(xNorm * static_cast<float>(windowW));
+        const int y = static_cast<int>(yNorm * static_cast<float>(windowH));
+        if (std::strcmp(kind, "down") == 0) {
+            TrajTouch t;
+            t.id = id;
+            t.lastMs = ms;
+            t.startMs = ms;
+            t.downX = t.lastX = x;
+            t.downY = t.lastY = y;
+            t.samples = 1;
+            trajTouches.push_back(t);
+            gFlickLog.write("[traj] down finger=%u state=%s s=(%d,%d)", static_cast<unsigned>(id),
+                trajAppState(), x, y);
+            gFlickLog.flush();
+            return;
+        }
+        auto it = std::find_if(trajTouches.begin(), trajTouches.end(),
+            [&](const TrajTouch& t) { return t.id == id; });
+        if (std::strcmp(kind, "up") == 0) {
+            if (it == trajTouches.end()) {
+                // A lift-off whose down was never seen (the finger was already
+                // down when the window got focus) - still worth a line.
+                gFlickLog.write("[traj] up finger=%u state=%s s=(%d,%d) (no down seen)",
+                    static_cast<unsigned>(id), trajAppState(), x, y);
+                gFlickLog.flush();
+                return;
+            }
+            // The lift-off position is a sample of its own: a short flick can
+            // end before its last move arrives, and those are exactly the
+            // pixels the gesture was made of.
+            const float lastDx = static_cast<float>(x) - static_cast<float>(it->lastX);
+            const float lastDy = static_cast<float>(y) - static_cast<float>(it->lastY);
+            it->dx += lastDx;
+            it->dy += lastDy;
+            ++it->samples;
+            const Uint32 gap = ms - it->lastMs;
+            if (gap > 0) {
+                const float speed =
+                    std::sqrt(lastDx * lastDx + lastDy * lastDy) / (static_cast<float>(gap) / 1000.0f);
+                it->peakSpeed = std::max(it->peakSpeed, speed);
+                it->maxGapMs = std::max(it->maxGapMs, static_cast<int>(gap));
+            }
+            const Uint32 held = ms - it->startMs;
+            gFlickLog.write("[traj] up finger=%u state=%s s=(%d,%d) samples=%d held=%ums dx=%.0f dy=%.0f "
+                            "peak=%.0fpx/s maxGap=%ums",
+                static_cast<unsigned>(id), trajAppState(), x, y, it->samples,
+                static_cast<unsigned>(held), static_cast<double>(it->dx), static_cast<double>(it->dy),
+                static_cast<double>(it->peakSpeed), it->maxGapMs);
+            gFlickLog.flush();
+            trajTouches.erase(it);
+            return;
+        }
+        // move
+        if (it == trajTouches.end()) {
+            return;
+        }
+        const Uint32 gap = ms - it->lastMs;
+        const float dx = static_cast<float>(x) - static_cast<float>(it->lastX);
+        const float dy = static_cast<float>(y) - static_cast<float>(it->lastY);
+        it->lastX = x;
+        it->lastY = y;
+        it->dx += dx;
+        it->dy += dy;
+        if (gap > 0) {
+            const float speed = std::sqrt(dx * dx + dy * dy) / (static_cast<float>(gap) / 1000.0f);
+            it->peakSpeed = std::max(it->peakSpeed, speed);
+            it->maxGapMs = std::max(it->maxGapMs, static_cast<int>(gap));
+        }
+        it->lastMs = ms;
+        ++it->samples;
+        gFlickLog.write("[traj] move finger=%u s=(%d,%d) d=(%.0f,%.0f) gap=%ums", static_cast<unsigned>(id), x,
+            y, static_cast<double>(dx), static_cast<double>(dy), static_cast<unsigned>(gap));
+        if (++trajPendingWrites >= 32) {
+            trajPendingWrites = 0;
+            gFlickLog.flush();
+        }
+    };
     bool keyHeld[12] = {};
     std::array<float, LANE_COUNT> lanePress{};
     std::array<float, LANE_COUNT> laneHover{};
@@ -5213,6 +5339,20 @@ int main(int argc, char** argv)
                         if (flickAsTap != judgement.flickAsTap()) {
                             judgement.setFlickAsTap(flickAsTap);
                             userSettings.flickAsTap = flickAsTap;
+                            persistUserData();
+                        }
+                        // 触摸轨迹日志（= `--flick-log` 的那个开关，默认不启用）。
+                        // 打开后每一次 SDL_FINGERDOWN / MOTION / UP 都进
+                        // flick_debug.log，**在"这个触点算不算打击区域"的过滤之前**，
+                        // 所以"这块屏的手指根本发不出 motion"和"滑得太短"能区分开。
+                        // 关掉就立刻闭文件，不用重启；一局密集谱面是几千行，别常开。
+                        colSet(1);
+                        bool trajLogBox = userSettings.debugLog;
+                        ui::checkBox("触摸轨迹日志", &trajLogBox, w);
+                        if (trajLogBox != userSettings.debugLog) {
+                            userSettings.debugLog = trajLogBox;
+                            // `--flick-log` 是本次运行的强制开关，勾掉选项不该把它关掉。
+                            gFlickLog.setEnabled(trajLogBox || gForceFlickLog);
                             persistUserData();
                         }
                         // Starting life. The engine seeds every session's stats from its
@@ -7599,6 +7739,19 @@ int main(int argc, char** argv)
                     continue;
                 }
                 mapPointerEvent(event);
+            // Raw touch trajectory (设置 > 判定 > 触摸轨迹日志): recorded before
+            // the state / playfield gates below, so a gesture that the game ends
+            // up ignoring still shows up in the log.
+            if (event.type == SDL_FINGERDOWN) {
+                trajRaw("down", event.tfinger.fingerId, event.tfinger.x, event.tfinger.y,
+                    event.tfinger.timestamp);
+            } else if (event.type == SDL_FINGERMOTION) {
+                trajRaw("move", event.tfinger.fingerId, event.tfinger.x, event.tfinger.y,
+                    event.tfinger.timestamp);
+            } else if (event.type == SDL_FINGERUP) {
+                trajRaw("up", event.tfinger.fingerId, event.tfinger.x, event.tfinger.y,
+                    event.tfinger.timestamp);
+            }
             ImGui_ImplSDL2_ProcessEvent(&event);
             switch (event.type) {
                 case SDL_QUIT:

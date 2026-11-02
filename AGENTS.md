@@ -1233,8 +1233,13 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
 - **入场/过渡动画**（2026-09-13）：`enterAnim` 靠"本函数每帧都被调用，隔 >0.5s 才又调一次
   = 刚进来"判定（不用宿主通知），手机面板的入场就是挂在既有的"手机顶点整体旋转"那趟循环里
   做的（位移 + 顶点 alpha），所以别在那里加 `continue` 之类的短路。选中卡片的高度按槽位
-  （`slotHeights`，索引是 `wrapSlot(slot)`）做指数趋近——`slotHeights` 必须在 `listSignature`
-  变化时 `assign(rowCount, 0)`，否则越界。
+  （`slotHeights`）做指数趋近——**键是原始 `slot`，不是 `wrapSlot(slot)`**（2026-11-02 改）：
+  列表是循环的，曲库比屏幕能放的槽位少时同一首歌会同时出现在多个槽位上，那些副本必须各自
+  有独立的高度状态。以前共用 `wrapSlot` 索引，副本们每帧朝 128 / 84 互相拉扯，**选中卡片
+  永远到不了 `cardH`（实测卡在 ~98/128）而且每帧在 97.88~98.33 之间来回**——这就是用户报的
+  "选中选项一直在颤抖"。`slotHeights` 现在是个 `unordered_map<int,float>`，`listSignature`
+  变化时 `clear()`，每帧在行循环之后把 `[firstSlot-4, lastSlot+4]` 之外的擦掉（槽位号会随着
+  循环无限增长，不清就是个慢泄漏）。**别改回 `vector` + `wrapSlot`。**
 - **选曲背景可以是桌面壁纸**（2026-09-13）：`bgStyle/bgBlur/bgDim` 三个设置项，壁纸路径见
   `windowsWallpaperPath()`（SPI_GETDESKWALLPAPER → 注册表 HKCU\Control Panel\Desktop\WallPaper
   → `%APPDATA%\Microsoft\Windows\Themes\TranscodedWallpaper`，都要 `GetFileAttributesW` 验存在，
@@ -2657,20 +2662,27 @@ ImGui 后端降级 + 去掉 `glBindSampler`），那是一块真活儿，而目�
   数字从一开始就写 1000、每次 MISS 掉 16（看起来"扣血变慢"），而血条其实一直是对的。
   实测（0001_master，autoplay 8 miss、池子 5000）：数字 `4360`、血条 87.2%，
   与 `[stats] life=4360 (87.2%)` 一致。
-- **Flick 调试日志**（`settings > 判定 > Flick 调试日志`，勾选即生效并写进档案；
+- **Flick / 触摸调试日志**（`settings > 判定 > 触摸轨迹日志`，勾选即生效并写进档案；
   命令行等价物 `--flick-log`，不落盘设置、只给支持/回归用）。开启时先把
   `flick_debug.log`（exe 工作目录）清空再逐行 flush，内容：
+  - `[traj] down/move/up`（2026-11-02 加）：**手势里每一个 SDL 手指事件**，写在
+    "这个触点算不算打击区"的过滤**之前**（`beginPointer` 会把落点在地平线以下的
+    触点直接丢掉、一行不留），所以能区分"这块屏根本不发 motion"和"滑得太短/起点太低"。
+    up 行汇总 `samples` / `held` / 总 `dx dy` / `peak` px/s / `maxGap`——采样只有 2~3 个、
+    或者中间有 40ms 空洞，一眼就能看出来。move 行带本帧 gap。
   - `[touch] down` / `[touch] move` / 每次 flick 判定尝试的 `[flick] fire/move|fire/up`；
     move 行有**每个原始采样**：屏幕坐标、位移、`dt`（以及未 clamp 的 rawDt）、低通后的
-    vel、travel、当前分类出的 dir、lane。
+    vel、travel、当前分类出的 dir、lane。这些只覆盖**被判为打击**的手指（落点在打击区内）。
   - 没打中时 `logFlickOutcome` 会调 `JudgementEngine::debugFlickNotesNear(t, 0.6s)`
     把附近的 flick 音符按时间距离列出来（`dt` / laneDelta / halfWidth / wantDir / state），
     这是判断"方向错 vs 轨道错 vs 根本没到判定窗口"的关键。
   - 所以用户报"触摸 flick 老 MISS"，**让他开着这个开关打一遍再把 flick_debug.log 发来**
-    就行（日志很密，一首歌几千行）。
+    就行（日志很密，一首歌几千行；`[traj]` 每个采样一行，长滑一次几十行）。
   - 实现注意：日志结构体 `FlickDebugLog` 在 main.cpp 匿名命名空间（文件级 `gFlickLog`），
     `setEnabled()` 里会 truncate；**变量别叫 `near`**（windef.h 把它定义成空宏，
-    声明会被吃掉，直接编译不过）。
+    声明会被吃掉，直接编译不过）。轨迹状态 `trajTouches` 在事件循环之前声明，
+    `trajRaw` 由 `while (SDL_PollEvent)` 上方那一段按事件类型调用——**不要在
+    `case SDL_FINGERDOWN` 里调**，那里已经被 `state != Play` 之类的分支切碎，漏事件。
 
 ## 「Flick 视作 Tap」（2026-09-19，`settings > 判定`，紧跟在「严格 Flick 方向」后面）
 

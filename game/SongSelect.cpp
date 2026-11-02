@@ -29,6 +29,7 @@
 #include <random>
 #include <sstream>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include <nlohmann/json.hpp>
@@ -3598,9 +3599,18 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     static float indexAnim = 0.0f;
     static float enterAnim = 0.0f;
     static double lastFrameTime = -1.0;
-    // Animated height per row slot: the selected row grows into a card and the
-    // one it replaced shrinks back, instead of snapping.
-    static std::vector<float> slotHeights;
+    // Animated height per **visual slot**: the selected row grows into a card
+    // and the one it replaced shrinks back, instead of snapping.
+    //
+    // Keyed by the raw slot, not by `wrapSlot(slot)`. The list is cyclic, so a
+    // short library draws the same song at several slots at once; those copies
+    // are separate visuals and must not share one height. They used to, and the
+    // copies then pulled the value in opposite directions every frame - the
+    // selected card never reached `cardH` (it sat at ~98 px of 128) and its
+    // position kept flipping by a fraction of a pixel, which is what the
+    // "selected row trembles" report was. Entries are pruned to the slots that
+    // are on screen, so the map stays tiny.
+    static std::unordered_map<int, float> slotHeights;
 
     // Sorting / grouping decides the row layout. Grouping wins over the sort
     // combo because a section's songs have to stay together.
@@ -3619,7 +3629,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         lastSignature = listSignature;
         cachedRows = buildRows(groups, visible, entries, diffIndex, order, groupMode);
         listInit = false; // the list changed shape: recentre without gliding
-        slotHeights.assign(cachedRows.size(), 0.0f);
+        slotHeights.clear();
         listIn = 0.0f; // and let the new rows rise in (see the vertex pass below)
     }
     // Grouping off means no section headers exist, so the panel has nothing to
@@ -4027,11 +4037,8 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         // up in the middle is picked once it stops.
         const bool isSel = slot == cardSlot;
         // Animated height: a row grows into a card instead of snapping, and the
-        // one the selection left shrinks back.
-        float& rowHAnim = slotHeights[static_cast<size_t>(wrapSlot(slot))];
-        if (rowHAnim <= 0.0f) {
-            rowHAnim = compactH; // first time this slot is on screen
-        }
+        // one the selection left shrinks back. Per slot - see the declaration.
+        float& rowHAnim = slotHeights.try_emplace(slot, compactH).first->second;
         rowHAnim += ((isSel ? cardH : compactH) - rowHAnim) * (1.0f - std::exp(-frameDt * 16.0f));
         const float rowH = rowHAnim;
         const ImVec2 p0(rowX, centerY - rowH * 0.5f);
@@ -4152,6 +4159,12 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
                     IM_COL32(40, 36, 20, 255), mv.c_str());
             }
         }
+    }
+    // Drop the animated heights of slots that left the screen: a slot is a
+    // position in the cyclic list, so they would otherwise accumulate (and the
+    // value a returning slot inherits would be meaningless anyway).
+    for (auto it = slotHeights.begin(); it != slotHeights.end();) {
+        it = (it->first < firstSlot - 4 || it->first > lastSlot + 4) ? slotHeights.erase(it) : std::next(it);
     }
 
     // ------------------------------------------------------------------

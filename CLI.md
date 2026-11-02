@@ -140,7 +140,7 @@ cppsekai [--sus <file.sus>] [--bgm <audio>] [--charts <dir>] [--cover <image>]
 | `--result-at <sec>` | 谱面走到指定秒数就切到**结算画面**（用真实判定数据），不用等整首歌放完 |
 | `--result-preview` | 启动即进结算画面，且用参考截图的样例数字（940021 / PERFECT 634 …），专门用来跟原版截图做像素对比 |
 | `--flick-as-tap` | 本次运行把 **flick 音符当 tap 判**（任意手势都能清），给上滑很难触发的触摸屏用；等同设置里「判定 > Flick 视作 Tap」，但**不写档案** |
-| `--flick-log` | 开触摸 flick 调试日志（等同设置里「判定 > Flick 调试日志」，但不写档案）。写 `flick_debug.log`：每个触摸采样（坐标/位移/dt/vel/travel/分类出的方向）+ 每次 flick 判定的结果，**没打中时还会列出附近 flick 音符的 dt / 轨道偏差 / 需要的方向**——触摸 flick 老 MISS 就靠它定位 |
+| `--flick-log` | 开触摸 flick 调试日志（等同设置里「判定 > 触摸轨迹日志」，但不写档案）。写 `flick_debug.log`：`[traj]` 是**每一个 SDL 手指事件**（写在"这个触点算不算打击区"的过滤之前，所以"这块屏不发 motion"也能看见；up 行汇总 `samples`/`held`/总位移/峰值速度/最大间隔）+ `[touch]` 每个被判为打击的采样的坐标/位移/dt/vel/travel/分类方向 + `[flick]` 每次判定结果，**没打中时还会列出附近 flick 音符的 dt / 轨道偏差 / 需要的方向**——触摸 flick 老 MISS 就靠它定位 |
 | `--confirm-flash [<sec>]` | 在选曲界面单独放一次「确定」的白色爆发光效（默认 1.0s 处，**不加载歌曲**），配合 `--screenshot` 抓爆发过程 |
 | `--profile` | 启动即打开选曲界面的**个人资料卡**（平时要点右上角的等级牌才出来），配合 `--screenshot` 截它 |
 | `--guess` | 启动即打开**猜歌**卡片（平时要点选曲界面头排的「猜歌」按钮），配合 `--screenshot` 截它 |
