@@ -7094,8 +7094,11 @@ int main(int argc, char** argv)
         // The state flags were derived from the (empty) live stats above; the
         // preview numbers are written afterwards, so re-derive them or the
         // reference shot would claim a full combo despite the MISS in it.
-        resultData.failed = false;
-        resultData.fullCombo = resultData.miss == 0;
+        // CPSEKAI_RESULT_FAIL=1: preview the FAILED result (LIVE FAILED title,
+        // no score-rank plate). The failed run can otherwise only be seen by
+        // actually draining the life bar to zero.
+        resultData.failed = std::getenv("CPSEKAI_RESULT_FAIL") != nullptr;
+        resultData.fullCombo = !resultData.failed && resultData.miss == 0;
         resultData.allPerfect = resultData.fullCombo && resultData.great == 0
             && resultData.good == 0 && resultData.bad == 0;
         beginSessionClockPending = false;
@@ -10158,10 +10161,10 @@ int main(int argc, char** argv)
                 ? resultAtSec
                 : (chartEnd > 1.0 ? std::min(naturalEnd, chartEnd + kLiveClearDelaySec)
                                   : naturalEnd);
-            const bool clearedSoFar = judgement.stats().life > 0.0f;
             // 2026-11-01：**不看血量**。原版不论打成什么样，最后一个音符判完就出
             // LIVE CLEAR；原来这里要求 life > 0，掉血掉光的局就没有横幅、直接
-            // 黑场进结算，用户要的是统一。
+            // 黑场进结算，用户要的是统一。（clearedSoFar 随之没用了：它唯一的
+            // 消费者是下面的普通黑场分支，那个分支 2026-11-03 已删。）
             if (state == AppState::Play && trackDurationSec > 1.0 && !liveClearBannerArmed
                 && !resultScheduled && songTime >= effectiveEnd) {
                 liveClearBannerArmed = true;
@@ -10194,18 +10197,21 @@ int main(int argc, char** argv)
                     //   全黑  —— 从 bannerFadeStart 起算，kSongEndFadeSec 秒推到 1，
                     //            推满才切结算（见下面的 resultDue），Result 再用
                     //            0.6 s 把这层黑抬起来 = 第一屏是渐亮的
+                    //
+                    // ⚠ 这里必须是**赋值**，不能 max 保留旧值（2026-11-03 修
+                    // "血量扣完横幅像没播"）：血量归零的局在横幅 armed 之前，
+                    // 下面的普通黑场分支已经把 songEndBlackout 推到 1；armed 之后再
+                    // max(banner 黑场, u)，那个 1 就永远压着横幅 —— 字落在全黑上，
+                    // 观感是"LIVE CLEAR 播了一下就没了"。cleared 局没有那个分支，
+                    // 所以只有失败局能看见。横幅 armed 之后黑场完全归它管。
                     const float u = std::clamp(
                         (bannerT - bannerFadeStart) / kSongEndFadeSec, 0.0f, 1.0f);
                     songEndBlackout = std::max(liveClearBanner.blackout(), u);
-                } else if (!clearedSoFar) {
-                    // A failed run has no banner - it keeps the plain fade. A
-                    // living run deliberately does not start fades here: the
-                    // banner would otherwise appear behind a black screen.
-                    const float fadeFrom = static_cast<float>(effectiveEnd) - kSongEndFadeSec;
-                    const float u = std::clamp(
-                        (static_cast<float>(songTime) - fadeFrom) / kSongEndFadeSec, 0.0f, 1.0f);
-                    songEndBlackout = std::max(songEndBlackout, u);
                 }
+                // （曾经的 `else if (!clearedSoFar)` 普通黑场已删：2026-11-01 起失败局
+                // 也播横幅，这段提前 1 s 推黑的老逻辑只剩一个作用 —— 把画面推进全黑，
+                // 让紧接着出现的横幅落在黑屏上。切结算前的黑透由上面的 u 曲线保证，
+                // summary 的 fromBlack 不受影响。）
             }
 
             // ----------------------------------------------------------

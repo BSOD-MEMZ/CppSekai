@@ -1492,14 +1492,20 @@ prefab，**10 个字母各占一个 Image 节点**（不是一行文字，也不
 同帧有控件发声会把这条顶掉）。加在枚举末尾是必须的：`ui::flushSe()` 把 `ui::SeKind` 的
 下标直接 cast 进这个枚举。
 
-流程接在 `main.cpp`：`songTime >= effectiveEnd` 且 `st.life > 0` 时 `start()` + 播音效，然后
+流程接在 `main.cpp`：`songTime >= effectiveEnd` 时 `start()` + 播音效，然后
+- **2026-11-01 起不看血量**：原版不论打成什么样，最后一个音符判完就出 LIVE CLEAR，
+  失败局也一样（结算第一屏会显示 LIVE FAILED，横幅播的是 CLEAR，这是用户要的统一）；
 - `resultDue` 等 **banner 自己的时钟**（`time() >= kDuration`），不是 songTime —— 音频时钟在
   曲末就停了，用 songTime 会永远等不到；
 - 黑幕由 `banner.blackout()` 接管（半透明 0.5 遮罩 → 1.25s 后涨到 1）；**活着的曲子在这段
-  完全不走老的 `kSongEndFadeSec` 淡黑**，否则字会出现在黑屏上（`songEndBlackout` 老代码是
-  `max()` 累加，一旦涨到 1 就再也下不来）；
+  完全不走老的 `kSongEndFadeSec` 淡黑**，否则字会出现在黑屏上；
 - banner 期间不画 HUD（`drawHud` 的条件加 `!liveClearBanner.active()`），原作曲终就是只剩舞台；
-- 失败（`life <= 0`）不播，照旧淡黑。
+- ⚠ **`songEndBlackout` 在横幅 armed 之后必须是赋值语义，不能 max 保留旧值**
+  （2026-11-03 修「血量扣完横幅像没播」）：曾经有个 `else if (!clearedSoFar)` 的普通黑场
+  分支，在横幅 armed **之前** 1 s 就把画面推黑，而横幅分支是 `max(blackout(), u)` ——
+  那个 1 永远压着横幅，字落在全黑上，观感是"特效播了一下就没了"；cleared 局没有那个
+  分支，所以只有失败局看得见。分支已删，失败局的黑场完全交给横幅自己的 u 曲线
+  （切结算前照样黑透，summary 的 fromBlack 不受影响）。
 
 **坑**：
 
