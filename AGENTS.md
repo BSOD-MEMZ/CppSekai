@@ -776,6 +776,13 @@ bash build.sh          # 仅需 Git Bash；产物 build/cppsekai.exe + SDL2.dll 
     `game::setVocalPreference()` 推过去的副本。只在"这首歌真有那个版本、且音频在本地"
     时生效，否则回落 —— 别把它做成"放不出声"。
   - 卡片带阴影（`shadowLayers`，spreadScale 3.0，比控件的 1.0 远得多）。
+  - **卡片高度是"按内容反推"的，必须带死区**（2026-11-02 修「设置窗口也在颤」）：
+    每页把 `used + 10s - view` 加到当前高度上（`tabCardH[tab]`，第一帧 780）。问题是
+    `view` 是 ImGui 的**整数**高度，等式永远差 0.5px 左右 → 高度在 783.8 ↔ 784.75 之间
+    以 60Hz 来回，底边和投影每秒抖 60 次。现在：`std::round()` 落到整像素 +
+    **|差| < 1.5px 就不动**（`stored = cardH`），七页实测各自定住不动
+    （784 / 804 / 699 / 707 / 652 / 765 / 521）。**别去掉这个死区**，否则极限环立刻回来。
+    复查：临时在回写处打 `cardH/used/view`，同一个值应该连成一片。
   高度用 `CPSEKAI_UI_TRACE=1` 量（@1080p view = 796，最高的判定页 768，不滚）。
   `--settings` + `--settings-tab <0-6>` 无头打开（按键没法送进无头运行），配合 `--screenshot` 截图。
   **加页签要同步三处**：`kSettingsTabCount`（LB/RB 循环页签用它）、`ui::tabBar` 的标签数组、
@@ -3252,6 +3259,27 @@ UI 在 **设置 → 演奏 → 按键映射**（3 列 × 4 行，点一格再按
   下面是"答对 x / y 连对 z（最佳 w）"+ 下一题 / 关闭。
 - 出题时打一行 `[guess] "别名" -> <id> 正确曲名 | *正确曲名 / 干扰 / ...`，
   无头跑只能靠它看到出了什么题（`--guess` 起手就能抓）。
+- **题库是分帧建的，卡片先出来（2026-11-02）**。以前点击那一帧同步跑完整个池子，
+  12.9k 个别名里每个都要和**全部曲名**比一遍（`toLower(titleFor(id))` 双层循环
+  = 6.4M 次临时 string），点下去就是几百毫秒的卡死。现在三段：
+  - `openGuessDialog()` 只把 `gGuess.open = true` + `gGuess.loading = true` 立起来，
+    卡片立刻画出来（标题 + 「正在准备题库…」+ 进度条 + 关闭）；
+  - `tickGuessPool()` 每帧推 ~3ms（每 64 条看一眼表），进度写 `gGuess.loadingPercent`；
+    卡片关了也继续推，下次点就直接能玩。收尾会打
+    `[guess] pool built in X ms over N frame(s)`（**注意这个数是墙钟**，含启动那一帧的调查
+    200ms，真实 CPU 也就 20~30ms）；
+  - 收尾时自己 `newGuessQuestion()` 出第一题。
+  - 那条"别人的曲名不能正好是这个别名"改成查 `gTitleLowerIndex`（小写曲名 → 曲 id 们），
+    6.4M 次 string 比较变成一次哈希。**结果必须仍然是 11876 可用**（前 12896 条），
+    改这块之后拿这个数对一下。
+  - 凑不出题时**不关卡片**：`gGuess.unavailable` 立起来，卡片里写"没有可用的题库"。
+    以前是 `open = false`，看起来就像按钮没反应。
+- **入场/出场动画要 `alive` 守着**（2026-11-02）：`if (gGuess.open && options.size() == 4)`
+  这种写法会同时踩两个坑 —— 关的时候那一帧就不画了，出场动画没有；而 `beginCard` 只有在
+  **关闭动画真的播完**（`st.t` 走到 0 → `st.ended = true`）之后才会在下次 open 时重置 `t`，
+  所以"第一次点有入场、之后都没有"。现在和 `keymapCardAlive` / `eulaAlive` 一个套路：
+  `open` 只当目标态，`gGuessAlive` 在 `beginCard()` 返回 false 时才落下来。
+  **新加卡片照抄这个模式**，别用 `if (open) { beginCard(...); }`。
 - `--guess` 是给 `--screenshot` 用的钩子，同 `--profile`；正式入口就是头排那个按钮。
 - 实现细节：选项胶囊不能用 `ui::capsuleButton`（它只认薄荷/白两色），所以
   `guessOptionPill()` 照它的外观重画一遍（半高圆角 + 底部浅阴影 + `bodyFont` 居中），

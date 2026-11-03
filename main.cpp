@@ -5987,9 +5987,22 @@ int main(int argc, char** argv)
             // 记下这一页需要多高（下一帧的卡片高度用它，见上面的 tabCardH）。
             // used 是 child 里的光标 y，view 是 child 的高度 —— 差值就是"多出来
             // 的那截空白"，把它从卡片上减掉，正好收成贴着内容的高度。
-            tabCardH[std::clamp(tab, 0, 6)] = std::clamp(
-                cardH + (ImGui::GetCursorPosY() + 10.0f * s - ImGui::GetWindowHeight()),
-                400.0f * s, 1040.0f * s);
+            //
+            // ⚠ 这个反推式**本身没有不动点**：view 是 ImGui 把 child 高度取整之后
+            // 的值，于是 `cardH + used + 10s - view` 永远差 0.5px 左右，卡片高度就在
+            // 783.8 ↔ 784.75 之间以 60Hz 来回 —— 底边和投影每秒抖 60 次，就是
+            // "设置窗口也在颤"（2026-11-02 实测：used 恒 603，view 在 615/616 之间
+            // 交替，cardH 跟着跳）。所以两件事：**取整**（让它落到整数像素上）+
+            // **1.5px 死区**（差得不够多就别动），差值归零之后高度就真的定住了。
+            {
+                float& stored = tabCardH[std::clamp(tab, 0, 6)];
+                const float wanted = std::round(cardH + (ImGui::GetCursorPosY() + 10.0f * s - ImGui::GetWindowHeight()));
+                if (std::fabs(wanted - cardH) >= 1.5f) {
+                    stored = std::clamp(wanted, 400.0f * s, 1040.0f * s);
+                } else {
+                    stored = cardH; // 已经贴着内容了：别再动，不然就是上面那个极限环
+                }
+            }
             // Diagnostic (CPSEKAI_UI_TRACE=1): how tall this tab really is against
             // the view. `used` past `view` means rows are being drawn below the
             // child and clipped - which is what "the settings do not fit" looks

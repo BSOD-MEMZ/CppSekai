@@ -603,6 +603,11 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
 // when the level chip is clicked, which a --screenshot run cannot do.
 void debugOpenProfileCard(bool open);
 
+// 猜歌（header 那颗「猜歌」按钮 → 卡片）。打开是**异步**的：卡片立刻放上来显示
+// 「正在准备题库…」，别名表在随后的帧里按 ~3ms/帧 建好（第一次打开要过 12.9k 个别名，
+// 同步做会把点击那一帧卡住几百毫秒）。建完之后一直缓存。
+void openGuessDialog();
+
 // Debug (`--guess`): open the 猜歌 quiz (the header button's card) at boot, for
 // the same reason. Also usable to close it again.
 void debugOpenGuessDialog(bool open);

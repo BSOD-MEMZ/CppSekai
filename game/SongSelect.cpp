@@ -541,6 +541,14 @@ std::vector<std::string> vocalSingerLines(const std::vector<std::string>& singer
 struct GuessState
 {
     bool open = false;
+    // 题库还在建（见 tickGuessPool）：卡片先放上来显示"正在准备题库…"。
+    // 以前是点击那一帧同步算完的 —— 12.9k 个别名 × 每首标题都 toLower 一遍，
+    // 实测 175ms 一帧卡死（慢机 / 冷缓存上更久），表现就是"点猜歌会卡住"。
+    bool loading = false;
+    int loadingPercent = 0;
+    // newGuessQuestion() 凑不出题（没有别名表 / 池子太小）时置真。卡片留着说明
+    // 原因，别让它悄悄消失 —— 那看起来像按钮没反应。
+    bool unavailable = false;
     std::string alias;
     std::vector<int> options; // 4 song ids; options[answer] is the right one
     int answer = 0;
@@ -552,8 +560,31 @@ struct GuessState
     int lastAnswerId = 0; // never ask the same song twice in a row
 };
 GuessState gGuess;
+// 卡片是不是还在屏幕上（含出场动画）。只按 `open` 画的话，一关就是"啪一下消失"，
+// 和 keymap / eula 一样要等 beginCard() 的关闭动画播完再停手。
+bool gGuessAlive = false;
 std::vector<std::pair<std::string, int>> gGuessPool;
 bool gGuessPoolBuilt = false;
+
+// 小写标题 -> 所有用这个标题的曲 id。原来"有没有别的歌的标题正好就是这个别名"
+// 那条规则是 (别名 x 全部标题) 双层循环，每个组合都 toLower 一份临时 string ——
+// 12.9k x ~500 = 6.4M 次，是整个构建里最贵的一段。建一次索引就变成一次哈希查找。
+std::unordered_map<std::string, std::vector<int>> gTitleLowerIndex;
+bool gTitleLowerIndexBuilt = false;
+
+// 题库的增量构建。items 是别名的快照（gAliasIndex 之后不会再变，但拿 std::map
+// 的迭代器没法按下标推进），cursor 就是进度。
+struct GuessPoolBuild
+{
+    bool active = false;
+    std::vector<std::pair<std::string, std::vector<int>>> items;
+    std::size_t cursor = 0;
+    std::vector<std::string> unreadable;
+    std::chrono::steady_clock::time_point started{};
+    int ticks = 0;        // how many frames it took (logged with the total, see below)
+    double cpuMs = 0.0;   // time actually spent inside tickGuessPool(), summed over ticks
+};
+GuessPoolBuild gGuessBuild;
 
 std::mt19937& guessRng()
 {
@@ -562,8 +593,21 @@ std::mt19937& guessRng()
     return rng;
 }
 
+void ensureTitleLowerIndex()
+{
+    if (gTitleLowerIndexBuilt) {
+        return;
+    }
+    gTitleLowerIndexBuilt = true;
+    gTitleLowerIndex.clear();
+    for (const auto& song : gMusicTitles) {
+        gTitleLowerIndex[toLower(song.second)].push_back(song.first);
+    }
+}
+
 bool guessAliasIsUsable(const std::string& alias, int musicId)
 {
+    ensureTitleLowerIndex(); // 幂等，一次 bool 检查；漏了它那条曲名冲突规则会静默失效
     if (alias.size() < 2) {
         return false;
     }
@@ -587,53 +631,119 @@ bool guessAliasIsUsable(const std::string& alias, int musicId)
         return false;
     }
     // Someone else's title must not *be* the alias, or that decoy is right too.
-    for (const auto& song : gMusicTitles) {
-        if (song.first != musicId && toLower(song.second) == alias) {
-            return false;
+    // (Hash lookup instead of walking every title: see gTitleLowerIndex.)
+    if (const auto titled = gTitleLowerIndex.find(alias); titled != gTitleLowerIndex.end()) {
+        for (const int id : titled->second) {
+            if (id != musicId) {
+                return false;
+            }
         }
     }
     return true;
 }
 
-void buildGuessPool()
+// 开始（或重开）题库构建。真正干活的是 tickGuessPool()，这里只准备数据。
+void newGuessQuestion(); // 构建收尾时要直接出一题
+
+void startGuessPoolBuild()
 {
     gGuessPool.clear();
-    gGuessPoolBuilt = true;
-    std::vector<std::string> unreadable;
+    gGuessPoolBuilt = false;
+    gGuess.loading = true;
+    gGuess.loadingPercent = 0;
+    gGuess.options.clear(); // 加载时别留着上一题的四个选项
+    gGuessBuild = GuessPoolBuild{};
+    gGuessBuild.active = true;
+    gGuessBuild.items.reserve(gAliasIndex.size());
     for (const auto& entry : gAliasIndex) {
-        if (entry.second.size() != 1) {
-            continue;
-        }
-        const int musicId = entry.second.front();
-        if (guessAliasIsUsable(entry.first, musicId)) {
-            gGuessPool.emplace_back(entry.first, musicId);
-        } else if (!fontCoversText(entry.first)) {
-            unreadable.push_back(entry.first);
-        }
+        gGuessBuild.items.push_back(entry);
     }
-    platform::logf(platform::LogSelect, "[guess] %zu usable alias(es) of %zu (%zu of them dropped: the font cannot "
-                "draw part of the alias)\n",
-        gGuessPool.size(), gAliasIndex.size(), unreadable.size());
-    // A few examples, so "the pool shrank" can be told apart from "the font
-    // broke": each line names the alias and the character that has no glyph.
-    for (std::size_t i = 0; i < unreadable.size() && i < 3; ++i) {
-        platform::logf(platform::LogSelect, "[guess]   unreadable: %s\n", unreadable[i].c_str());
-    }
-    if (!unreadable.empty() && !gGuessPool.empty()) {
-        platform::logf(platform::LogSelect, "[guess]   example kept: %s\n", gGuessPool.front().first.c_str());
-    }
+    gGuessBuild.started = std::chrono::steady_clock::now();
+    // 曲名表是启动时载入的，但**重建索引**而不是沿用可能早于它的缓存：这个调用
+    // 发生在用户第一次点猜歌（或 --guess 启动），那时 musics.json 一定已经读完。
+    gTitleLowerIndexBuilt = false;
+    ensureTitleLowerIndex();
+    platform::logf(platform::LogSelect, "[guess] building pool: %zu alias(es)\n", gGuessBuild.items.size());
     std::fflush(stdout);
 }
 
-// Builds one question. Leaves gGuess.open false when there is nothing to ask
-// (no alias table next to the exe, or a pool too small to fill four options).
+// 把构建往前推一小步（~3ms 一批），返回时卡片照画 —— 这样"点猜歌"那一帧永远不会
+// 被题库占住。构建完成时直接出一题。
+void tickGuessPool()
+{
+    if (!gGuessBuild.active) {
+        return;
+    }
+    const std::size_t total = gGuessBuild.items.size();
+    ++gGuessBuild.ticks;
+    const auto tickStart = std::chrono::steady_clock::now();
+    const auto deadline = tickStart + std::chrono::microseconds(3000);
+    while (gGuessBuild.cursor < total) {
+        // 64 个一批再看表：steady_clock::now() 本身也要几十纳秒，逐个看划算不来。
+        const std::size_t stop = std::min(total, gGuessBuild.cursor + 64);
+        for (; gGuessBuild.cursor < stop; ++gGuessBuild.cursor) {
+            const auto& entry = gGuessBuild.items[gGuessBuild.cursor];
+            if (entry.second.size() != 1) {
+                continue;
+            }
+            const int musicId = entry.second.front();
+            if (guessAliasIsUsable(entry.first, musicId)) {
+                gGuessPool.emplace_back(entry.first, musicId);
+            } else if (!fontCoversText(entry.first)) {
+                gGuessBuild.unreadable.push_back(entry.first);
+            }
+        }
+        gGuess.loadingPercent = total > 0 ? static_cast<int>(gGuessBuild.cursor * 100u / total) : 100;
+        if (std::chrono::steady_clock::now() >= deadline) {
+            gGuessBuild.cpuMs += std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - tickStart).count();
+            return;
+        }
+    }
+
+    gGuessBuild.active = false;
+    gGuessPoolBuilt = true;
+    gGuess.loading = false;
+    gGuess.loadingPercent = 100;
+    gGuessBuild.cpuMs += std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - tickStart).count();
+    // 两个数都给：cpu 是这个构建真正花掉的 CPU（每帧 ≤3ms，就是"不卡"的证据），
+    // wall 是墙钟 —— 启动那几帧本来就要 200ms 加载资源，墙钟会被它拉得很长，
+    // 单看墙钟会以为构建本身很慢。
+    const double wallMs = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - gGuessBuild.started).count();
+    platform::logf(platform::LogSelect, "[guess] pool built: cpu %.0f ms over %d frame(s), wall %.0f ms\n",
+        gGuessBuild.cpuMs, gGuessBuild.ticks, wallMs);
+    platform::logf(platform::LogSelect, "[guess] %zu usable alias(es) of %zu (%zu of them dropped: the font cannot "
+                "draw part of the alias)\n",
+        gGuessPool.size(), gAliasIndex.size(), gGuessBuild.unreadable.size());
+    // A few examples, so "the pool shrank" can be told apart from "the font
+    // broke": each line names the alias and the character that has no glyph.
+    for (std::size_t i = 0; i < gGuessBuild.unreadable.size() && i < 3; ++i) {
+        platform::logf(platform::LogSelect, "[guess]   unreadable: %s\n", gGuessBuild.unreadable[i].c_str());
+    }
+    if (!gGuessBuild.unreadable.empty() && !gGuessPool.empty()) {
+        platform::logf(platform::LogSelect, "[guess]   example kept: %s\n", gGuessPool.front().first.c_str());
+    }
+    std::fflush(stdout);
+    newGuessQuestion();
+}
+
+// Builds one question. Marks gGuess.unavailable when there is nothing to ask
+// (no alias table next to the exe, or a pool too small to fill four options) -
+// the card stays up and says so instead of vanishing.
 void newGuessQuestion()
 {
+    gGuess.unavailable = false;
+    if (gGuess.loading) {
+        return; // 题库还没建完：等 tickGuessPool() 收尾时自己会来要题
+    }
     if (!gGuessPoolBuilt) {
-        buildGuessPool();
+        startGuessPoolBuild();
+        return;
     }
     if (gGuessPool.size() < 4 || gMusicTitles.size() < 4) {
-        gGuess.open = false;
+        gGuess.unavailable = true;
         return;
     }
     std::uniform_int_distribution<std::size_t> pick(0, gGuessPool.size() - 1);
@@ -675,7 +785,7 @@ void newGuessQuestion()
         }
     }
     if (gGuess.options.size() < 4) {
-        gGuess.open = false;
+        gGuess.unavailable = true;
         return;
     }
     std::shuffle(gGuess.options.begin(), gGuess.options.end(), guessRng());
@@ -699,12 +809,30 @@ void newGuessQuestion()
     std::fflush(stdout);
 }
 
+// 打开猜歌卡片（header 那颗按钮）。**立刻**把卡片放上来，题库在随后的帧里建
+// （tickGuessPool），所以点击那一帧不会被 12.9k 个别名占住。
+void openGuessDialog()
+{
+    gGuess.open = true;
+    gGuess.unavailable = false;
+    gGuess.picked = -1;
+    if (gGuessPoolBuilt) {
+        if (gGuess.options.size() != 4) {
+            newGuessQuestion(); // 上次没出成题（比如池子太小），再试一次
+        }
+        return;
+    }
+    if (!gGuessBuild.active) {
+        startGuessPoolBuild();
+    }
+}
+
 // Debug (`--guess`): open the quiz at boot, so a --screenshot run can look at
 // it without a click to hit.
 void debugOpenGuessDialog(bool open)
 {
     if (open) {
-        newGuessQuestion();
+        openGuessDialog();
     } else {
         gGuess.open = false;
     }
@@ -2973,9 +3101,12 @@ bool guessOptionPill(const char* label, const ImVec2& size, ImU32 fill, float s,
     dl->AddRectFilled(lo, hi, fill, radius);
     ImFont* font = game::bodyFont();
     const float fontSize = std::min(22.0f * s, size.y * 0.42f);
-    const ImVec2 text = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, label);
+    // 长曲名（"ワールド・ランプシェード [reunion]"）以前会直接冲出胶囊、横穿整张
+    // 卡片：胶囊是网格里的固定格子，标签得裁到格子内（和歌曲列表同一个 helper）。
+    const std::string fitted = ellipsize(font, fontSize, label, size.x - 18.0f * s);
+    const ImVec2 text = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, fitted.c_str());
     dl->AddText(font, fontSize,
-        ImVec2((lo.x + hi.x - text.x) * 0.5f, (lo.y + hi.y - text.y) * 0.5f), ui::kBtnText, label);
+        ImVec2((lo.x + hi.x - text.x) * 0.5f, (lo.y + hi.y - text.y) * 0.5f), ui::kBtnText, fitted.c_str());
     return clicked;
 }
 
@@ -3488,7 +3619,9 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     }
     if (headerButton("##guess", guessX, guessW, "guess", "猜歌")) {
         ui::se(ui::SeClick);
-        newGuessQuestion();
+        // 不再直接 newGuessQuestion()：第一次点要现场建题库，同步做就是那一帧
+        // 卡住。openGuessDialog() 先把卡片放上来，题库在后面的帧里分批建。
+        openGuessDialog();
     }
 
     // 设置, in the same header row as the other buttons. It used to be the round
@@ -5232,8 +5365,23 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     // ------------------------------------------------------------------
     // 猜歌. Drawn after the list window (like 个人资料) so it is a modal card
     // of its own and nothing behind it can be clicked.
+    //
+    // Two things this block gets right that it used to get wrong (2026-11-02):
+    //   * `alive` — the card has to keep being drawn while beginCard() plays the
+    //     close animation. Gating on `gGuess.open` alone hid it in the very frame
+    //     it was dismissed (`st.t` never ran down and `st.ended` was never set),
+    //     so the card popped out with no exit, and because the entrance only
+    //     replays after a finished close, the *next* open had no entrance either.
+    //   * the pool is built by tickGuessPool() across frames, so the frame that
+    //     opens the card draws "正在准备题库" instead of freezing on 12.9k aliases.
     // ------------------------------------------------------------------
-    if (gGuess.open && gGuess.options.size() == 4) {
+    if (gGuess.open) {
+        gGuessAlive = true;
+    }
+    if (gGuessBuild.active) {
+        tickGuessPool(); // 卡片关了也继续建，下次点就不用等
+    }
+    if (gGuessAlive) {
         const float s = ui::scale();
         ImVec2 cardSize(560.0f * s, 424.0f * s);
         ImVec2 cardCenter(w * 0.5f, h * 0.5f);
@@ -5251,124 +5399,161 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             ImGui::SetCursorScreenPos(ImVec2(leftX, topY + 16.0f * s));
             ui::cardTitle("猜歌", interior);
 
-            ImGui::SetCursorScreenPos(ImVec2(leftX, topY + 64.0f * s));
-            ui::caption("这个别名指的是哪首歌？", 18.0f * s, ui::kTitleText, interior);
+            if (gGuess.loading || gGuess.unavailable) {
+                // 加载 / 没题库：卡片照常立着，只换中间那一段。加载期间题库在
+                // 后台按 ~3ms/帧推进，所以进度是真的会走的，不是装饰。
+                ImGui::SetCursorScreenPos(ImVec2(leftX, topY + 92.0f * s));
+                ImGui::PushFont(titleFont(), 30.0f * s);
+                ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(ui::kNotePink), "%s",
+                    gGuess.loading ? "正在准备题库…" : "没有可用的题库");
+                ImGui::PopFont();
 
-            // The alias, big and pink - the whole question.
-            ImGui::SetCursorScreenPos(ImVec2(leftX, topY + 92.0f * s));
-            ImGui::PushFont(titleFont(), 34.0f * s);
-            const std::string aliasText = "「" + gGuess.alias + "」";
-            const ImVec2 aliasSize = ImGui::CalcTextSize(aliasText.c_str());
-            ImGui::SetCursorScreenPos(
-                ImVec2(cardCenter.x - aliasSize.x * 0.5f, topY + 92.0f * s));
-            ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(ui::kNotePink), "%s",
-                aliasText.c_str());
-            ImGui::PopFont();
+                ImGui::SetCursorScreenPos(ImVec2(leftX, topY + 152.0f * s));
+                ui::caption(gGuess.loading ? "第一次打开要把别名表过一遍，只需要一次。"
+                                           : "找不到 music-aliases.json，或者别名表太小，凑不出四个选项。",
+                    17.0f * s, ui::kTitleText, interior);
 
-            // Four options in a 2x2 grid. The fill carries the verdict after a
-            // pick (mint = right, red = the one you took) - capsuleButton only
-            // knows mint-or-white, hence the local pill.
-            // One answer, two ways in (the pointer and the keyboard). Both have
-            // to land in exactly the same place - the tally and the streak are
-            // the whole point of the mode - so they share this instead of
-            // duplicating the bookkeeping.
-            auto pickOption = [&](int i) {
-                if (gGuess.picked >= 0 || i < 0 || i >= 4) {
-                    return;
+                if (gGuess.loading) {
+                    const float pct = static_cast<float>(std::clamp(gGuess.loadingPercent, 0, 100)) / 100.0f;
+                    ImGui::SetCursorScreenPos(ImVec2(leftX, topY + 200.0f * s));
+                    const ImVec2 barPos = ImGui::GetCursorScreenPos();
+                    ImGui::Dummy(ImVec2(interior, 12.0f * s));
+                    ui::expBar(ImGui::GetWindowDrawList(), barPos, interior, s, pct);
+                    char pctLine[32];
+                    std::snprintf(pctLine, sizeof(pctLine), "%d%%", gGuess.loadingPercent);
+                    ImGui::SetCursorScreenPos(ImVec2(leftX, topY + 218.0f * s));
+                    ui::caption(pctLine, 16.0f * s, ui::kTitleText, interior);
                 }
-                gGuess.picked = i;
-                ++gGuess.asked;
-                if (i == gGuess.answer) {
-                    ++gGuess.correct;
-                    ++gGuess.streak;
-                    gGuess.bestStreak = std::max(gGuess.bestStreak, gGuess.streak);
-                } else {
-                    gGuess.streak = 0;
-                }
-            };
 
-            bool answered = gGuess.picked >= 0;
-            const float optW = (interior - 14.0f * s) * 0.5f;
-            const float optH = 52.0f * s;
-            for (int i = 0; i < 4; ++i) {
-                const int col = i % 2;
-                const int row = i / 2;
-                ImGui::SetCursorScreenPos(ImVec2(leftX + static_cast<float>(col) * (optW + 14.0f * s),
-                    topY + (146.0f + static_cast<float>(row) * 62.0f) * s));
-                std::string label = std::to_string(i + 1) + ". " + titleFor(gGuess.options[i]);
-                ImU32 fill = ui::kWhiteBtn;
-                if (answered && i == gGuess.answer) {
-                    fill = ui::kPrimary;
-                } else if (answered && i == gGuess.picked) {
-                    fill = IM_COL32(255, 138, 150, 255);
+                const float footY = topY + cardSize.y - 66.0f * s;
+                ImGui::SetCursorScreenPos(ImVec2(leftX, footY));
+                if (ui::capsuleButton("关闭", ImVec2(interior, 50.0f * s), false)) {
+                    gGuess.open = false; // 题库还在后台继续建，下次点就直接能玩
                 }
-                if (guessOptionPill(label.c_str(), ImVec2(optW, optH), fill, s, !answered)) {
-                    pickOption(i);
-                }
-            }
+                ui::endCard();
+            } else {
+                ImGui::SetCursorScreenPos(ImVec2(leftX, topY + 64.0f * s));
+                ui::caption("这个别名指的是哪首歌？", 18.0f * s, ui::kTitleText, interior);
 
-            // ---- Keyboard: 1/2/3/4 选, 回车下一题, Esc 关闭 ------------------
-            // ImGui's key state is global - IsKeyPressed does not care which
-            // window holds focus - so these work wherever the pointer is. The
-            // `false` is "on the press, not on auto-repeat": holding 1 must not
-            // answer this question and the next one with it.
-            //
-            // ESC is also handled by the main loop, which runs *before* this
-            // function in a frame; it asks game::guessDialogOpen() first and
-            // stands down while the card is up, so the close lands here.
-            {
-                static const ImGuiKey kOptionKeys[4] = {
-                    ImGuiKey_1, ImGuiKey_2, ImGuiKey_3, ImGuiKey_4};
+                // The alias, big and pink - the whole question.
+                ImGui::SetCursorScreenPos(ImVec2(leftX, topY + 92.0f * s));
+                ImGui::PushFont(titleFont(), 34.0f * s);
+                const std::string aliasText = "「" + gGuess.alias + "」";
+                const ImVec2 aliasSize = ImGui::CalcTextSize(aliasText.c_str());
+                ImGui::SetCursorScreenPos(
+                    ImVec2(cardCenter.x - aliasSize.x * 0.5f, topY + 92.0f * s));
+                ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(ui::kNotePink), "%s",
+                    aliasText.c_str());
+                ImGui::PopFont();
+
+                // Four options in a 2x2 grid. The fill carries the verdict after a
+                // pick (mint = right, red = the one you took) - capsuleButton only
+                // knows mint-or-white, hence the local pill.
+                // One answer, two ways in (the pointer and the keyboard). Both have
+                // to land in exactly the same place - the tally and the streak are
+                // the whole point of the mode - so they share this instead of
+                // duplicating the bookkeeping.
+                auto pickOption = [&](int i) {
+                    if (gGuess.picked >= 0 || i < 0 || i >= 4) {
+                        return;
+                    }
+                    gGuess.picked = i;
+                    ++gGuess.asked;
+                    if (i == gGuess.answer) {
+                        ++gGuess.correct;
+                        ++gGuess.streak;
+                        gGuess.bestStreak = std::max(gGuess.bestStreak, gGuess.streak);
+                    } else {
+                        gGuess.streak = 0;
+                    }
+                };
+
+                bool answered = gGuess.picked >= 0;
+                const float optW = (interior - 14.0f * s) * 0.5f;
+                const float optH = 52.0f * s;
                 for (int i = 0; i < 4; ++i) {
-                    if (ui::keyPressed(kOptionKeys[i], false)) {
+                    const int col = i % 2;
+                    const int row = i / 2;
+                    ImGui::SetCursorScreenPos(ImVec2(leftX + static_cast<float>(col) * (optW + 14.0f * s),
+                        topY + (146.0f + static_cast<float>(row) * 62.0f) * s));
+                    std::string label = std::to_string(i + 1) + ". " + titleFor(gGuess.options[i]);
+                    ImU32 fill = ui::kWhiteBtn;
+                    if (answered && i == gGuess.answer) {
+                        fill = ui::kPrimary;
+                    } else if (answered && i == gGuess.picked) {
+                        fill = IM_COL32(255, 138, 150, 255);
+                    }
+                    if (guessOptionPill(label.c_str(), ImVec2(optW, optH), fill, s, !answered)) {
                         pickOption(i);
                     }
                 }
-                // Enter does the job of the button under the grid: 下一题 once
-                // answered, 跳过 before that.
-                if (ui::keyPressed(ImGuiKey_Enter, false)
-                    || ui::keyPressed(ImGuiKey_KeypadEnter, false)) {
+
+                // ---- Keyboard: 1/2/3/4 选, 回车下一题, Esc 关闭 ------------------
+                // ImGui's key state is global - IsKeyPressed does not care which
+                // window holds focus - so these work wherever the pointer is. The
+                // `false` is "on the press, not on auto-repeat": holding 1 must not
+                // answer this question and the next one with it.
+                //
+                // ESC is also handled by the main loop, which runs *before* this
+                // function in a frame; it asks game::guessDialogOpen() first and
+                // stands down while the card is up, so the close lands here.
+                {
+                    static const ImGuiKey kOptionKeys[4] = {
+                        ImGuiKey_1, ImGuiKey_2, ImGuiKey_3, ImGuiKey_4};
+                    for (int i = 0; i < 4; ++i) {
+                        if (ui::keyPressed(kOptionKeys[i], false)) {
+                            pickOption(i);
+                        }
+                    }
+                    // Enter does the job of the button under the grid: 下一题 once
+                    // answered, 跳过 before that.
+                    if (ui::keyPressed(ImGuiKey_Enter, false)
+                        || ui::keyPressed(ImGuiKey_KeypadEnter, false)) {
+                        newGuessQuestion();
+                    }
+                    if (ui::keyPressed(ImGuiKey_Escape, false)) {
+                        gGuess.open = false;
+                    }
+                    // A keyboard answer landed in this very frame, above the
+                    // drawing already done - re-read so the verdict line and the
+                    // button label show it now instead of blinking a frame later.
+                    answered = gGuess.picked >= 0;
+                }
+
+                // Verdict + tally.
+                const std::string verdict = !answered
+                    ? std::string()
+                    : (gGuess.picked == gGuess.answer
+                              ? std::string("答对了！")
+                              : std::string("答错了，正确答案是「") + titleFor(gGuess.options[gGuess.answer])
+                                    + "」");
+                char tally[96];
+                std::snprintf(tally, sizeof(tally), "答对 %d / %d    连对 %d（最佳 %d）", gGuess.correct,
+                    gGuess.asked, gGuess.streak, gGuess.bestStreak);
+                ImGui::SetCursorScreenPos(ImVec2(leftX, topY + 276.0f * s));
+                ui::caption(verdict.empty() ? " " : verdict.c_str(), 18.0f * s,
+                    gGuess.picked == gGuess.answer ? IM_COL32(46, 168, 140, 255)
+                                                   : IM_COL32(214, 74, 104, 255),
+                    interior);
+                ImGui::SetCursorScreenPos(ImVec2(leftX, topY + 302.0f * s));
+                ui::caption(tally, 16.0f * s, ui::kTitleText, interior);
+
+                const float footY = topY + cardSize.y - 66.0f * s;
+                const float btnW = (interior - 14.0f * s) * 0.5f;
+                ImGui::SetCursorScreenPos(ImVec2(leftX, footY));
+                if (ui::capsuleButton(answered ? "下一题" : "跳过", ImVec2(btnW, 50.0f * s), true)) {
                     newGuessQuestion();
                 }
-                if (ui::keyPressed(ImGuiKey_Escape, false)) {
+                ImGui::SetCursorScreenPos(ImVec2(leftX + btnW + 14.0f * s, footY));
+                if (ui::capsuleButton("关闭", ImVec2(btnW, 50.0f * s), false)) {
                     gGuess.open = false;
                 }
-                // A keyboard answer landed in this very frame, above the
-                // drawing already done - re-read so the verdict line and the
-                // button label show it now instead of blinking a frame later.
-                answered = gGuess.picked >= 0;
-            }
-
-            // Verdict + tally.
-            const std::string verdict = !answered
-                ? std::string()
-                : (gGuess.picked == gGuess.answer
-                          ? std::string("答对了！")
-                          : std::string("答错了，正确答案是「") + titleFor(gGuess.options[gGuess.answer])
-                                + "」");
-            char tally[96];
-            std::snprintf(tally, sizeof(tally), "答对 %d / %d    连对 %d（最佳 %d）", gGuess.correct,
-                gGuess.asked, gGuess.streak, gGuess.bestStreak);
-            ImGui::SetCursorScreenPos(ImVec2(leftX, topY + 276.0f * s));
-            ui::caption(verdict.empty() ? " " : verdict.c_str(), 18.0f * s,
-                gGuess.picked == gGuess.answer ? IM_COL32(46, 168, 140, 255)
-                                               : IM_COL32(214, 74, 104, 255),
-                interior);
-            ImGui::SetCursorScreenPos(ImVec2(leftX, topY + 302.0f * s));
-            ui::caption(tally, 16.0f * s, ui::kTitleText, interior);
-
-            const float footY = topY + cardSize.y - 66.0f * s;
-            const float btnW = (interior - 14.0f * s) * 0.5f;
-            ImGui::SetCursorScreenPos(ImVec2(leftX, footY));
-            if (ui::capsuleButton(answered ? "下一题" : "跳过", ImVec2(btnW, 50.0f * s), true)) {
-                newGuessQuestion();
-            }
-            ImGui::SetCursorScreenPos(ImVec2(leftX + btnW + 14.0f * s, footY));
-            if (ui::capsuleButton("关闭", ImVec2(btnW, 50.0f * s), false)) {
-                gGuess.open = false;
-            }
-            (void)dl2;
-            ui::endCard();
+                (void)dl2;
+                ui::endCard();
+            } // 题目 / 加载态二选一
+        } else {
+            // 关闭动画播完了（或者从一开始就没开过）：next open 会重新走一遍入场。
+            gGuessAlive = false;
         }
     }
 
