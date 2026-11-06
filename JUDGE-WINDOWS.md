@@ -295,9 +295,7 @@ clipY = -2 * (worldY * scaledHeight - screenTop)  // 只跟 worldY 有关
   `normalNoteOffsetX`、`flickNoteOffsetX`、`longNoteOffsetX`
   （SerializeField 0x18/0x1C/0x34/0x38/0x3C）。这些是演出层给 note 判定区做的
   微调，我们的谱面转换没有这些字段（一般应为 0，未验证）。
-- **friction / trace 的触摸是持续的**：原作每次 Moved 都会重新问
-  `IsJudgment`，所以按住手指滑过一串 trace 会逐个判；我们只在按下（`beginPointer`）
-  和抬起时各判一次，滑动过程中不判。这是目前手感差得最多的一条（不影响 tap/flick）。
+- ~~**friction / trace 的触摸是持续的**~~ → **已对齐（11-06）**，见 §5.5。
 - **最多 8 指**：原作 `inputResults` 定长 8；我们没有限制（SDL 也不会给超过 10）。
 - **Began → Moved 两段式**：原作独立 flick 在 Began 只记录、下一帧 Moved 才定案；
   我们每个 motion 事件都能直接定案（更宽松，不改变能否判中，只影响极早的甩）。
@@ -305,7 +303,7 @@ clipY = -2 * (worldY * scaledHeight - screenTop)  // 只跟 worldY 有关
 ### 5.4 怎么回归
 
 ```bash
-# 判定逻辑单测（方向 / 方向错降级 / 长条尾时间下限 / strict tap）
+# 判定逻辑单测（方向 / 方向错降级 / 长条尾时间下限 / strict tap / 摩擦条覆盖窗口）
 zig c++ -std=c++17 -I. .workbuddy/tools/judge_flick_test.cpp \
     game/Judgement.cpp platform/Log.cpp -o /tmp/judge_flick_test.exe && /tmp/judge_flick_test.exe
 
@@ -313,3 +311,44 @@ zig c++ -std=c++17 -I. .workbuddy/tools/judge_flick_test.cpp \
 ./build/cppsekai.exe --sus charts/0075_master.sus --test-hits \
     --screenshot /tmp/hits.png --screenshot-time 20 --no-party
 ```
+
+### 5.5 摩擦条（trace / kind 3）的覆盖判定 —— 11-06 对齐
+
+`NoteBase` 的子类里**没有** `FrictionNote`：摩擦条就是 `NormalNote` 带
+`NoteCategory.Friction`，走 `NormalNote.IsJudgment`（`0x507657C`）。反汇编出来是：
+
+```
+if (State == Done)                                   return false;
+if (JudgeLaneStart > lane)                           return false;   // vtable +0x458
+if (JudgeLaneEnd   < lane)                           return false;   // vtable +0x478
+frameType = NoteUtility.GetINoteToJudgeFrameType(this);
+offset    = noteTime - touch.musicTime;                             // 正 = 手指早到
+if (!NoteUtility.IsJudgmentTiming(frameType, offset)) return false; // 0x4DBDEF8
+// 相位闸门（某个 int 属性 == 0 时只认 Moved；== 1 时只要不是 Ended/Canceled）
+```
+
+关键在那个 `IsJudgmentTiming`（`0x4DBDEF8`）：它从 `JudgeTimeData` 里读的是
+**`BadBeforeJudgeTime` / `BadAfterJudgeTime`**（结构体偏移 0x1C / 0x20）：
+
+```
+offset > -BadAfter  &&  offset < BadBefore      // 开区间
+```
+
+⇒ 摩擦条**整个 BAD 窗口内都能判**，不需要卡在 perfect 窗口，更不需要正好落在
+音符时间那一帧。而 `master/ingameJudgeFrames.json` 里摩擦四行**四档同宽**
+（friction 5/5 帧全档、friction_long_end 6.5/8、friction_flick 6.5/7.5），
+所以窗口内任何时刻命中都是 PERFECT —— 这就是「滑过去就算」的出处。
+
+**我们的实现**（`game/Judgement.cpp`）：
+
+- `coverFriction()`：一次采样 = 窗口检查 + `mHoldLanes` 里有没有手指盖住 +
+  记账。`mHoldLanes` 每帧由 `main.cpp` 灌入所有手指/键盘的当前 lane，所以
+  「滑过去」在采样意义上就是连续的（原作是每个输入事件问一次，两者等价）。
+- `sweepFrictionCoverage()`：主循环按时间序走、遇到第一个未来音符就 `break`，
+  所以**早到那一侧的手指永远见不到音符**。这个扫段专门补 `offset > 0` 的一半，
+  上限取摩擦四行里最宽的 `bad.earlyMs`。
+- 顺手修掉一条**过宽**：原来只要盖住就判 PERFECT，晚了 200 ms 也算；现在必须
+  在 BAD 窗口内，超了照常走自动 MISS。
+- autoplay 不走早到那侧 —— 否则特效会比音符早 ~83 ms 冒出来。
+
+已知残留：覆盖容差仍是 `margin = 0.5f` lane（见 §5.3 第一条），原作没有额外容差。

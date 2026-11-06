@@ -486,6 +486,84 @@ bool JudgementEngine::laneHeld(const ActiveHold& hold) const
     return false;
 }
 
+bool JudgementEngine::coverFriction(std::size_t index, float songTimeSec)
+{
+    if (index >= mNotes.size()) {
+        return false;
+    }
+    HitNote& note = mNotes[index];
+    if (note.state != 0) {
+        return false;
+    }
+    const bool critical = noteHasFlag(note.flags, 1);
+    const TypeWindows noteWindows = mWindows.windowsFor(
+        windowTypeFor(note.kind, critical, note.holdTail, noteHasFlag(note.flags, kFlagFriction)));
+    // Official timing test (NoteUtility.IsJudgmentTiming): offset is
+    // noteTime - touchTime, so positive means the finger is EARLY, and the
+    // bounds it compares against are BadBefore / BadAfter - the whole window,
+    // not just the perfect one. A friction note can therefore be taken at any
+    // point of its window, which is what "slide over it" means.
+    const float offsetMs = (note.timeSec - songTimeSec) * 1000.0f;
+    if (offsetMs > noteWindows.bad.earlyMs || offsetMs < -noteWindows.bad.lateMs) {
+        return false;
+    }
+    bool covered = mAutoPlay; // autoplay preview: no fingers exist
+    for (const float lane : mHoldLanes) {
+        if (laneCovers(note, lane, 0.5f)) {
+            covered = true;
+            break;
+        }
+    }
+    if (!covered) {
+        return false;
+    }
+
+    note.state = 1;
+    mHitEventIndices.push_back(static_cast<int>(index));
+    // Every friction row in master/ingameJudgeFrames.json has the same width
+    // for all four grades, so anything inside the window is a PERFECT. Going
+    // through gradeFor() anyway keeps that honest if the table ever changes.
+    registerJudge(gradeFor(noteWindows, -offsetMs), critical, note.volume, note.kind, note.timeSec);
+    mStats.lastJudgeTimeSec = songTimeSec;
+    mStats.lastHitKind = note.kind;
+    mStats.lastHitCenter = note.center;
+    mStats.lastHitWidth = note.width;
+    mStats.lastHitTimeSec = note.timeSec;
+    mStats.lastHitFlickDir = noteFlickDir(note);
+    mStats.lastHitFriction = true;
+    mStats.pushFreshHit(critical);
+    return true;
+}
+
+void JudgementEngine::sweepFrictionCoverage(float songTimeSec)
+{
+    // The main pass walks the chart in time order and stops at the first note
+    // that is still in the future, so a finger that slides over a friction
+    // lane BEFORE the note time never meets it - and the player loses a note
+    // they physically covered. Sample the early half of the window here; the
+    // late half is already reached by the main pass.
+    if (!mLoaded || mAutoPlay || mHoldLanes.empty()) {
+        return;
+    }
+    const WindowType frictionRows[] = {WindowType::Friction, WindowType::FrictionCritical,
+        WindowType::FrictionLongEnd, WindowType::FrictionFlick};
+    float widestEarlyMs = 0.0f;
+    for (const WindowType type : frictionRows) {
+        widestEarlyMs = std::max(widestEarlyMs, mWindows.windowsFor(type).bad.earlyMs);
+    }
+    for (std::size_t i = mCursor; i < mNotes.size(); ++i) {
+        const HitNote& note = mNotes[i];
+        const float offsetMs = (note.timeSec - songTimeSec) * 1000.0f;
+        if (offsetMs > widestEarlyMs) {
+            break; // notes are time ordered: everything after this is further away
+        }
+        if (offsetMs <= 0.0f || note.state != 0 || note.kind != 3.0f || note.holdTail) {
+            continue; // due / already resolved / not a friction note
+        }
+        coverFriction(i, songTimeSec);
+    }
+}
+
 HitNote* JudgementEngine::findCandidate(float lanePos, float songTimeSec, float margin, bool wantFlick,
     FlickDir flickDir, float dirX, float dirY)
 {
@@ -821,39 +899,23 @@ void JudgementEngine::update(float songTimeSec)
         }
 
         if (note.kind == 3.0f) {
-            // Trace notes (the green "bamboo" segments / slides): the official
-            // rule is COVERAGE, not timing. Keeping a finger on the lane while
-            // the segment passes is enough, there is no tail, and the head does
-            // not have to be re-tapped - which is why a player who holds
-            // through the whole bamboo should not lose a single note.
+            // Trace / friction notes (the green "bamboo" segments / slides):
+            // the official rule is COVERAGE, not a press. Keeping a finger on
+            // the lane while the segment passes is enough, there is no tail,
+            // and the head does not have to be re-tapped - which is why a
+            // player who holds through the whole bamboo loses nothing.
             //
             // A well timed press still goes through findCandidate() and keeps
-            // its graded judgement; this branch only catches the "already
-            // holding" case, which used to fall through to the auto-miss and
-            // made every trace in the chart unplayable on a hold-through.
-            bool covered = mAutoPlay;
-            for (const float lane : mHoldLanes) {
-                if (laneCovers(note, lane, 0.5f)) {
-                    covered = true;
-                    break;
-                }
-            }
-            if (covered) {
-                note.state = 1;
-                mHitEventIndices.push_back(static_cast<int>(i));
-                registerJudge(Judge::Perfect, (static_cast<int>(note.flags) & 1) != 0, note.volume, note.kind,
-                    note.timeSec);
-                mStats.lastJudgeTimeSec = songTimeSec;
-                mStats.lastHitKind = note.kind;
-                mStats.lastHitCenter = note.center;
-                mStats.lastHitWidth = note.width;
-                mStats.lastHitTimeSec = note.timeSec;
-                mStats.lastHitFlickDir = noteFlickDir(note);
-                mStats.lastHitFriction = true;
-                mStats.pushFreshHit((static_cast<int>(note.flags) & 1) != 0);
+            // its graded judgement; this branch is the "already holding" case,
+            // sampled once per frame against the note's own BAD window (the
+            // early half of that window is handled by
+            // sweepFrictionCoverage(), because this pass never reaches a note
+            // whose time has not arrived yet).
+            if (coverFriction(i, songTimeSec)) {
                 continue;
             }
-            // Not covered: fall through to the normal miss timing below.
+            // Not covered (or outside the window): fall through to the normal
+            // miss timing below.
         }
 
         if (gHoldTest && note.endTimeSec > 0.0f) {
@@ -893,6 +955,11 @@ void JudgementEngine::update(float songTimeSec)
             continue;
         }
     }
+
+    // 摩擦条早到那一侧的覆盖采样（见 sweepFrictionCoverage）。放在主循环之后，
+    // 这样"已经到点的"先按时间序判，"还没到点但手指已经滑过去"的后补，最终
+    // 顺序仍以时间序为主。
+    sweepFrictionCoverage(songTimeSec);
 
     // Hold tracking: judge the tail on release, break the hold when the lane
     // is let go too early.

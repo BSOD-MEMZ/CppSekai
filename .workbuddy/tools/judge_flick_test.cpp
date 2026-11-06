@@ -38,6 +38,16 @@ void loadOne(game::JudgementEngine& engine, float time, int kind, int flickDir, 
     }
     engine.load(packed, 1);
 }
+
+void expectInt(const char* what, int got, int want)
+{
+    const bool ok = got == want;
+    std::printf("%-58s %s\n", what, ok ? "ok" : "FAIL");
+    if (!ok) {
+        std::printf("    got %d want %d\n", got, want);
+        ++gFailures;
+    }
+}
 } // namespace
 
 int main()
@@ -77,6 +87,49 @@ int main()
     loadOne(engine, 1.0f, 2, static_cast<int>(FlickUp), false);
     expect("flick note + plain tap (strict)", engine.tap(0.0f, 1.0f, false), Judge::None);
 
+    // ---- friction / trace: coverage over the whole BAD window -------------
+    // Official rule (NormalNote.IsJudgment + NoteUtility.IsJudgmentTiming):
+    // a finger on the note's judge lane at ANY sample inside the bad window
+    // clears it. Friction's row is uniform (5 frames early and late), so the
+    // result is a PERFECT whenever it lands.
+    const float early80 = 1.0f - 0.080f; // inside the 5-frame (83.3 ms) window
+    const float early120 = 1.0f - 0.120f; // outside it
+
+    loadOne(engine, 1.0f, 3, 0, false);
+    engine.setHoldLanes({0.0f});
+    engine.update(early120);
+    expectInt("friction: 120 ms early, covered -> still pending", engine.stats().perfect, 0);
+    engine.update(early80);
+    expectInt("friction: 80 ms early, covered -> PERFECT", engine.stats().perfect, 1);
+    engine.update(1.5f);
+    expectInt("friction: consumed early, no late MISS", engine.stats().miss, 0);
+
+    loadOne(engine, 1.0f, 3, 0, false);
+    engine.setHoldLanes({0.0f});
+    engine.update(1.050f);
+    expectInt("friction: 50 ms late, held through -> PERFECT", engine.stats().perfect, 1);
+
+    loadOne(engine, 1.0f, 3, 0, false);
+    engine.setHoldLanes({0.0f});
+    engine.update(1.200f);
+    expectInt("friction: 200 ms late, held -> MISS (window is the real limit)",
+        engine.stats().miss, 1);
+
+    loadOne(engine, 1.0f, 3, 0, false);
+    engine.setHoldLanes({5.0f});
+    engine.update(early80);
+    expectInt("friction: 80 ms early but finger on another lane", engine.stats().perfect, 0);
+
+    // A finger that passes over the lane only for a moment still takes it:
+    // that is the difference between polling the press and polling the touch.
+    loadOne(engine, 1.0f, 3, 0, false);
+    engine.setHoldLanes({5.0f});
+    engine.update(early80);
+    engine.setHoldLanes({0.0f}); // slid onto the note
+    engine.update(1.0f - 0.050f);
+    expectInt("friction: finger arrives 50 ms early -> PERFECT", engine.stats().perfect, 1);
+
+    engine.setHoldLanes({});
     std::printf("\n%s (%d failure%s)\n", gFailures == 0 ? "PASS" : "FAILED", gFailures,
         gFailures == 1 ? "" : "s");
     return gFailures == 0 ? 0 : 1;

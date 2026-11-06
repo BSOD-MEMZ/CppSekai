@@ -420,6 +420,16 @@ class JudgementEngine
     bool laneCovers(const HitNote& note, float lanePos, float margin) const;
     bool laneHeld(const ActiveHold& hold) const;
 
+    // Friction notes (kind 3 / 摩擦条・なぞり) are cleared by COVERAGE, not by a
+    // press: the official game re-asks "is a finger on this note's judge lane"
+    // on every input sample and accepts anything inside the note's BAD window
+    // (NormalNote.IsJudgment + IsJudgmentTiming, see JUDGE-WINDOWS.md §5.5).
+    // coverFriction() implements one such sample; sweepFrictionCoverage() runs
+    // the early side of the window, which the main loop's time-ordered pass
+    // never reaches.
+    bool coverFriction(std::size_t index, float songTimeSec);
+    void sweepFrictionCoverage(float songTimeSec);
+
     // The score weight of one note, mirroring the upstream getHudWeight().
     static float hudWeight(float kind, bool critical)
     {
