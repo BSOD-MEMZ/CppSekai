@@ -258,6 +258,12 @@ class JudgementEngine
     // Returns the judge result if a note was hit, Judge::None otherwise.
     Judge tap(float lanePos, float songTimeSec, bool critical, float margin = 0.5f);
     Judge flick(float lanePos, float songTimeSec, FlickDir dir, float margin = 0.5f);
+    // Swipe direction as a vector (x right, y up, need not be normalised).
+    // The official direction test is `dot(v, noteDir) >= 0`, so the *sign of x*
+    // is the whole test for left/right notes and a straight up swipe clears
+    // either of them. A (0,0) vector means "no direction information" and
+    // skips the test. See findCandidate().
+    Judge flickVector(float lanePos, float songTimeSec, float dirX, float dirY, float margin = 0.5f);
 
     // Keyboard lane tracking for hold notes. heldLanes is a list of currently
     // held lane positions; touches count as holds while the finger is down.
@@ -410,7 +416,7 @@ class JudgementEngine
     double scoreDeltaFor(float kind, bool critical) const;
     void judgeHoldTail(ActiveHold& hold, Judge judge, float songTimeSec);
     HitNote* findCandidate(float lanePos, float songTimeSec, float margin, bool wantFlick,
-        FlickDir flickDir = FlickNone);
+        FlickDir flickDir = FlickNone, float dirX = 0.0f, float dirY = 0.0f);
     bool laneCovers(const HitNote& note, float lanePos, float margin) const;
     bool laneHeld(const ActiveHold& hold) const;
 

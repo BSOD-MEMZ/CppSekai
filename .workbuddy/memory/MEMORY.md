@@ -84,6 +84,14 @@
   **「repo 404」不能归因**，别拿别人 repo 的状态当决策依据。
 
 ## 最近工作
+- 11-06：**flick 判定逻辑反汇编完成**（写进 `JUDGE-WINDOWS.md` §4，工具在
+  `.workbuddy/tools/il2cpp_disasm.py` + `il2cpp_where.py`）。**REA 的 rizin 在 Windows
+  上是 ERR_REA_WINDOWS_NATIVE、ghidra 分析 199MB so 太慢，直接按 dump.cs 的 VA 读 so 才是正解。**
+  结论：门槛是"单帧瞬时位移"（÷deltaTime×(1/60)）> `LiveBundleBuildData.flickDistance`
+  （资源不在解包里，数值未知）；方向只一个符号点积、Default 方向恒真；**方向错上限 Great
+  + (Great, FlickMiss)**；有 JustPerfect ±8.33ms 且仅方向对时给；独立 flick 是
+  Began 记录→下一帧 Moved 定案；长条尾 flick 必须晚 ≥8.33ms 且方向错不判；
+  自动 MISS 是全局 max(BadAfter)=141.7ms。**尚未落进 Judgement.cpp。**
 - 10-29：**删除标题画面**（TitleScreen.* / 开屏卡 / showTitleScreen / assets/title 20 个文件
   全删，取法留档在 AGENTS.md）；教学对话描边 16步4px -> 8步<=2.5px 且原点 floor
   （描边 -40%、白芯不变、不再抖）；点击特效三角两轮收敛 —— hero 80..130/bias1.15

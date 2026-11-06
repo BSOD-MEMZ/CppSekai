@@ -213,13 +213,13 @@ if (在 Bad   窗口内) -> Bad(3)
 | 项 | 原作 | 我们（`main.cpp` 的 `flickDirFrom` + `game/Judgement.cpp`） |
 |---|---|---|
 | 手势判据 | 单一位移向量长度 `|v| > flickDistance`（px/帧@60fps） | 双轴分离：`upSpeed > 380/900 px/s`、`sideSpeed > 450/900`，或行程 `> 56/150 px`；另有 `minTravel 12px` |
-| 方向 | `dot(normalize(v), dir) >= 0`（≈±90°） | 主导**行程**轴 + 0.85 斜向偏置，分 up/left/right 三选一 |
+| 方向 | `dot(normalize(v), dir) >= 0`（≈±90°） | **已对齐（11-06）**：`flickVector()` 收滑动向量，左/右音符只判 `vx` 的符号，Default 恒真 |
 | 帧率归一 | 显式 ÷ `deltaTime/(1/60)` | 用 px/s 速度（天然帧率无关），但采样窗口 `min(rawDt, 30ms)` |
 | 重复触发 | 无锁，每帧都试 | `kFlickRefireSec = 60ms` 锁存 + 行程清零 |
-| 方向错 | 上限 Great；Perfect 窗口内 → **(Great, FlickMiss)** | `findCandidate` 直接不匹配 → 不判，音符留到 MISS |
+| 方向错 | 上限 Great；Perfect 窗口内 → **(Great, FlickMiss)** | **已对齐（11-06）**：仍进候选、上限 Great（Perfect→Great）；有方向对的候选时优先选它。`FlickMiss` 字样未做 |
 | JustPerfect | ±8.33 ms，**仅方向对时** | 无这一档 |
 | 触发时机 | `Began` 只记录 → 下一帧 `Moved` 定案 | 每个 motion 事件都可直接定案（含 lift-off） |
-| 长条尾 flick | 必须晚 ≥8.33 ms；方向错**不判** | 无时间下限；方向错同样不判 |
+| 长条尾 flick | 必须晚 ≥8.33 ms；方向错**不判** | **时间下限已对齐**（`1/120`）；方向错这里仍会判中（上限 Great），比原作宽松 |
 | 自动 MISS | 全局 `max(BadAfter)` = 141.7 ms | `mWindows.missAfterMs` 也是全局（§2 表里写的「逐类型 bad.lateMs」与代码不符，见下） |
 | 同时手指数 | 8（`inputResults` 定长 8） | — |
 
@@ -229,3 +229,87 @@ if (在 Bad   窗口内) -> Bad(3)
 > 2. 原作其实是**全局 max(BadAfter)**（141.7 ms），我们两种都不完全等价；
 >    差异只影响「MISS 字样什么时候跳出来」，不影响最终评级。
 
+
+## 5. 舞台区 / 空间判定（2026-11-06）
+
+### 5.1 原作怎么把手指变成 lane
+
+`LiveTouch` 的字段（`dump.cs`，`Sekai.Live`，TypeDefIndex 11816）：
+
+```
+int fingerId; int touchId; Vector2 delta;
+Vector3 worldPosition;      // 0x10
+TouchPhase phase;           // 0x1C
+float musicTime;            // 0x20
+```
+
+`CreateLiveTouch(touchId, musicTime, ref Touch, out LiveTouch, phase)`
+（`0x545763C`）里调 **`Camera.ScreenToWorldPoint(Vector3)`** —— 也就是把屏幕点
+投到**一个固定的世界平面**上。`IsJudgment(ref LiveTouch, float lane)` 的 `lane`
+就是这个 `worldPosition.x`，然后拿音符自己的横向区间比：
+
+- vtable `+0x458` 取到的值 `> lane` → 不判（在左边）
+- vtable `+0x478` 取到的值 `< lane` → 不判（在右边）
+
+⇒ 判定的横向坐标**只跟屏幕 x 有关**，跟手指在屏幕上的高度无关。
+`LiveTouch.delta`（0x8）正是 flick 用的那一对，`phase`（0x1C）是 Began/Moved 的判据。
+
+### 5.2 我们原来的映射错在哪
+
+`worldToClip()` 是**正交投影**（`platform/Renderer.cpp:1189`）：
+
+```
+clipX = 2 * worldX * scaledWidth / fillWidth      // 只跟 worldX 有关
+clipY = -2 * (worldY * scaledHeight - screenTop)  // 只跟 worldY 有关
+```
+
+透视感是渲染时人为做的（`core` 的 `scaleQuad(quad, y)` 把 x、y 都乘 y，
+所以 lane 坐标 x 在高度 y 上画在 `worldX = x * y`）。
+
+原来的触摸反解是「撤销透视」：`lanePos = clipToWorldX(clipX) / worldY`。
+这让 **同一个屏幕 x 在不同高度映射到不同 lane**：
+
+| 手指高度 | worldY | 同一个屏幕 x 映射到的 lane |
+|---|---|---|
+| 判定线（屏幕 79%） | 1.00 | `L`（正确） |
+| 屏幕中部 | ≈0.65 | `L / 0.65` ≈ **1.54 L** |
+| 屏幕上部（≈300px） | ≈0.39 | `L / 0.39` ≈ **2.6 L** |
+
+后果：**追着音符 sprite 点，永远正中**（sprite 就画在 `lane * y`，除回去刚好
+还原 lane），于是「音符还在屏幕上半部分时打」和「在判定线上打」一样准；
+而真实手感应该是越往上越偏（原作的固定平面）。这就是「上半部分反而更容易判定」
+的来源。
+
+**已改**：`beginPointer` / `movePointer` 都改成 `lanePos = clipToWorldX(clipX)`，
+即投到 `worldY == 1`（判定线）平面，与原作一致。世界 y 只用来拒绝天空
+（`worldY < 0.06`）和屏幕外（`> 1.6`），不再参与 lane。
+
+### 5.3 还没对齐的空间项
+
+- **判定宽度**：我们 `laneCovers()` 是 `note.width/2 + margin`，而调用点传
+  `margin = 0.8` lane —— 1 lane 宽的音符实际覆盖 **2.6 lane**。原作的
+  `IsJudgment` 只要求 touch 落在音符自己的横向区间里（`0x458` / `0x478` 两个
+  边界，无额外容差）。0.8 是历史手感补丁，会让相邻 lane 的同一时刻音符互相抢，
+  在 12 lane 的密集谱面上尤其明显。要不要降到 0.3~0.5 需要真人手感确认。
+- **note 横向偏移**：`LiveBundleBuildData` 有 `judgmentOffsetX/Y`、
+  `normalNoteOffsetX`、`flickNoteOffsetX`、`longNoteOffsetX`
+  （SerializeField 0x18/0x1C/0x34/0x38/0x3C）。这些是演出层给 note 判定区做的
+  微调，我们的谱面转换没有这些字段（一般应为 0，未验证）。
+- **friction / trace 的触摸是持续的**：原作每次 Moved 都会重新问
+  `IsJudgment`，所以按住手指滑过一串 trace 会逐个判；我们只在按下（`beginPointer`）
+  和抬起时各判一次，滑动过程中不判。这是目前手感差得最多的一条（不影响 tap/flick）。
+- **最多 8 指**：原作 `inputResults` 定长 8；我们没有限制（SDL 也不会给超过 10）。
+- **Began → Moved 两段式**：原作独立 flick 在 Began 只记录、下一帧 Moved 才定案；
+  我们每个 motion 事件都能直接定案（更宽松，不改变能否判中，只影响极早的甩）。
+
+### 5.4 怎么回归
+
+```bash
+# 判定逻辑单测（方向 / 方向错降级 / 长条尾时间下限 / strict tap）
+zig c++ -std=c++17 -I. .workbuddy/tools/judge_flick_test.cpp \
+    game/Judgement.cpp platform/Log.cpp -o /tmp/judge_flick_test.exe && /tmp/judge_flick_test.exe
+
+# 整条判定链（自动把所有音符按正常路径打一遍，看 [stats] 有没有 MISS 爆掉）
+./build/cppsekai.exe --sus charts/0075_master.sus --test-hits \
+    --screenshot /tmp/hits.png --screenshot-time 20 --no-party
+```

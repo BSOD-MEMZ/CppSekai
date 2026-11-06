@@ -487,10 +487,19 @@ bool JudgementEngine::laneHeld(const ActiveHold& hold) const
 }
 
 HitNote* JudgementEngine::findCandidate(float lanePos, float songTimeSec, float margin, bool wantFlick,
-    FlickDir flickDir)
+    FlickDir flickDir, float dirX, float dirY)
 {
+    (void)flickDir; // the vector is the primary form now (see flickVector)
     HitNote* best = nullptr;
     float bestAbsDt = std::numeric_limits<float>::max();
+    // Second chance: a swipe that went the wrong way still clears the note in
+    // the official game - it is capped at GREAT instead of being dropped. Those
+    // candidates are only used when nothing with a correct direction is in
+    // reach, exactly like FlickNote.JudgmentFlick prefers `distance &&
+    // trueDirection` over a bare `distance` record.
+    HitNote* bestWrongDir = nullptr;
+    float bestWrongAbsDt = std::numeric_limits<float>::max();
+    const bool haveSwipeDir = dirX != 0.0f || dirY != 0.0f;
 
     // Look-ahead bound: the widest BAD any note type can have, since the row
     // is only known once we reach the note.
@@ -530,18 +539,34 @@ HitNote* JudgementEngine::findCandidate(float lanePos, float songTimeSec, float 
             }
             // Lenient skeleton mode: either gesture clears either kind.
         }
-        if (wantFlick && mStrictFlick && !flickAsTap) {
+        // Official direction test (FlickNote.UpdateDelta):
+        //   isTrueDirection = dot(normalize(v), noteDir) >= 0 || Direction == Default
+        // noteDir is (-1,0) / (1,0) for left/right, and a Default (arrow-less)
+        // flick ignores the direction completely. So a LEFT note is "correct"
+        // for any swipe whose x is not positive - a straight UP swipe (x == 0)
+        // clears it, which is what players actually do and what the old
+        // `flickDir == noteDir` test rejected. A wrong direction is not a
+        // reject either: the note still clears, capped at GREAT (see below),
+        // exactly like the official GetJudgeResultInternal.
+        bool dirWrong = false;
+        if (wantFlick && mStrictFlick && !flickAsTap && haveSwipeDir) {
             const FlickDir noteDir = static_cast<FlickDir>(noteFlickDir(note));
-            // Up/default flicks (and legacy FlickNone) accept any upward
-            // swipe; left/right flicks require the matching horizontal swipe.
-            const bool dirOk = noteDir == FlickNone || noteDir == FlickUp
-                ? flickDir == FlickUp || flickDir == FlickNone
-                : flickDir == noteDir;
-            if (!dirOk) {
-                continue;
+            if (noteDir == FlickLeft) {
+                dirWrong = dirX > 0.0f;
+            } else if (noteDir == FlickRight) {
+                dirWrong = dirX < 0.0f;
             }
+            // FlickUp / FlickNone: always accepted.
         }
         if (!laneCovers(note, lanePos, margin)) {
+            continue;
+        }
+        // Official long-note tail flick: FlickNote.Judgment (parentNote != null)
+        // requires `noteTime - touchTime <= -1/120`, i.e. the swipe must land at
+        // least one JustPerfect half-window AFTER the tail's time. Early
+        // swipes simply do not resolve it (it stays pending).
+        if (note.holdTail && wantFlick && note.kind == 2.0f
+            && songTimeSec - note.timeSec < 1.0f / 120.0f) {
             continue;
         }
         // Signed distance: positive means the press is late. A note only
@@ -557,10 +582,24 @@ HitNote* JudgementEngine::findCandidate(float lanePos, float songTimeSec, float 
             continue;
         }
         const float dt = std::fabs(deltaMs) / 1000.0f;
+        if (dirWrong) {
+            // Keep it as a fallback only - a correctly-swiped note always wins.
+            if (dt < bestWrongAbsDt) {
+                bestWrongAbsDt = dt;
+                bestWrongDir = &note;
+            }
+            continue;
+        }
         if (dt < bestAbsDt) {
             bestAbsDt = dt;
             best = &note;
         }
+    }
+
+    bool dirWasWrong = false;
+    if (best == nullptr && bestWrongDir != nullptr) {
+        best = bestWrongDir;
+        dirWasWrong = true;
     }
 
     if (best == nullptr) {
@@ -571,7 +610,13 @@ HitNote* JudgementEngine::findCandidate(float lanePos, float songTimeSec, float 
     const bool bestCritical = noteHasFlag(best->flags, 1);
     const TypeWindows bestWindows = mWindows.windowsFor(
         windowTypeFor(best->kind, bestCritical, best->holdTail, noteHasFlag(best->flags, kFlagFriction)));
-    const Judge judge = gradeFor(bestWindows, (songTimeSec - best->timeSec) * 1000.0f);
+    Judge judge = gradeFor(bestWindows, (songTimeSec - best->timeSec) * 1000.0f);
+    if (dirWasWrong && judge == Judge::Perfect) {
+        // Swiped the wrong way but landed inside the PERFECT window: the
+        // official game reports (GREAT, FlickMiss). Time-wise worse than
+        // PERFECT grades are left alone (a late GREAT is still a GREAT).
+        judge = Judge::Great;
+    }
     best->state = 1;
     mHitEventIndices.push_back(static_cast<int>(best - mNotes.data()));
     // Critical is bit0 only - bits 1-2 carry the flick direction, so a
@@ -601,7 +646,24 @@ Judge JudgementEngine::tap(float lanePos, float songTimeSec, bool critical, floa
 
 Judge JudgementEngine::flick(float lanePos, float songTimeSec, FlickDir dir, float margin)
 {
-    HitNote* hit = findCandidate(lanePos, songTimeSec, margin, true, dir);
+    // Legacy enum entry point (keyboard, scripts, --drop-test): translate to
+    // the official direction vector. Up/default carries no horizontal
+    // component, so it is acceptable for left/right notes as well - that is
+    // exactly what `dot(v, (-1,0)) >= 0` says for a straight vertical swipe.
+    float dx = 0.0f;
+    float dy = 0.0f;
+    switch (dir) {
+        case FlickLeft: dx = -1.0f; break;
+        case FlickRight: dx = 1.0f; break;
+        case FlickUp: dy = 1.0f; break;
+        default: break; // FlickNone: no direction information, skip the test
+    }
+    return flickVector(lanePos, songTimeSec, dx, dy, margin);
+}
+
+Judge JudgementEngine::flickVector(float lanePos, float songTimeSec, float dirX, float dirY, float margin)
+{
+    HitNote* hit = findCandidate(lanePos, songTimeSec, margin, true, FlickNone, dirX, dirY);
     if (hit == nullptr) {
         return Judge::None;
     }

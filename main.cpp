@@ -6836,21 +6836,32 @@ int main(int argc, char** argv)
         return true;
     };
 
-    // Judges a flick gesture, trying the lane the press started on first and
-    // the lane the finger was resting on second. The second try is what makes
-    // the tail flick of a sideways-sliding hold work: its tail note sits on
-    // the lane the hold ENDED on (the core emits a marker at the start lane
-    // carrying the end time, and a separate tap/flick event at the end lane),
-    // so a swipe at the press lane covers nothing. Before this, the only way
-    // to clear such a tail was to release the hold and swipe again, because
-    // the new touch read its lane from the current finger position.
-    auto flickJudge = [&](const TouchTrack& track, double songTime, game::FlickDir dir) -> game::Judge {
+    // Judges a flick gesture. The official game tests the swipe direction as a
+    // single dot product against the note's direction, so the raw x / y of the
+    // swipe is what matters - not a left/right/up classification (a straight
+    // up swipe clears a LEFT note too, because dot((0,1), (-1,0)) == 0).
+    //
+    // Lane: the touch's CURRENT lane first (the official IsJudgment gets the
+    // live touch position), then the lane the finger was resting on (a
+    // sideways-sliding hold's tail lives there), then the press lane.
+    auto flickJudge = [&](const TouchTrack& track, double songTime, game::FlickDir dir,
+                          float dirX, float dirY) -> game::Judge {
+        (void)dir;
         const float t = static_cast<float>(songTime);
-        const game::Judge result = judgement.flick(track.lanePos, t, dir, 0.8f);
-        if (result != game::Judge::None || std::fabs(track.restLanePos - track.lanePos) < 0.01f) {
+        const game::Judge result = judgement.flickVector(track.lastLanePos, t, dirX, dirY, 0.8f);
+        if (result != game::Judge::None) {
             return result;
         }
-        return judgement.flick(track.restLanePos, t, dir, 0.8f);
+        if (std::fabs(track.restLanePos - track.lastLanePos) > 0.01f) {
+            const game::Judge rest = judgement.flickVector(track.restLanePos, t, dirX, dirY, 0.8f);
+            if (rest != game::Judge::None) {
+                return rest;
+            }
+        }
+        if (std::fabs(track.lanePos - track.lastLanePos) > 0.01f) {
+            return judgement.flickVector(track.lanePos, t, dirX, dirY, 0.8f);
+        }
+        return game::Judge::None;
     };
 
     // Debug log: one line per flick judgement attempt, and when it cleared
@@ -6900,10 +6911,17 @@ int main(int argc, char** argv)
         if (worldY < 0.06f || worldY > 1.6f) {
             return false;
         }
-        // Undo the fake perspective: screen x = laneX * worldY.
-        const float lanePos = std::abs(worldY) > 0.08f
-            ? renderer.clipToWorldX(clipX) / worldY
-            : renderer.clipToWorldX(clipX);
+        // Judgement plane, matching the official game: LiveTouch.worldPosition
+        // is Camera.ScreenToWorldPoint on a FIXED plane, so the same screen x
+        // maps to the same lane at every height of the playfield. The old code
+        // divided by worldY ("undo the fake perspective"), which made the lane
+        // depend on how high the finger was - a tap high up covered a different
+        // lane than the same x near the judge line, and chasing the note sprite
+        // upwards always landed dead-centre. That is what made notes feel
+        // easier to clear while they were still in the upper half of the
+        // screen: the lane was only wrong when the sprite had not reached the
+        // judge line yet (y == 1 is the plane the sprites are drawn on).
+        const float lanePos = renderer.clipToWorldX(clipX);
         if (lanePos < -6.5f || lanePos > 6.5f) {
             return false;
         }
@@ -6951,16 +6969,19 @@ int main(int argc, char** argv)
     // measurement instead of being thrown away.
     auto movePointer = [&](SDL_FingerID id, int x, int y, Uint32 eventMs) {
         const float clipX = (static_cast<float>(x) / static_cast<float>(windowW)) * 2.0f - 1.0f;
-        const float clipY = 1.0f - (static_cast<float>(y) / static_cast<float>(windowH)) * 2.0f;
-        const float worldY = renderer.clipToWorldY(clipY);
         const float heightScale = static_cast<float>(windowH) / 1080.0f;
         for (auto& track : touches) {
             if (track.fingerId != id) {
                 continue;
             }
-            const float lanePos = std::abs(worldY) > 0.08f
-                ? renderer.clipToWorldX(clipX) / worldY
-                : renderer.clipToWorldX(clipX);
+            // Same fixed judgement plane as beginPointer: the lane comes from
+            // the screen x alone, never from the height of the finger.
+            const float lanePos = renderer.clipToWorldX(clipX);
+            // The flick is judged at the lane the finger is on RIGHT NOW (the
+            // official IsJudgment reads the live touch world position), so this
+            // has to be current before flickJudge() runs below - not at the end
+            // of the sample.
+            track.lastLanePos = lanePos;
             const float dx = static_cast<float>(x) - track.lastScreenX;
             const float dy = static_cast<float>(y) - track.lastScreenY; // screen: down is positive
             // The position advances with every event - the displacement is
@@ -7027,7 +7048,7 @@ int main(int argc, char** argv)
             }
             if (dir != game::FlickNone && now - track.lastFlickFireTimeSec >= kFlickRefireSec) {
                 const double songTime = songTimeAtEvent(eventMs);
-                const game::Judge result = flickJudge(track, songTime, dir);
+                const game::Judge result = flickJudge(track, songTime, dir, track.velSide, track.velUp);
                 logFlickOutcome(track, songTime, dir, result, "fire/move");
                 if (result != game::Judge::None) {
                     // Consume the gesture: resetting the travelled distance stops
@@ -7056,7 +7077,6 @@ int main(int argc, char** argv)
                 // with the up-stroke's perspective skew.
                 track.restLanePos = lanePos;
             }
-            track.lastLanePos = lanePos;
         }
     };
 
@@ -8212,7 +8232,8 @@ int main(int argc, char** argv)
                             if (dir != game::FlickNone) {
                                 const double songTime =
                                     songClock();
-                                const game::Judge result = flickJudge(track, songTime, dir);
+                                const game::Judge result = flickJudge(track, songTime, dir,
+                                    track.peakSide, track.peakUp);
                                 logFlickOutcome(track, songTime, dir, result, "fire/up");
                                 if (result != game::Judge::None) {
                                     playHitSe(audio, judgement, seVolume);
