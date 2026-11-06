@@ -248,8 +248,8 @@ float musicTime;            // 0x20
 投到**一个固定的世界平面**上。`IsJudgment(ref LiveTouch, float lane)` 的 `lane`
 就是这个 `worldPosition.x`，然后拿音符自己的横向区间比：
 
-- vtable `+0x458` 取到的值 `> lane` → 不判（在左边）
-- vtable `+0x478` 取到的值 `< lane` → 不判（在右边）
+- vtable `+0x458` 取到的值 `> lane` → 不判（手指在音符右边之外）
+- vtable `+0x478` 取到的值 `< lane` → 不判（手指在音符左边之外）
 
 ⇒ 判定的横向坐标**只跟屏幕 x 有关**，跟手指在屏幕上的高度无关。
 `LiveTouch.delta`（0x8）正是 flick 用的那一对，`phase`（0x1C）是 Began/Moved 的判据。
