@@ -166,6 +166,40 @@ PY
 现成索引：`jp_index.py` 会把 dump.cs 切成 `ui-SekaiUI.txt` / `ui-ScreenLayer.txt` /
 `ui-Tween.txt` / `tween-defs.txt`（按命名空间与关键字过滤）。
 
+### 4.1b 直接反汇编方法体（`dump.cs` 只有签名，逻辑要读 so）
+
+`dump.cs` 只给 RVA，没有函数体。要看真正的逻辑（判定、状态机、常量），
+用仓库里这两个脚本直接啃 `libil2cpp.so`，**不用起 Ghidra**（REA 的 rizin
+provider 在 Windows 上是 `ERR_REA_WINDOWS_NATIVE`，ghidra provider 分析 199 MB
+的 so 要几十分钟，读几段 asm 完全不值得）：
+
+```bash
+# 反汇编一段（VA 就是 dump.cs 里的 VA，脚本自己按 PT_LOAD 换算文件偏移）
+python .workbuddy/tools/il2cpp_disasm.py \
+       "D:/Tools/rea/work/jp/lib/arm64-v8a/libil2cpp.so" \
+       --range 0x506F658 0x506F818
+
+# 反查某个调用点/地址属于哪个方法（dump.cs 的 RVA 注释在声明**上一行**）
+python .workbuddy/tools/il2cpp_where.py \
+       "D:/Tools/rea/work/jp/dump/dump.cs" 0x506F658
+
+# 想知道"谁调了这个方法"：扫全 so 的 BL 立即数（纯 python，约 20s）
+#   编码 (w & 0xFC000000) == 0x94000000，目标 = pc + imm26*4
+```
+
+读 asm 的几条经验：
+
+- `ldr x8,[x0]; ldr x9,[x8,#0x4a8]; ldr x1,[x8,#0x4b0]; blr x9` = 虚调用
+  （`INote` 接口属性/方法，走 vtable 槽位）。
+- `ldr x8,[klass+0xb8]` = `static_fields`，之后 `+offset` 就是 dump.cs 里静态字段的偏移。
+- `adrp+ldr s0,[x8,#imm]` 指向 `.rodata` 的 float 常量，用
+  `il2cpp_disasm` 里同样的 `va_to_off` 直接读出来即可（`.cctor` 里的 `stur d0,[x8,#0x14]`
+  这类 8 字节写入常常一次填两个相邻 float）。
+- 实例方法参数：`w0` 是 this，整数进 `x1..x7`，float 进 `s0..s7`（**两套寄存器独立**），
+  所以 `(A a, B b, float c, float d)` 的第 3 个 float 在 `s1` 而不是 `s2`。
+  别按"总第 N 个参数"数。
+
+
 ### 4.2 读一个 prefab 的完整 RectTransform 树（**几何对齐就靠它**）
 
 ```bash
