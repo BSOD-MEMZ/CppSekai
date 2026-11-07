@@ -44,7 +44,9 @@
 官方 2026-04-27：确认使用外部非公式应用 → 禁参加官方大会/活动（资格罚）。风险：资格罚 > 下架 > 诉讼，没走 DMCA。「repo 404」不能归因。
 
 ## 最近工作（细节见日志）
-- 11-07 演奏中顶部进度条可拖动 seek（谱面/音乐/判定统计同步归零）。
+- 11-07 演奏中顶部进度条可拖动 seek（音频/判定/渲染三层同步，score/combo 归零、跳过的音符不判 MISS）；
+  产出 `HUD-UI-AUDIT.md`（HUD 是 SpriteRenderer + 世界坐标，prefab 无 rect，位置只能量截图）
+  与 `HAIKU-PORT.md`（miniaudio 无 Haiku 后端 / llvmpipe + 无 swap interval 是两大障碍）。
 - 11-06 flick 判定反汇编完成（`JUDGE-WINDOWS.md` §4）：门槛=单帧瞬时位移；方向错上限 Great；独立 flick 由 Began→下一帧 Moved 定案；自动 MISS 141.7ms。**尚未落进 Judgement.cpp**。
 - 11-01 选曲几何大修（`SELECT-UI.md`）：基准 1920×1080 不换算；手机面板 704 prefab 几何；A0/A1/B 待拍板。
 - 11-01 判定窗口按 master 表逐类型 + 左右不对称实现（`JUDGE-WINDOWS.md`）。
