@@ -581,6 +581,38 @@ void AudioEngine::resume()
     mPaused = false;
 }
 
+void AudioEngine::seekTo(double chartSec)
+{
+    if (!mStarted || !mMusicLoaded) {
+        return;
+    }
+    const double target = std::max(0.0, chartSec);
+    // Same file position the clock and update()/resume() use, clamped to the
+    // track so a seek to the very end cannot wrap into an empty region.
+    double filePos = std::max(0.0, target + mMusicStartPosSec + mUserOffsetSec);
+    const double length = musicDurationSec();
+    if (length > 0.0) {
+        filePos = std::min(filePos, std::max(0.0, length - 0.05));
+    }
+    const ma_uint64 frames = static_cast<ma_uint64>(filePos * sampleRate());
+    ma_sound_seek_to_pcm_frame(&mMusic, frames);
+    const std::uint64_t now = ma_engine_get_time_in_pcm_frames(&mEngine);
+    // Once the music is running songTime() is (now - mMusicStartFrames)/rate,
+    // so anchoring that many frames in the past makes it read `target`.
+    // Clamped: a small target would underflow the unsigned frame counter and
+    // throw the clock years into the future.
+    mMusicStartFrames = frames > now ? 0 : now - frames;
+    mMusicStarted = true;
+    if (mPaused) {
+        // resume() re-seeks from mPauseSongTime, so the paused clock is the
+        // only thing that has to move.
+        mPauseSongTime = target;
+    } else if (!ma_sound_is_playing(&mMusic)) {
+        ma_sound_start(&mMusic);
+    }
+    platform::logf(platform::LogAudio, "[audio] seek to %.2fs (file %.2fs)\n", target, filePos);
+}
+
 void AudioEngine::playSe(SeKind kind, float volume)
 {
     if (!mSe.loaded) {

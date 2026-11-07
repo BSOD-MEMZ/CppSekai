@@ -142,6 +142,13 @@ class AudioEngine
     void pause();
     void resume();
 
+    // Jumps playback to `chartSec` (chart time: 0 = the first audible sample)
+    // and re-anchors the clock so picture and sound move together. Also works
+    // while paused (the paused position is what moves) and while still in the
+    // lead-in (the music starts right there). A session with no track loaded
+    // is left alone - the caller re-anchors its own wall clock instead.
+    void seekTo(double chartSec);
+
     void playSe(SeKind kind, float volume);
 
     // ---- Master BGM volume (0..1, the settings card's BGM slider) --------

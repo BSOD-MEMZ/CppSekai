@@ -1278,6 +1278,32 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
 - **截图**：卡片只活在谱面时间 0 之前（`outputTime = songTime + leadIn`，而 `leadIn >= 5.8s`），
   普通 `--screenshot` 抓不到。用 `--intro-preview [sec]`（默认 1.5）把输出时钟钉住再截。
 
+## 演奏中的进度条拖动（seek，2026-11-07）
+
+窗口最顶上那条 3px 半透明进度条（设置 → 画面「显示播放进度条」）**本身就是 seek 控件**：
+鼠标悬停在顶部 16px 的命中带里它会长到 6px、冒出白色圆钮和时间（`1:24 / 3:07`）；
+在带上按下开始拖动，指针离开这条带也继续跟（否则「从 20% 拖到 80%」做不到）。
+
+一次 seek 是三层一起跳，缺一层就会出现「画面对了声音没对」或「一拖上百个 MISS」：
+
+| 层 | 调用 | 它做的事 |
+|---|---|---|
+| 音频 | `AudioEngine::seekTo(chartSec)` | 文件位置 = `chart + startPos + userOffset`，再按 `(now - frames)` 重锚 `mMusicStartFrames`；暂停中按 `mPauseSongTime` 处理；无 BGM 的局由 `main.cpp` 拨 `perfStart`（墙钟） |
+| 判定 | `JudgementEngine::seekTo(sec)` | 落点**之前**的音符 `state = 2` 静默消费（不判 MISS、不掉血、不计分），长条/尾判/命中索引全清，`mStats` 归零、血量回初始 |
+| 渲染 | `core_api::clearHitNotes()` | 核心的 `hitNoteIds` 不认时间，不清的话倒着拖回去那些音符已经"消失"了 |
+
+- **score / combo / 判定表从 0 重新算**，`mWeightedNoteCount` **故意不重算**：跳过后半曲
+  不该能打出满分（否则结算会给 S）。
+- 拖动时按 ~90ms 节流真正 seek（音频 seek 不免费），松手再对齐一次。
+- **多人游玩直接禁用**（`party.active()` → `[seek] ignored`）：那一局的时钟归房主，
+  单方面跳会让所有人的谱面散架。
+- 暂停 / 倒计时 / 暂停卡 / 开屏卡期间不接（`seekBarArmed()`）。
+- 无头验证：`CPSEKAI_SEEK_TEST=<秒>`，开局 1 秒后跳一次。日志应有
+  `[audio] seek to … (file …)` / `[judge] seek to … (N note(s) consumed silently, cursor …)` /
+  `[seek] …`，随后 `[stats]` 从 0 重新长且 **miss=0**。
+- 事件层：鼠标 / 触摸两条路的 DOWN/MOTION/UP 都在 `beginPointer()` **之前**被吃掉
+  （`hudSeekPress/Move/Release`），所以拖动不会被当成 lane 输入，也不会顺手点掉暂停键。
+
 ## 结算画面（2026-09-13，`game/Result.cpp`）
 
 **2026-09-19 改版（用户点名的四条）**：

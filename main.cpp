@@ -3914,6 +3914,50 @@ int main(int argc, char** argv)
     float lastSeenJudgeTime = -100.0f;
     bool wantScreenshot = false;
 
+    // ------------------------------------------------------------------
+    // 演奏中拖动顶部进度条 = seek（2026-11-07）.
+    //
+    // 一次跳到底：音乐（AudioEngine 重新锚定时钟）、谱面（核心按新的时间重算
+    // 绘制数据）和判定表一起走。落点之前的音符算「已经过去」，不判 MISS、不
+    // 计分 —— 否则拖一下就是上百个 MISS；落点之后 score / combo / 判定统计
+    // 全部从 0 重新算。
+    //
+    // 多人游玩里禁用：那一局的时钟归房主，单方面跳会让所有人的谱面散架。
+    // ------------------------------------------------------------------
+    auto seekPlayback = [&](double targetSec) -> bool {
+        if (trackDurationSec <= 1.0 || party.active()) {
+            if (party.active()) {
+                platform::logf(platform::LogPlay, "[seek] ignored (多人游玩的时钟归房主)\n");
+                std::fflush(stdout);
+            }
+            return false;
+        }
+        // Leave a little room at the end: seeking onto the last sample ends the
+        // live on the very next frame.
+        const double target = std::clamp(targetSec, 0.0, trackDurationSec - 0.15);
+        if (audio.hasMusic()) {
+            audio.seekTo(target);
+        } else {
+            // Wall-clock sessions (no BGM, or a chart preview without audio):
+            // move the anchor so wallSongTime() reads `target`.
+            const double offsetSec = std::max(0.0, target + leadInSec);
+            perfStart = SDL_GetPerformanceCounter()
+                - static_cast<Uint64>(offsetSec * static_cast<double>(perfFreq));
+        }
+        judgement.seekTo(static_cast<float>(target));
+        core_api::clearHitNotes();
+        // The HUD reads the stats next frame, but its *display* state (score
+        // rolling, combo bubble, judge sprite) is separate: drop it here so the
+        // score starts from zero instead of rolling down from the old value.
+        hudState = game::HudState{};
+        hudState.lifeRatio = 1.0f;
+        hudState.lifeValue = judgement.stats().life;
+        lastSeenJudgeTime = -100.0f;
+        platform::logf(platform::LogPlay, "[seek] %.2f / %.2f s\n", target, trackDurationSec);
+        std::fflush(stdout);
+        return true;
+    };
+
     // Result screen state: the snapshot it draws, when it appeared (drives the
     // entrance animation) and the previous best score of the chart being
     // played (captured *before* the new record is written).
@@ -4003,6 +4047,12 @@ int main(int argc, char** argv)
     // Set by the mouse handler when the HUD pause button was clicked, so the
     // same click is not also treated as a lane hit.
     bool pauseClickRequested = false;
+
+    // 顶部进度条拖动（seek）状态。按下落在顶部细条上就开始拖动，期间每次指针
+    // 移动都把整局跳过去（节流），松手落定。
+    bool scrubActive = false;
+    double scrubTargetSec = 0.0;
+    Uint32 scrubLastApplyMs = 0;
 
     // ------------------------------------------------------------------
     // Resume countdown: continuing from the pause dialog shows 3-2-1 with an
@@ -6836,6 +6886,63 @@ int main(int argc, char** argv)
         return true;
     };
 
+    // ------------------------------------------------------------------
+    // 顶部进度条的可拖动区域（seek）。
+    //
+    // 条本身只有 3px，鼠标/手指点不中，命中带放大到 16 个窗口像素（进度条
+    // 也是按窗口像素画的）。拖动一旦开始，指针可以离开这一带 —— 那是「从 20%
+    // 拖到 80%」的必要条件。忙碌状态（暂停、倒计时、暂停卡、多人）一律不接。
+    // ------------------------------------------------------------------
+    constexpr float kSeekBarZonePx = 16.0f;
+    const auto seekBarArmed = [&]() {
+        return state == AppState::Play && showProgressBar && trackDurationSec > 1.0
+            && !paused && !countdownActive && !pauseDialogOpen && !party.active();
+    };
+    const auto hudSeekTarget = [&](int x) {
+        return std::clamp(static_cast<double>(x) / static_cast<double>(std::max(1, windowW)) * trackDurationSec,
+            0.0, std::max(0.0, trackDurationSec - 0.15));
+    };
+    const auto hudSeekPress = [&](int x, int y) -> bool {
+        if (!seekBarArmed() || static_cast<float>(y) < 0.0f || static_cast<float>(y) > kSeekBarZonePx) {
+            return false;
+        }
+        if (ImGui::GetIO().WantCaptureMouse) {
+            return false;
+        }
+        // 开屏卡还盖着屏幕时 HUD 没画出来，那条此刻不是可见的控件。
+        const float visibility = game::openingPlayfieldVisibility(
+            static_cast<float>(songClock() + leadInSec), session.intro.hasContent);
+        if (visibility <= 0.0f) {
+            return false;
+        }
+        scrubActive = true;
+        scrubTargetSec = hudSeekTarget(x);
+        scrubLastApplyMs = SDL_GetTicks();
+        seekPlayback(scrubTargetSec);
+        return true;
+    };
+    const auto hudSeekMove = [&](int x) {
+        if (!scrubActive) {
+            return;
+        }
+        scrubTargetSec = hudSeekTarget(x);
+        // 音频 seek 不算免费：拖动时按 ~90ms 一档跳，手感仍然是连续的。
+        const Uint32 now = SDL_GetTicks();
+        if (now - scrubLastApplyMs >= 90) {
+            scrubLastApplyMs = now;
+            seekPlayback(scrubTargetSec);
+        }
+    };
+    // 松手：落点最后对齐一次。返回 true 表示这次抬起属于进度条。
+    const auto hudSeekRelease = [&]() -> bool {
+        if (!scrubActive) {
+            return false;
+        }
+        scrubActive = false;
+        seekPlayback(scrubTargetSec);
+        return true;
+    };
+
     // Judges a flick gesture. The official game tests the swipe direction as a
     // single dot product against the note's direction, so the raw x / y of the
     // swipe is what matters - not a left/right/up classification (a straight
@@ -8111,6 +8218,12 @@ int main(int argc, char** argv)
                             event.tfinger.y * static_cast<float>(windowH));
                         break;
                     }
+                    // 顶部进度条拖动（seek）：和暂停按钮一样，在暂停/自动播放
+                    // 的守卫之前处理。
+                    if (hudSeekPress(static_cast<int>(event.tfinger.x * static_cast<float>(windowW)),
+                            static_cast<int>(event.tfinger.y * static_cast<float>(windowH)))) {
+                        break;
+                    }
                     // HUD pause button (not lane input): handled before the
                     // paused / autoplay guards, exactly like the mouse path.
                     if (hudPausePress(static_cast<int>(event.tfinger.x * static_cast<float>(windowW)),
@@ -8148,6 +8261,10 @@ int main(int argc, char** argv)
                     break;
                 }
                 case SDL_FINGERMOTION: {
+                    if (scrubActive) {
+                        hudSeekMove(static_cast<int>(event.tfinger.x * static_cast<float>(windowW)));
+                        break;
+                    }
                     tapEffect.moveHold(event.tfinger.x * static_cast<float>(windowW),
                         event.tfinger.y * static_cast<float>(windowH));
                     if (longPress.active) {
@@ -8192,6 +8309,9 @@ int main(int argc, char** argv)
                 case SDL_FINGERUP: {
                     longPress.active = false;
                     tapEffect.release();
+                    if (hudSeekRelease()) {
+                        break; // 这次抬起属于进度条，不是 lane 输入
+                    }
                     if (event.tfinger.fingerId == uiTouchScrollId) {
                         // Only the finger state goes; whatever was banked stays
                         // for the card to apply this frame. A quick flick hands
@@ -8311,6 +8431,11 @@ int main(int argc, char** argv)
                             break;
                         }
                     }
+                    // 顶部进度条拖动（seek）：吃掉这次按下，绝不落到 lane 上。
+                    if (event.button.button == SDL_BUTTON_LEFT
+                        && hudSeekPress(event.button.x, event.button.y)) {
+                        break;
+                    }
                     // HUD pause button (see hudPausePress): checked before the
                     // "no input while paused / autoplaying" guards so the
                     // button behaves the same in a preview as in a real run.
@@ -8330,6 +8455,15 @@ int main(int argc, char** argv)
                 case SDL_MOUSEMOTION: {
                     if (event.motion.which == SDL_TOUCH_MOUSEID) {
                         break; // touch drag is handled by the finger path
+                    }
+                    // 进度条拖动期间，指针的每一次移动都是 seek，不是 lane 输入。
+                    if (scrubActive) {
+                        if ((event.motion.state & SDL_BUTTON_LMASK) != 0) {
+                            hudSeekMove(event.motion.x);
+                        } else {
+                            hudSeekRelease(); // 抬起丢了（窗口外 / 失焦）
+                        }
+                        break;
                     }
                     if (state != AppState::Play && tapEffect.loaded()) {
                         // Held-press ripple follows the pointer; in Play a drag is
@@ -8355,6 +8489,9 @@ int main(int argc, char** argv)
                 case SDL_MOUSEBUTTONUP: {
                     if (event.button.which == SDL_TOUCH_MOUSEID) {
                         break; // touch release is handled by the finger path
+                    }
+                    if (event.button.button == SDL_BUTTON_LEFT && hudSeekRelease()) {
+                        break;
                     }
                     tapEffect.release();
                     if (event.button.button != SDL_BUTTON_LEFT && event.button.button != SDL_BUTTON_RIGHT) {
@@ -10061,6 +10198,19 @@ int main(int argc, char** argv)
                     holdLanes.push_back(hold.first);
                 }
             }
+            // 无头验证（2026-11-07）：CPSEKAI_SEEK_TEST=<秒> 在一局开始 1 秒后
+            // 把整局跳到那个位置，用来确认音频 / 谱面 / 判定统计真的同步跳了。
+            {
+                static const char* seekTestEnv = std::getenv("CPSEKAI_SEEK_TEST");
+                static bool seekTestDone = false;
+                if (seekTestEnv != nullptr && !seekTestDone && songTime >= 1.0
+                    && trackDurationSec > 1.0 && !party.active()) {
+                    seekTestDone = true;
+                    platform::logf(platform::LogPlay, "[seek-test] asking for %.2fs\n",
+                        std::atof(seekTestEnv));
+                    seekPlayback(std::atof(seekTestEnv));
+                }
+            }
             judgement.setHoldLanes(holdLanes);
             // Autoplay is runtime-switchable (settings card), so keep the
             // judgement engine and the core's effect timeline in sync here.
@@ -10631,18 +10781,44 @@ int main(int argc, char** argv)
 
             // Subtle playback progress bar along the very top edge of the
             // window (semi-transparent, can be turned off in the settings).
+            // 2026-11-07: it doubles as the seek control. Hovering the top
+            // strip thickens it and shows a knob + the time it points at;
+            // dragging it moves the whole run (see seekPlayback()).
             if (showProgressBar) {
                 const float progress = trackDurationSec > 1.0
                     ? std::clamp(static_cast<float>(songTime / trackDurationSec), 0.0f, 1.0f)
                     : 0.0f;
                 ImDrawList* fg = ImGui::GetForegroundDrawList();
-                const float barH = 3.0f;
+                const ImVec2 mouse = ImGui::GetIO().MousePos;
+                const bool hoverBar = seekBarArmed() && mouse.y >= 0.0f && mouse.y <= kSeekBarZonePx
+                    && mouse.x >= 0.0f && mouse.x <= static_cast<float>(windowW);
+                const bool barHot = hoverBar || scrubActive;
+                const float shownProgress = (scrubActive && trackDurationSec > 1.0)
+                    ? static_cast<float>(std::clamp(scrubTargetSec / trackDurationSec, 0.0, 1.0))
+                    : progress;
+                const float barH = barHot ? 6.0f : 3.0f;
                 fg->AddRectFilled(ImVec2(0.0f, 0.0f),
                     ImVec2(static_cast<float>(windowW), barH), IM_COL32(255, 255, 255, 24));
-                if (progress > 0.0f) {
+                if (shownProgress > 0.0f) {
                     fg->AddRectFilled(ImVec2(0.0f, 0.0f),
-                        ImVec2(static_cast<float>(windowW) * progress, barH),
-                        IM_COL32(255, 255, 255, 84));
+                        ImVec2(static_cast<float>(windowW) * shownProgress, barH),
+                        IM_COL32(255, 255, 255, barHot ? 168 : 84));
+                }
+                if (barHot) {
+                    // Knob on the fill + the landing time, "1:24 / 3:07".
+                    const float knobX = static_cast<float>(windowW) * shownProgress;
+                    fg->AddCircleFilled(ImVec2(knobX, barH * 0.5f), 5.0f,
+                        IM_COL32(255, 255, 255, 220), 20);
+                    const double shownSec = scrubActive ? scrubTargetSec : songTime;
+                    const int shownTotal = std::max(0, static_cast<int>(std::lround(shownSec)));
+                    const int totalSec = std::max(0, static_cast<int>(std::lround(trackDurationSec)));
+                    char timeText[64];
+                    std::snprintf(timeText, sizeof(timeText), "%d:%02d / %d:%02d",
+                        shownTotal / 60, shownTotal % 60, totalSec / 60, totalSec % 60);
+                    const float textW = ImGui::CalcTextSize(timeText).x;
+                    const float textX = std::clamp(knobX - textW * 0.5f, 4.0f,
+                        static_cast<float>(windowW) - textW - 4.0f);
+                    fg->AddText(ImVec2(textX, barH + 4.0f), IM_COL32(255, 255, 255, 210), timeText);
                 }
             }
 

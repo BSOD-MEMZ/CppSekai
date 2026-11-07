@@ -237,6 +237,14 @@ class JudgementEngine
     void load(const float* packed, int count);
     void reset();
 
+    // Jumps the run to `songTimeSec` (进度条拖动 / seek). Every note before
+    // that point is consumed silently - no MISS, no life loss, no score - so a
+    // seek does not cost the player the whole skipped half of the chart. Holds
+    // in flight are dropped and score / combo / every tally restart from zero.
+    // The caller owns the audio seek and has to clear the renderer's hit-note
+    // set (core_api::clearHitNotes) as well.
+    void seekTo(float songTimeSec);
+
     // Life the next session starts with (settings > 判定 > 初始血量). reset() - which
     // runs per session - seeds the stats from it, so push it before a chart loads.
     // Clamped to 1..kMaxInitialLife.

@@ -385,6 +385,44 @@ void JudgementEngine::reset()
     mComboFactor = 1.0;
 }
 
+void JudgementEngine::seekTo(float songTimeSec)
+{
+    if (!mLoaded) {
+        return;
+    }
+    const float target = std::max(0.0f, songTimeSec);
+    // Notes behind the seek point are behind the player, not missed. Anything
+    // at or after the target stays pending, so a note sitting exactly on the
+    // landing point is still playable.
+    int skipped = 0;
+    for (auto& note : mNotes) {
+        const bool behind = note.timeSec < target;
+        note.state = behind ? static_cast<std::uint8_t>(2) : static_cast<std::uint8_t>(0);
+        if (behind) {
+            ++skipped;
+        }
+    }
+    mCursor = 0;
+    while (mCursor < mNotes.size() && mNotes[mCursor].state != 0) {
+        ++mCursor;
+    }
+    mActiveHolds.clear();
+    mMissedHoldKeys.clear();
+    mHitEventIndices.clear();
+    mTailClaimed.assign(mNotes.size(), 0);
+    // A seek starts a new score: tallies, combo factor and the life bar all go
+    // back to their session-start values (a retry, only further down the chart).
+    mStats = JudgementStats{};
+    mStats.life = std::clamp(mInitialLife, 1.0f, kMaxInitialLife);
+    mComboFactor = 1.0;
+    // The score denominator is deliberately NOT recomputed over the remaining
+    // notes: a run that skipped half the chart must not be able to reach a full
+    // score, or the result screen would call it a S rank.
+    platform::logf(platform::LogPlay, "[judge] seek to %.2fs (%d note(s) consumed silently, cursor %d/%d)\n",
+        static_cast<double>(target), skipped, static_cast<int>(mCursor), static_cast<int>(mNotes.size()));
+    std::fflush(stdout);
+}
+
 void JudgementEngine::registerMiss(float songTimeSec, float lifeCost)
 {
     mStats.miss += 1;
