@@ -621,6 +621,11 @@ void AudioEngine::seekTo(double chartSec)
     } else if (!ma_sound_is_playing(&mMusic)) {
         ma_sound_start(&mMusic);
     }
+    if (!mPaused) {
+        // 6ms 淡入：seek 落在波形中间时第一帧就是满幅，听感是一声"咔"。
+        // 淡入只在这一小段起作用，之后回到 1.0，不影响音量设置。
+        ma_sound_set_fade_in_milliseconds(&mMusic, 0.0f, 1.0f, 6);
+    }
     platform::logf(platform::LogAudio, "[audio] seek to %.2fs (file %.2fs)\n", target, filePos);
 }
 

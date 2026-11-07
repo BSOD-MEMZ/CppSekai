@@ -3935,6 +3935,14 @@ int main(int argc, char** argv)
         // Leave a little room at the end: seeking onto the last sample ends the
         // live on the very next frame.
         const double target = std::clamp(targetSec, 0.0, trackDurationSec - 0.15);
+        // 已经在目标位置就别再跳：每次 seek 都是一次音频断点（源码里
+        // ma_sound_seek_to_pcm_frame + 重锚），听感上就是一声"咔"。按下和松手
+        // 各跳一次时，一声点击会变成两声，所以这里先去重。
+        if (std::fabs(target - songClock()) < 0.05) {
+            platform::logf(platform::LogPlay, "[seek] %.2fs is where we already are - skipped\n", target);
+            std::fflush(stdout);
+            return true;
+        }
         if (audio.hasMusic()) {
             audio.seekTo(target);
         } else {
@@ -4048,11 +4056,10 @@ int main(int argc, char** argv)
     // same click is not also treated as a lane hit.
     bool pauseClickRequested = false;
 
-    // 顶部进度条拖动（seek）状态。按下落在顶部细条上就开始拖动，期间每次指针
-    // 移动都把整局跳过去（节流），松手落定。
+    // 顶部进度条拖动（seek）状态。按下落在顶部细条上就开始拖动，期间只更新
+    // 目标位置（进度条跟着指针走），松手那一下才真正 seek。
     bool scrubActive = false;
     double scrubTargetSec = 0.0;
-    Uint32 scrubLastApplyMs = 0;
 
     // ------------------------------------------------------------------
     // Resume countdown: continuing from the pause dialog shows 3-2-1 with an
@@ -6917,8 +6924,9 @@ int main(int argc, char** argv)
         }
         scrubActive = true;
         scrubTargetSec = hudSeekTarget(x);
-        scrubLastApplyMs = SDL_GetTicks();
-        seekPlayback(scrubTargetSec);
+        // 这里**不**真跳：按下跳一次、松手再跳一次就是两声"咔"，而且拖动中途
+        // 每 90ms 跳一次更是一串断点。拖动期间只更新目标位置（进度条和旋钮跟着
+        // 指针走），落地只在松手那一下。
         return true;
     };
     const auto hudSeekMove = [&](int x) {
@@ -6926,12 +6934,6 @@ int main(int argc, char** argv)
             return;
         }
         scrubTargetSec = hudSeekTarget(x);
-        // 音频 seek 不算免费：拖动时按 ~90ms 一档跳，手感仍然是连续的。
-        const Uint32 now = SDL_GetTicks();
-        if (now - scrubLastApplyMs >= 90) {
-            scrubLastApplyMs = now;
-            seekPlayback(scrubTargetSec);
-        }
     };
     // 松手：落点最后对齐一次。返回 true 表示这次抬起属于进度条。
     const auto hudSeekRelease = [&]() -> bool {

@@ -1309,7 +1309,13 @@ python .workbuddy/tools/pngcrop.py build/sel1.png build/crop.png <x> <y> <w> <h>
      从引擎创建起算，目标比引擎运行时长还大时直接下溢被钳到 0，时钟反而倒退。
      正解是 `mMusicClipStartSec` 这个**有符号偏移**，`resume()` / 新歌开始都要一起维护。
   验证：`CPSEKAI_SEEK_TEST=40` 之后日志里 `[seek-test] clock now 40.00s` 必须等于目标。
-- 拖动时按 ~90ms 节流真正 seek（音频 seek 不免费），松手再对齐一次。
+- **只在松手那一下真跳**（2026-11-07 改）：按下 + 松手各跳一次会听到**两声**"咔"
+  （每次 seek 都是音频里的一次断点），拖动中每 90ms 跳一次更是一串断点。
+  现在 press 只记录目标、拖动只更新 `scrubTargetSec`（进度条和旋钮跟着指针走），
+  release 才 `seekPlayback()`；`seekPlayback` 里还有一道去重——目标与当前
+  `songClock()` 差 < 50ms 就直接返回（点在自己所在位置不该出声）。
+  `AudioEngine::seekTo` 跳完加 **6ms 淡入**（`ma_sound_set_fade_in_milliseconds(0→1)`），
+  否则 seek 落在波形中间第一帧满幅，听感是一声爆音。
 - **多人游玩直接禁用**（`party.active()` → `[seek] ignored`）：那一局的时钟归房主，
   单方面跳会让所有人的谱面散架。
 - 暂停 / 倒计时 / 暂停卡 / 开屏卡期间不接（`seekBarArmed()`）。
