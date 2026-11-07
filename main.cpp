@@ -7954,6 +7954,9 @@ int main(int argc, char** argv)
                         // own up event, the mouse may not).
                         endPointer(pointerIdForButton(SDL_BUTTON_LEFT));
                         endPointer(pointerIdForButton(SDL_BUTTON_RIGHT));
+                        // 进度条拖动同理：失焦后那个"抬起"可能再也收不到，
+                        // 不清掉的话下一次移动/抬起会拿旧目标位置跳一次。
+                        scrubActive = false;
                         // Auto-pause when the window loses keyboard focus while
                         // playing (LEAVE only fires for mouse leave, so gate on
                         // the focus event itself). During the opening lead-in
