@@ -265,6 +265,11 @@ class AudioEngine
     double mUserOffsetSec = 0.0;    // manual fine tune, added to the above
     std::uint64_t mAnchorFrames = 0;      // engine frame counter when clock armed
     std::uint64_t mMusicStartFrames = 0;  // engine frame counter when music actually started
+    // Chart time the running music clock counts from. seek / resume restart the
+    // clock at a positive chart time, and the frame counter is unsigned (it
+    // starts at engine creation), so "this happened 40 seconds ago" cannot be
+    // expressed in frames: it is a bias instead.
+    double mMusicClipStartSec = 0.0;
     double mPauseSongTime = 0.0;
 };
 

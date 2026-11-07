@@ -10209,6 +10209,7 @@ int main(int argc, char** argv)
                     platform::logf(platform::LogPlay, "[seek-test] asking for %.2fs\n",
                         std::atof(seekTestEnv));
                     seekPlayback(std::atof(seekTestEnv));
+                    platform::logf(platform::LogPlay, "[seek-test] clock now %.2fs\n", songClock());
                 }
             }
             judgement.setHoldLanes(holdLanes);
@@ -10790,8 +10791,12 @@ int main(int argc, char** argv)
                     : 0.0f;
                 ImDrawList* fg = ImGui::GetForegroundDrawList();
                 const ImVec2 mouse = ImGui::GetIO().MousePos;
-                const bool hoverBar = seekBarArmed() && mouse.y >= 0.0f && mouse.y <= kSeekBarZonePx
-                    && mouse.x >= 0.0f && mouse.x <= static_cast<float>(windowW);
+                // 无头验证：CPSEKAI_SEEK_HOVER=1 假装指针停在进度条上，好截
+                // 「悬停态 + 时间文字」那一帧（无头会话里没有真鼠标）。
+                static const bool seekHoverShot = std::getenv("CPSEKAI_SEEK_HOVER") != nullptr;
+                const bool hoverBar = seekHoverShot
+                    || (seekBarArmed() && mouse.y >= 0.0f && mouse.y <= kSeekBarZonePx
+                        && mouse.x >= 0.0f && mouse.x <= static_cast<float>(windowW));
                 const bool barHot = hoverBar || scrubActive;
                 const float shownProgress = (scrubActive && trackDurationSec > 1.0)
                     ? static_cast<float>(std::clamp(scrubTargetSec / trackDurationSec, 0.0, 1.0))
@@ -10806,6 +10811,8 @@ int main(int argc, char** argv)
                 }
                 if (barHot) {
                     // Knob on the fill + the landing time, "1:24 / 3:07".
+                    // 字体用游戏自己的正文条（微软雅黑），不要 ImGui 默认点阵字：
+                    // AddText 不传字体就是 ProggyClean，在 1080p 下糊成一排方块。
                     const float knobX = static_cast<float>(windowW) * shownProgress;
                     fg->AddCircleFilled(ImVec2(knobX, barH * 0.5f), 5.0f,
                         IM_COL32(255, 255, 255, 220), 20);
@@ -10815,10 +10822,27 @@ int main(int argc, char** argv)
                     char timeText[64];
                     std::snprintf(timeText, sizeof(timeText), "%d:%02d / %d:%02d",
                         shownTotal / 60, shownTotal % 60, totalSec / 60, totalSec % 60);
-                    const float textW = ImGui::CalcTextSize(timeText).x;
+                    ImFont* timeFont = game::bodyFont();
+                    // 跟着窗口高度走一点，小窗口才不会比进度条还高。
+                    const float timeSize = std::clamp(static_cast<float>(windowH) * 0.020f, 14.0f, 26.0f);
+                    const float textW = timeFont != nullptr
+                        ? timeFont->CalcTextSizeA(timeSize, FLT_MAX, 0.0f, timeText).x
+                        : ImGui::CalcTextSize(timeText).x;
                     const float textX = std::clamp(knobX - textW * 0.5f, 4.0f,
                         static_cast<float>(windowW) - textW - 4.0f);
-                    fg->AddText(ImVec2(textX, barH + 4.0f), IM_COL32(255, 255, 255, 210), timeText);
+                    const ImVec2 textPos(textX, barH + 3.0f);
+                    if (timeFont != nullptr) {
+                        // 底部先垫一块半透明圆角胶囊：白字压在分数面板/亮背景上
+                        // 会直接消失，加了底才读得出来。
+                        const float padX = 8.0f;
+                        const float padY = 4.0f;
+                        fg->AddRectFilled(ImVec2(textPos.x - padX, textPos.y - padY),
+                            ImVec2(textPos.x + textW + padX, textPos.y + timeSize + padY),
+                            IM_COL32(12, 12, 20, 150), 7.0f);
+                        fg->AddText(timeFont, timeSize, textPos, IM_COL32(255, 255, 255, 240), timeText);
+                    } else {
+                        fg->AddText(textPos, IM_COL32(255, 255, 255, 235), timeText);
+                    }
                 }
             }
 

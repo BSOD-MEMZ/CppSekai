@@ -230,8 +230,12 @@ cppsekai [--sus <file.sus>] [--bgm <audio>] [--charts <dir>] [--cover <image>]
   别的谱面还认得的共用文件不会被连带删掉。
 - **进度条拖动（seek）**：`CPSEKAI_SEEK_TEST=<秒>` 在开局 1 秒后把整局跳到那个位置。
   日志应有 `[audio] seek to … (file …)`、`[judge] seek to … (N note(s) consumed silently)`、
-  `[seek] …`，随后 `[stats]` 的 score/combo 从 0 重新长而 **miss=0**（跳过的音符不判 MISS）。
+  `[seek] …`、`[seek-test] clock now …`（**这个值必须等于目标**，不等就是时钟锚点错了），
+  随后 `[stats]` 的 score/combo 从 0 重新长而 **miss=0**（跳过的音符不判 MISS）。
   多人游玩下会被忽略（`[seek] ignored`）。细节见 AGENTS.md「演奏中的进度条拖动」。
+- **进度条悬停态**：`CPSEKAI_SEEK_HOVER=1` 假装指针停在进度条上（真鼠标在无头会话里
+  动不了），用来截「加粗 + 白钮 + `1:24 / 3:07`」那一帧。文字用的是游戏的正文条
+  （微软雅黑），不是 ImGui 默认点阵字。
 - **失血阴影**（掉血时四边变暗）：`CPSEKAI_VIGNETTE=0.85` 把阴影冻结在这个强度上，用来截无头对比图——
   掉血需要真人漏接，`--screenshot` 造不出来。`0` = 关（当对照图用）。
 - **曲末「LIVE CLEAR!」大字**：`CPSEKAI_BANNER_T=<秒>` 把那段 1.5167s 的动画**冻结**在指定时刻

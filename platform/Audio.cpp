@@ -77,6 +77,7 @@ bool AudioEngine::loadMusic(const std::string& path, std::string& outError)
         ma_sound_uninit(&mMusic);
         mMusicLoaded = false;
         mMusicStarted = false;
+        mMusicClipStartSec = 0.0; // 新歌：时钟不再带上一首的 seek 偏移
     }
     const ma_result result = ma_sound_init_from_file(&mEngine, path.c_str(), MA_SOUND_FLAG_DECODE, nullptr, nullptr, &mMusic);
     if (result != MA_SUCCESS) {
@@ -244,6 +245,7 @@ void AudioEngine::skipLeadIn()
     ma_sound_seek_to_pcm_frame(&mMusic, static_cast<ma_uint64>(filePos * sampleRate()));
     ma_sound_start(&mMusic);
     mMusicStartFrames = ma_engine_get_time_in_pcm_frames(&mEngine);
+    mMusicClipStartSec = 0.0; // 从头开始
     mMusicStarted = true;
 }
 
@@ -522,6 +524,7 @@ void AudioEngine::update()
         ma_sound_seek_to_pcm_frame(&mMusic, static_cast<ma_uint64>(filePos * sampleRate()));
         ma_sound_start(&mMusic);
         mMusicStartFrames = ma_engine_get_time_in_pcm_frames(&mEngine);
+        mMusicClipStartSec = 0.0; // 这首歌从头开始
         mMusicStarted = true;
     }
 }
@@ -544,7 +547,9 @@ double AudioEngine::songTime() const
         // Lead-in: start at -leadInSec and climb toward zero.
         return -mLeadInSec + static_cast<double>(now - mAnchorFrames) / sampleRate();
     }
-    return static_cast<double>(now - mMusicStartFrames) / sampleRate();
+    // mMusicClipStartSec is the chart time this clock was (re)anchored at:
+    // 0 normally, the seek/resume position otherwise.
+    return mMusicClipStartSec + static_cast<double>(now - mMusicStartFrames) / sampleRate();
 }
 
 void AudioEngine::pause()
@@ -570,8 +575,11 @@ void AudioEngine::resume()
         const double seekPos = std::max(0.0, filePos);
         ma_sound_seek_to_pcm_frame(&mMusic, static_cast<ma_uint64>(seekPos * sampleRate()));
         ma_sound_start(&mMusic);
-        mMusicStartFrames =
-            ma_engine_get_time_in_pcm_frames(&mEngine) - static_cast<std::uint64_t>(mPauseSongTime * sampleRate());
+        // Same trick as seekTo(): anchor *now* and carry the chart time as a
+        // bias. Subtracting the frames underflows whenever the paused
+        // position is older than the engine's own uptime.
+        mMusicStartFrames = ma_engine_get_time_in_pcm_frames(&mEngine);
+        mMusicClipStartSec = mPauseSongTime;
         mMusicStarted = true;
     } else {
         // Still in the lead-in: re-anchor the lead-in clock.
@@ -597,11 +605,14 @@ void AudioEngine::seekTo(double chartSec)
     const ma_uint64 frames = static_cast<ma_uint64>(filePos * sampleRate());
     ma_sound_seek_to_pcm_frame(&mMusic, frames);
     const std::uint64_t now = ma_engine_get_time_in_pcm_frames(&mEngine);
-    // Once the music is running songTime() is (now - mMusicStartFrames)/rate,
-    // so anchoring that many frames in the past makes it read `target`.
-    // Clamped: a small target would underflow the unsigned frame counter and
-    // throw the clock years into the future.
-    mMusicStartFrames = frames > now ? 0 : now - frames;
+    // 时钟怎么走：songTime() = mMusicClipStartSec + (now - mMusicStartFrames)/rate。
+    // 所以这里只要"从现在起算、片段从 target 开始"，两者都由 songTime() 自己加回去。
+    // 2026-11-07 修过一次：早先把**文件位置**的帧数当成锚点（chart 时间会多走一个
+    // startPos，点 40s 实际跳到 49s），后来又想用 `now - target*rate` 表示"40 秒前"，
+    // 但帧计数是无符号的、从引擎创建起算 —— 目标位置比引擎运行时长还大时直接下溢，
+    // 时钟反而倒退。用偏移量就没有这两个坑。
+    mMusicStartFrames = now;
+    mMusicClipStartSec = target;
     mMusicStarted = true;
     if (mPaused) {
         // resume() re-seeks from mPauseSongTime, so the paused clock is the
