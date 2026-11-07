@@ -34,6 +34,14 @@ CppSekai：Project SEKAI 风格 SUS 谱面 Windows 原生游玩器。
   **再遇到「某台机器画面不对」先看这篇**，别从渲染逻辑查起。
 - `RE.md` —— **pjsk 解包产物与工具链**：日服/国服的差异、Il2CppDumper / AssetStudio /
   AssetRipper 的用法与坑、产物索引（dump.cs、sprite 尺寸表、prefab 几何）。
+- `HUD-UI-AUDIT.md` —— **HUD 与界面控件的原作对照（2026-11-07）**：ScoreView / LifeView /
+  ComboView 三个 prefab 的节点树（**HUD 是 SpriteRenderer + 世界坐标，prefab 里没有 rect**，
+  位置只能量截图）、缺的三块（技能显示、生命条内的跳过键、AP 连击层）、
+  判定字 324×96 vs 我们 310×81、以及控件几何表（复选框 72×74、开关 180.8×100、
+  滑杆 560×24、标准按钮 336×96、对话框 1168 宽、关闭 X 44×44）。**再动 HUD 尺寸前先看这篇。**
+- `HAIKU-PORT.md` —— **移植 HaikuOS 的可行性（2026-11-07）**：分层可移植性表、
+  四个真障碍（miniaudio 无 Haiku 后端 / llvmpipe + SDL 无 swap interval / Party 的 Win32 IPC /
+  zig 交叉构建）、分阶段计划与结论（单机能玩 5~7 天，建议独立分支）。
 - `RESULT-FX.md` —— **曲末特效的实测规格（2026-10-31）**：`fx_result_*` 这一族真名
   （三支 prefab，两个代码字符串）、每支的结构树 / `m_IsActive`+`Color.a` 时间轴 /
   贴图尺寸。**做曲末大字前必读**，别按 stringliteral 里那五个名字去找资产。
