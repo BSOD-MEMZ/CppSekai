@@ -22,7 +22,7 @@ NEW = r'''                // 关于: 一页流水信息，不分组（2026-11-01
                 contentLeft();
                 ImGui::PushFont(game::bodyFont(), 22.0f * s);
                 ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(122, 122, 148, 255));
-                ImGui::TextUnformatted("版本 1.0.0.6 · 许可 AGPL-3.0-only");
+                ImGui::TextUnformatted("版本 1.0.0.7 · 许可 AGPL-3.0-only");
                 ImGui::PopStyleColor();
                 ImGui::PopFont();
 
