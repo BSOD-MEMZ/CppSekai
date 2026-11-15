@@ -210,6 +210,37 @@ curl -s "https://storage.exmeaning.com/api/assets/bundle-files?server=jp&path=li
 curl -s "https://storage.exmeaning.com/api/assets/bundles?server=jp&path=live/2dmode&limit=50"
 ```
 
+## 1.7b 「MV 上面那层纹理」查清了（2026-11-15）
+
+`Background2DView` 的 prefab 是 **1249**（37 个节点），结构：
+
+```
+Background2DView               (场景里偏在 x=100，不在 HUD 层)
+├ movieContent
+│ ├ movieCamera                ← 独立相机，MV 由它渲染
+│ │ └ Movie          scale=120 ← CriMana 的输出面
+├ Back               scale=10  ← 底板（在 movieContent **外面**）
+└ jacketContent
+  ├ Right / Bot / top / Left / Top   ← 封面模式的五块拼贴（各带 Jacket/Mask/Gaku）
+```
+
+- `Back` 用的是 `live/2dmode/background/default/default.png`：**2048×2048、全不透明、
+  深蓝黑底**（实测 alpha 全 255，中心色 `(0,9,47)`）。它在 MV **下面**，不是覆盖层。
+- `Back` / `Jacket` 的 `SpriteRenderer.m_Sprite` 全是 `null`（运行时由代码赋值），
+  所以 asset 里查不到"那块纹理叫什么"。
+
+**真正的那层"纹理"在视频里**。把 0036 的 MV 抽一帧出来看
+（`build/mv20.png`）：画面本身就带**圆角 + 四周压暗的黑框**，是 MV 美术做的
+"投影幕布"效果，不是引擎叠的。我们直接播原画就已经包含了它。
+
+所以播放端**不需要额外叠任何层**。如果看上去和原作不一样，只可能是：
+
+1. 我们 `pad` 到 640×360，而原视频 DAR 是 72:41（1.756），会多出约 4px 的左右黑边；
+2. 原作把 MV 铺在 `Back` 之上时可能有自己的缩放/位置（`Movie` 的 scale=120 是相机
+   空间的值，不是屏幕比例）。
+
+---
+
 ## 1.8 我们（CppSekai）现在的状态
 
 只有 `game/StageBackground.cpp`（封面投到舞台屏的静态合成，上游 `bggen v3` 移植），

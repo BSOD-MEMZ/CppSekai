@@ -1,0 +1,14 @@
+prefix=D:/Dev/CppSekai/build/ffmpeg-min
+exec_prefix=${prefix}
+libdir=D:/Dev/CppSekai/build/ffmpeg-min/lib
+includedir=D:/Dev/CppSekai/build/ffmpeg-min/include
+
+Name: libavutil
+Description: FFmpeg utility library
+Version: 59.39.100
+Requires: 
+Requires.private: 
+Conflicts:
+Libs: -L${libdir}  -lavutil -lm -luser32 -lbcrypt -latomic
+Libs.private: 
+Cflags: -I${includedir}

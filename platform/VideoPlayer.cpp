@@ -1,7 +1,6 @@
-// CppSekai - the 2D MV decoder (child-process ffmpeg feeding a rawvideo pipe).
-// See VideoPlayer.hpp for why it is a separate process instead of a linked
-// library: licensing (LGPL stays outside this binary) and no MinGW .a has to be
-// linked into a zig build.
+// CppSekai - 2D MV decoder, built on the trimmed ffmpeg from
+// tools/build_ffmpeg_min.sh (usm demuxer + mpeg1 decoder + swscale only).
+// See VideoPlayer.hpp for the shape and MV2D-SCORE.md 1.7 for the container.
 #include "platform/VideoPlayer.hpp"
 
 #include "path_utf8.hpp"
@@ -9,36 +8,20 @@
 
 #include <algorithm>
 #include <cstdio>
-#include <cstring>
 
-#ifdef _WIN32
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-#endif
+extern "C" {
+#include "libavcodec/avcodec.h"
+#include "libavformat/avformat.h"
+#include "libavutil/imgutils.h"
+#include "libswscale/swscale.h"
+}
 
 namespace platform
 {
 namespace
 {
-// Fixed output size: every frame is exactly this many RGBA bytes, which is what
-// makes reading the pipe a simple "read N bytes" loop. 640x360 is a touch above
-// the source resolution (576x328) and keeps the pipe at ~22 MB/s at 24 fps.
 constexpr int kOutWidth = 640;
-constexpr int kOutHeight = 360;
-constexpr int kDefaultFps = 24; // pjsk's 2D MV .usm is 24 fps (measured: 0036)
-
-bool fileExists(const std::string& path)
-{
-    if (path.empty()) {
-        return false;
-    }
-    std::FILE* probe = std::fopen(path.c_str(), "rb");
-    if (probe == nullptr) {
-        return false;
-    }
-    std::fclose(probe);
-    return true;
-}
+constexpr int kOutHeight = 360; // 640x360 RGBA = 921,600 bytes per frame
 } // namespace
 
 VideoPlayer::~VideoPlayer()
@@ -46,160 +29,151 @@ VideoPlayer::~VideoPlayer()
     close();
 }
 
-std::string findFfmpeg(const std::string& hint)
-{
-    if (!hint.empty()) {
-        return fileExists(hint) ? hint : std::string();
-    }
-#ifdef _WIN32
-    // Next to the exe first (that is where a bundled trimmed build will live),
-    // then the usual spots, then PATH.
-    char module[MAX_PATH] = {0};
-    if (GetModuleFileNameA(nullptr, module, MAX_PATH) > 0) {
-        std::string dir(module);
-        const std::size_t slash = dir.find_last_of("\\/");
-        if (slash != std::string::npos) {
-            const std::string candidate = dir.substr(0, slash + 1) + "ffmpeg.exe";
-            if (fileExists(candidate)) {
-                return candidate;
-            }
-        }
-    }
-    char found[MAX_PATH] = {0};
-    if (SearchPathA(nullptr, "ffmpeg.exe", nullptr, MAX_PATH, found, nullptr) > 0) {
-        return std::string(found);
-    }
-#endif
-    return std::string();
-}
-
-bool VideoPlayer::open(const std::string& ffmpegPath, const std::string& videoPath, int maxWidth,
-    std::string& outError)
+bool VideoPlayer::open(const std::string& videoPath, int maxWidth, std::string& outError)
 {
     close();
     outError.clear();
 
-    if (!fileExists(videoPath)) {
-        outError = "mv file not found: " + videoPath;
+    AVFormatContext* fmt = nullptr;
+    if (avformat_open_input(&fmt, videoPath.c_str(), nullptr, nullptr) != 0 || fmt == nullptr) {
+        outError = "avformat_open_input failed: " + videoPath;
         return false;
     }
-    const std::string binary = findFfmpeg(ffmpegPath);
-    if (binary.empty()) {
-        outError = "ffmpeg not found (put ffmpeg.exe next to the game, or set CPSEKAI_FFMPEG)";
+    if (avformat_find_stream_info(fmt, nullptr) < 0) {
+        avformat_close_input(&fmt);
+        outError = "avformat_find_stream_info failed";
         return false;
     }
 
-#ifdef _WIN32
-    SECURITY_ATTRIBUTES sa{};
-    sa.nLength = sizeof(sa);
-    sa.bInheritHandle = TRUE;
-    HANDLE readEnd = nullptr;
-    HANDLE writeEnd = nullptr;
-    if (!CreatePipe(&readEnd, &writeEnd, &sa, 0)) {
-        outError = "CreatePipe failed";
+    const int stream = av_find_best_stream(fmt, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+    if (stream < 0) {
+        avformat_close_input(&fmt);
+        outError = "no video stream";
         return false;
     }
-    SetHandleInformation(readEnd, HANDLE_FLAG_INHERIT, 0);
 
-    STARTUPINFOW si{};
-    si.cb = sizeof(si);
-    si.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
-    si.wShowWindow = SW_HIDE;
-    HANDLE nul = CreateFileW(L"NUL", GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa,
-        OPEN_EXISTING, 0, nullptr);
-    si.hStdOutput = writeEnd;
-    si.hStdError = nul;
-    si.hStdInput = nul;
+    const AVCodecParameters* par = fmt->streams[stream]->codecpar;
+    const AVCodec* codec = avcodec_find_decoder(par->codec_id);
+    if (codec == nullptr) {
+        avformat_close_input(&fmt);
+        outError = "no decoder for the stream codec (is mpeg1video compiled in?)";
+        return false;
+    }
+    AVCodecContext* dec = avcodec_alloc_context3(codec);
+    if (dec == nullptr || avcodec_parameters_to_context(dec, par) < 0
+        || avcodec_open2(dec, codec, nullptr) < 0) {
+        if (dec != nullptr) {
+            avcodec_free_context(&dec);
+        }
+        avformat_close_input(&fmt);
+        outError = "avcodec_open2 failed";
+        return false;
+    }
 
-    // -an: the 2D MV has no audio (the song track is played by the engine).
-    // scale/pad force a fixed frame size so the reader never has to ask.
+    // Output size: keep the source aspect, then scale into a 16:9 RGBA buffer so
+    // every frame is the same byte count (the caller may treat it as a record).
     int width = std::clamp(maxWidth > 0 ? maxWidth : kOutWidth, 160, 1920);
     if (width % 2 != 0) {
         ++width;
     }
     const int height = width * 9 / 16;
-    std::string cmd = "\"" + binary + "\" -v error -nostdin -i \"" + videoPath + "\" -an"
-        " -vf \"scale=" + std::to_string(width) + ":" + std::to_string(height)
-        + ":force_original_aspect_ratio=decrease,"
-          "pad=" + std::to_string(width) + ":" + std::to_string(height) + ":(ow-iw)/2:(oh-ih)/2\""
-        " -pix_fmt rgba -f rawvideo -";
-    std::wstring wcmd = path_utf8::widen(cmd);
 
-    PROCESS_INFORMATION pi{};
-    const BOOL ok = CreateProcessW(nullptr, wcmd.data(), nullptr, nullptr, TRUE,
-        CREATE_NO_WINDOW | CREATE_SUSPENDED, nullptr, nullptr, &si, &pi);
-    CloseHandle(writeEnd);
-    if (nul != INVALID_HANDLE_VALUE) {
-        CloseHandle(nul);
+    const AVRational rate = fmt->streams[stream]->avg_frame_rate.num > 0
+        ? fmt->streams[stream]->avg_frame_rate
+        : fmt->streams[stream]->r_frame_rate;
+    int fps = rate.num > 0 && rate.den > 0 ? static_cast<int>(rate.num / rate.den + 0.5) : 24;
+    if (fps < 1 || fps > 240) {
+        fps = 24; // usm's own header says 24; do not trust a bogus rational
     }
-    if (!ok) {
-        CloseHandle(readEnd);
-        outError = "failed to start ffmpeg";
+
+    SwsContext* sws = sws_getContext(dec->width, dec->height, dec->pix_fmt, width, height,
+        AV_PIX_FMT_RGBA, SWS_BILINEAR, nullptr, nullptr, nullptr);
+    if (sws == nullptr) {
+        avcodec_free_context(&dec);
+        avformat_close_input(&fmt);
+        outError = "sws_getContext failed";
         return false;
     }
-    ResumeThread(pi.hThread);
-    CloseHandle(pi.hThread);
 
-    mProcess = new PROCESS_INFORMATION(pi);
-    mReadPipe = readEnd;
-    mBinary = binary;
+    mFmt = fmt;
+    mDec = dec;
+    mSws = sws;
+    mPacket = av_packet_alloc();
+    mAvFrame = av_frame_alloc();
+    mStreamIndex = stream;
     mWidth = width;
     mHeight = height;
-    mFps = kDefaultFps;
-    mFrameBytes = static_cast<std::size_t>(mWidth) * static_cast<std::size_t>(mHeight) * 4u;
-    mBuffer.assign(mFrameBytes, 0);
+    mFps = fps;
     mFrame = -1;
     mEnded = false;
+    mBuffer.assign(static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 4u, 0);
 
-    logf(LogPlay, "[mv] ffmpeg=%s video=%s out=%dx%d frameBytes=%zu\n", binary.c_str(),
-        videoPath.c_str(), mWidth, mHeight, mFrameBytes);
+    logf(LogPlay, "[mv] opened %s src=%dx%d out=%dx%d @%d fps\n", videoPath.c_str(), dec->width,
+        dec->height, width, height, fps);
     std::fflush(stdout);
+
+    decodeNextFrame(); // one frame up front so the caller has something to upload
     return true;
-#else
-    (void)ffmpegPath;
-    outError = "video playback is Windows-only for now";
-    return false;
-#endif
 }
 
-bool VideoPlayer::readOneFrame()
+bool VideoPlayer::decodeNextFrame()
 {
-#ifdef _WIN32
-    if (mReadPipe == nullptr || mEnded) {
+    if (mFmt == nullptr || mEnded) {
         return false;
     }
-    std::size_t got = 0;
-    HANDLE pipe = static_cast<HANDLE>(mReadPipe);
-    while (got < mFrameBytes) {
-        DWORD chunk = 0;
-        const DWORD want = static_cast<DWORD>(std::min<std::size_t>(mFrameBytes - got, 1u << 20));
-        if (!ReadFile(pipe, mBuffer.data() + got, want, &chunk, nullptr) || chunk == 0) {
-            // The child ended (or died). Keep whatever we have as the last frame.
+    auto* fmt = static_cast<AVFormatContext*>(mFmt);
+    auto* dec = static_cast<AVCodecContext*>(mDec);
+    auto* pkt = static_cast<AVPacket*>(mPacket);
+    auto* frm = static_cast<AVFrame*>(mAvFrame);
+    auto* sws = static_cast<SwsContext*>(mSws);
+
+    std::uint8_t* dst[4] = {mBuffer.data(), nullptr, nullptr, nullptr};
+    const int dstStride[4] = {mWidth * 4, 0, 0, 0};
+
+    while (true) {
+        const int ret = av_read_frame(fmt, pkt);
+        if (ret < 0) {
+            // Flush: the decoder may still hold a frame or two.
+            avcodec_send_packet(dec, nullptr);
+            if (avcodec_receive_frame(dec, frm) == 0) {
+                sws_scale(sws, frm->data, frm->linesize, 0, dec->height, dst, dstStride);
+                av_frame_unref(frm);
+                ++mFrame;
+                return true;
+            }
             mEnded = true;
             return false;
         }
-        got += chunk;
+        if (pkt->stream_index != mStreamIndex) {
+            av_packet_unref(pkt);
+            continue;
+        }
+        if (avcodec_send_packet(dec, pkt) < 0) {
+            av_packet_unref(pkt);
+            continue;
+        }
+        av_packet_unref(pkt);
+        if (avcodec_receive_frame(dec, frm) == 0) {
+            sws_scale(sws, frm->data, frm->linesize, 0, dec->height, dst, dstStride);
+            av_frame_unref(frm);
+            ++mFrame;
+            return true;
+        }
     }
-    ++mFrame;
-    return true;
-#else
-    return false;
-#endif
 }
 
 bool VideoPlayer::pumpTo(int targetFrame)
 {
-    if (mReadPipe == nullptr) {
+    if (mFmt == nullptr) {
         return false;
     }
     if (targetFrame < 0) {
         targetFrame = 0;
     }
-    // Forward only: the official player seeks with SetSeekPosition, and the
-    // audio clock never runs backwards during a live (a retry restarts the
-    // whole player, which the caller does by calling close()/open() again).
+    // Forward only: the audio clock is the master, so a lagging video simply
+    // decodes a few frames back to back to catch up.
     while (mFrame < targetFrame && !mEnded) {
-        if (!readOneFrame()) {
+        if (!decodeNextFrame()) {
             break;
         }
     }
@@ -208,28 +182,33 @@ bool VideoPlayer::pumpTo(int targetFrame)
 
 void VideoPlayer::close()
 {
-#ifdef _WIN32
-    if (mReadPipe != nullptr) {
-        CloseHandle(static_cast<HANDLE>(mReadPipe));
-        mReadPipe = nullptr;
+    if (mSws != nullptr) {
+        sws_freeContext(static_cast<SwsContext*>(mSws));
+        mSws = nullptr;
     }
-    if (mProcess != nullptr) {
-        auto* pi = static_cast<PROCESS_INFORMATION*>(mProcess);
-        // Closing our end of the pipe already makes ffmpeg write into a closed
-        // handle and exit, but do not rely on it - a hung child would keep a
-        // decoder alive for the rest of the session.
-        TerminateProcess(pi->hProcess, 0);
-        CloseHandle(pi->hProcess);
-        delete pi;
-        mProcess = nullptr;
+    if (mAvFrame != nullptr) {
+        AVFrame* frm = static_cast<AVFrame*>(mAvFrame);
+        av_frame_free(&frm);
+        mAvFrame = nullptr;
     }
-#else
-    mProcess = nullptr;
-#endif
+    if (mPacket != nullptr) {
+        AVPacket* pkt = static_cast<AVPacket*>(mPacket);
+        av_packet_free(&pkt);
+        mPacket = nullptr;
+    }
+    if (mDec != nullptr) {
+        AVCodecContext* dec = static_cast<AVCodecContext*>(mDec);
+        avcodec_free_context(&dec);
+        mDec = nullptr;
+    }
+    if (mFmt != nullptr) {
+        AVFormatContext* fmt = static_cast<AVFormatContext*>(mFmt);
+        avformat_close_input(&fmt);
+        mFmt = nullptr;
+    }
     mFrame = -1;
     mEnded = false;
     mBuffer.clear();
-    mFrameBytes = 0;
 }
 
 } // namespace platform

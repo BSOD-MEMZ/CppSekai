@@ -16,6 +16,10 @@ SDL="toolchain/SDL2-2.32.10/x86_64-w64-mingw32"
 CXXFLAGS=(
     -std=c++20
     -O2
+    # 精简 ffmpeg（usm demuxer + mpeg1 解码 + swscale），由
+    # tools/build_ffmpeg_min.sh 生成到 build/ffmpeg-min。没有它也能编，
+    # 只是 2D MV 打不开（VideoPlayer::open 会报 no decoder）。
+    -Ithird_party/ffmpeg-min/include
     # ⚠ 必须钉住基线 CPU（2026-09-25 加）。不给 -mcpu 时 zig 的默认目标是 **native**，
     # 也就是"构建这台机器的 CPU"（实测 -### 里是 -target-cpu alderlake），于是产物里
     # 会出现 AVX2 / FMA / BMI2 / **AVX-VNNI** 这些只有 Intel 12 代（2021）之后才有的
@@ -156,6 +160,8 @@ fi
 GAME_OUT="${OUT:-build/cppsekai.exe}"
 "$ZIG" c++ "${CXXFLAGS[@]}" "${SOURCES[@]}" "${UPSTREAM_OBJS[@]}" build/app.res \
     "$SDL/lib/libSDL2.dll.a" \
+    -L"$(cygpath -m "$PWD")/third_party/ffmpeg-min/lib" -lavformat -lavcodec -lswscale -lavutil \
+    -lws2_32 -lsecur32 -lbcrypt \
     -limm32 -lsetupapi -lversion -lole32 -loleaut32 -lwinmm -lgdi32 -luser32 -ladvapi32     -lshell32 \
     -lcomdlg32 \
     -lopengl32 \

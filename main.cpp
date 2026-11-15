@@ -10766,10 +10766,9 @@ int main(int argc, char** argv)
                         const std::string mvUtf8 = path_utf8::fromPath(mvFile);
                         const char* hint = std::getenv("CPSEKAI_FFMPEG");
                         std::string mvErr;
-                        if (mvPlayer.open(hint != nullptr ? std::string(hint) : std::string(), mvUtf8,
-                                640, mvErr)) {
-                            platform::logf(platform::LogPlay, "[mv] opened %s (%dx%d @%d fps)\n",
-                                mvUtf8.c_str(), mvPlayer.width(), mvPlayer.height(), mvPlayer.fps());
+                        (void)hint;
+                        if (mvPlayer.open(mvUtf8, 640, mvErr)) {
+                            // VideoPlayer 自己会打一行 [mv] opened src=.. out=..
                         } else {
                             platform::logf(platform::LogPlay, "[mv] skipped: %s\n", mvErr.c_str());
                         }
