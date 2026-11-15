@@ -29,6 +29,7 @@
 #include <random>
 #include <sstream>
 #include <string>
+#include <set>
 #include <unordered_map>
 #include <vector>
 
@@ -416,9 +417,16 @@ namespace
     // Collaboration labels come from music-collabs.json (official
     // musicCollaborations table).
     // -----------------------------------------------------------------
-    fs::path gChartMvDir; // set by scanChartFolder()
+    // mv/<id4>.usm lookups (songBadges) are relative to EVERY scanned chart
+    // root: chartCandidates holds several folders (build/charts plus an older
+    // ..\charts), and letting the last candidate overwrite one global path made
+    // the badges vanish whenever a later empty candidate had no mv/ folder.
+    std::set<std::string> gChartMvDirs;
     std::map<int, SongBadges> gLocalMvBadges;
     std::map<int, std::string> gCollabLabels;
+    // Simplified-Chinese ribbon labels (国服译名). Filled from the optional
+    // "collabZh" object of music-collabs.json; musicCollab() prefers these.
+    std::map<int, std::string> gCollabLabelsZh;
 
     // Existence check for one asset's audio file. Only ever called for the
     // selected song (a handful of stats per frame), so no caching: a stale
@@ -1556,9 +1564,13 @@ std::vector<ChartEntry> scanChartFolder(const std::string& dir)
     }
     // mv/<id4>.usm lookups (songBadges) are relative to the scan root - the
     // same convention the playback side uses (<chart dir>/mv/). Absolute so a
-    // later cwd change cannot break the lookups.
+    // later cwd change cannot break the lookups. Only registered when the mv/
+    // folder actually exists, so an empty candidate cannot shadow a real one.
     std::error_code absEc;
-    gChartMvDir = fs::absolute(root, absEc) / "mv";
+    const fs::path mvDir = fs::absolute(root, absEc) / "mv";
+    if (fs::is_directory(mvDir, ec)) {
+        gChartMvDirs.insert(fromFsPath(mvDir));
+    }
     gLocalMvBadges.clear();
 
     // Diagnostic (CPSEKAI_SCAN_TIMING=1): where the scan time goes. The header
@@ -3123,23 +3135,28 @@ void loadMusicCollabs(const std::string& path)
     if (!doc.is_object()) {
         return;
     }
-    const auto collab = doc.find("collab");
-    if (collab != doc.end() && collab->is_object()) {
-        for (auto it = collab->begin(); it != collab->end(); ++it) {
-            const int musicId = std::atoi(it.key().c_str());
-            if (musicId > 0 && it.value().is_string() && !it.value().get<std::string>().empty()) {
-                gCollabLabels[musicId] = it.value().get<std::string>();
+    const auto loadMap = [&doc](const char* key, std::map<int, std::string>& out) {
+        const auto obj = doc.find(key);
+        if (obj != doc.end() && obj->is_object()) {
+            for (auto it = obj->begin(); it != obj->end(); ++it) {
+                const int musicId = std::atoi(it.key().c_str());
+                if (musicId > 0 && it.value().is_string() && !it.value().get<std::string>().empty()) {
+                    out[musicId] = it.value().get<std::string>();
+                }
             }
         }
-    }
-    platform::logf(platform::LogSelect, "[collabs] %zu labels\n", gCollabLabels.size());
+    };
+    loadMap("collab", gCollabLabels);
+    loadMap("collabZh", gCollabLabelsZh);
+    platform::logf(platform::LogSelect, "[collabs] %zu labels (%zu zh)\n", gCollabLabels.size(),
+        gCollabLabelsZh.size());
     std::fflush(stdout);
 }
 
 const SongBadges& songBadges(int musicId)
 {
     static const SongBadges none;
-    if (musicId <= 0 || gChartMvDir.empty()) {
+    if (musicId <= 0 || gChartMvDirs.empty()) {
         return none;
     }
     const auto it = gLocalMvBadges.find(musicId);
@@ -3150,14 +3167,28 @@ const SongBadges& songBadges(int musicId)
     char id4[8] = {0};
     std::snprintf(id4, sizeof(id4), "%04d", musicId);
     std::error_code ec;
-    b.original = fs::exists(gChartMvDir / (std::string(id4) + ".usm"), ec);
-    b.mv2d = fs::exists(gChartMvDir / (std::string(id4) + "_sekai.usm"), ec);
+    for (const std::string& dir : gChartMvDirs) {
+        if (!b.original) {
+            b.original = fs::exists(toFsPath(dir) / (std::string(id4) + ".usm"), ec);
+        }
+        if (!b.mv2d) {
+            b.mv2d = fs::exists(toFsPath(dir) / (std::string(id4) + "_sekai.usm"), ec);
+        }
+        if (b.original && b.mv2d) {
+            break;
+        }
+    }
     const auto inserted = gLocalMvBadges.emplace(musicId, b);
     return inserted.first->second;
 }
 
 std::string musicCollab(int musicId)
 {
+    // Chinese label first (国服出处), falling back to the Japanese one.
+    const auto zh = gCollabLabelsZh.find(musicId);
+    if (zh != gCollabLabelsZh.end()) {
+        return zh->second;
+    }
     const auto it = gCollabLabels.find(musicId);
     return it == gCollabLabels.end() ? std::string() : it->second;
 }
@@ -4330,6 +4361,61 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         char levelBuf[16];
         const char* rowLevel = levelLabel(levelForDifficulty(g, entries, diffIndex), levelBuf, sizeof(levelBuf));
 
+        // MV badges, right-aligned. Layout numbers from the MusicSelectListCell
+        // prefab (895x144, RE'd 2026-11-15): MVMode is a HorizontalLayoutGroup,
+        // ChildAlignment=MiddleRight, Spacing=8, ReverseArrangement=1 (fills
+        // right->left), children 78.98x48. The prefab has TWO variants of the
+        // MVMode node: Neutral (apos -248.4,66.4 -> centre y 77.6/144 = 53.9%,
+        // right edge inset 28.7px) for compact rows, Highlight (apos
+        // -237.2,39.4 -> centre y 104.6/144 = 72.6%, clearly LOWER, inset
+        // 17.5px) for the selected card. Scaled by row height (48/144).
+        // WHICH badges show is decided by the mv/ folder, not the master
+        // categories: original <id4>.usm -> blue 原曲, <id4>_sekai.usm ->
+        // green 2D MV. No 3D badge - we do not render 3D MVs.
+        // Label style per the sprites: text filled with the badge border
+        // colour (bl 102,204,255 / gn 119,238,221), sized ~0.56 of the badge.
+        const auto drawMvBadges = [&](const ImVec2& r0, const ImVec2& r1, bool highlight) {
+            const SongBadges& badges = songBadges(g.musicId);
+            if (!badges.original && !badges.mv2d) {
+                return;
+            }
+            const float bh = r1.y - r0.y;
+            const float bs = bh / 144.0f; // cell -> row scale
+            const float bhh = 48.0f * bs;
+            const float bww = 78.98f * bs;
+            const float gap = 8.0f * bs;
+            const float bcy = r0.y + (highlight ? 0.7264f : 0.5390f) * bh;
+            const float bx0 = r1.x - (highlight ? 17.5f : 28.7f) * bs;
+            struct BadgeDef
+            {
+                bool present;
+                const char* tex;
+                const char* label;
+                ImU32 labelCol;
+            };
+            const BadgeDef defs[] = {
+                {badges.original, "label_line_m_dbl_bl", "原曲", IM_COL32(102, 204, 255, 255)},
+                {badges.mv2d, "label_line_m_dbl_gn", "2D", IM_COL32(119, 238, 221, 255)},
+            };
+            float bx = bx0;
+            for (const BadgeDef& def : defs) {
+                if (!def.present) {
+                    continue;
+                }
+                bx -= bww;
+                const float by = bcy - bhh * 0.5f;
+                // The sprites are 32x32 sliced images (4px coloured frame,
+                // #444466 fill); nine-patching keeps the corner radii. The
+                // slice border is 12 source px so a bit more of the rounded
+                // corner survives scaling.
+                addNinePatch(listDl, badgeTex(renderer, def.tex), 32, 32, ImVec2(bx, by),
+                    ImVec2(bx + bww, by + bhh), 12.0f, 12.0f, bs, IM_COL32(255, 255, 255, 255));
+                addTextCentered(listDl, body, bhh * 0.56f,
+                    ImVec2(bx + bww * 0.5f, bcy - 1.0f * bs), def.labelCol, def.label);
+                bx -= gap;
+            }
+        };
+
         if (isSel) {
             // Expanded card: a translucent white rounded rectangle over the
             // list background, with the level badge, credits and diamonds.
@@ -4376,6 +4462,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
                 addDiamondSlot(listDl, backTex, ImVec2(dx, dy), 20.0f * k, g.idx[d] >= 0, badgeFor(d));
                 dx += 20.0f * k;
             }
+            drawMvBadges(p0, p1, true);
         } else {
             // Compact row: no card fill - the entries are separated by a thin
             // translucent rule, like the reference UI. The rule under the row
@@ -4419,38 +4506,8 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             // WHICH badges show is decided by the mv/ folder, not the master
             // categories: original <id4>.usm -> blue 原曲, <id4>_sekai.usm ->
             // green 2D MV. No 3D badge - we do not render 3D MVs.
-            const SongBadges& badges = songBadges(g.musicId);
-            if (badges.original || badges.mv2d) {
-                const float bs = rowH / 144.0f; // cell -> row scale
-                const float bh = 48.0f * bs;
-                const float bw = 78.98f * bs;
-                const float gap = 8.0f * bs;
-                struct BadgeDef
-                {
-                    bool present;
-                    const char* tex;
-                    const char* label;
-                };
-                const BadgeDef defs[] = {
-                    {badges.original, "label_line_m_dbl_bl", "原曲"},
-                    {badges.mv2d, "label_line_m_dbl_gn", "2D MV"},
-                };
-                float bx = p1.x - 29.0f * bs;
-                for (const BadgeDef& def : defs) {
-                    if (!def.present) {
-                        continue;
-                    }
-                    bx -= bw;
-                    const float by = cy - bh * 0.5f;
-                    // The sprites are 32x32 sliced images (4px coloured frame,
-                    // #444466 fill); nine-patching keeps the corner radii.
-                    addNinePatch(listDl, badgeTex(renderer, def.tex), 32, 32, ImVec2(bx, by),
-                        ImVec2(bx + bw, by + bh), 8.0f, 8.0f, bs, IM_COL32(255, 255, 255, 255));
-                    addTextCentered(listDl, body, bh * 0.46f,
-                        ImVec2(bx + bw * 0.5f, cy - 1.0f * bs), IM_COL32(255, 255, 255, 255), def.label);
-                    bx -= gap;
-                }
-            }
+            // MV badges (see drawMvBadges above for the prefab numbers).
+            drawMvBadges(p0, p1, false);
         }
     }
     // Drop the animated heights of slots that left the screen: a slot is a

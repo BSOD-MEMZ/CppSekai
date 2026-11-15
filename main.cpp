@@ -11309,8 +11309,10 @@ int main(int argc, char** argv)
         // --story-test is a debug run: it must not be covered by the first-run
         // card (the tutorial starts right away, and the card would sit on top
         // of whatever --story-step asks us to look at).
+        // --screenshot runs are headless checks: the first-run card would sit
+        // on top of whatever the run is supposed to capture.
         if (state == AppState::Select && !userSettings.eulaAccepted && !eulaDismissedThisRun
-            && storyTestId.empty()) {
+            && storyTestId.empty() && screenshotPath.empty()) {
             eulaAlive = true;
         }
         if (eulaAlive) {
