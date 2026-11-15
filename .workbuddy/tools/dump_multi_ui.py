@@ -24,7 +24,7 @@ GROUPS = [
         ('卡面遮罩', ['thumb_mask']),
         ('缩略图色标', ['label_color_thumbnail']),
         ('YOU 标记', ['text_you_gn', 'txt_you_line_wh']),
-        ('FEVER OK 文字', ['text_feverOK']),
+        ('feverReady 标记（贴图内容是 "OK!"）', ['text_feverOK']),
         ('濒死/掉血效果', ['effect_playerScoreDanger_multi']),
         ('死亡态底', ['frame_multi_black']),
     ]),

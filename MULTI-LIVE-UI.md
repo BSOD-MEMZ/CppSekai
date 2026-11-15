@@ -109,7 +109,7 @@ string UserId;
 - 卡面（`CardId`）+ 是否特训（`IsTraining`）
 - 头像框（`PlayerFrameId` + `PlayerFramePartsLayout`）
 - 名字（`UserName`）—— 注意：**字段里有名字，但 `MultiThumbnailView` 的节点树里没有 Text**
-  （只有 `text_feverOK` 这一张固定字），说明**演奏中不显示玩家名**
+  （只有 `text_feverOK` 这张固定字，内容是 **"OK!"**），说明**演奏中不显示玩家名**
 - 「YOU」标记（自己那一块）
 - 独立 combo（`ComboView`）+ 独立分数
 - 存活状态：`dying`（血量低）/ `death`（血空，且 `deadMask` 会压整屏）
@@ -327,8 +327,8 @@ python .workbuddy/tools/dump_multi_ui.py            # 默认读 jp/tex_all_sprit
 | `frame_multi_black` | **156×156** | 头像块死亡态底图 → 头像块边长大概 156 |
 | `thumb_mask` | 24×26 | 小，是 9-slice 边距不是整块 |
 | `label_color_thumbnail` | 40×40 | 队色小块 |
-| `text_you_gn` | 78×40 | YOU 标记 |
-| `text_feverOK` | 64×30 | FEVER OK |
+| `text_you_gn` | 78×40 | "YOU" 字样 |
+| `text_feverOK` | 64×30 | 贴图内容是 **"OK!"** |
 | `number_combo_154px_*` | 78~117 × 144~151 | 名字里就写了 154px 字号 |
 | `bg_combo_pl` / `eff_combo` | 144×30 / 197×79 | 与我们单人 HUD 同源 |
 | `bar_scoreGauge_multi` | 609×24 | 团队分条底 |
@@ -339,3 +339,10 @@ python .workbuddy/tools/dump_multi_ui.py            # 默认读 jp/tex_all_sprit
 | `line_fever` / `line_superFever` | 66×20 / 50×18 | 阈值线 |
 | `text_lineFever` / `text_lineSuperFever` | 177×46 / 252×40 | 阈值文字 |
 | `itemBox_superFever(_open)` | 118×116 / 115×119 | SuperFever 图标 |
+
+看图时注意两点（`contact_sheet.png` 里一眼能看出）：
+
+- `ScoreRank_Mark_S` / `_D` 是**粉色徽章 + 缎带，右下角带一个「仮」字** —— 这版美术里它还是
+  临时占位图，别当成最终观感去抄配色。
+- 块内连击数字是**紫色发光款**（`number_combo_154px_*_pr`），和单人 HUD 的数字**不是同一套** ——
+  这是「别人的连击」和「我的连击」在视觉上区分开的手段。
