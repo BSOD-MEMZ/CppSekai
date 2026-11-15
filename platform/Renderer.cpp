@@ -964,6 +964,10 @@ bool Renderer::loadHud(const std::string& overlayDir, std::string& outError)
     // frame / gauge_* / ok / label / dying 是**纯白遮罩**，画的时候必须靠
     // ImGui AddImage 的 tint 染色，直接画出来是白的；combo_bg / glow / you /
     // death 自带颜色。
+    // 2D MV 的暗角层（1920×1080，四周 alpha 128 黑、中心全透明）。游戏里这层
+    // 是 URP Volume 的 Vignette（Timeline `VignetteTrack` 驱动），不是 sprite；
+    // 这张图是上游 web 版拿来模拟同一观感的等价物。
+    add("mv_line", "mv_line.png");
     add("multi_frame", "multi/frame.png");        // 头像框（20x20 九宫格）
     add("multi_you", "multi/you.png");            // "YOU" 标记（青色）
     add("multi_ok", "multi/ok.png");              // feverReady 的 "OK!"（白 mask）

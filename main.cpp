@@ -10872,6 +10872,18 @@ int main(int argc, char** argv)
             // original hides the whole play HUD (score / life / combo / pause)
             // for the burst, so the letters land on the bare stage.
             if (visibility > 0.0f && !liveClearBanner.active()) {
+                // 2D MV 的暗角：盖在 MV 之上、HUD 之下（同一个 BackgroundDrawList，
+                // 先画就在下面）。只在 MV 真的在播时出现。
+                if (mvPlayer.isOpen()) {
+                    const platform::Renderer::HudSprite* vignette = renderer.hud("mv_line");
+                    if (vignette != nullptr && vignette->id != 0) {
+                        ImGui::GetBackgroundDrawList()->AddImage(
+                            reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(vignette->id)),
+                            ImVec2(0.0f, 0.0f),
+                            ImVec2(static_cast<float>(windowW), static_cast<float>(windowH)),
+                            ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), IM_COL32(255, 255, 255, 235));
+                    }
+                }
                 game::drawHud(renderer, hudState, static_cast<float>(songTime), windowW, windowH,
                     static_cast<float>(leadInSec), dumpJudgeSheet,
                     showFps ? static_cast<float>(fpsDisplay) : 0.0f);

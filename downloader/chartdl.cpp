@@ -1148,7 +1148,7 @@ void printUsage()
         "              [--diffs all|easy,normal,hard,expert,master]\n"
         "              [--vocals all|0,1,2]      indexes into the song's version list\n"
         "              [--out <dir>]             default: charts next to the exe\n"
-        "              [--no-jacket] [--no-sidecar] [--force]\n"
+        "              [--no-jacket] [--no-sidecar] [--mv] [--force]\n"
         "  chartdl.exe --screenshot <png> [--screenshot-time <sec>]\n"
         "              [--dpi <96|120|144|192>]   force the layout scale (default:\n"
         "                                          the system DPI)\n"
@@ -2040,6 +2040,7 @@ namespace
         // width (see WM_GETMINMAXINFO): it ends at dp(784) and 设置… needs its
         // dp(110) from dp(792) on.
         SetWindowPos(gSettingsButton, nullptr, width - dp(120), dp(42), dp(110), dp(24), SWP_NOZORDER);
+        SetWindowPos(gMvCheck, nullptr, width - dp(120) - dp(130), dp(42), dp(120), dp(24), SWP_NOZORDER);
 
         const int progressY = topY + topHeight + band + dp(4);
         SetWindowPos(gProgress, nullptr, margin, progressY, width - margin * 2, dp(20), SWP_NOZORDER);
@@ -2343,6 +2344,10 @@ namespace
                 // selected yet (see updateDeleteButton).
                 gDeleteButton = create(L"BUTTON", L"删除文件", BS_PUSHBUTTON, kIdDelete);
                 EnableWindow(gDeleteButton, FALSE);
+                // 2D MV 的勾选框放工具栏而不是「下载内容」面板：面板里全是
+                // 难度/演唱版本/pinned 行，再塞一行会和会滚动的列表重叠。
+                gMvCheck = create(L"BUTTON", L"含 2D MV", BS_AUTOCHECKBOX, kIdMv);
+                SendMessageW(gMvCheck, BM_SETCHECK, BST_UNCHECKED, 0);
                 gSettingsButton = create(L"BUTTON", L"设置…", BS_PUSHBUTTON, kIdSettings);
 
                 gList = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"",
@@ -2420,11 +2425,8 @@ namespace
                 gJacketCheck = createInBox(L"BUTTON", L"曲绘", BS_AUTOCHECKBOX, kIdJacket);
                 gSidecarCheck = createInBox(L"BUTTON", L"元数据 (sidecar json)", BS_AUTOCHECKBOX,
                     kIdSidecar);
-                gMvCheck = createInBox(L"BUTTON", L"2D MV (.usm)", BS_AUTOCHECKBOX, kIdMv);
                 SendMessageW(gJacketCheck, BM_SETCHECK, BST_CHECKED, 0);
                 SendMessageW(gSidecarCheck, BM_SETCHECK, BST_CHECKED, 0);
-                // 默认不勾：单首 10~40 MB，而且很多歌根本没有 2D MV。
-                SendMessageW(gMvCheck, BM_SETCHECK, BST_UNCHECKED, 0);
 
                 // Alias panel: mirrors whatever song is selected in the main
                 // list on the left - one row per alias, empty when nothing is
@@ -3179,9 +3181,6 @@ namespace
             SetWindowTextW(gSidecarCheck, L"元数据 (sidecar json)");
             EnableWindow(gSidecarCheck, FALSE);
             placeRow(gSidecarCheck, sidecarY);
-            SetWindowTextW(gMvCheck, L"2D MV (.usm)");
-            EnableWindow(gMvCheck, FALSE);
-            placeRow(gMvCheck, mvY);
             return;
         }
         const Song& song = gSongs[static_cast<std::size_t>(songIndex)];
@@ -3279,9 +3278,6 @@ namespace
         SendMessageW(gSidecarCheck, BM_SETCHECK, files.sidecar ? BST_UNCHECKED : BST_CHECKED, 0);
         placeRow(gSidecarCheck, sidecarY);
 
-        SetWindowTextW(gMvCheck, L"2D MV (.usm)");
-        EnableWindow(gMvCheck, TRUE);
-        placeRow(gMvCheck, mvY);
         // (The wanted height was already published above the footer, where the
         // unscrolled body bottom is still known.)
     }
