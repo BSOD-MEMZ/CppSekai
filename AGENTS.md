@@ -51,6 +51,12 @@ CppSekai：Project SEKAI 风格 SUS 谱面 Windows 原生游玩器。
   §2 的系数全部换成 master 真值（`ingameNotes` / `ingameNoteJudges` / `ingameCombos` /
   `ingamePlayLevels` / `playLevelScores`），**分数与综合力线性相关、等级线与综合力无关**。
   **要做 MV 背景、调分数、或查等级线先看这篇。**
+- `PERF-AUTOSETTING.md` —— **原作的「按设备性能自动调设置」（2026-11-15）**：
+  查证结果 = **没有**独立的设备分级类、**没有** `QualitySettings.SetQualityLevel` 调用，
+  `LiveModeType` / `MVQualityType` 都是手选设置项；`DeviceInfoPlugin` 只做上报。
+  能确证的只有「画质不用 Unity 质量档、设置持久化、不同场景有各自默认」。
+  文末给了我们自己的四档方案（GL renderer/显存 → CPU 核数 → 首局帧时兜底）。
+  **别当实证引用的部分文中都标了推断。**
 - `MULTI-LIVE-UI.md` —— **多人演出 UI 的原作结构（2026-11-15）**：`MultiLiveFrontView` 与
   单人 `LiveFrontView` 的逐字段差分（换 `MultiScoreView`/`MultiCutinManager`/`tapEffectArray`，
   加 `MultiThumbnailViewGroup`/`MultiFeverView`）、头像块内部**自带一整套 ComboView**、

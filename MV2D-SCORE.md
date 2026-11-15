@@ -223,6 +223,29 @@ curl -s "https://storage.exmeaning.com/api/assets/bundles?server=jp&path=live/2d
 | 2 上传 | 每帧 `glTexSubImage2D` 到 RGBA 纹理，画在背景 quad | `Renderer.cpp` 已有 quad 通路，加一条「外部纹理 quad」 |
 | 3 同步 | 音频时钟为主钟，`frame = trunc(fps × songTime)` | 照抄 §1.5：截断 + clamp + `<1` 不播 |
 
+### 体积账（2026-11-15 实测 + 估算）
+
+`ffmpeg.exe` **能直接读 usm**（`-i` 就识别出来了）：
+
+```
+Input #0, usm, from '0036.usm':
+  Stream #0:0: Video: mpeg1video, yuv420p, 576x328, 24 fps
+```
+
+只有视频流、没有音频（2D MV 的音乐走 BGM 那一路），所以解码链路很窄：
+**usm demuxer + mpeg1video 解码 + swscale 的 YUV→RGB**，别的全不要。
+
+| 方案 | 体积 | 说明 |
+|---|---:|---|
+| 本机 `ffmpeg.exe`（全量静态 win64） | **102 MB** | 所有编解码器/filter/协议都在里面，**不能这么进包** |
+| 裁剪静态库（只留 usm + mpeg1/h264 解码） | **约 4~8 MB**（估） | `--disable-everything --enable-demuxer=usm,mov --enable-decoder=mpeg1video,h264 --enable-parser=mpegvideo,h264 --enable-protocol=file --enable-filter=scale`，strip 后 |
+| 动态 DLL（avcodec/avformat/avutil/swscale） | 约 25~35 MB | 放 exe 旁边，不算进 exe 但一样占安装包 |
+| 自己解 usm 容器 + 只链 avcodec | 约 3~5 MB（估） | usm 结构简单（CRID 头 + chunk），能省掉 avformat |
+
+**会变大，但能压到 5 MB 级**：现在 exe 5.6 MB，接上后大约翻倍；
+和 102 MB 的全量 ffmpeg 差二十倍。真正要操心的不是体积，是 **LGPL 许可**和
+**Win7 兼容**（官方 build 的 CRT 依赖）。
+
 ---
 
 # 第二部分：分数公式

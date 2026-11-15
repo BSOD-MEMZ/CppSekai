@@ -341,8 +341,26 @@ python .workbuddy/tools/dump_multi_ui.py            # 默认读 jp/tex_all_sprit
 | `itemBox_superFever(_open)` | 118×116 / 115×119 | SuperFever 图标 |
 
 看图时注意两点（`contact_sheet.png` 里一眼能看出）：
-
 - `ScoreRank_Mark_S` / `_D` 是**粉色徽章 + 缎带，右下角带一个「仮」字** —— 这版美术里它还是
   临时占位图，别当成最终观感去抄配色。
 - 块内连击数字是**紫色发光款**（`number_combo_154px_*_pr`），和单人 HUD 的数字**不是同一套** ——
   这是「别人的连击」和「我的连击」在视觉上区分开的手段。
+
+### ⚠️ 一半素材是「纯白遮罩」，必须染色（2026-11-15 实测）
+
+这批图看着"怪"就是因为这个：**它们不是最终观感，是给 SpriteRenderer 的 `m_Color` 染色的底图**。
+对每张 PNG 统计「不透明像素是否全白」得到：
+
+| 类型 | 文件 |
+|---|---|
+| **纯白 mask（必须 tint 才有颜色）** | `frame_player_multi`（20×20 头像框）、`gauge_bar_ingame_multiLive_s_wh`（分条填充）、`bar_scoreGauge_multi`（条底）、`bar_scoreGauge_mask`、`text_feverOK`（"OK!"）、`text_lineFever`、`text_lineSuperFever`、`label_color_thumbnail`、`line_fever`、`line_superFever` |
+| **自带颜色（可直接用）** | `number_combo_154px_*`（紫）、`bg_combo_pl`、`eff_combo`、`ScoreRank_Mark_S/D`（粉徽章）、`itemBox_superFever(_open)`、`text_you_gn`（青）、`frame_multi_black`、`effect_playerScoreDanger_multi`、`thumb_mask` |
+
+**`frame_player_multi` 只有 20×20**：它是九宫格边框（Unity sprite 的 border 拉伸），
+不是一张 156×156 的整图 —— 所以在 contact sheet 里看着像个小圆角方块。
+头像块的**实际大小参考值**是 `frame_multi_black` 的 **156×156**（死亡态的整块底）。
+
+**`dying` / `death` 的图其实存在**（prefab 里 `SpriteRenderer` 有有效引用，只是走
+`m_ExternalRefs` 外部文件，名字不叫 dying/death，全量 sprite 里也没同名项）。
+从尺寸看 `death` 极可能就复用 `frame_multi_black`（156×156 纯黑块）+ 染色；
+`dying` 是同尺寸的另一张遮罩。真要确认得解 prefab 的 external refs 表，成本不值。

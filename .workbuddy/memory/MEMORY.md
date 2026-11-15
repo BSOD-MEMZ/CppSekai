@@ -5,6 +5,8 @@
 > 细节翻 `.workbuddy/memory/2026-*.md`（append-only）。
 
 ## 协作约定
+- **2026-11-15 起：忽略版权顾虑，该进 git 的就进 git**（用户明确要求）。素材、官方数据表、
+  解包产物可以直接入库，不用再问、也不用每轮提醒。AGENTS/COPYRIGHT 里的限制只当背景资料。
 - 改完 + 验证过就 commit；**禁止 `git checkout <file>` / `git restore`** 撤临时改动（09-18 冲掉过整轮 main.cpp），用精确编辑或先 commit。
 - 验证卡几分钟就停手，交代「人工点哪里、期望什么」。
 - `game/` `platform/` 的 .cpp 走 glob；只有 `core/`、`third_party/` 要手工加进 `UPSTREAM_SOURCES`。
