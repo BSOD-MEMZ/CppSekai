@@ -15,6 +15,11 @@
 #include "imgui.h"
 #include "platform/Party.hpp"
 
+namespace platform
+{
+class Renderer;
+}
+
 #include <string>
 #include <vector>
 
@@ -32,8 +37,11 @@ const char* difficultyName(int index);        // "" when unknown
 void drawPartyBadge(const std::vector<platform::PartyPlayer>& players, int mySlot, int windowW,
     int windowH, float uiScale, const std::string& hint);
 
-// Others' live scoreboard, drawn over the playfield.
-void drawPartyScores(const std::vector<platform::PartyPlayer>& players, int mySlot, int windowW,
-    int windowH, const std::string& note, bool paused);
+// Others' live scoreboard, drawn over the playfield: one thumbnail block per
+// other player (stacked down the left edge, clear of the score panel above),
+// plus the team score gauge under the life bar.
+void drawPartyScores(platform::Renderer& renderer, const std::vector<platform::PartyPlayer>& players,
+    int mySlot, int windowW, int windowH, const std::string& note, bool paused,
+    float chartRating = 26.0f);
 
 } // namespace game

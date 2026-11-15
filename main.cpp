@@ -10818,10 +10818,36 @@ int main(int argc, char** argv)
 
             // 多人游玩: the other players' score / combo, and - while the host
             // has the shared clock on hold - why nothing is moving.
-            if (party.active() && visibility > 0.0f) {
-                const bool hostHeld = mpFollowing && mpHostPaused;
-                game::drawPartyScores(party.players(), party.slot(), windowW, windowH,
-                    hostHeld ? "房主已暂停" : std::string(), hostHeld);
+            // CPSEKAI_PARTY_PREVIEW=1 paints the same panel with stand-in
+            // players so the layout can be checked headlessly (there is no way
+            // to open four windows in a --screenshot run).
+            {
+                static const bool partyPreview = std::getenv("CPSEKAI_PARTY_PREVIEW") != nullptr;
+                if ((party.active() || partyPreview) && visibility > 0.0f) {
+                    std::vector<platform::PartyPlayer> shown = party.players();
+                    int shownSlot = party.slot();
+                    if (partyPreview && !party.active()) {
+                        static const char* kNames[4] = {"みく", "リン", "レン", "ルカ"};
+                        static const double kScores[4] = {812340.0, 640120.0, 998000.0, 210000.0};
+                        static const int kCombos[4] = {214, 118, 433, 0};
+                        static const float kLives[4] = {1.0f, 0.22f, 1.0f, 0.0f};
+                        shown.clear();
+                        for (int i = 0; i < 4; ++i) {
+                            platform::PartyPlayer fake;
+                            fake.slot = i;
+                            fake.name = kNames[i];
+                            fake.score = kScores[i];
+                            fake.combo = kCombos[i];
+                            fake.life = kLives[i];
+                            fake.host = i == 0;
+                            shown.push_back(fake);
+                        }
+                        shownSlot = 0;
+                    }
+                    const bool hostHeld = mpFollowing && mpHostPaused;
+                    game::drawPartyScores(renderer, shown, shownSlot, windowW, windowH,
+                        hostHeld ? "房主已暂停" : std::string(), hostHeld, judgement.chartRating());
+                }
             }
 
             // Subtle playback progress bar along the very top edge of the

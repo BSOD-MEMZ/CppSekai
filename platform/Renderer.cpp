@@ -958,6 +958,26 @@ bool Renderer::loadHud(const std::string& overlayDir, std::string& outError)
     add("life_bg", "life/v3/bg.png");
     add("life_fill", "life/v3/normal.png");
     add("life_danger", "life/v3/danger.png");
+
+    // ---- 多人演出（MultiLive）HUD 素材 --------------------------------------
+    // 全部来自日服 7.1.0 的 HUD sprite（见 MULTI-LIVE-UI.md 9）。注意其中
+    // frame / gauge_* / ok / label / dying 是**纯白遮罩**，画的时候必须靠
+    // ImGui AddImage 的 tint 染色，直接画出来是白的；combo_bg / glow / you /
+    // death 自带颜色。
+    add("multi_frame", "multi/frame.png");        // 头像框（20x20 九宫格）
+    add("multi_you", "multi/you.png");            // "YOU" 标记（青色）
+    add("multi_ok", "multi/ok.png");              // feverReady 的 "OK!"（白 mask）
+    add("multi_dying", "multi/dying.png");        // 濒死竖条（白/红 mask）
+    add("multi_death", "multi/death.png");        // 死亡整块底（156x156 黑）
+    add("multi_label", "multi/label.png");        // 队色小块（白 mask）
+    add("multi_gauge_bg", "multi/gauge_bg.png");  // 团队分条底（白 mask）
+    add("multi_gauge_fill", "multi/gauge_fill.png"); // 分条填充（白 mask）
+    add("multi_gauge_mask", "multi/gauge_mask.png");
+    add("multi_combo_bg", "multi/combo_bg.png");
+    add("multi_combo_glow", "multi/combo_glow.png");
+    for (int d = 0; d < 10; ++d) {
+        add("multi_d" + std::to_string(d), "multi/d" + std::to_string(d) + ".png");
+    }
     add("life_overflow", "life/v3/overflow.png");
     add("auto_badge", "autolive.png");
     add("ui_close", "../ui/close.png");
