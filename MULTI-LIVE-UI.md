@@ -427,3 +427,59 @@ cd /d/Tools/rea/work/jp
 python ms_world.py 1241 front_multi_ui     # 多人 HUD 根，含 5 个头像块
 python ms_world.py 1224 ml_thumb_world     # 单个块内部
 ```
+
+
+---
+
+## 11. 多人结算和单人不是一套（2026-11-15 调查）
+
+**结论：多人结算走 `ScreenLayerMultiLiveResult`（prefab 666，2154 个节点），
+和单人的 `ScreenLayerFreeLiveResult` 是两份完全不同的资产**，不是「同一个页面加几列」。
+
+好消息是这一份**有真正的 `RectTransform`**（`rect=WxH` + `anchored=(x,y)` 都能读），
+几何是像素级可信的 —— 不像演奏 HUD 那样要靠 `m_LocalPosition` 换算。
+
+### 结构（`multi_result_world.txt`）
+
+```
+ScreenLayerMultiLiveResult
+├ ComponentRoot
+│ ├ ScreenShotUx / OverlayButton
+└ ScreenRoot
+  └ MultiLivePartyScoreDetail
+    └ Root
+      └ Player                      ← 一个玩家的整卡
+        ├ Player_root_01            rect=336x632  anchored=(240.501,-350)
+        │ └ ScreenMultiLiveResultMemberScoreSum...Cell  rect=336x632
+        ├ PlayerFrameCell           rect=4x596
+        ├ Combination6FrameRoot     ← 6 人协作房的框（FrameParts1..6 各 100x100）
+        │ └ FrameBase
+        └ SingleFrameRoot           ← 普通房的框（FramePartsTop/Bottom L/R）
+```
+
+要点：
+- **每人一张 336×632 的竖卡**，横向排（`Player_root_01` 的 `anchored.x = 240.5` 是卡内偏移，
+  真正步进在 `Player` 那一层）。
+- 框有两套：`SingleFrameRoot`（单格）和 `Combination6FrameRoot`（6 人拼合框），
+  由房间类型决定。
+- 相关的 cell prefab 单独存在：`ScreenMultiLiveResultMemberScoreSummaryPlayerCell`（1182）、
+  `...ScoreDetailPlayerCell`、`MultiLiveScoreSummary`（1186）、`MultiLiveResultScoreGauge`。
+
+### 资源已拉（`assets/mmw/overlay/multi_result/`，14 张 252KB）
+
+| 素材 | 用途 |
+|---|---|
+| `text_MVP` / `MVP` / `MVP_flash_01` | MVP 字样与闪光 |
+| `text_superstar` / `Superstar` / `SuperStar_flash_01` | SUPERSTAR |
+| `ribbon_h40_mvp` / `ribbon_h40_superstar` | 卡面顶部的缎带（高 40） |
+| `text_MvpSUPERSTAR` | 两者合一的版式 |
+| `tex_result_rank_atlas_{S,A,B,C,FULL}` | 评级字母（多人 summary 也用这套） |
+
+### 还没做的
+
+- 336×632 卡片内部的排版（名字/分数/判定行/名次）还没逐节点拆 —— 2154 个节点，
+  只看了骨架。
+- 我们的 `game/Result.cpp` 现在只有单人版；多人的成绩数据（每个人的分数/判定）
+  协议层也还没传（`PartyPlayer` 只有 score/combo）。
+- 顺序建议：**先把演奏 HUD 收尾 → 协议加判定统计 → 再动结算**，
+  否则结了算也是假的。
