@@ -2209,21 +2209,20 @@ namespace
     }
 
     // ------------------------------------------------------------------
-    // Floating background sprites (2026-11-15 rework): the official select
-    // screen floats the atlas sprites bg_base_circle_h180_wh (the
-    // BG_SelectFream circle) and img_triangle_wh over the bg_common pattern.
-    // Field is still a deterministic mulberry32 stream with per-layer
-    // parallax while the song list scrolls.
+    // Floating background decorations (2026-11-15 v2): rings (stroked
+    // circles - the atlas has no ring sprite, bg_base_circle_* are all
+    // solid soft-edged discs) plus the official img_triangle_wh sprite.
+    // Each shape floats on its own sine wave; no scroll parallax.
     // ------------------------------------------------------------------
     struct BgFloater
     {
-        int layer = 1;
         float leftPct = 0.0f;
         float topPct = 0.0f;
-        float size = 0.0f;     // display px at k=1
+        float size = 0.0f;     // ring diameter / triangle width, px at k=1
+        float amp = 0.0f;      // float amplitude, px at k=1
+        float speed = 0.0f;    // float speed, rad/s
+        float phase = 0.0f;
         float opacity = 1.0f;
-        float rotate = 0.0f;   // degrees
-        float phase = 0.0f;    // slow idle-float offset
         unsigned char r = 255;
         unsigned char g = 255;
         unsigned char b = 255;
@@ -2253,9 +2252,9 @@ namespace
             // BG_SelectFream pink (1, 0.467, 0.667) + the theme palette.
             static const unsigned char kColors[5][3] = {
                 {255, 119, 170}, {51, 204, 187}, {119, 238, 227}, {255, 229, 138}, {255, 255, 255}};
-            const int kCount[3] = {12, 10, 7};                        // shapes per layer
-            const float kSize[3][2] = {{26, 44}, {34, 62}, {44, 88}}; // px at k=1
-            const float kOpacity[3][2] = {{.10f, .18f}, {.14f, .24f}, {.18f, .30f}};
+            const int kCount[2] = {14, 8};                       // rings / triangles
+            const float kSize[2][2] = {{18, 56}, {34, 72}};      // px at k=1
+            const float kOpacity[2][2] = {{.12f, .26f}, {.10f, .20f}};
 
             std::vector<BgFloater> out;
             Mulberry32 rng;
@@ -2273,23 +2272,21 @@ namespace
                 pairLeft = 100.0f - t;
                 return t;
             };
-            for (int layer = 1; layer <= 3; ++layer) {
-                for (int i = 0; i < kCount[layer - 1]; ++i) {
+            for (int kind = 0; kind < 2; ++kind) {
+                for (int i = 0; i < kCount[kind]; ++i) {
                     BgFloater s;
-                    s.layer = layer;
                     const unsigned char* c = kColors[static_cast<int>(rng.next() * 5.0f) % 5];
                     s.r = c[0];
                     s.g = c[1];
                     s.b = c[2];
+                    s.circle = kind == 0;
                     s.leftPct = leftPct();
                     s.topPct = rng.next() * 100.0f;
+                    s.size = rng.range(kSize[kind][0], kSize[kind][1]);
+                    s.amp = rng.range(8.0f, 20.0f);
+                    s.speed = rng.range(0.25f, 0.5f);
                     s.phase = rng.next() * 6.2831853f;
-                    // Official look leans on the circles (BG_SelectFream), with
-                    // fewer, slower triangles around them.
-                    s.circle = rng.next() < 0.55f;
-                    s.size = rng.range(kSize[layer - 1][0], kSize[layer - 1][1]);
-                    s.opacity = rng.range(kOpacity[layer - 1][0], kOpacity[layer - 1][1]);
-                    s.rotate = (2.0f * rng.next() - 1.0f) * 40.0f;
+                    s.opacity = rng.range(kOpacity[kind][0], kOpacity[kind][1]);
                     out.push_back(s);
                 }
             }
@@ -2314,50 +2311,29 @@ namespace
         return it->second;
     }
 
-    void drawBgShapes(platform::Renderer& renderer, ImDrawList* dl, float w, float h, float k, double timeSec, float scroll)
+    void drawBgShapes(platform::Renderer& renderer, ImDrawList* dl, float w, float h, float k, double timeSec)
     {
-        // Parallax is relative to where the list was when the screen opened, so
-        // the field is already in place on entry. Clamped, because the song list
-        // is endless and sliding the art off-screen entirely would just look
-        // empty.
-        static float base = 0.0f;
-        static bool haveBase = false;
-        if (!haveBase) {
-            base = scroll;
-            haveBase = true;
-        }
-        const float rel = std::clamp(scroll - base, -900.0f, 900.0f);
-        const GLuint circleTex = selectBgTex(renderer, "bg_base_circle_h180_wh");
         const GLuint triTex = selectBgTex(renderer, "img_triangle_wh");
-        if (circleTex == 0 && triTex == 0) {
-            return;
-        }
 
         for (const BgFloater& s : bgFloaters()) {
-            const GLuint tex = s.circle ? circleTex : triTex;
-            if (tex == 0) {
-                continue;
-            }
-            const float factor = s.layer == 1 ? 0.30f : (s.layer == 2 ? 0.16f : 0.07f);
-            const float floatY = std::sin(static_cast<float>(timeSec) * 0.35f + s.phase) * 9.0f * k;
             const float cx = s.leftPct * 0.01f * w;
-            const float cy = s.topPct * 0.01f * h - factor * rel + floatY;
-            const float half = s.size * k * 0.5f;
-            if (cx < -half || cx > w + half || cy < -half || cy > h + half) {
-                continue;
-            }
+            const float cy = s.topPct * 0.01f * h
+                + std::sin(static_cast<float>(timeSec) * s.speed + s.phase) * s.amp * k;
+            const float size = s.size * k;
             const int alpha = static_cast<int>(std::clamp(s.opacity, 0.0f, 1.0f) * 255.0f);
             const ImU32 col = IM_COL32(s.r, s.g, s.b, alpha);
-            // Rotate the sprite quad around its centre (ImGui's AddImage cannot).
-            const float rad = s.rotate * 0.017453292f;
-            const float cosR = std::cos(rad);
-            const float sinR = std::sin(rad);
-            auto corner = [&](float dx, float dy) {
-                return ImVec2(cx + dx * cosR - dy * sinR, cy + dx * sinR + dy * cosR);
-            };
-            dl->AddImageQuad(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(tex)),
-                corner(-half, -half), corner(half, -half), corner(half, half), corner(-half, half),
-                ImVec2(0, 0), ImVec2(1, 0), ImVec2(1, 1), ImVec2(0, 1), col);
+            if (s.circle) {
+                // Ring: stroked circle (no ring sprite in the atlas).
+                dl->AddCircle(ImVec2(cx, cy), size * 0.5f, col, 40, std::max(1.5f, 2.2f * k));
+                continue;
+            }
+            if (triTex == 0) {
+                continue;
+            }
+            dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(triTex)),
+                ImVec2(cx - size * 0.5f, cy - size * 0.5f * 76.0f / 166.0f),
+                ImVec2(cx + size * 0.5f, cy + size * 0.5f * 76.0f / 166.0f),
+                ImVec2(0, 0), ImVec2(1, 1), col);
         }
     }
 
@@ -3466,6 +3442,24 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             const int alpha = static_cast<int>(std::clamp(gSelectBackdropDim, 0.0f, 1.0f) * 255.0f);
             dl->AddRectFilled(ImVec2(0, 0), ImVec2(w, h), IM_COL32(8, 10, 24, alpha));
         }
+        // Official pattern sheet over the wallpaper, semi-transparent (the
+        // wallpaper stays readable underneath).
+        const GLuint patternTex = selectBgTex(renderer, "bg_common");
+        if (patternTex != 0) {
+            constexpr float kPatternAspect = 2048.0f / 1261.0f; // measured sprite size
+            const float dstAspect = w / h;
+            float dw = w;
+            float dh = h;
+            if (kPatternAspect > dstAspect) {
+                dw = h * kPatternAspect;
+            } else {
+                dh = w / kPatternAspect;
+            }
+            const ImVec2 p0((w - dw) * 0.5f, (h - dh) * 0.5f);
+            dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(patternTex)),
+                p0, ImVec2(p0.x + dw, p0.y + dh), ImVec2(0, 0), ImVec2(1, 1),
+                IM_COL32(255, 255, 255, 110));
+        }
     } else if (drawFill) {
         // Official built-in fill (2026-11-15): the bg_common.png pattern sheet
         // (2048x1261 halftone gradient from the UI atlas), cover-fit like the
@@ -3957,7 +3951,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
 
     // Floating shape field: drawn on the parent draw list here, i.e. above the
     // backdrop but below the list child window.
-    drawBgShapes(renderer, dl, w, h, k, timeSec, scroll);
+    drawBgShapes(renderer, dl, w, h, k, timeSec);
     const std::vector<ListRow>& rows = cachedRows;
     const int rowCount = static_cast<int>(rows.size());
 
@@ -4396,7 +4390,10 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
                 return;
             }
             const float bh = r1.y - r0.y;
-            const float bs = bh / 144.0f; // cell -> row scale
+            // Badge size stays at the compact-row scale even on the expanded
+            // card (the selected row must not blow the badges up); only the
+            // position follows the Highlight variant geometry.
+            const float bs = compactH / 144.0f;
             const float bhh = 48.0f * bs;
             const float bww = 78.98f * bs;
             const float gap = 8.0f * bs;
@@ -4426,7 +4423,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
                 // corner survives scaling.
                 addNinePatch(listDl, badgeTex(renderer, def.tex), 32, 32, ImVec2(bx, by),
                     ImVec2(bx + bww, by + bhh), 12.0f, 12.0f, bs, IM_COL32(255, 255, 255, 255));
-                addTextCentered(listDl, body, bhh * 0.56f,
+                addTextCentered(listDl, body, bhh * 0.64f,
                     ImVec2(bx + bww * 0.5f, bcy - 1.0f * bs), def.labelCol, def.label);
                 bx -= gap;
             }
