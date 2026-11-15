@@ -101,8 +101,16 @@ class Renderer
     // stage plate (the non-MV background) stays intact. `shown` selects what the
     // background quad samples: false = plate (intro card / result screen show
     // the same background as a run without an MV), true = video.
+    // While the MV is open the decoded frames live in their own texture, so the
+    // stage plate (the non-MV background) stays intact. `mix` (0..1) fades the
+    // video quad over the plate: 0 = plate only (intro card / result screen
+    // look exactly like a run without an MV), 1 = MV fully shown. Alpha is
+    // applied at draw time, so changing it costs no quad rebuild.
+    void setBackgroundVideoMix(float mix);
+    [[nodiscard]] float backgroundVideoMix() const { return mBackgroundVideoMix; }
+    // Convenience: 1.0 / 0.0. Kept for the select/result paths that just
+    // want the video fully hidden.
     void setBackgroundVideoShown(bool shown);
-    [[nodiscard]] bool backgroundVideoShown() const { return mBackgroundVideoShown; }
     bool setVideoTexture(const std::uint8_t* rgba, int width, int height, std::string& outError);
 
     // Album cover / jacket shown by the opening card and the song list.
@@ -236,7 +244,12 @@ class Renderer
     GLuint mVao = 0;
     GLuint mVbo = 0;
 
-    Texture mBackground;
+    // The background plate: the default room plate, replaced by a song's stage
+    // backdrop (setSongBackground). MV frames live in mVideo and never touch
+    // this texture - the intro card and the result screen fall back to the
+    // plate, so they look exactly like a run without an MV.
+    Texture mPlate;
+    Texture mVideo; // decoded 2D MV frames (owner)
     // The default plate, so a song-specific stage background can be swapped
     // out again without re-deriving the asset path.
     std::string mDefaultBackgroundPath;
@@ -253,20 +266,16 @@ class Renderer
 
     std::vector<float> mStaticBackgroundVertices;
     std::vector<float> mStaticStageVertices;
-    // mv_line overlay (full-screen 50% black pattern over the MV): same geometry
-    // as the video quad, UV 0..1 so any full-frame texture works.
+    // MV frame quad (full-fit geometry, built from mVideo) and the mv_line
+    // overlay (same geometry, UV 0..1 so any full-frame texture works).
+    std::vector<float> mStaticVideoVertices;
     std::vector<float> mStaticMvLineVertices;
 
     std::map<std::string, HudSprite> mHudSprites;
     bool mDrawCoreEffects = false;
     bool mTransparentBackground = false;
     bool mBackgroundIsVideo = false;
-    bool mBackgroundVideoShown = false;
-    // Owner textures: mPlate = the non-MV stage backdrop, mVideo = decoded MV
-    // frames. mBackground is an alias pointing at whichever the background quad
-    // currently samples - never delete it directly, delete the owners.
-    Texture mPlate;
-    Texture mVideo;
+    float mBackgroundVideoMix = 0.0f; // 0 = plate only, 1 = MV fully faded in
 };
 
 } // namespace platform

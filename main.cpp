@@ -10871,9 +10871,9 @@ int main(int argc, char** argv)
             const float visibility =
                 game::openingPlayfieldVisibility(outputTime, session.intro.hasContent);
             // The intro card must not reveal the MV: while the playfield is
-            // hidden the background quad samples the stage plate (same as a run
+            // hidden the video quad alpha is 0 (the plate shows, same as a run
             // without an MV); the video fades in with the playfield.
-            renderer.setBackgroundVideoShown(visibility > 0.0f);
+            renderer.setBackgroundVideoMix(visibility);
             renderer.renderFrame(quads, quadCount, 0.85f, visibility);
 
             // ----------------------------------------------------------

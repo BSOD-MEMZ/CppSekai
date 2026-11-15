@@ -2209,30 +2209,25 @@ namespace
     }
 
     // ------------------------------------------------------------------
-    // Floating background shapes, ported from the pjsk.moe background
-    // pattern (BackgroundPattern component, chunk 1lvqppbmv_p-9.js):
-    // three layers of mainly triangles (80% triangles / 20% circles),
-    // laid out by a mulberry32 stream so the field is identical on every
-    // run, then offset by a per-layer parallax factor while the song list
-    // scrolls (-0.30 / -0.16 / -0.07 of the scroll distance).
+    // Floating background sprites (2026-11-15 rework): the official select
+    // screen floats the atlas sprites bg_base_circle_h180_wh (the
+    // BG_SelectFream circle) and img_triangle_wh over the bg_common pattern.
+    // Field is still a deterministic mulberry32 stream with per-layer
+    // parallax while the song list scrolls.
     // ------------------------------------------------------------------
-    struct BgShape
+    struct BgFloater
     {
         int layer = 1;
         float leftPct = 0.0f;
         float topPct = 0.0f;
-        float size = 0.0f;     // svg viewBox is 100x100, mapped to `size` px
+        float size = 0.0f;     // display px at k=1
         float opacity = 1.0f;
         float rotate = 0.0f;   // degrees
-        float skewX = 0.0f;    // degrees
-        float scaleX = 1.0f;
-        float scaleY = 1.0f;
         float phase = 0.0f;    // slow idle-float offset
         unsigned char r = 255;
         unsigned char g = 255;
         unsigned char b = 255;
         bool circle = false;
-        bool outline = false;
     };
 
     // mulberry32, the exact stream the web component seeds with 0x9e3779b9.
@@ -2252,20 +2247,20 @@ namespace
         float range(float lo, float hi) { return lo + next() * (hi - lo); }
     };
 
-    const std::vector<BgShape>& bgShapes()
+    const std::vector<BgFloater>& bgFloaters()
     {
-        static const std::vector<BgShape> shapes = [] {
-            // pjsk.moe palette: theme (miku teal) / cyan / pink / yellow / white.
+        static const std::vector<BgFloater> shapes = [] {
+            // BG_SelectFream pink (1, 0.467, 0.667) + the theme palette.
             static const unsigned char kColors[5][3] = {
-                {51, 204, 187}, {119, 238, 227}, {255, 117, 168}, {255, 229, 138}, {255, 255, 255}};
-            const int kCount[3] = {14, 12, 8};             // shapes per layer
-            const float kSize[3][2] = {{8, 14}, {7, 12}, {6, 10}};      // circles only
-            const float kOpacity[3][2] = {{.1f, .18f}, {.14f, .24f}, {.2f, .32f}};
+                {255, 119, 170}, {51, 204, 187}, {119, 238, 227}, {255, 229, 138}, {255, 255, 255}};
+            const int kCount[3] = {12, 10, 7};                        // shapes per layer
+            const float kSize[3][2] = {{26, 44}, {34, 62}, {44, 88}}; // px at k=1
+            const float kOpacity[3][2] = {{.10f, .18f}, {.14f, .24f}, {.18f, .30f}};
 
-            std::vector<BgShape> out;
+            std::vector<BgFloater> out;
             Mulberry32 rng;
-            // The web code mirrors every other leftPct around the centre so the
-            // field is not clustered on one side.
+            // Mirror every other leftPct around the centre so the field is not
+            // clustered on one side.
             float pairLeft = -1.0f;
             auto leftPct = [&]() {
                 if (pairLeft >= 0.0f) {
@@ -2280,7 +2275,7 @@ namespace
             };
             for (int layer = 1; layer <= 3; ++layer) {
                 for (int i = 0; i < kCount[layer - 1]; ++i) {
-                    BgShape s;
+                    BgFloater s;
                     s.layer = layer;
                     const unsigned char* c = kColors[static_cast<int>(rng.next() * 5.0f) % 5];
                     s.r = c[0];
@@ -2289,21 +2284,12 @@ namespace
                     s.leftPct = leftPct();
                     s.topPct = rng.next() * 100.0f;
                     s.phase = rng.next() * 6.2831853f;
-                    if (rng.next() < 0.8f) {
-                        // Triangle: 2/3 large faint, 1/3 small bold.
-                        const bool large = rng.next() < 0.67f;
-                        s.size = large ? rng.range(60.0f, 95.0f) : rng.range(22.0f, 38.0f);
-                        s.opacity = large ? rng.range(0.08f, 0.13f) : rng.range(0.30f, 0.48f);
-                        s.rotate = (2.0f * rng.next() - 1.0f) * 50.0f;
-                        s.skewX = (rng.next() < 0.5f ? -1.0f : 1.0f) * (6.0f + 12.0f * rng.next());
-                        s.scaleX = 0.38f + 0.16f * rng.next();
-                        s.scaleY = s.scaleX * (1.3f + 0.4f * rng.next());
-                        s.outline = rng.next() < 0.5f;
-                    } else {
-                        s.circle = true;
-                        s.size = rng.range(kSize[layer - 1][0], kSize[layer - 1][1]);
-                        s.opacity = rng.range(kOpacity[layer - 1][0], kOpacity[layer - 1][1]);
-                    }
+                    // Official look leans on the circles (BG_SelectFream), with
+                    // fewer, slower triangles around them.
+                    s.circle = rng.next() < 0.55f;
+                    s.size = rng.range(kSize[layer - 1][0], kSize[layer - 1][1]);
+                    s.opacity = rng.range(kOpacity[layer - 1][0], kOpacity[layer - 1][1]);
+                    s.rotate = (2.0f * rng.next() - 1.0f) * 40.0f;
                     out.push_back(s);
                 }
             }
@@ -2312,7 +2298,23 @@ namespace
         return shapes;
     }
 
-    void drawBgShapes(ImDrawList* dl, float w, float h, float k, double timeSec, float scroll)
+    // Select-background sprites (assets/mmw/overlay/select_bg, exported from
+    // the UI atlas). Same caching scheme as badgeTex, different directory.
+    GLuint selectBgTex(platform::Renderer& renderer, const char* name)
+    {
+        static std::map<std::string, GLuint> cache;
+        auto it = cache.find(name);
+        if (it == cache.end()) {
+            std::string err;
+            const GLuint id = gSelectAssetDir.empty()
+                ? 0
+                : renderer.loadUiTexture(gSelectAssetDir + "\\mmw\\overlay\\select_bg\\" + name + ".png", err);
+            it = cache.emplace(name, id).first;
+        }
+        return it->second;
+    }
+
+    void drawBgShapes(platform::Renderer& renderer, ImDrawList* dl, float w, float h, float k, double timeSec, float scroll)
     {
         // Parallax is relative to where the list was when the screen opened, so
         // the field is already in place on entry. Clamped, because the song list
@@ -2325,44 +2327,37 @@ namespace
             haveBase = true;
         }
         const float rel = std::clamp(scroll - base, -900.0f, 900.0f);
+        const GLuint circleTex = selectBgTex(renderer, "bg_base_circle_h180_wh");
+        const GLuint triTex = selectBgTex(renderer, "img_triangle_wh");
+        if (circleTex == 0 && triTex == 0) {
+            return;
+        }
 
-        for (const BgShape& s : bgShapes()) {
+        for (const BgFloater& s : bgFloaters()) {
+            const GLuint tex = s.circle ? circleTex : triTex;
+            if (tex == 0) {
+                continue;
+            }
             const float factor = s.layer == 1 ? 0.30f : (s.layer == 2 ? 0.16f : 0.07f);
             const float floatY = std::sin(static_cast<float>(timeSec) * 0.35f + s.phase) * 9.0f * k;
             const float cx = s.leftPct * 0.01f * w;
             const float cy = s.topPct * 0.01f * h - factor * rel + floatY;
-            const float size = s.size * k;
-            if (cx < -size || cx > w + size || cy < -size || cy > h + size) {
+            const float half = s.size * k * 0.5f;
+            if (cx < -half || cx > w + half || cy < -half || cy > h + half) {
                 continue;
             }
             const int alpha = static_cast<int>(std::clamp(s.opacity, 0.0f, 1.0f) * 255.0f);
             const ImU32 col = IM_COL32(s.r, s.g, s.b, alpha);
-            if (s.circle) {
-                dl->AddCircleFilled(ImVec2(cx, cy), size * 0.5f, col, 20);
-                continue;
-            }
-            // svg polygon "10,0 0,100 100,85" with
-            // translate(50 50) scale() skewX() rotate() translate(-50 -50).
-            static const float kPts[3][2] = {{10.0f, 0.0f}, {0.0f, 100.0f}, {100.0f, 85.0f}};
+            // Rotate the sprite quad around its centre (ImGui's AddImage cannot).
             const float rad = s.rotate * 0.017453292f;
             const float cosR = std::cos(rad);
             const float sinR = std::sin(rad);
-            const float tanSkew = std::tan(s.skewX * 0.017453292f);
-            ImVec2 pts[3];
-            for (int i = 0; i < 3; ++i) {
-                float px = kPts[i][0] - 50.0f;
-                float py = kPts[i][1] - 50.0f;
-                const float rx = px * cosR - py * sinR;
-                const float ry = px * sinR + py * cosR;
-                px = (rx + ry * tanSkew) * s.scaleX + 50.0f;
-                py = ry * s.scaleY + 50.0f;
-                pts[i] = ImVec2(cx + (px * 0.01f - 0.5f) * size, cy + (py * 0.01f - 0.5f) * size);
-            }
-            if (s.outline) {
-                dl->AddPolyline(pts, 3, col, ImDrawFlags_Closed, std::max(1.2f, 1.4f * k));
-            } else {
-                dl->AddTriangleFilled(pts[0], pts[1], pts[2], col);
-            }
+            auto corner = [&](float dx, float dy) {
+                return ImVec2(cx + dx * cosR - dy * sinR, cy + dx * sinR + dy * cosR);
+            };
+            dl->AddImageQuad(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(tex)),
+                corner(-half, -half), corner(half, -half), corner(half, half), corner(-half, half),
+                ImVec2(0, 0), ImVec2(1, 0), ImVec2(1, 1), ImVec2(0, 1), col);
         }
     }
 
@@ -3472,11 +3467,32 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             dl->AddRectFilled(ImVec2(0, 0), ImVec2(w, h), IM_COL32(8, 10, 24, alpha));
         }
     } else if (drawFill) {
-        dl->AddRectFilledMultiColor(ImVec2(0, 0), ImVec2(w, h),
-            IM_COL32(30, 26, 58, 255), IM_COL32(52, 40, 88, 255),
-            IM_COL32(20, 18, 40, 255), IM_COL32(46, 36, 78, 255));
-        const float glowX = w * (0.5f + 0.35f * std::sin(timeSec * 0.25f));
-        dl->AddCircleFilled(ImVec2(glowX, h * 0.35f), h * 0.6f, IM_COL32(120, 130, 230, 30), 64);
+        // Official built-in fill (2026-11-15): the bg_common.png pattern sheet
+        // (2048x1261 halftone gradient from the UI atlas), cover-fit like the
+        // wallpaper branch above. Falls back to the old wash if the sprite is
+        // missing.
+        const GLuint patternTex = selectBgTex(renderer, "bg_common");
+        if (patternTex != 0) {
+            // Measured sprite size; loadUiTexture does not report dimensions.
+            constexpr float kPatternAspect = 2048.0f / 1261.0f;
+            const float dstAspect = w / h;
+            float dw = w;
+            float dh = h;
+            if (kPatternAspect > dstAspect) {
+                dw = h * kPatternAspect;
+            } else {
+                dh = w / kPatternAspect;
+            }
+            const ImVec2 p0((w - dw) * 0.5f, (h - dh) * 0.5f);
+            dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(patternTex)),
+                p0, ImVec2(p0.x + dw, p0.y + dh));
+        } else {
+            dl->AddRectFilledMultiColor(ImVec2(0, 0), ImVec2(w, h),
+                IM_COL32(30, 26, 58, 255), IM_COL32(52, 40, 88, 255),
+                IM_COL32(20, 18, 40, 255), IM_COL32(46, 36, 78, 255));
+            const float glowX = w * (0.5f + 0.35f * std::sin(timeSec * 0.25f));
+            dl->AddCircleFilled(ImVec2(glowX, h * 0.35f), h * 0.6f, IM_COL32(120, 130, 230, 30), 64);
+        }
     }
 
     const ImU32 white = IM_COL32(255, 255, 255, 255);
@@ -3941,7 +3957,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
 
     // Floating shape field: drawn on the parent draw list here, i.e. above the
     // backdrop but below the list child window.
-    drawBgShapes(dl, w, h, k, timeSec, scroll);
+    drawBgShapes(renderer, dl, w, h, k, timeSec, scroll);
     const std::vector<ListRow>& rows = cachedRows;
     const int rowCount = static_cast<int>(rows.size());
 
