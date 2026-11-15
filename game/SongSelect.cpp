@@ -408,6 +408,20 @@ namespace
     // -----------------------------------------------------------------
     std::map<int, std::vector<VocalVersion>> gMusicVocals;
 
+    // -----------------------------------------------------------------
+    // Per-song MV / original badges + collaboration labels
+    // (music-collabs.json, generated from the official master tables).
+    // Badge visibility mirrors MusicSelectListCell.Setup()'s master lookups:
+    //   3DMV   <- HasMusicCategoryOf(musicCategories, mv)        (cat 0)
+    //   2DMV   <- HasAny2DMV                                     (mv_2d, cat 1)
+    //   Original <- HasMusicCategoryOf(original)                 (cat 4)
+    //   Full   <- music.get_IsFullLength()
+    // and the collab ribbon text comes from MasterMusic.musicCollaborationId
+    // -> MasterMusicCollaboration.label.
+    // -----------------------------------------------------------------
+    std::map<int, SongBadges> gMusicBadges;
+    std::map<int, std::string> gCollabLabels;
+
     // Existence check for one asset's audio file. Only ever called for the
     // selected song (a handful of stats per frame), so no caching: a stale
     // cache would hide a file the player just dropped in and pressed F5 for.
@@ -2672,6 +2686,23 @@ namespace
         return it->second;
     }
 
+    // Badge sprites for the song list rows (assets/mmw/overlay/select_badge,
+    // exported from the UI atlas). Same caching scheme as selectTex but a
+    // different directory.
+    GLuint badgeTex(platform::Renderer& renderer, const char* name)
+    {
+        static std::map<std::string, GLuint> cache;
+        auto it = cache.find(name);
+        if (it == cache.end()) {
+            std::string err;
+            const GLuint id = gSelectAssetDir.empty()
+                ? 0
+                : renderer.loadUiTexture(gSelectAssetDir + "\\mmw\\overlay\\select_badge\\" + name + ".png", err);
+            it = cache.emplace(name, id).first;
+        }
+        return it->second;
+    }
+
     // Level text: the chart's own #PLAYLEVEL / sidecar, else the official table
     // for its difficulty. Charts with no data at all show "-" instead of 0.
     const char* levelText(const ChartEntry& entry, char* buf, size_t bufSize)
@@ -3030,6 +3061,71 @@ void loadMusicAliases(const std::string& path)
     // search just quietly loses its alias branch.
     platform::logf(platform::LogSelect, "[aliases] %zu aliases\n", gAliasIndex.size());
     std::fflush(stdout);
+}
+
+void loadMusicBadges(const std::string& path)
+{
+    gMusicBadges.clear();
+    gCollabLabels.clear();
+    std::error_code ec;
+    if (path.empty() || !fs::exists(toFsPath(path), ec)) {
+        return;
+    }
+    std::ifstream file(toFsPath(path), std::ios::binary);
+    if (!file) {
+        return;
+    }
+    nlohmann::json doc;
+    try {
+        doc = nlohmann::json::parse(file);
+    } catch (...) {
+        return;
+    }
+    if (!doc.is_object()) {
+        return;
+    }
+    const auto fillSet = [&](const char* key, std::map<int, SongBadges>& store,
+        bool SongBadges::*flag) {
+        const auto it = doc.find(key);
+        if (it == doc.end() || !it->is_array()) {
+            return;
+        }
+        for (const auto& id : *it) {
+            if (!id.is_number_integer()) {
+                continue;
+            }
+            store[id.get<int>()].*flag = true;
+        }
+    };
+    fillSet("mv3d", gMusicBadges, &SongBadges::mv3d);
+    fillSet("mv2d", gMusicBadges, &SongBadges::mv2d);
+    fillSet("original", gMusicBadges, &SongBadges::original);
+    fillSet("full", gMusicBadges, &SongBadges::full);
+    const auto collab = doc.find("collab");
+    if (collab != doc.end() && collab->is_object()) {
+        for (auto it = collab->begin(); it != collab->end(); ++it) {
+            const int musicId = std::atoi(it.key().c_str());
+            if (musicId > 0 && it.value().is_string() && !it.value().get<std::string>().empty()) {
+                gCollabLabels[musicId] = it.value().get<std::string>();
+            }
+        }
+    }
+    platform::logf(platform::LogSelect, "[badges] %zu songs, %zu collabs\n", gMusicBadges.size(),
+        gCollabLabels.size());
+    std::fflush(stdout);
+}
+
+const SongBadges& songBadges(int musicId)
+{
+    static const SongBadges none;
+    const auto it = gMusicBadges.find(musicId);
+    return it == gMusicBadges.end() ? none : it->second;
+}
+
+std::string musicCollab(int musicId)
+{
+    const auto it = gCollabLabels.find(musicId);
+    return it == gCollabLabels.end() ? std::string() : it->second;
 }
 
 void loadMusicVocals(const std::string& path)
@@ -4195,11 +4291,6 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             return e.cleared ? clearTex : 0;
         };
 
-        // The entry this row currently points at (jacket / MV tag / diamonds).
-        const int rowIdx = g.idx[diffIndex] >= 0 ? g.idx[diffIndex]
-                                                 : (g.idx[3] >= 0 ? g.idx[3]
-                                                                  : (g.idx[4] >= 0 ? g.idx[4] : g.idx[0]));
-        const ChartEntry* rowEntry = rowIdx >= 0 ? &entries[static_cast<size_t>(rowIdx)] : nullptr;
         // Level of the *selected* difficulty (official table when this song
         // has no chart for it), so switching difficulty renumbers the list.
         char levelBuf[16];
@@ -4285,18 +4376,62 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
                 dx += 18.0f * k;
             }
 
-            // Optional 2D / 3D MV tag from the sidecar.
-            if (rowEntry != nullptr && !rowEntry->mv.empty()) {
-                const std::string& mv = rowEntry->mv;
-                const ImVec2 ts = ImGui::CalcTextSize(mv.c_str());
-                const float bw = ts.x + 16.0f * k;
-                const float bx = p1.x - bw - 12.0f * k;
-                const float by = p1.y - 30.0f * k;
-                const bool is3d = mv.find('3') != std::string::npos;
-                listDl->AddRectFilled(ImVec2(bx, by), ImVec2(bx + bw, by + 22.0f * k),
-                    is3d ? IM_COL32(242, 200, 70, 255) : IM_COL32(90, 140, 255, 255), 4.0f * k);
-                listDl->AddText(body, 14.0f * k, ImVec2(bx + 8.0f * k, by + 3.0f * k),
-                    IM_COL32(40, 36, 20, 255), mv.c_str());
+            // MV / original-song badges, right-aligned. All numbers come from
+            // the MusicSelectListCell prefab (895x144 cell, RE'd 2026-11-15):
+            // the MVMode group is a HorizontalLayoutGroup with
+            // ChildAlignment=MiddleRight, Spacing=8, ReverseArrangement=1 -
+            // so the badges fill right->left in child order Original, 2D, 3D,
+            // Full - each 48 tall and vertically centred, with the rightmost
+            // badge's right edge 29px from the cell's right edge. Scaled by
+            // row height (48/144 of the cell) so compact rows and cards keep
+            // the original's proportions.
+            const SongBadges& badges = songBadges(g.musicId);
+            if (badges.mv2d || badges.mv3d || badges.original || badges.full) {
+                const float bs = rowH / 144.0f; // cell -> row scale
+                const float bh = 48.0f * bs;
+                const float bwFrame = 78.98f * bs; // coloured frames
+                const float bwFull = 120.0f * bs;  // full-length badge
+                const float gap = 8.0f * bs;
+                struct BadgeDef
+                {
+                    bool present;
+                    const char* tex;
+                    const char* label;
+                    bool darkText;
+                };
+                const BadgeDef defs[] = {
+                    {badges.original, "label_line_m_dbl_bl", "原曲", false},
+                    {badges.mv2d, "label_line_m_dbl_gn", "2D MV", false},
+                    {badges.mv3d, "label_line_m_dbl_yw", "3D MV", false},
+                    {badges.full, "bg_base_round_h48_wh", "FULL", true},
+                };
+                // bg_base_round_h48_wh is exported pure white - the prefab
+                // tints it (0.631, 0.957, 0.922) in Setup.
+                const ImU32 fullTint = IM_COL32(161, 244, 235, 255);
+                float bx = p1.x - 29.0f * bs; // right edge inset from the cell edge
+                for (const BadgeDef& def : defs) {
+                    if (!def.present) {
+                        continue;
+                    }
+                    const float bw = def.tex[0] == 'b' ? bwFull : bwFrame;
+                    bx -= bw;
+                    const float by = cy - bh * 0.5f;
+                    const GLuint tex = badgeTex(renderer, def.tex);
+                    if (tex != 0) {
+                        listDl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(tex)),
+                            ImVec2(bx, by), ImVec2(bx + bw, by + bh), ImVec2(0.0f, 0.0f),
+                            ImVec2(1.0f, 1.0f), def.darkText ? fullTint : IM_COL32(255, 255, 255, 255));
+                    } else {
+                        // Sprite missing: a flat plate in the badge's colour so
+                        // the information survives a broken asset install.
+                        listDl->AddRectFilled(ImVec2(bx, by), ImVec2(bx + bw, by + bh),
+                            def.darkText ? fullTint : IM_COL32(120, 130, 170, 255), bh * 0.2f);
+                    }
+                    addTextCentered(listDl, body, bh * 0.46f,
+                        ImVec2(bx + bw * 0.5f, cy - 1.0f * bs),
+                        def.darkText ? IM_COL32(30, 90, 84, 255) : IM_COL32(255, 255, 255, 255), def.label);
+                    bx -= gap;
+                }
             }
         }
     }
@@ -4630,6 +4765,28 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         addJacket(dl, renderer.cover() != nullptr ? renderer.cover()->id : thumbFor(renderer, group.coverPath),
             j0, ImVec2(j0.x + jw, j0.y + jh), 12.0f * k);
         dl->AddRect(j0, ImVec2(j0.x + jw, j0.y + jh), IM_COL32(255, 255, 255, 60), 12.0f * k, 0, 2.0f);
+
+        // Collaboration ribbon (歌曲出处, e.g. 「劇場版プロジェクトセカイ」).
+        // Geometry from the phone-cell prefab (704): the Collaboration node is
+        // a child of the 376x376 jacket, anchored to its top-left with
+        // pivot (0,1) and offset (-8, +8) - so the ribbon's top edge sits 8px
+        // ABOVE the jacket edge and 8px to its left - 40.42 tall, the Text
+        // child at x=12 with height 40. Background is bg_base_r8_wh tinted
+        // (0.267, 0.267, 0.4) = #444466. All offsets scale with the jacket
+        // (jh / 376) so the ribbon follows the panel's jacket size.
+        const std::string collab = musicCollab(group.musicId);
+        if (!collab.empty()) {
+            const float rs = jh / 376.0f;
+            const float rh = 40.42f * rs;
+            const float pad = 12.0f * rs;
+            const float fs = rh * 0.58f;
+            const ImVec2 ts = body->CalcTextSizeA(fs, FLT_MAX, 0.0f, collab.c_str());
+            const float rw = pad * 2.0f + ts.x;
+            const ImVec2 r0(j0.x - 8.0f * rs, j0.y - 8.0f * rs - rh);
+            dl->AddRectFilled(r0, ImVec2(r0.x + rw, r0.y + rh), IM_COL32(68, 68, 102, 230), rh * 0.28f);
+            dl->AddText(body, fs, ImVec2(r0.x + pad, r0.y + (rh - ts.y) * 0.5f),
+                IM_COL32(255, 255, 255, 255), collab.c_str());
+        }
 
         // Title / artist / vocal. Everything below is laid out in flow: the
         // vocal chip row is conditional, and the old fixed fractions let the

@@ -2905,6 +2905,21 @@ int main(int argc, char** argv)
         }
     }
 
+    // Per-song MV / original badges + collaboration labels (music-collabs.json,
+    // generated from the official master tables - see game/SongSelect.hpp).
+    // Optional: without it the list shows no badges and the phone panel no
+    // collaboration ribbon.
+    for (const std::string& candidate :
+        {baseDir + "music-collabs.json", baseDir + "..\\music-collabs.json",
+            std::string("music-collabs.json")}) {
+        std::ifstream probe(candidate, std::ios::binary);
+        if (probe.good()) {
+            probe.close();
+            game::loadMusicBadges(candidate);
+            break;
+        }
+    }
+
     // ------------------------------------------------------------------
     // UI fonts
     // ------------------------------------------------------------------

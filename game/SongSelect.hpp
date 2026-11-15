@@ -469,6 +469,27 @@ void loadMusicVocals(const std::string& path);
 // "梦开始的地方", "mmj团歌" ...). Matching is exact, not substring.
 void loadMusicAliases(const std::string& path);
 
+// Per-song display flags (music-collabs.json, generated from the official
+// master tables musicCategories / musics / musicCollaborations). These drive
+// the right-aligned MV / original-song badges in the song list - which badge
+// a song shows is what the original's MusicSelectListCell.Setup() derives from
+// the master categories (HasAny2DMV / HasMusicCategoryOf(mv|original) /
+// isFullLength), not from local mv files. Optional: without it no badges show.
+struct SongBadges
+{
+    bool mv3d = false;     // 3D MV (yellow frame)
+    bool mv2d = false;     // 2D MV (green frame)
+    bool original = false; // original-song MV (blue frame)
+    bool full = false;     // full-length version (white 120-wide badge)
+};
+void loadMusicBadges(const std::string& path);
+const SongBadges& songBadges(int musicId);
+
+// Collaboration label for a song ("劇場版プロジェクトセカイ", "ゲキ！チュウマイ
+// コラボ" ...), from MasterMusic.musicCollaborationId -> MasterMusicCollaboration
+// via musicCollaborations.json. Empty when the song has none.
+std::string musicCollab(int musicId);
+
 // Key used in scores.json: the chart's file name (e.g. "0075_master.sus").
 std::string scoreKey(const ChartEntry& entry);
 
