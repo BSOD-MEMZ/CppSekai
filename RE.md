@@ -175,8 +175,9 @@ provider 在 Windows 上是 `ERR_REA_WINDOWS_NATIVE`，ghidra provider 分析 19
 
 ```bash
 # 反汇编一段（VA 就是 dump.cs 里的 VA，脚本自己按 PT_LOAD 换算文件偏移）
+# so 在 jp/ 根下叫 libil2cpp_arm64.so（lib/arm64-v8a/ 那个目录 2026-11-15 已不存在）
 python .workbuddy/tools/il2cpp_disasm.py \
-       "D:/Tools/rea/work/jp/lib/arm64-v8a/libil2cpp.so" \
+       "D:/Tools/rea/work/jp/libil2cpp_arm64.so" \
        --range 0x506F658 0x506F818
 
 # 反查某个调用点/地址属于哪个方法（dump.cs 的 RVA 注释在声明**上一行**）
@@ -185,6 +186,30 @@ python .workbuddy/tools/il2cpp_where.py \
 
 # 想知道"谁调了这个方法"：扫全 so 的 BL 立即数（纯 python，约 20s）
 #   编码 (w & 0xFC000000) == 0x94000000，目标 = pc + imm26*4
+```
+
+⚠️ **依赖 capstone**，2026-11-15 两个 python 都没有。pip 直连 index 在本机不通
+（`Could not find a version that satisfies the requirement capstone`），但**清华镜像的 curl 是通的**：
+
+```bash
+mkdir -p build/tmpw
+curl -sL -o build/tmpw/capstone-5.0.9-py3-none-win_amd64.whl \
+  "https://pypi.tuna.tsinghua.edu.cn/packages/50/e6/6f06fdb6a9ed32b2f7cd9c036b92d5324112c3ef7080f2c71efc367d40dd/capstone-5.0.9-py3-none-win_amd64.whl"
+"C:/Users/Miku/.workbuddy/binaries/python/envs/default/Scripts/pip.exe" install \
+  --no-index build/tmpw/capstone-5.0.9-py3-none-win_amd64.whl
+# 之后一律用这个 venv 跑脚本：
+"C:/Users/Miku/.workbuddy/binaries/python/envs/default/Scripts/python.exe" ...
+```
+
+wheel 文件名**不能改**：pip 认 `名字-版本-标签.whl`，存成 `capstone.whl` 会报
+`Invalid wheel filename (wrong number of parts)`。
+
+**按类名取一段干净输出**（`dump.cs` 85MB，手工 grep 很痛苦，2026-11-15 新增）：
+
+```bash
+cd /d/Tools/rea/work/jp
+python q.py ScoreLogic Background2DView     # 去掉 get/set 和 RVA，只留字段 + 方法签名
+python q.py -f ScoreLogic                   # 原文（带 RVA）
 ```
 
 读 asm 的几条经验：

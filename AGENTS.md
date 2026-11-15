@@ -39,6 +39,19 @@ CppSekai：Project SEKAI 风格 SUS 谱面 Windows 原生游玩器。
   位置只能量截图）、缺的三块（技能显示、生命条内的跳过键、AP 连击层）、
   判定字 324×96 vs 我们 310×81、以及控件几何表（复选框 72×74、开关 180.8×100、
   滑杆 560×24、标准按钮 336×96、对话框 1168 宽、关闭 X 44×44）。**再动 HUD 尺寸前先看这篇。**
+- `MV2D-SCORE.md` —— **演出时怎么放 2D MV + 分数公式（2026-11-15）**：`LiveModeType` 五档
+  （High3D/Default3D/**Mode2D**/Low/OriginalMV）、`Background2DView` 的 `movieModeRoot` /
+  `jacketModeRoot` 两个子模式、播放器是 **CriWare Sofdec2（CriMana）**不是 VideoPlayer、
+  usm 从 bundle 落盘再播、`MusicVideo2DModeData` 的 seek 帧表，以及 ms→帧的换算公式
+  （`trunc(framerateN/1000 × ms/1000)`，**framerateN 是千分单位**、截断、clamp）。
+  后半是分数公式：四因子连乘 + master `ingameNotes` 15 行系数全表（与我们的 `hudWeight()` 是
+  10:1 关系）+ `levelFactor = 1 + (lv-5)×0.005`（asm 实证）。**要做 MV 背景或调分数先看这篇。**
+- `MULTI-LIVE-UI.md` —— **多人演出 UI 的原作结构（2026-11-15）**：`MultiLiveFrontView` 与
+  单人 `LiveFrontView` 的逐字段差分（换 `MultiScoreView`/`MultiCutinManager`/`tapEffectArray`，
+  加 `MultiThumbnailViewGroup`/`MultiFeverView`）、头像块内部**自带一整套 ComboView**、
+  团队分条是 **5 段 gauge** 不是裁剪条、Fever 是「全队攒一条 + 每人翻面」。
+  附我们（`game/PartyScreen.cpp` 左下角文字列）的差距与按性价比排的补齐顺序。
+  **动多人 UI 前先看这篇。**
 - `HAIKU-PORT.md` —— **移植 HaikuOS 的可行性（2026-11-07）**：分层可移植性表、
   四个真障碍（miniaudio 无 Haiku 后端 / llvmpipe + SDL 无 swap interval / Party 的 Win32 IPC /
   zig 交叉构建）、分阶段计划与结论（单机能玩 5~7 天，建议独立分支）。

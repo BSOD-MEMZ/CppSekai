@@ -215,3 +215,30 @@ ComboView
   解析 `m_Sprite` 的 `{m_FileID: >0}` 指向哪张 atlas。
 - **控件九宫格边距**（sliced sprite 的 border）：YAML 里有 `m_Sprite` 的 border 字段，
   但同上，跨包引用没解。
+
+---
+
+## 6. 2026-11-15 复核（代码现状）+ 多人 HUD 差分
+
+§4 那三条「能立刻做」的，快照时**一条都还没落地**：
+
+| 项 | 现状（`game/Hud.cpp`） | 目标 |
+|---|---|---|
+| 判定字 | `kJudgeBaseH = 81`，sprite 310×81（第 434 行） | 原作 324×96 |
+| 评级字母 | `rank_char_*` 画 49×58（第 199 行） | 76×94 |
+| `PauseButtonDisable` | 仍然没有 | 灰态图 |
+
+新增一条尺寸观察（这次从 prefab 1226 拿到的）：**原作的分条有两种实现**——
+
+- 单人 `ScoreView`（1219）：`ScoreGaugeBase` + `ScoreGauge`，**一条裁剪填充**（我们同款）；
+- 多人 `MultiScoreView`（1226）：`Gauges` 下 **`ScoreGauge1..5` 五段**，各自伸缩。
+
+所以 `Runner` 里如果要做多人分条，不能复用单人的裁剪逻辑，得改成段式
+（`CalculateMultiGaugeProgress(ref LiveScore[])` 返回五个比例）。
+
+多人 HUD 的完整对照（`MultiLiveFrontView` / 头像块 / Fever / 团队分条）单独成篇：
+见 [MULTI-LIVE-UI.md](MULTI-LIVE-UI.md)。一句话总结：
+
+> 多人 = 单人 HUD 换三个零件（`ScoreView→MultiScoreView`、`CutinManager→MultiCutinManager`、
+> `tapEffect→tapEffectArray[]`）+ 加两块（`MultiThumbnailViewGroup` 每人头像块、`MultiFeverView`），
+> **头像块里自带一整套 ComboView**。我们目前只有左下角一列自绘文字卡，这四块全缺。
