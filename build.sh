@@ -188,5 +188,8 @@ cp -f music-levels.json build/ 2>/dev/null || true
 cp -f icon.png build/ 2>/dev/null || true
 # Official song readings (song select "sort by name" + aiueo grouping)
 cp -f musics.json build/ 2>/dev/null || true
+# Collaboration ribbon labels (JP + zh). The exe loads the copy next to itself
+# first, so a stale build/ file would shadow an edited root one.
+cp -f music-collabs.json build/ 2>/dev/null || true
 
 echo "build OK -> $GAME_OUT"

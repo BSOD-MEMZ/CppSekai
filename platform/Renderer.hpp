@@ -97,6 +97,14 @@ class Renderer
     // (letterboxed on non-16:9 windows) instead of the oversized cover-crop quad.
     void setBackgroundVideo(bool video);
 
+    // While the MV is open the decoded frames live in their own texture, so the
+    // stage plate (the non-MV background) stays intact. `shown` selects what the
+    // background quad samples: false = plate (intro card / result screen show
+    // the same background as a run without an MV), true = video.
+    void setBackgroundVideoShown(bool shown);
+    [[nodiscard]] bool backgroundVideoShown() const { return mBackgroundVideoShown; }
+    bool setVideoTexture(const std::uint8_t* rgba, int width, int height, std::string& outError);
+
     // Album cover / jacket shown by the opening card and the song list.
     // Pass an empty path (or clearCover) when the chart has no jacket.
     bool loadCover(const std::string& path, std::string& outError);
@@ -245,11 +253,20 @@ class Renderer
 
     std::vector<float> mStaticBackgroundVertices;
     std::vector<float> mStaticStageVertices;
+    // mv_line overlay (full-screen 50% black pattern over the MV): same geometry
+    // as the video quad, UV 0..1 so any full-frame texture works.
+    std::vector<float> mStaticMvLineVertices;
 
     std::map<std::string, HudSprite> mHudSprites;
     bool mDrawCoreEffects = false;
     bool mTransparentBackground = false;
     bool mBackgroundIsVideo = false;
+    bool mBackgroundVideoShown = false;
+    // Owner textures: mPlate = the non-MV stage backdrop, mVideo = decoded MV
+    // frames. mBackground is an alias pointing at whichever the background quad
+    // currently samples - never delete it directly, delete the owners.
+    Texture mPlate;
+    Texture mVideo;
 };
 
 } // namespace platform

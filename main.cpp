@@ -9364,6 +9364,9 @@ int main(int argc, char** argv)
                 renderer.setSongBackground(nullptr, 0, 0, error);
                 error.clear();
             }
+            // The select screen never shows MV frames, even if the last run
+            // had one open.
+            renderer.setBackgroundVideoShown(false);
             renderer.setLaneGlows({});
             // playfieldVisibility 0: the song select is not a performance, so the
             // stage/playfield plate must not be drawn - only the backdrop. It
@@ -10830,8 +10833,16 @@ int main(int argc, char** argv)
                 if (mvPlayer.isOpen()) {
                     // Frame index from the EXACT container rate: rounding the
                     // rate to an int drifts ~4 frames over a 3-minute song.
+                    // The MV file carries the same leading blank as the audio
+                    // (official mp3s start with ~9s of silence and the usm is
+                    // cut from the same master), so the video timeline is the
+                    // AUDIO FILE position, not the chart clock: file pos =
+                    // songTime + musicStartPos (+ user offset, same shift the
+                    // audible stream gets).
+                    const double mvFileTime =
+                        songTime + audio.musicStartPos() + audio.userOffset();
                     const int want =
-                        static_cast<int>(songTime * mvPlayer.fpsExact());
+                        static_cast<int>(mvFileTime * mvPlayer.fpsExact());
                     if (want != mvShownFrame && mvPlayer.pumpTo(want)) {
                         if (renderer.updateSongBackground(mvPlayer.pixels(), mvPlayer.width(),
                                 mvPlayer.height(), error)) {
@@ -10859,6 +10870,10 @@ int main(int argc, char** argv)
             // stay hidden behind the card, then fade in over 1.8s.
             const float visibility =
                 game::openingPlayfieldVisibility(outputTime, session.intro.hasContent);
+            // The intro card must not reveal the MV: while the playfield is
+            // hidden the background quad samples the stage plate (same as a run
+            // without an MV); the video fades in with the playfield.
+            renderer.setBackgroundVideoShown(visibility > 0.0f);
             renderer.renderFrame(quads, quadCount, 0.85f, visibility);
 
             // ----------------------------------------------------------
@@ -11212,6 +11227,9 @@ int main(int argc, char** argv)
             // panel over the plain background art and nothing else.
             // ----------------------------------------------------------
             renderer.setLaneGlows({});
+            // MV off: the result background must look exactly like a run
+            // without an MV - the stage plate, not a frozen video frame.
+            renderer.setBackgroundVideoShown(false);
             renderer.renderFrame(nullptr, 0, 0.85f, 0.0f);
 
             const float resultElapsed = static_cast<float>(uiClock - resultShownAt);

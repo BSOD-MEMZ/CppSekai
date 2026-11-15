@@ -1088,10 +1088,11 @@ bool Renderer::setSongBackground(const std::uint8_t* rgba, int width, int height
         if (!mDefaultBackgroundPath.empty()) {
             Texture plate = loadTextureFromFile(mDefaultBackgroundPath, outError);
             if (plate.id != 0) {
-                if (mBackground.id != 0) {
-                    glDeleteTextures(1, &mBackground.id);
+                if (mPlate.id != 0) {
+                    glDeleteTextures(1, &mPlate.id);
                 }
-                mBackground = plate;
+                mPlate = plate;
+                mBackground = (mBackgroundIsVideo && mBackgroundVideoShown) ? mVideo : mPlate;
                 buildStaticVertices();
             }
         }
@@ -1114,16 +1115,37 @@ bool Renderer::setSongBackground(const std::uint8_t* rgba, int width, int height
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glBindTexture(GL_TEXTURE_2D, 0);
 
-    if (mBackground.id != 0) {
-        glDeleteTextures(1, &mBackground.id);
+    if (mPlate.id != 0) {
+        glDeleteTextures(1, &mPlate.id);
     }
-    mBackground = Texture{id, width, height};
+    mPlate = Texture{id, width, height};
+    mBackground = (mBackgroundIsVideo && mBackgroundVideoShown) ? mVideo : mPlate;
     // The quad's UVs were baked from the previous texture's size.
     buildStaticVertices();
     outError.clear();
     return true;
 }
 
+
+bool Renderer::setVideoTexture(const std::uint8_t* rgba, int width, int height, std::string& outError)
+{
+    GLuint id = 0;
+    glGenTextures(1, &id);
+    if (id == 0) {
+        outError = "failed to create the MV video texture";
+        return false;
+    }
+    glBindTexture(GL_TEXTURE_2D, id);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    mVideo = Texture{id, width, height};
+    return true;
+}
 
 void Renderer::setBackgroundVideo(bool video)
 {
@@ -1132,6 +1154,20 @@ void Renderer::setBackgroundVideo(bool video)
     }
     mBackgroundIsVideo = video;
     // The background quad geometry differs between cover-crop and video-fit.
+    mBackground = (video && mBackgroundVideoShown) ? mVideo : mPlate;
+    buildStaticVertices();
+}
+
+void Renderer::setBackgroundVideoShown(bool shown)
+{
+    if (mBackgroundVideoShown == shown) {
+        return;
+    }
+    mBackgroundVideoShown = shown;
+    // Select plate vs video without touching either texture: the intro card and
+    // the result screen want the plain non-MV background, the live itself shows
+    // the MV.
+    mBackground = (mBackgroundIsVideo && shown) ? mVideo : mPlate;
     buildStaticVertices();
 }
 
@@ -1140,13 +1176,27 @@ bool Renderer::updateSongBackground(const std::uint8_t* rgba, int width, int hei
     if (rgba == nullptr || width <= 0 || height <= 0) {
         return false;
     }
-    if (mBackground.id == 0 || mBackground.width != width || mBackground.height != height) {
-        return setSongBackground(rgba, width, height, outError);
+    if (mVideo.id == 0 || mVideo.width != width || mVideo.height != height) {
+        // New MV (or first frame): decode wrote into a fresh GL texture. The
+        // stage plate texture is left untouched so the intro card and the
+        // result screen can fall back to it.
+        if (mVideo.id != 0) {
+            glDeleteTextures(1, &mVideo.id);
+            mVideo = Texture{};
+        }
+        if (!setVideoTexture(rgba, width, height, outError)) {
+            return false;
+        }
+    } else {
+        // Same size: one glTexSubImage2D per decoded frame, no quad rebuild.
+        glBindTexture(GL_TEXTURE_2D, mVideo.id);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
     }
-    // Same size: one glTexSubImage2D per decoded frame, no quad rebuild.
-    glBindTexture(GL_TEXTURE_2D, mBackground.id);
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+    if (mBackgroundIsVideo && mBackgroundVideoShown && mBackground.id != mVideo.id) {
+        mBackground = mVideo;
+        buildStaticVertices();
+    }
     outError.clear();
     return true;
 }
@@ -1288,6 +1338,7 @@ void Renderer::buildStaticVertices()
 {
     mStaticBackgroundVertices.clear();
     mStaticStageVertices.clear();
+    mStaticMvLineVertices.clear();
 
     auto buildQuad = [&](std::vector<float>& out, const Texture& texture, const std::array<std::array<float, 2>, 4>& worldPoints,
                          const std::array<float, 4>& sprite, const std::array<float, 4>& color) {
@@ -1361,6 +1412,11 @@ void Renderer::buildStaticVertices()
         buildQuad(mStaticBackgroundVertices, mBackground, videoPoints,
                   {0.0f, 0.0f, static_cast<float>(mBackground.width), static_cast<float>(mBackground.height)},
                   {1.0f, 1.0f, 1.0f, 1.0f});
+        // mv_line overlay: identical geometry, full 0..1 UV. The png already
+        // carries its own alpha (black at 128), so white tint = untouched.
+        buildQuad(mStaticMvLineVertices, mBackground, videoPoints,
+                  {0.0f, 0.0f, static_cast<float>(mBackground.width), static_cast<float>(mBackground.height)},
+                  {1.0f, 1.0f, 1.0f, 1.0f});
     } else {
         const std::array<std::array<float, 2>, 4> backgroundPoints{{
             {WORLD_BACKGROUND_LEFT + WORLD_BACKGROUND_WIDTH, WORLD_BACKGROUND_TOP},
@@ -1405,20 +1461,28 @@ void Renderer::drawStaticScene(float backgroundBrightness, float playfieldVisibi
         // "background fill" the setting is about. The stage below stays.
         drawVertices(mBackground, background, false, BLEND_NORMAL);
     }
-    if (mBackgroundIsVideo) {
-        // mv_line: the original dims the 2D MV itself with a full-screen 50%
-        // black sheet (mv_line.png is 1920x1080 black at alpha 128) that sits
+    if (mBackgroundIsVideo && mBackgroundVideoShown) {
+        // mv_line: the original dims the 2D MV with a full-screen 50% black
+        // pattern sheet (mv_line.png, 1920x1080 black at alpha 128) that sits
         // ABOVE the video but BELOW the stage / notes / HUD - so it has to be
         // drawn here in the GL pass, between the background quad and the stage,
-        // not in the ImGui pass (there it covered the notes too).
-        std::vector<float> dim = mStaticBackgroundVertices;
-        for (size_t i = 4; i < dim.size(); i += FLOATS_PER_VERTEX) {
-            dim[i + 0] = 0.0f;
-            dim[i + 1] = 0.0f;
-            dim[i + 2] = 0.0f;
-            dim[i + 3] = 0.5f;
+        // not in the ImGui pass (there it covered the notes too). Drawn from
+        // the real sprite (not a flat dim quad) so its pattern shows.
+        const HudSprite* line = mHudSprites.count("mv_line") != 0 ? &mHudSprites.at("mv_line") : nullptr;
+        if (line != nullptr && line->id != 0 && !mStaticMvLineVertices.empty()) {
+            Texture lineTex{line->id, line->width, line->height};
+            drawVertices(lineTex, mStaticMvLineVertices, false, BLEND_NORMAL);
+        } else {
+            // Sprite missing: approximate with the flat 50% dim.
+            std::vector<float> dim = mStaticBackgroundVertices;
+            for (size_t i = 4; i < dim.size(); i += FLOATS_PER_VERTEX) {
+                dim[i + 0] = 0.0f;
+                dim[i + 1] = 0.0f;
+                dim[i + 2] = 0.0f;
+                dim[i + 3] = 0.5f;
+            }
+            drawVertices(mBackground, dim, false, BLEND_NORMAL);
         }
-        drawVertices(mBackground, dim, false, BLEND_NORMAL);
     }
     if (visibility <= 0.001f) {
         return;
