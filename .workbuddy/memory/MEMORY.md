@@ -30,7 +30,10 @@
 - 无交互会话 ImGui 点不动 → 用调试开关（`--fake-pad` / `--drop-test` / `CPSEKAI_*`）；ImGui 卡片可 PostMessage 点客户区坐标。
 
 ## 数据 / 设置
-- 根目录四个可选表 musics / music-vocals / music-levels / music-aliases.json，同步用 `update_music_db.py`。
+- 根目录五个可选表 musics / music-vocals / music-levels / music-aliases / **music-mv.json**，
+  同步用 `update_music_db.py`（mv 表用 `.workbuddy/tools/gen_music_mv.py`，源是 exmeaning 的文件清单）。
+  `music-mv.json` = 每首歌有哪些 2D MV（`original` 原曲 / `sekai` セカイ），358 首有，两版文件同名
+  `<id4>.usm` 但本地分开存（`mv/<id4>.usm` / `mv/<id4>_sekai.usm`）。
 - 曲库 id ≤804 走 assets.unipjsk.com，国服独占 11000+ 走 storage.sekai.best，别往 10000 以上放新 id。
 - **加设置字段必须同时改 `SongSelect.cpp` 的 loadUserData 与 saveUserData**。
 

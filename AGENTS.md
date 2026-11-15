@@ -57,6 +57,10 @@ CppSekai：Project SEKAI 风格 SUS 谱面 Windows 原生游玩器。
   能确证的只有「画质不用 Unity 质量档、设置持久化、不同场景有各自默认」。
   文末给了我们自己的四档方案（GL renderer/显存 → CPU 核数 → 首局帧时兜底）。
   **别当实证引用的部分文中都标了推断。**
+- `music-mv.json` / `.workbuddy/tools/gen_music_mv.py` —— **哪些歌有 2D MV、有哪一版**。
+  358 首：只有原曲 158 / 只有セカイ 172 / 两版都有 28。两版在镜像上**同名**
+  `<id4>.usm`，本地靠 `mv/<id4>.usm` 与 `mv/<id4>_sekai.usm` 区分，播放器优先前者。
+  **别去试表外的歌**（404）。
 - `MULTI-LIVE-UI.md` —— **多人演出 UI 的原作结构（2026-11-15）**：`MultiLiveFrontView` 与
   单人 `LiveFrontView` 的逐字段差分（换 `MultiScoreView`/`MultiCutinManager`/`tapEffectArray`，
   加 `MultiThumbnailViewGroup`/`MultiFeverView`）、头像块内部**自带一整套 ComboView**、
