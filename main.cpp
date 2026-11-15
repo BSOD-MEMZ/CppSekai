@@ -10759,10 +10759,23 @@ int main(int argc, char** argv)
                     if (session.entry.musicId > 0) {
                         char id4[8] = {0};
                         std::snprintf(id4, sizeof(id4), "%04d", session.entry.musicId);
-                        const std::filesystem::path mvFile =
+                        // chartdl 下两种版本：原曲 mv/<id4>.usm、セカイ mv/<id4>_sekai.usm。
+                        // 优先原曲（原作 2D 模式默认也是 original），没有再退セカイ。
+                        const std::filesystem::path mvDir =
                             std::filesystem::path(path_utf8::widen(session.entry.susPath))
                                 .parent_path()
-                            / "mv" / (std::string(id4) + ".usm");
+                            / "mv";
+                        std::filesystem::path mvFile = mvDir / (std::string(id4) + ".usm");
+                        {
+                            std::error_code mvEc;
+                            if (!std::filesystem::exists(mvFile, mvEc)) {
+                                const std::filesystem::path alt =
+                                    mvDir / (std::string(id4) + "_sekai.usm");
+                                if (std::filesystem::exists(alt, mvEc)) {
+                                    mvFile = alt;
+                                }
+                            }
+                        }
                         const std::string mvUtf8 = path_utf8::fromPath(mvFile);
                         const char* hint = std::getenv("CPSEKAI_FFMPEG");
                         std::string mvErr;

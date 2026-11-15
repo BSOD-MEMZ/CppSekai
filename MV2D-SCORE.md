@@ -175,7 +175,20 @@ https://storage.exmeaning.com/sekai-jp-assets/live/2dmode/background/default/def
 - `background/default/default.png`（1.16 MB）是**2D 模式没有 MV 时的兜底背景** —— 对应
   `Background2DView.jacketModeRoot` 之外的底图。
 
-### 有 2D MV 的歌：186 首
+### 有 2D MV 的歌：358 首，而且分两个版本
+
+`live/2dmode/` 下有两个平级目录，**同名文件**：
+
+| 目录 | 是什么 | 数量 |
+|---|---|---|
+| `original_mv/` | 原曲 MV（原曲编排） | 186 |
+| `sekai_mv/` | セカイ MV（游戏默认那版） | 200 |
+
+合起来 **358 首**有 MV（只有原曲 158 / 只有セカイ 172 / 两版都有 28），
+清单见仓库根的 `music-mv.json`（`.workbuddy/tools/gen_music_mv.py` 生成）。
+因为它们都叫 `<id4>.usm`，本地必须分开存：原曲 `mv/<id4>.usm`、セカイ `mv/<id4>_sekai.usm`。
+
+#### 旧记录（只剩 original_mv 时的数字）
 
 `_files_jp.json` 里 `live/2dmode/original_mv/*` 共 186 个 id，清单已落盘
 `build/2dmv_ids.txt`（build/ 不入库）。要查全量可：

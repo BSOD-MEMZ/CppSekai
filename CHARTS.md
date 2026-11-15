@@ -176,23 +176,38 @@ ls -la "$DIR"
 
 批量下载就外面再套一层 `for ID in 0075 0127 0200 0500; do ... done`。
 
-### 5. 2D MV（**不在 unipjsk**）
+### 5. 2D MV（**不在 unipjsk**，而且有**两个版本**）
 
 演出背景那套 2D MV 是 `.usm` 视频，unipjsk 和 sekai.best **都没有**（2026-11-15 实测 404）。
-唯一带它的公开镜像是 `storage.exmeaning.com`：
+唯一带它的公开镜像是 `storage.exmeaning.com`，而且分两个目录：
 
-```
-https://storage.exmeaning.com/sekai-jp-assets/live/2dmode/original_mv/<id4>/<id4>.usm
-https://storage.exmeaning.com/sekai-jp-assets/live/2dmode/original_mv/<id4>/moviebundlebuilddata.json
-https://storage.exmeaning.com/sekai-jp-assets/live/2dmode/background/default/default.png
+| 版本 | 镜像路径 | 本地存成 |
+|---|---|---|
+| 原曲 MV（Original） | `.../live/2dmode/original_mv/<id4>/<id4>.usm` | `mv/<id4>.usm` |
+| セカイ MV（游戏默认） | `.../live/2dmode/sekai_mv/<id4>/<id4>.usm` | `mv/<id4>_sekai.usm` |
+
+> **两版文件名在镜像上完全一样**（都是 `<id4>.usm`），所以本地必须靠后缀区分，
+> 否则后下的会覆盖先下的。播放器优先读 `mv/<id4>.usm`，没有再退 `_sekai.usm`。
+
+覆盖范围（`music-mv.json`，由 `.workbuddy/tools/gen_music_mv.py` 生成）：
+
+- **358 首**有 MV —— 只有原曲 158 / 只有セカイ 172 / **两版都有 28**
+- 单首 **10~40 MB**
+- 表格外的歌**根本没有 MV**，别去试（会 404）
+
+```bash
+# 只补 MV（谱面/BGM 已存在会自动 skip）
+chartdl.exe --download 36 --mv original --out charts
+chartdl.exe --download 36 --mv sekai    --out charts
+chartdl.exe --download 36 --mv          --out charts   # 两版都要
 ```
 
-- 单个 usm **10~40 MB**，186 首歌有（id 清单见 `build/2dmv_ids.txt`，不入库）。
+GUI 里是工具栏右上角那个 **「不含 MV」下拉**（不含 / 原曲 / セカイ / 两个都要）。
+`--help` 里也有 `[--mv [original|sekai|both]]`。
+
 - 想列某个 id 有哪些文件：
   `curl "https://storage.exmeaning.com/api/assets/bundle-files?server=jp&path=live/2dmode/original_mv/0036"`
-- 技术细节（CriMana、按帧 seek、seek 表）见 [MV2D-SCORE.md](MV2D-SCORE.md)。
-
-> 目前 CppSekai **还不播视频**，下下来只能自己看。要做播放得先接 ffmpeg。
+- 技术细节（CriMana、按帧 seek、seek 表、Vignette 暗角）见 [MV2D-SCORE.md](MV2D-SCORE.md)。
 
 ---
 

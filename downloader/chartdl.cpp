@@ -358,6 +358,11 @@ struct Song
     // simply has no row for it. The detail panel uses this to keep the
     // difficulty boxes usable instead of greying all five out.
     bool levelsKnown = false;
+    // 这首歌有哪些 2D MV 版本（来自 music-mv.json，见 .workbuddy/tools/gen_music_mv.py）。
+    // original = live/2dmode/original_mv（原曲 MV）
+    // sekai    = live/2dmode/sekai_mv（セカイ MV，游戏默认那版）
+    bool mvOriginal = false;
+    bool mvSekai = false;
     std::vector<VocalVersion> vocals;
 };
 
@@ -657,6 +662,32 @@ void loadData()
             gSongs[found->second].levelsKnown = anyLevel;
         }
     }
+
+    // 2D MV 可用性：{"0036": ["original","sekai"], ...}
+    nlohmann::json mvs;
+    if (readJson("music-mv.json", mvs) && mvs.is_object()) {
+        std::map<int, size_t> byId;
+        for (size_t i = 0; i < gSongs.size(); ++i) {
+            byId[gSongs[i].id] = i;
+        }
+        for (auto it = mvs.begin(); it != mvs.end(); ++it) {
+            const auto found = byId.find(std::atoi(it.key().c_str()));
+            if (found == byId.end() || !it.value().is_array()) {
+                continue;
+            }
+            for (const auto& kind : it.value()) {
+                if (!kind.is_string()) {
+                    continue;
+                }
+                const std::string k = kind.get<std::string>();
+                if (k == "original") {
+                    gSongs[found->second].mvOriginal = true;
+                } else if (k == "sekai") {
+                    gSongs[found->second].mvSekai = true;
+                }
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -741,9 +772,11 @@ fs::path jacketPath(const fs::path& dir, const Song& song)
 }
 
 // MV 统一放 <charts>/mv/<id4>.usm，演奏那边就按这个路径找。
-fs::path mvPath(const fs::path& dir, const Song& song)
+fs::path mvPath(const fs::path& dir, const Song& song, bool sekai)
 {
-    return dir / "mv" / (id4(song.id) + ".usm");
+    // 镜像上两版同名，本地必须分开：原曲 <id4>.usm / セカイ <id4>_sekai.usm。
+    // 播放器优先读前者，没有才回退后者（见 main.cpp 的 mv 打开处）。
+    return dir / "mv" / (id4(song.id) + (sekai ? "_sekai" : "") + ".usm");
 }
 
 // The sidecar. Named here rather than inline in writeSidecar so the two places
@@ -787,13 +820,13 @@ std::string audioUrl(const VocalVersion& version, int id)
     return "https://assets.unipjsk.com/ondemand/music/long/" + asset + "/" + asset + ".mp3";
 }
 
-// 2D MV（.usm）。**不在 unipjsk**：那边 404，只有 exmeaning 镜像有
-// （见 MV2D-SCORE.md 1.7）。总共只有 186 首带 2D MV，别的歌下下来是 404 ——
-// 那是正常的，不代表下载器坏了。
-std::string mvUrl(const Song& song)
+// 两个版本的 2D MV 在镜像上是两个目录，文件同名（都是 <id4>.usm），
+// 所以本地也必须分开存：原曲 -> mv/<id4>.usm，セカイ -> mv/<id4>_sekai.usm。
+std::string mvUrl(const Song& song, bool sekai)
 {
-    return "https://storage.exmeaning.com/sekai-jp-assets/live/2dmode/original_mv/"
-        + id4(song.id) + "/" + id4(song.id) + ".usm";
+    const char* sub = sekai ? "sekai_mv" : "original_mv";
+    return std::string("https://storage.exmeaning.com/sekai-jp-assets/live/2dmode/") + sub
+        + "/" + id4(song.id) + "/" + id4(song.id) + ".usm";
 }
 
 std::string jacketUrl(const Song& song)
@@ -817,6 +850,9 @@ struct SongFiles
 {
     bool chart[5] = {false, false, false, false, false};
     bool jacket = false;
+    // 已下载的 2D MV：mv/<id4>.usm（原曲）/ mv/<id4>_sekai.usm（セカイ）
+    bool mvOriginal = false;
+    bool mvSekai = false;
     bool sidecar = false;
     std::vector<bool> vocal; // one entry per Song::vocals
 
@@ -850,6 +886,20 @@ std::vector<SongFiles> scanDownloaded(const std::vector<Song>& songs, const fs::
     }
     auto has = [&](const std::string& name) { return present.count(http::widen(name)) != 0; };
 
+    // MV 在 mv/ 子目录里，顶层那次扫描看不到，单独再扫一遍。
+    std::set<std::wstring> mvPresent;
+    {
+        std::error_code ec;
+        for (fs::directory_iterator it(dir / "mv", ec), end; !ec && it != end; it.increment(ec)) {
+            std::error_code kindEc;
+            if (!it->is_regular_file(kindEc)) {
+                continue;
+            }
+            mvPresent.insert(it->path().filename().native());
+        }
+    }
+    auto mvHas = [&](const std::string& name) { return mvPresent.count(http::widen(name)) != 0; };
+
     for (std::size_t i = 0; i < songs.size(); ++i) {
         const Song& song = songs[i];
         SongFiles files;
@@ -860,6 +910,8 @@ std::vector<SongFiles> scanDownloaded(const std::vector<Song>& songs, const fs::
             files.wantCharts += song.levels[static_cast<std::size_t>(d)] > 0 ? 1 : 0;
         }
         files.jacket = has(id4(song.id) + ".png");
+        files.mvOriginal = mvHas(id4(song.id) + ".usm");
+        files.mvSekai = mvHas(id4(song.id) + "_sekai.usm");
         files.sidecar = has(id4(song.id) + ".json");
         for (std::size_t v = 0; v < song.vocals.size(); ++v) {
             const std::string asset = song.vocals[v].asset.empty() ? id4(song.id) + "_01"
@@ -910,8 +962,9 @@ struct Request
     std::vector<size_t> vocalIndexes; // indexes into Song::vocals
     bool jacket = true;
     bool sidecar = true;
-    // 2D MV：默认关。单首 10~40 MB，而且只有 186 首有。
-    bool mv = false;
+    // 2D MV：位掩码。0 = 不下，1 = 原曲 MV，2 = セカイ MV，3 = 两个都要。
+    // 单首 10~40 MB，而且只有 358 首有（music-mv.json）。
+    int mv = 0;
 };
 
 // Builds jobs for one song. Existing files become Skipped jobs (shown as such in
@@ -956,9 +1009,13 @@ void queueSong(const Song& song, const Request& request, const fs::path& dir, bo
     if (request.jacket) {
         add(jacketUrl(song), jacketPath(dir, song));
     }
-    if (request.mv) {
+    if ((request.mv & 1) != 0 && song.mvOriginal) {
         fs::create_directories(dir / "mv", ec);
-        add(mvUrl(song), mvPath(dir, song));
+        add(mvUrl(song, false), mvPath(dir, song, false));
+    }
+    if ((request.mv & 2) != 0 && song.mvSekai) {
+        fs::create_directories(dir / "mv", ec);
+        add(mvUrl(song, true), mvPath(dir, song, true));
     }
     if (request.sidecar) {
         writeSidecar(dir, song, [&] {
@@ -1273,7 +1330,9 @@ namespace
     std::vector<std::string> gAliasRows;
     HWND gAliasList = nullptr;
     HWND gJacketCheck = nullptr;
-    HWND gMvCheck = nullptr;
+    HWND gMvCombo = nullptr;
+    // 0 = 不含 MV，1 = 原曲，2 = セカイ，3 = 两个（正好是 Request::mv 的位掩码）
+    int gMvChoice = 0;
     HWND gSidecarCheck = nullptr;
     HWND gSettingsButton = nullptr;
     HWND gDiffChecks[5] = {};
@@ -1712,8 +1771,27 @@ namespace
 
     bool songIsDone(int songIndex)
     {
-        return songIndex >= 0 && songIndex < static_cast<int>(gFiles.size())
-            && gFiles[static_cast<std::size_t>(songIndex)].complete;
+        if (songIndex < 0 || songIndex >= static_cast<int>(gFiles.size())) {
+            return false;
+        }
+        const std::size_t i = static_cast<std::size_t>(songIndex);
+        const SongFiles& f = gFiles[i];
+        if (!f.complete) {
+            return false;
+        }
+        // 「已下载完整」原来只看谱面+曲绘+sidecar，勾了 MV 也照拦 —— 见
+        // 2026-11-15 的 bug 报告。现在把当前 MV 选择也算进来：选了哪个版本却
+        // 没下，就不算完成（否则补不下 MV）。
+        if (i < gSongs.size()) {
+            const Song& song = gSongs[i];
+            if ((gMvChoice & 1) != 0 && song.mvOriginal && !f.mvOriginal) {
+                return false;
+            }
+            if ((gMvChoice & 2) != 0 && song.mvSekai && !f.mvSekai) {
+                return false;
+            }
+        }
+        return true;
     }
 
     // The 删除 button is only meaningful for a selected song that actually has
@@ -2040,7 +2118,7 @@ namespace
         // width (see WM_GETMINMAXINFO): it ends at dp(784) and 设置… needs its
         // dp(110) from dp(792) on.
         SetWindowPos(gSettingsButton, nullptr, width - dp(120), dp(42), dp(110), dp(24), SWP_NOZORDER);
-        SetWindowPos(gMvCheck, nullptr, width - dp(120) - dp(130), dp(42), dp(120), dp(24), SWP_NOZORDER);
+        SetWindowPos(gMvCombo, nullptr, width - dp(120) - dp(150), dp(42), dp(140), dp(200), SWP_NOZORDER);
 
         const int progressY = topY + topHeight + band + dp(4);
         SetWindowPos(gProgress, nullptr, margin, progressY, width - margin * 2, dp(20), SWP_NOZORDER);
@@ -2346,8 +2424,15 @@ namespace
                 EnableWindow(gDeleteButton, FALSE);
                 // 2D MV 的勾选框放工具栏而不是「下载内容」面板：面板里全是
                 // 难度/演唱版本/pinned 行，再塞一行会和会滚动的列表重叠。
-                gMvCheck = create(L"BUTTON", L"含 2D MV", BS_AUTOCHECKBOX, kIdMv);
-                SendMessageW(gMvCheck, BM_SETCHECK, BST_UNCHECKED, 0);
+                // 原曲 MV / セカイ MV 是两套资源（镜像上 original_mv / sekai_mv 两个目录），
+                // 很多歌只有其中一套、也有 358 首之外根本没 MV —— 所以这里是个下拉，
+                // 只有真的勾了对应版本才入队（queueSong 里按 Song::mvOriginal/mvSekai 判）。
+                gMvCombo = create(L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL, kIdMv);
+                ComboBox_AddString(gMvCombo, L"不含 MV");
+                ComboBox_AddString(gMvCombo, L"原曲 MV");
+                ComboBox_AddString(gMvCombo, L"セカイ MV");
+                ComboBox_AddString(gMvCombo, L"两个都要");
+                ComboBox_SetCurSel(gMvCombo, 0);
                 gSettingsButton = create(L"BUTTON", L"设置…", BS_PUSHBUTTON, kIdSettings);
 
                 gList = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"",
@@ -2674,7 +2759,8 @@ namespace
                             SendMessageW(gDiffChecks[d], BM_GETCHECK, 0, 0) == BST_CHECKED;
                     }
                     request.jacket = SendMessageW(gJacketCheck, BM_GETCHECK, 0, 0) == BST_CHECKED;
-                    request.mv = SendMessageW(gMvCheck, BM_GETCHECK, 0, 0) == BST_CHECKED;
+                    request.mv = ComboBox_GetCurSel(gMvCombo);
+                    gMvChoice = request.mv;
                     request.sidecar = SendMessageW(gSidecarCheck, BM_GETCHECK, 0, 0) == BST_CHECKED;
                     for (std::size_t v = 0; v < gVocalChecks.size(); ++v) {
                         if (SendMessageW(gVocalChecks[v], BM_GETCHECK, 0, 0) == BST_CHECKED) {
@@ -3264,8 +3350,6 @@ namespace
         // Rows start right under the title, which lives in the group box, so the
         // measured body is offset by however far down the container starts.
         gDetailWantedHeight += bodyTop;
-        // 多出来的一行 pinned 是 2D MV（曲绘 / 元数据之上）。
-        gDetailWantedHeight += rowHeight;
 
         SetWindowTextW(gJacketCheck, files.jacket ? L"曲绘  ✓已下载" : L"曲绘");
         EnableWindow(gJacketCheck, files.jacket ? FALSE : TRUE);
@@ -3563,7 +3647,7 @@ int main(int argc, char** argv)
     bool force = false;
     bool wantJacket = true;
     bool wantSidecar = true;
-    bool wantMv = false;
+    int wantMv = 0; // 0 无 / 1 原曲 / 2 セカイ / 3 两者
 
     const int argCount = static_cast<int>(args.size());
     for (int i = 1; i < argCount; ++i) {
@@ -3632,8 +3716,23 @@ int main(int argc, char** argv)
         } else if (arg == "--no-sidecar") {
             wantSidecar = false;
         } else if (arg == "--mv") {
-            // 命令行模式默认不下 MV（10~40 MB/首），要就显式给。
-            wantMv = true;
+            // 命令行模式默认不下 MV（10~40 MB/首），要就显式给：
+            //   --mv           两个版本都要
+            //   --mv original  只要原曲 MV
+            //   --mv sekai     只要セカイ MV
+            wantMv = 3;
+            if (i + 1 < argc) {
+                const std::string v = argv[i + 1];
+                if (v == "original") {
+                    wantMv = 1;
+                    ++i;
+                } else if (v == "sekai") {
+                    wantMv = 2;
+                    ++i;
+                } else if (v == "both") {
+                    ++i;
+                }
+            }
         } else if (arg == "--help" || arg == "-h") {
             printUsage();
             return 0;
