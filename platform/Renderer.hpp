@@ -87,6 +87,11 @@ class Renderer
     // the default plate.
     bool setSongBackground(const std::uint8_t* rgba, int width, int height, std::string& outError);
 
+    // Same texture, updated in place (2D MV: one upload per decoded frame).
+    // Falls back to setSongBackground when the size changed - a video does not
+    // change size mid-stream, so that only happens once.
+    bool updateSongBackground(const std::uint8_t* rgba, int width, int height, std::string& outError);
+
     // Album cover / jacket shown by the opening card and the song list.
     // Pass an empty path (or clearCover) when the chart has no jacket.
     bool loadCover(const std::string& path, std::string& outError);

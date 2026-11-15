@@ -340,44 +340,10 @@ void drawPartyScores(platform::Renderer& renderer, const std::vector<platform::P
         }
     }
 
-    // ---- 团队合計分条（生命条正下方） --------------------------------------
-    // 刻度按 master playLevelScores 的比例（C 1.9% / B 38.5% / A 80.8% / S 100%，
-    // 见 MV2D-SCORE.md 2.7），分子是全队分数合计。
-    double totalScore = 0.0;
-    for (const platform::PartyPlayer& player : players) {
-        totalScore += player.score;
-    }
-    const float gx = 1442.0f;
-    const float gy = 126.0f;
-    const float gw = 444.0f;
-    const float gh = 20.0f;
-    // S 线按谱面等级走：S = 1040000 × levelFactor（MV2D-SCORE.md 2.7），
-    // 这样 5 级和 40 级的条不会一个打满一个永远空。
-    const float levelFactor = 1.0f + std::max(0.0f, chartRating - 5.0f) * 0.005f;
-    const float sLine = 1040000.0f * levelFactor;
-    const float ratio = static_cast<float>(std::clamp(totalScore / sLine, 0.0, 1.0));
-
-    c.dl->AddRectFilled(ImVec2(c.x(gx), c.y(gy)), ImVec2(c.x(gx + gw), c.y(gy + gh)),
-        IM_COL32(12, 14, 24, 200), c.s(gh * 0.5f));
-    img("multi_gauge_bg", gx, gy, gw, gh, IM_COL32(255, 255, 255, 150));
-    if (ratio > 0.0f) {
-        img("multi_gauge_fill", gx, gy, gw * ratio, gh, IM_COL32(120, 240, 220, 255), ratio);
-    }
-    static const float kMarks[4] = {0.0192f, 0.3846f, 0.8077f, 1.0f};
-    static const char* kMarkNames[4] = {"C", "B", "A", "S"};
-    for (int i = 0; i < 4; ++i) {
-        const float mx = gx + gw * kMarks[i];
-        c.dl->AddLine(ImVec2(c.x(mx), c.y(gy + gh * 0.5f) - c.s(6.0f)),
-            ImVec2(c.x(mx), c.y(gy + gh * 0.5f) + c.s(6.0f)),
-            i == 3 ? IM_COL32(255, 230, 120, 220) : IM_COL32(200, 214, 236, 170), c.s(1.5f));
-        textLeft(c, body, 13.0f, mx + 3.0f, gy + gh + 9.0f, IM_COL32(170, 180, 200, 200),
-            kMarkNames[i]);
-    }
-    {
-        char buf[48];
-        std::snprintf(buf, sizeof(buf), "TEAM %.0f", totalScore);
-        textRight(c, body, 18.0f, gx + gw, gy - 10.0f, IM_COL32(220, 232, 246, 230), buf);
-    }
+    // 右上角只有生命条本身，**没有**额外的团队分条 —— 原作多人 HUD 的
+    // 「团队合計」是左上那个 MultiScoreView（prefab 1226，位置和单人
+    // ScoreView 一样在 LeftTopAnchor，只是数字换成全队合计）。
+    // 2026-11-15 之前在这里画过一条 TEAM 条，是臆造的，已删。
 
     if (!note.empty()) {
         textLeft(c, body, 20.0f, firstCx - 40.0f, 1080.0f - 40.0f, paused ? kAccent : kTextFaint, note);

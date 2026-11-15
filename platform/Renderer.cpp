@@ -1120,6 +1120,23 @@ bool Renderer::setSongBackground(const std::uint8_t* rgba, int width, int height
     return true;
 }
 
+
+bool Renderer::updateSongBackground(const std::uint8_t* rgba, int width, int height, std::string& outError)
+{
+    if (rgba == nullptr || width <= 0 || height <= 0) {
+        return false;
+    }
+    if (mBackground.id == 0 || mBackground.width != width || mBackground.height != height) {
+        return setSongBackground(rgba, width, height, outError);
+    }
+    // Same size: one glTexSubImage2D per decoded frame, no quad rebuild.
+    glBindTexture(GL_TEXTURE_2D, mBackground.id);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+    outError.clear();
+    return true;
+}
+
 GLuint Renderer::loadUiTexture(const std::string& path, std::string& outError, int maxDim)
 {
     const Texture texture = loadTextureFromFile(path, outError, maxDim);

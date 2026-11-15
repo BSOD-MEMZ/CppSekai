@@ -18,6 +18,7 @@
 #include "platform/Party.hpp"
 #include "platform/ShellIntegration.hpp"
 #include "platform/Renderer.hpp"
+#include "platform/VideoPlayer.hpp"
 #include "platform/SystemMedia.hpp"
 #include "platform/ChartDlGuide.hpp"
 #include "game/Intro.hpp"
@@ -1359,6 +1360,8 @@ int main(int argc, char** argv)
     // Settings that also live in userdata.json (loaded below). Flags present on
     // the command line win over the saved values; these record which were given.
     bool speedGiven = false;
+    // --mv-mode 0|1|2（只对本次运行生效，不写档案）：无 MV / 原曲 MV / 2D MV。
+    int mvModeGiven = -1;
     bool seGiven = false;
     bool leadInGiven = false;
     bool windowGiven = false;
@@ -1458,6 +1461,8 @@ int main(int argc, char** argv)
             autoplayGiven = true;
         } else if (arg == "--flick-as-tap") {
             flickAsTapGiven = true;
+        } else if (arg == "--mv-mode" && i + 1 < utf8Argc) {
+            mvModeGiven = std::atoi(utf8Argv[++i]);
         } else if (arg == "--speed" && i + 1 < utf8Argc) {
             noteSpeed = static_cast<float>(std::atof(utf8Argv[++i]));
             speedGiven = true;
@@ -2001,6 +2006,9 @@ int main(int argc, char** argv)
     } else {
         platform::logf(platform::LogParty, "[party] off (设置 -> 系统 -> 多人游玩 没开，本机也没有别人开好的房间)\n");
         std::fflush(stdout);
+    }
+    if (mvModeGiven >= 0) {
+        userSettings.mvMode = std::clamp(mvModeGiven, 0, 2);
     }
     if (!speedGiven) {
         noteSpeed = userSettings.noteSpeed;
@@ -3105,6 +3113,11 @@ int main(int argc, char** argv)
     // Jacket whose stage backdrop is currently installed ("" = the default
     // plate). A CPU composite is only worth redoing when the song changes.
     std::string stageBackgroundFor;
+    // 2D MV（设置 > 演出 > MV）：子进程 ffmpeg 解码，每解码出一帧就更新一次
+    // 背景纹理。mvOpenedFor 记住已经为哪个谱面开过，避免每帧重开。
+    platform::VideoPlayer mvPlayer;
+    std::string mvOpenedFor;
+    int mvShownFrame = -1;
 
     AppState state = susPath.empty() ? AppState::Select : AppState::Play;
     Session session;
@@ -10727,6 +10740,58 @@ int main(int argc, char** argv)
                 }
                 renderer.setSongBackground(plate.empty() ? nullptr : plate.data(), plateW, plateH, error);
                 error.clear();
+            }
+
+
+            // ----------------------------------------------------------
+            // 2D MV（设置 > 演出 > MV = 2D MV）
+            //
+            // 盘上放的是这首歌的 .usm（Sofdec2 容器，里面一条 mpeg1 视频流、
+            // 没有音频），由子进程 ffmpeg 解成 RGBA 喂回来再传纹理 —— 不链接
+            // LGPL 库，进程边界就是许可边界（见 platform/VideoPlayer.hpp）。
+            // 路径约定：<谱面目录>/mv/<id4>.usm（chartdl --mv 下的就是这里）。
+            // ----------------------------------------------------------
+            if (userSettings.mvMode == 2) {
+                if (mvOpenedFor != session.entry.susPath) {
+                    mvOpenedFor = session.entry.susPath;
+                    mvPlayer.close();
+                    mvShownFrame = -1;
+                    if (session.entry.musicId > 0) {
+                        char id4[8] = {0};
+                        std::snprintf(id4, sizeof(id4), "%04d", session.entry.musicId);
+                        const std::filesystem::path mvFile =
+                            std::filesystem::path(path_utf8::widen(session.entry.susPath))
+                                .parent_path()
+                            / "mv" / (std::string(id4) + ".usm");
+                        const std::string mvUtf8 = path_utf8::fromPath(mvFile);
+                        const char* hint = std::getenv("CPSEKAI_FFMPEG");
+                        std::string mvErr;
+                        if (mvPlayer.open(hint != nullptr ? std::string(hint) : std::string(), mvUtf8,
+                                640, mvErr)) {
+                            platform::logf(platform::LogPlay, "[mv] opened %s (%dx%d @%d fps)\n",
+                                mvUtf8.c_str(), mvPlayer.width(), mvPlayer.height(), mvPlayer.fps());
+                        } else {
+                            platform::logf(platform::LogPlay, "[mv] skipped: %s\n", mvErr.c_str());
+                        }
+                        std::fflush(stdout);
+                    }
+                }
+                if (mvPlayer.isOpen()) {
+                    const int want = static_cast<int>(songTime * mvPlayer.fps());
+                    if (want != mvShownFrame && mvPlayer.pumpTo(want)) {
+                        if (renderer.updateSongBackground(mvPlayer.pixels(), mvPlayer.width(),
+                                mvPlayer.height(), error)) {
+                            error.clear();
+                            mvShownFrame = mvPlayer.frame();
+                        }
+                    }
+                }
+            } else if (!mvOpenedFor.empty()) {
+                // 关掉 MV：让静态舞台底板重新生成一次。
+                mvPlayer.close();
+                mvOpenedFor.clear();
+                mvShownFrame = -1;
+                stageBackgroundFor.clear();
             }
 
             // ----------------------------------------------------------
