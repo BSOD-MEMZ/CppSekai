@@ -228,6 +228,12 @@ struct UserSettings
     // pool just takes longer to drain. Pushed to the judgement engine, which
     // seeds its stats from it on every reset.
     float initialLife = 1000.0f;
+    // 卡组综合力 (设置 > 判定 > 综合力). The official score model scales with the
+    // deck's TotalPowerIncludeBuff (see MV2D-SCORE.md 2.1), and we have no deck
+    // system - so the number is a plain setting. Score is linear in it: 250000
+    // is roughly a full team of max-level 4-stars, which is what the old
+    // hard-coded kTeamPower meant. 1000..500000.
+    int deckPower = 250000;
     bool strictFlick = true;
     // 默认歌手偏好（设置 > 演奏 > 默认歌手，独立卡片）。
     //   0 = 跟随歌曲 —— 官方的セカイver，也就是一直以来的行为
@@ -283,6 +289,16 @@ struct UserSettings
     int bgStyle = 1;
     float bgBlur = 0.5f; // 0..1 blur amount for the wallpaper
     float bgDim = 0.45f; // 0..1 darkening on top of it (keeps the list readable)
+    // 演出背景 (设置 > 演出 > MV). Mirrors LiveSettingData.LiveModeType, minus the
+    // 3D tiers we cannot render:
+    //   0 = 无 MV    - the current look: jacket composited onto the stage screens
+    //   1 = 原曲 MV  - the "original MV" stage; needs a 2D MV for that song,
+    //                  otherwise it falls back to the jacket (that is exactly what
+    //                  the official game does when a song has no 2D MV)
+    //   2 = 2D MV    - play the song's .usm on the background quad
+    // Note 1 and 2 currently render the same thing; 1 only differs once a song
+    // without a 2D MV exists in the library, and it then keeps the jacket.
+    int mvMode = 0;
     // How "透明（Aero 玻璃）" (bgStyle 2) is put together; only read then, but
     // stored always so the answer survives switching the background away:
     //   0 = DwmExtendFrameIntoClientArea(-1) only. The client area is glass, but

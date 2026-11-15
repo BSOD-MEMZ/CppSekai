@@ -1252,6 +1252,8 @@ void loadUserData(const std::string& path, UserSettings& settings,
             settings.holdTailGraceMs = s.value("holdTailGraceMs", settings.holdTailGraceMs);
             settings.holdStartGraceMs = s.value("holdStartGraceMs", settings.holdStartGraceMs);
             settings.initialLife = s.value("initialLife", settings.initialLife);
+            settings.deckPower = s.value("deckPower", settings.deckPower);
+            settings.mvMode = s.value("mvMode", settings.mvMode);
             settings.strictFlick = s.value("strictFlick", settings.strictFlick);
             settings.vocalPref = std::clamp(s.value("vocalPref", settings.vocalPref), 0, 2);
             settings.vocalPrefSinger = s.value("vocalPrefSinger", settings.vocalPrefSinger);
@@ -1323,6 +1325,9 @@ void loadUserData(const std::string& path, UserSettings& settings,
     // 100 = one MISS from failing, 5000 = the practice-pool maximum. The HUD bar
     // is normalised against the value itself, so it always starts full.
     settings.initialLife = std::clamp(settings.initialLife, 100.0f, 5000.0f);
+    // 综合力: 1000 是「怎么都得不了几分」的下限, 500000 是四星满编的两倍.
+    settings.deckPower = std::clamp(settings.deckPower, 1000, 500000);
+    settings.mvMode = std::clamp(settings.mvMode, 0, 2);
     settings.windowWidth = std::clamp(settings.windowWidth, 320, 7680);
     settings.windowHeight = std::clamp(settings.windowHeight, 240, 4320);
     settings.renderScale = std::clamp(settings.renderScale, 0, 1);
@@ -1418,6 +1423,8 @@ void saveUserData(const std::string& path, const UserSettings& settings,
         {"holdTailGraceMs", settings.holdTailGraceMs},
         {"holdStartGraceMs", settings.holdStartGraceMs},
         {"initialLife", settings.initialLife},
+        {"deckPower", settings.deckPower},
+        {"mvMode", settings.mvMode},
         {"strictFlick", settings.strictFlick},
         {"vocalPref", settings.vocalPref},
         {"vocalPrefSinger", settings.vocalPrefSinger},

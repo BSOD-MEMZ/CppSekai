@@ -2127,14 +2127,19 @@ namespace
                     return control;
                 };
                 const int left = dp(20);
-                const int width = dp(320);
+                const int width = dp(400);
                 // Explicit bands, because a chain of += is what put the second
                 // group box on top of the first one.
                 const int group1Y = dp(16);
                 const int group1H = dp(92);
                 const int group2Y = group1Y + group1H + dp(12);
                 const int group2H = dp(76);
-                const int buttonY = group2Y + group2H + dp(20);
+                // The credits band. Everything this program downloads comes off
+                // third-party mirrors, so say who they are instead of leaving
+                // the source buried in CHARTS.md only.
+                const int group3Y = group2Y + group2H + dp(12);
+                const int group3H = dp(118);
+                const int buttonY = group3Y + group3H + dp(16);
                 create(L"BUTTON", L"关闭窗口时", BS_GROUPBOX, -1, left, group1Y, width, group1H);
                 gSetCloseExit = create(L"BUTTON", L"退出程序", BS_AUTORADIOBUTTON | WS_GROUP,
                     kIdSetCloseExit, left + dp(14), group1Y + dp(22), width - dp(28), dp(22));
@@ -2146,12 +2151,26 @@ namespace
                 gSetMinTray = create(L"BUTTON", L"最小化时收进托盘", BS_AUTOCHECKBOX, kIdSetMinTray,
                     left + dp(14), group2Y + dp(46), width - dp(28), dp(22));
 
+                // ---- 数据来源与致谢 -------------------------------------------
+                // chartdl 本身不运营任何资源，谱面/BGM/曲绘和 2D MV 全部来自
+                // 下面这几个第三方镜像。名字和地址写全，方便自己去核对/找源。
+                const int creditRowH = dp(21);
+                auto credit = [&](int row, const wchar_t* text) {
+                    return create(L"STATIC", text, SS_LEFT, -1, left + dp(14),
+                        group3Y + dp(24) + row * creditRowH, width - dp(28), dp(20));
+                };
+                create(L"BUTTON", L"数据来源与致谢", BS_GROUPBOX, -1, left, group3Y, width, group3H);
+                credit(0, L"谱面 / BGM / 曲绘：unipjsk（assets.unipjsk.com）");
+                credit(1, L"国服独占曲目：sekai.best（storage.sekai.best）");
+                credit(2, L"2D MV（.usm）：exmeaning（storage.exmeaning.com）");
+                credit(3, L"感谢以上镜像站，以及 sekai-world 的 master 镜像。");
+
                 create(L"BUTTON", L"确定", BS_DEFPUSHBUTTON, kIdSetOk, dp(20), buttonY, dp(120), dp(30));
                 create(L"BUTTON", L"取消", BS_PUSHBUTTON, kIdSetCancel, dp(152), buttonY, dp(120), dp(30));
                 // Size the *window* so the client area matches the layout above:
                 // the caller only guessed a size, and with a caption in the way
                 // the bottom buttons would be off-screen.
-                RECT want{0, 0, dp(380), buttonY + dp(30) + dp(20)};
+                RECT want{0, 0, dp(460), buttonY + dp(30) + dp(16)};
                 const DWORD style = static_cast<DWORD>(GetWindowLongPtrW(hwnd, GWL_STYLE));
                 AdjustWindowRectEx(&want, style, FALSE,
                     static_cast<DWORD>(GetWindowLongPtrW(hwnd, GWL_EXSTYLE)));

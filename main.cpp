@@ -2723,6 +2723,9 @@ int main(int argc, char** argv)
     // seeds every session from its own copy on reset(), so it is pushed once here
     // and again whenever the slider moves.
     judgement.setInitialLife(userSettings.initialLife);
+    // 卡组综合力 (settings > 判定 > 综合力): the score is linear in it, so this
+    // is the one knob that scales every note's value (see MV2D-SCORE.md 2.1).
+    judgement.setTeamPower(userSettings.deckPower);
     platform::logf(platform::LogSystem, "[settings] initialLife setting=%.0f engine=%.0f\n", userSettings.initialLife,
         judgement.initialLife());
     std::fflush(stdout);
@@ -4181,6 +4184,7 @@ int main(int argc, char** argv)
         judgement.setStrictFlick(userSettings.strictFlick);
         judgement.setFlickAsTap(flickAsTapGiven || userSettings.flickAsTap);
         judgement.setInitialLife(userSettings.initialLife);
+        judgement.setTeamPower(userSettings.deckPower);
         {
             game::JudgementWindows windows;
             windows.perfectMs = userSettings.perfectMs;
@@ -4852,6 +4856,25 @@ int main(int argc, char** argv)
                             userSettings.autoplay = autoPlayBox;
                             persistUserData();
                         }
+                        // 演出背景（设置 > 演出 > MV）。对应原作
+                        // LiveSettingData.LiveModeType：2D MV 走 CriMana 播 .usm，
+                        // 没有 2D MV 的歌退回封面 —— 我们这两种目前都退回封面，
+                        // 等 VideoPlayer 接上 ffmpeg 之后 2D MV 才真的出画面。
+                        colSet(1);
+                        ui::sectionLabel("MV", w);
+                        colSet(1);
+                        {
+                            const std::vector<std::string> mvItems{"无 MV", "原曲 MV", "2D MV"};
+                            int mvSel = std::clamp(userSettings.mvMode, 0, 2);
+                            ImGui::SetNextItemWidth(w);
+                            bool mvPicked = ui::combo("##mvmode",
+                                mvItems[static_cast<std::size_t>(mvSel)].c_str(), mvItems, &mvSel, w);
+                            mvPicked |= ui::padComboNudge(&mvSel, 3);
+                            if (mvPicked) {
+                                userSettings.mvMode = mvSel;
+                                persistUserData();
+                            }
+                        }
                     });
                 twoCols(
                     [&](float w) {
@@ -5416,7 +5439,9 @@ int main(int argc, char** argv)
                         // own copy on reset(), so pushing it here (and once at boot) is
                         // enough.
                         colSet(1);
-                        ui::sectionLabel("生命", w);
+                        // 生命和综合力共用一个小标题，判定页两列都已经排满，
+                        // 再加一个 sectionLabel 会把卡片顶破（七页都不滚）。
+                        ui::sectionLabel("生命 / 综合力", w);
                         float life = judgement.initialLife();
                         colSet(1);
                         if (ui::slider("initlife", &life, 100.0f, game::kMaxInitialLife, 50.0f, "%.0f", w)) {
@@ -5424,6 +5449,20 @@ int main(int argc, char** argv)
                             if (next != userSettings.initialLife) {
                                 userSettings.initialLife = next;
                                 judgement.setInitialLife(next);
+                                persistUserData();
+                            }
+                        }
+                        // 卡组综合力（设置 > 判定 > 综合力）。原作按卡组
+                        // DeckData.TotalPowerIncludeBuff 算分，我们没有卡组系统，
+                        // 所以直接给一个数：分数与它线性相关（MV2D-SCORE.md 2.1）。
+                        // 25 万 ≈ 一套满级四星，也是以前硬编码的那个值。
+                        float deckPower = static_cast<float>(userSettings.deckPower);
+                        colSet(1);
+                        if (ui::slider("deckpower", &deckPower, 1000.0f, 500000.0f, 5000.0f, "%.0f", w)) {
+                            const int next = std::clamp(static_cast<int>(deckPower + 0.5f), 1000, 500000);
+                            if (next != userSettings.deckPower) {
+                                userSettings.deckPower = next;
+                                judgement.setTeamPower(next);
                                 persistUserData();
                             }
                         }

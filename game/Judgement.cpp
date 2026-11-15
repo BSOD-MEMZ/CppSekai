@@ -444,7 +444,7 @@ double JudgementEngine::scoreDeltaFor(float kind, bool critical) const
         return 0.0;
     }
     const double levelFactor = static_cast<double>((mChartRating - 5.0f) * 0.005f + 1.0f);
-    return (kTeamPower / mWeightedNoteCount) * 4.0 * static_cast<double>(weight) * levelFactor * mComboFactor;
+    return (mTeamPower / mWeightedNoteCount) * 4.0 * static_cast<double>(weight) * levelFactor * mComboFactor;
 }
 
 Judge JudgementEngine::registerJudge(Judge judge, bool critical, float volume, float kind, float noteTimeSec)

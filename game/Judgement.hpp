@@ -146,6 +146,13 @@ constexpr float kMaxInitialLife = 5000.0f;
 //   (TEAM_POWER / weightedNoteCount) * 4 * noteWeight * levelFactor * comboFactor
 // scaled by the judgement multiplier (PERFECT 1.0 / GREAT 0.7 / GOOD 0.5),
 // with comboFactor growing by 0.01 per 100 combo up to 1.1.
+//
+// 2026-11-15: this is the *official* shape, verified against the game
+// (MV2D-SCORE.md 2.1) - the real thing divides
+// `levelFactor * DeckData.TotalPowerIncludeBuff * 4` by the summed note weight,
+// which is the same product with the two factors swapped. What used to be a
+// hard-coded team power is now 设置 > 判定 > 综合力 (`UserSettings::deckPower`);
+// this constant is only the default it starts from.
 constexpr double kTeamPower = 250000.0;
 constexpr float kDefaultChartRating = 26.0f;
 
@@ -294,6 +301,12 @@ class JudgementEngine
     [[nodiscard]] const JudgementWindows& windows() const { return mWindows; }
     void setWindows(const JudgementWindows& windows) { mWindows = windows; }
 
+    // 卡组综合力 (设置 > 判定 > 综合力). Stands in for the official
+    // DeckData.TotalPowerIncludeBuff; the score is linear in it, so this is the
+    // one number that moves every note's value. Clamped to 1000..500000.
+    void setTeamPower(int power) { mTeamPower = static_cast<double>(std::clamp(power, 1000, 500000)); }
+    [[nodiscard]] double teamPower() const { return mTeamPower; }
+
     // Chart level, used by the score formula's levelFactor (the upstream
     // overlay player hard-codes 26; we use the song's real difficulty level).
     void setChartRating(float rating)
@@ -414,6 +427,7 @@ class JudgementEngine
     bool mAutoPlay = false;
 
     // Score model (see kTeamPower above).
+    double mTeamPower = kTeamPower;
     float mChartRating = kDefaultChartRating;
     float mInitialLife = kMaxLife;
     double mWeightedNoteCount = 1.0;
