@@ -20,8 +20,7 @@ namespace platform
 {
 namespace
 {
-constexpr int kOutWidth = 640;
-constexpr int kOutHeight = 360; // 640x360 RGBA = 921,600 bytes per frame
+constexpr int kOutWidth = 640; // output height derives from the source aspect
 } // namespace
 
 VideoPlayer::~VideoPlayer()
@@ -85,6 +84,12 @@ bool VideoPlayer::open(const std::string& videoPath, int maxWidth, std::string& 
     if (fps < 1 || fps > 240) {
         fps = 24; // usm's own header says 24; do not trust a bogus rational
     }
+    double fpsExact = rate.num > 0 && rate.den > 0
+        ? static_cast<double>(rate.num) / static_cast<double>(rate.den)
+        : 24.0;
+    if (fpsExact < 1.0 || fpsExact > 240.0) {
+        fpsExact = 24.0; // same distrust as above
+    }
 
     SwsContext* sws = sws_getContext(dec->width, dec->height, dec->pix_fmt, width, height,
         AV_PIX_FMT_RGBA, SWS_BILINEAR, nullptr, nullptr, nullptr);
@@ -104,6 +109,7 @@ bool VideoPlayer::open(const std::string& videoPath, int maxWidth, std::string& 
     mWidth = width;
     mHeight = height;
     mFps = fps;
+    mFpsExact = fpsExact;
     mFrame = -1;
     mEnded = false;
     mBuffer.assign(static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 4u, 0);
@@ -170,8 +176,21 @@ bool VideoPlayer::pumpTo(int targetFrame)
     if (targetFrame < 0) {
         targetFrame = 0;
     }
-    // Forward only: the audio clock is the master, so a lagging video simply
-    // decodes a few frames back to back to catch up.
+    auto* fmt = static_cast<AVFormatContext*>(mFmt);
+    auto* dec = static_cast<AVCodecContext*>(mDec);
+    // Backwards target (progress-bar seek, retry): rewind to the stream start
+    // and decode forward again. Without this the video would sit on a stale
+    // frame until song time caught back up - visibly out of sync.
+    if (targetFrame < mFrame) {
+        if (av_seek_frame(fmt, mStreamIndex, 0, AVSEEK_FLAG_BACKWARD) < 0) {
+            av_seek_frame(fmt, 0, 0, AVSEEK_FLAG_BACKWARD);
+        }
+        avcodec_flush_buffers(dec);
+        mFrame = -1;
+        mEnded = false;
+    }
+    // The audio clock is the master, so a lagging video simply decodes a few
+    // frames back to back to catch up.
     while (mFrame < targetFrame && !mEnded) {
         if (!decodeNextFrame()) {
             break;

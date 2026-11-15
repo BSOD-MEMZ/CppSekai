@@ -469,21 +469,23 @@ void loadMusicVocals(const std::string& path);
 // "梦开始的地方", "mmj团歌" ...). Matching is exact, not substring.
 void loadMusicAliases(const std::string& path);
 
-// Per-song display flags (music-collabs.json, generated from the official
-// master tables musicCategories / musics / musicCollaborations). These drive
-// the right-aligned MV / original-song badges in the song list - which badge
-// a song shows is what the original's MusicSelectListCell.Setup() derives from
-// the master categories (HasAny2DMV / HasMusicCategoryOf(mv|original) /
-// isFullLength), not from local mv files. Optional: without it no badges show.
+// Per-song 2D MV badges, derived from what the player actually has on disk:
+// charts/mv/<id4>.usm (original 2D MV) -> the blue 原曲 badge,
+// charts/mv/<id4>_sekai.usm (セカイ 2D MV) -> the green 2D MV badge.
+// NOT from the master categories: we do not render 3D MVs at all, so showing
+// the master's yellow 3D badge would advertise a feature that does not exist -
+// the badge set follows the downloaded files (user rule, 2026-11-15).
 struct SongBadges
 {
-    bool mv3d = false;     // 3D MV (yellow frame)
-    bool mv2d = false;     // 2D MV (green frame)
-    bool original = false; // original-song MV (blue frame)
-    bool full = false;     // full-length version (white 120-wide badge)
+    bool original = false; // original 2D MV downloaded (blue frame)
+    bool mv2d = false;     // セカイ 2D MV downloaded (green frame)
 };
-void loadMusicBadges(const std::string& path);
 const SongBadges& songBadges(int musicId);
+
+// Collaboration labels (music-collabs.json, generated from the official
+// master table musicCollaborations). Optional: without it the phone panel
+// simply shows no collaboration ribbon.
+void loadMusicCollabs(const std::string& path);
 
 // Collaboration label for a song ("劇場版プロジェクトセカイ", "ゲキ！チュウマイ
 // コラボ" ...), from MasterMusic.musicCollaborationId -> MasterMusicCollaboration

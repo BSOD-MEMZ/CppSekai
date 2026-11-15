@@ -1405,6 +1405,21 @@ void Renderer::drawStaticScene(float backgroundBrightness, float playfieldVisibi
         // "background fill" the setting is about. The stage below stays.
         drawVertices(mBackground, background, false, BLEND_NORMAL);
     }
+    if (mBackgroundIsVideo) {
+        // mv_line: the original dims the 2D MV itself with a full-screen 50%
+        // black sheet (mv_line.png is 1920x1080 black at alpha 128) that sits
+        // ABOVE the video but BELOW the stage / notes / HUD - so it has to be
+        // drawn here in the GL pass, between the background quad and the stage,
+        // not in the ImGui pass (there it covered the notes too).
+        std::vector<float> dim = mStaticBackgroundVertices;
+        for (size_t i = 4; i < dim.size(); i += FLOATS_PER_VERTEX) {
+            dim[i + 0] = 0.0f;
+            dim[i + 1] = 0.0f;
+            dim[i + 2] = 0.0f;
+            dim[i + 3] = 0.5f;
+        }
+        drawVertices(mBackground, dim, false, BLEND_NORMAL);
+    }
     if (visibility <= 0.001f) {
         return;
     }

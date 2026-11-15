@@ -39,13 +39,19 @@ class VideoPlayer
     // Frames per second as reported by the container, rounded. Index of the
     // frame currently in pixels() is frame(); the caller maps song time to it.
     [[nodiscard]] int fps() const { return mFps; }
+    // Exact container rate (num/den, e.g. 23.976). Frame indexing MUST use
+    // this, not fps(): rounding 24000/1001 up to 24 drifts ~4 frames over a
+    // three-minute song, which reads as the MV slowly sliding out of sync.
+    [[nodiscard]] double fpsExact() const { return mFpsExact; }
     [[nodiscard]] int frame() const { return mFrame; }
     [[nodiscard]] const std::uint8_t* pixels() const { return mBuffer.data(); }
 
-    // Decodes forward until `targetFrame` is in pixels(). Forward only: a seek
-    // backwards would mean reopening (a live never runs backwards except on a
-    // retry, which closes and reopens the whole player). Returns true when the
-    // buffer holds the wanted frame, or the stream ended first.
+    // Decodes forward until `targetFrame` is in pixels(). A target *behind*
+    // the current frame (progress-bar seek, retry) rewinds the stream to the
+    // start and decodes forward again - staying put would leave the video
+    // frozen on an old frame until song time caught up, i.e. permanently out
+    // of sync. Returns true when the buffer holds the wanted frame, or the
+    // stream ended first.
     bool pumpTo(int targetFrame);
 
     void close();
@@ -63,6 +69,7 @@ class VideoPlayer
     int mWidth = 0;
     int mHeight = 0;
     int mFps = 24;
+    double mFpsExact = 24.0;
     int mFrame = -1;
     bool mEnded = false;
     bool mDirty = false; // a new frame was decoded but not yet reported

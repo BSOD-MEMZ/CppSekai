@@ -409,17 +409,15 @@ namespace
     std::map<int, std::vector<VocalVersion>> gMusicVocals;
 
     // -----------------------------------------------------------------
-    // Per-song MV / original badges + collaboration labels
-    // (music-collabs.json, generated from the official master tables).
-    // Badge visibility mirrors MusicSelectListCell.Setup()'s master lookups:
-    //   3DMV   <- HasMusicCategoryOf(musicCategories, mv)        (cat 0)
-    //   2DMV   <- HasAny2DMV                                     (mv_2d, cat 1)
-    //   Original <- HasMusicCategoryOf(original)                 (cat 4)
-    //   Full   <- music.get_IsFullLength()
-    // and the collab ribbon text comes from MasterMusic.musicCollaborationId
-    // -> MasterMusicCollaboration.label.
+    // 2D MV badges are derived from the mv/ folder next to the charts
+    // (charts/mv/<id4>.usm = original, <id4>_sekai.usm = セカイ): the badge
+    // set follows what the player downloaded, NOT the master categories -
+    // we do not render 3D MVs, so the master's yellow 3D badge would lie.
+    // Collaboration labels come from music-collabs.json (official
+    // musicCollaborations table).
     // -----------------------------------------------------------------
-    std::map<int, SongBadges> gMusicBadges;
+    fs::path gChartMvDir; // set by scanChartFolder()
+    std::map<int, SongBadges> gLocalMvBadges;
     std::map<int, std::string> gCollabLabels;
 
     // Existence check for one asset's audio file. Only ever called for the
@@ -1556,6 +1554,12 @@ std::vector<ChartEntry> scanChartFolder(const std::string& dir)
     if (dir.empty() || !fs::exists(root, ec) || !fs::is_directory(root, ec)) {
         return entries;
     }
+    // mv/<id4>.usm lookups (songBadges) are relative to the scan root - the
+    // same convention the playback side uses (<chart dir>/mv/). Absolute so a
+    // later cwd change cannot break the lookups.
+    std::error_code absEc;
+    gChartMvDir = fs::absolute(root, absEc) / "mv";
+    gLocalMvBadges.clear();
 
     // Diagnostic (CPSEKAI_SCAN_TIMING=1): where the scan time goes. The header
     // read is one file open per chart and the sidecar lookups are filesystem
@@ -2703,6 +2707,42 @@ namespace
         return it->second;
     }
 
+    // 9-slice for the badge / ribbon sprites. The originals are drawn with
+    // Unity's Sliced Image type - stretching the whole sprite (what AddImage
+    // does) squashes the rounded corners, which is exactly the "wrong shape"
+    // the badges showed. `bx`/`by` are the slice borders in source pixels,
+    // `s` scales them with the row so a 0.58x row does not get chunky corners.
+    void addNinePatch(ImDrawList* dl, GLuint tex, int texW, int texH, const ImVec2& p0,
+        const ImVec2& p1, float bx, float by, float s, ImU32 tint)
+    {
+        if (tex == 0) {
+            return;
+        }
+        float l = bx * s;
+        float t = by * s;
+        float r = bx * s;
+        float b = by * s;
+        const float w = p1.x - p0.x;
+        const float h = p1.y - p0.y;
+        l = std::min(l, w * 0.5f);
+        r = std::min(r, w * 0.5f);
+        t = std::min(t, h * 0.5f);
+        b = std::min(b, h * 0.5f);
+        const float u0 = 0.0f, u1 = static_cast<float>(bx) / texW, u2 = 1.0f - u1, u3 = 1.0f;
+        const float v0 = 0.0f, v1 = static_cast<float>(by) / texH, v2 = 1.0f - v1, v3 = 1.0f;
+        const float xs[4] = {p0.x, p0.x + l, p1.x - r, p1.x};
+        const float ys[4] = {p0.y, p0.y + t, p1.y - b, p1.y};
+        const float us[4] = {u0, u1, u2, u3};
+        const float vs[4] = {v0, v1, v2, v3};
+        for (int row = 0; row < 3; ++row) {
+            for (int col = 0; col < 3; ++col) {
+                dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(tex)),
+                    ImVec2(xs[col], ys[row]), ImVec2(xs[col + 1], ys[row + 1]),
+                    ImVec2(us[col], vs[row]), ImVec2(us[col + 1], vs[row + 1]), tint);
+            }
+        }
+    }
+
     // Level text: the chart's own #PLAYLEVEL / sidecar, else the official table
     // for its difficulty. Charts with no data at all show "-" instead of 0.
     const char* levelText(const ChartEntry& entry, char* buf, size_t bufSize)
@@ -3063,9 +3103,8 @@ void loadMusicAliases(const std::string& path)
     std::fflush(stdout);
 }
 
-void loadMusicBadges(const std::string& path)
+void loadMusicCollabs(const std::string& path)
 {
-    gMusicBadges.clear();
     gCollabLabels.clear();
     std::error_code ec;
     if (path.empty() || !fs::exists(toFsPath(path), ec)) {
@@ -3084,23 +3123,6 @@ void loadMusicBadges(const std::string& path)
     if (!doc.is_object()) {
         return;
     }
-    const auto fillSet = [&](const char* key, std::map<int, SongBadges>& store,
-        bool SongBadges::*flag) {
-        const auto it = doc.find(key);
-        if (it == doc.end() || !it->is_array()) {
-            return;
-        }
-        for (const auto& id : *it) {
-            if (!id.is_number_integer()) {
-                continue;
-            }
-            store[id.get<int>()].*flag = true;
-        }
-    };
-    fillSet("mv3d", gMusicBadges, &SongBadges::mv3d);
-    fillSet("mv2d", gMusicBadges, &SongBadges::mv2d);
-    fillSet("original", gMusicBadges, &SongBadges::original);
-    fillSet("full", gMusicBadges, &SongBadges::full);
     const auto collab = doc.find("collab");
     if (collab != doc.end() && collab->is_object()) {
         for (auto it = collab->begin(); it != collab->end(); ++it) {
@@ -3110,16 +3132,28 @@ void loadMusicBadges(const std::string& path)
             }
         }
     }
-    platform::logf(platform::LogSelect, "[badges] %zu songs, %zu collabs\n", gMusicBadges.size(),
-        gCollabLabels.size());
+    platform::logf(platform::LogSelect, "[collabs] %zu labels\n", gCollabLabels.size());
     std::fflush(stdout);
 }
 
 const SongBadges& songBadges(int musicId)
 {
     static const SongBadges none;
-    const auto it = gMusicBadges.find(musicId);
-    return it == gMusicBadges.end() ? none : it->second;
+    if (musicId <= 0 || gChartMvDir.empty()) {
+        return none;
+    }
+    const auto it = gLocalMvBadges.find(musicId);
+    if (it != gLocalMvBadges.end()) {
+        return it->second;
+    }
+    SongBadges b;
+    char id4[8] = {0};
+    std::snprintf(id4, sizeof(id4), "%04d", musicId);
+    std::error_code ec;
+    b.original = fs::exists(gChartMvDir / (std::string(id4) + ".usm"), ec);
+    b.mv2d = fs::exists(gChartMvDir / (std::string(id4) + "_sekai.usm"), ec);
+    const auto inserted = gLocalMvBadges.emplace(musicId, b);
+    return inserted.first->second;
 }
 
 std::string musicCollab(int musicId)
@@ -4376,60 +4410,44 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
                 dx += 18.0f * k;
             }
 
-            // MV / original-song badges, right-aligned. All numbers come from
-            // the MusicSelectListCell prefab (895x144 cell, RE'd 2026-11-15):
-            // the MVMode group is a HorizontalLayoutGroup with
-            // ChildAlignment=MiddleRight, Spacing=8, ReverseArrangement=1 -
-            // so the badges fill right->left in child order Original, 2D, 3D,
-            // Full - each 48 tall and vertically centred, with the rightmost
-            // badge's right edge 29px from the cell's right edge. Scaled by
-            // row height (48/144 of the cell) so compact rows and cards keep
-            // the original's proportions.
+            // MV badges, right-aligned. Layout numbers from the
+            // MusicSelectListCell prefab (895x144, RE'd 2026-11-15): MVMode is
+            // a HorizontalLayoutGroup, ChildAlignment=MiddleRight, Spacing=8,
+            // ReverseArrangement=1 (fills right->left), children 78.98x48
+            // vertically centred, rightmost badge's right edge 29px from the
+            // cell edge. Scaled by row height (48/144 of the cell).
+            // WHICH badges show is decided by the mv/ folder, not the master
+            // categories: original <id4>.usm -> blue 原曲, <id4>_sekai.usm ->
+            // green 2D MV. No 3D badge - we do not render 3D MVs.
             const SongBadges& badges = songBadges(g.musicId);
-            if (badges.mv2d || badges.mv3d || badges.original || badges.full) {
+            if (badges.original || badges.mv2d) {
                 const float bs = rowH / 144.0f; // cell -> row scale
                 const float bh = 48.0f * bs;
-                const float bwFrame = 78.98f * bs; // coloured frames
-                const float bwFull = 120.0f * bs;  // full-length badge
+                const float bw = 78.98f * bs;
                 const float gap = 8.0f * bs;
                 struct BadgeDef
                 {
                     bool present;
                     const char* tex;
                     const char* label;
-                    bool darkText;
                 };
                 const BadgeDef defs[] = {
-                    {badges.original, "label_line_m_dbl_bl", "原曲", false},
-                    {badges.mv2d, "label_line_m_dbl_gn", "2D MV", false},
-                    {badges.mv3d, "label_line_m_dbl_yw", "3D MV", false},
-                    {badges.full, "bg_base_round_h48_wh", "FULL", true},
+                    {badges.original, "label_line_m_dbl_bl", "原曲"},
+                    {badges.mv2d, "label_line_m_dbl_gn", "2D MV"},
                 };
-                // bg_base_round_h48_wh is exported pure white - the prefab
-                // tints it (0.631, 0.957, 0.922) in Setup.
-                const ImU32 fullTint = IM_COL32(161, 244, 235, 255);
-                float bx = p1.x - 29.0f * bs; // right edge inset from the cell edge
+                float bx = p1.x - 29.0f * bs;
                 for (const BadgeDef& def : defs) {
                     if (!def.present) {
                         continue;
                     }
-                    const float bw = def.tex[0] == 'b' ? bwFull : bwFrame;
                     bx -= bw;
                     const float by = cy - bh * 0.5f;
-                    const GLuint tex = badgeTex(renderer, def.tex);
-                    if (tex != 0) {
-                        listDl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(tex)),
-                            ImVec2(bx, by), ImVec2(bx + bw, by + bh), ImVec2(0.0f, 0.0f),
-                            ImVec2(1.0f, 1.0f), def.darkText ? fullTint : IM_COL32(255, 255, 255, 255));
-                    } else {
-                        // Sprite missing: a flat plate in the badge's colour so
-                        // the information survives a broken asset install.
-                        listDl->AddRectFilled(ImVec2(bx, by), ImVec2(bx + bw, by + bh),
-                            def.darkText ? fullTint : IM_COL32(120, 130, 170, 255), bh * 0.2f);
-                    }
+                    // The sprites are 32x32 sliced images (4px coloured frame,
+                    // #444466 fill); nine-patching keeps the corner radii.
+                    addNinePatch(listDl, badgeTex(renderer, def.tex), 32, 32, ImVec2(bx, by),
+                        ImVec2(bx + bw, by + bh), 8.0f, 8.0f, bs, IM_COL32(255, 255, 255, 255));
                     addTextCentered(listDl, body, bh * 0.46f,
-                        ImVec2(bx + bw * 0.5f, cy - 1.0f * bs),
-                        def.darkText ? IM_COL32(30, 90, 84, 255) : IM_COL32(255, 255, 255, 255), def.label);
+                        ImVec2(bx + bw * 0.5f, cy - 1.0f * bs), IM_COL32(255, 255, 255, 255), def.label);
                     bx -= gap;
                 }
             }
@@ -4768,12 +4786,15 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
 
         // Collaboration ribbon (歌曲出处, e.g. 「劇場版プロジェクトセカイ」).
         // Geometry from the phone-cell prefab (704): the Collaboration node is
-        // a child of the 376x376 jacket, anchored to its top-left with
-        // pivot (0,1) and offset (-8, +8) - so the ribbon's top edge sits 8px
-        // ABOVE the jacket edge and 8px to its left - 40.42 tall, the Text
-        // child at x=12 with height 40. Background is bg_base_r8_wh tinted
-        // (0.267, 0.267, 0.4) = #444466. All offsets scale with the jacket
-        // (jh / 376) so the ribbon follows the panel's jacket size.
+        // a child of the 376x376 jacket, anchored to its top-left corner with
+        // pivot (0,1) and anchoredPosition (-8, +8). In Unity's y-up space the
+        // +8 lifts the ribbon's TOP edge 8px above the jacket top, and the
+        // rect then extends 40.42 DOWN - so it lies across the jacket's
+        // top-left corner, ~32px inside the jacket (the first version floated
+        // entirely above the jacket, which is not what the prefab says).
+        // Background: bg_base_r8_wh (24x24, r8) tinted (0.267, 0.267, 0.4) =
+        // #444466, opaque; Text child at x=12, height 40. All offsets scale
+        // with the jacket (jh / 376).
         const std::string collab = musicCollab(group.musicId);
         if (!collab.empty()) {
             const float rs = jh / 376.0f;
@@ -4782,8 +4803,15 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             const float fs = rh * 0.58f;
             const ImVec2 ts = body->CalcTextSizeA(fs, FLT_MAX, 0.0f, collab.c_str());
             const float rw = pad * 2.0f + ts.x;
-            const ImVec2 r0(j0.x - 8.0f * rs, j0.y - 8.0f * rs - rh);
-            dl->AddRectFilled(r0, ImVec2(r0.x + rw, r0.y + rh), IM_COL32(68, 68, 102, 230), rh * 0.28f);
+            const ImVec2 r0(j0.x - 8.0f * rs, j0.y - 8.0f * rs);
+            const ImU32 ribbonTint = IM_COL32(68, 68, 102, 255);
+            const GLuint ribbonTex = badgeTex(renderer, "bg_base_r8_wh");
+            if (ribbonTex != 0) {
+                addNinePatch(dl, ribbonTex, 24, 24, r0, ImVec2(r0.x + rw, r0.y + rh), 8.0f, 8.0f,
+                    rs, ribbonTint);
+            } else {
+                dl->AddRectFilled(r0, ImVec2(r0.x + rw, r0.y + rh), ribbonTint, 8.0f * rs);
+            }
             dl->AddText(body, fs, ImVec2(r0.x + pad, r0.y + (rh - ts.y) * 0.5f),
                 IM_COL32(255, 255, 255, 255), collab.c_str());
         }
