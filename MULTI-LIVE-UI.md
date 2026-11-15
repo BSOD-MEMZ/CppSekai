@@ -293,3 +293,49 @@ python q.py MultiLiveFrontView LiveFrontView MultiThumbnailView MultiScoreView M
 | 头像块树 | `jp/ml_thumb.txt` / `.json` |
 | 团队分条树 | `jp/ml_score.txt`（本次已导） |
 | 字段原文 | `python q.py -f <类名>` |
+
+---
+
+## 9. 素材已经 dump 好了（2026-11-15）
+
+`build/multi_ui/`（**build/ 已 gitignore，官方素材绝不入库**）：
+
+| 内容 | 文件 |
+|---|---|
+| 32 张 sprite | 头像框 `frame_player_multi` / `thumb_mask` / `label_color_thumbnail` / `text_you_gn` / `text_feverOK` / `effect_playerScoreDanger_multi` / `frame_multi_black`；COMBO `bg_combo_pl` / `eff_combo` / `number_combo_154px_0..9_pr`；分条 `gauge_bar_ingame_multiLive_s_wh` / `bar_scoreGauge_multi` / `bar_scoreGauge_mask` / `bg_scoreGauge 1` / `ScoreRank_Mark_S|D`；Fever `gage_fever_lane` / `line_(super)fever` / `text_line(super)Fever` / `itemBox_superFever(_open)` |
+| prefab 树 | `ml_thumb.txt`（1224）/ `ml_score.txt`（1226）/ `ml_skilltext.txt`（1225）/ `ml_fever.txt`（1232） |
+| 索引 | `INDEX.md`（每张的用途 + 像素尺寸） |
+| 一览图 | `contact_sheet.png` |
+
+重新生成：
+
+```bash
+python .workbuddy/tools/dump_multi_ui.py            # 默认读 jp/tex_all_sprite
+```
+
+脚本只做「按名字复制 + 拼 contact sheet + 写索引」，源是 `tex_all_sprite`（2808 张全量导出）。
+缺的两张：`dying` / `death` 节点存在但贴图名不同（不在 sprite 全量里，可能是运行时从 atlas 取），
+索引里标了 `**缺**`。
+
+**尺寸还是拿不到精确值**：`INDEX.md` 给的是贴图原始像素，prefab 里的 `sizeDelta` 全是 0。
+位置/缩放只能量 1920×1080 截图（`HUD-UI-AUDIT.md` §1 的前提同款问题）。
+
+### 能直接用的几个数（贴图像素，非显示像素）
+
+| 元素 | 贴图尺寸 | 说明 |
+|---|---|---|
+| `frame_multi_black` | **156×156** | 头像块死亡态底图 → 头像块边长大概 156 |
+| `thumb_mask` | 24×26 | 小，是 9-slice 边距不是整块 |
+| `label_color_thumbnail` | 40×40 | 队色小块 |
+| `text_you_gn` | 78×40 | YOU 标记 |
+| `text_feverOK` | 64×30 | FEVER OK |
+| `number_combo_154px_*` | 78~117 × 144~151 | 名字里就写了 154px 字号 |
+| `bg_combo_pl` / `eff_combo` | 144×30 / 197×79 | 与我们单人 HUD 同源 |
+| `bar_scoreGauge_multi` | 609×24 | 团队分条底 |
+| `gauge_bar_ingame_multiLive_s_wh` | 532×24 | 填充（未满时占 532/609 ≈ 87%） |
+| `bar_scoreGauge_mask` | 610×24 | 遮罩 |
+| `ScoreRank_Mark_S/D` | 120×132 | 评级（注意这是 `Mark` 系列，不是 HUD 的 `score_S` 76×94） |
+| `gage_fever_lane` | 1196×1316 | Fever 整条轨道，斜着穿的 |
+| `line_fever` / `line_superFever` | 66×20 / 50×18 | 阈值线 |
+| `text_lineFever` / `text_lineSuperFever` | 177×46 / 252×40 | 阈值文字 |
+| `itemBox_superFever(_open)` | 118×116 / 115×119 | SuperFever 图标 |

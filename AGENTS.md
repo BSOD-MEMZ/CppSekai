@@ -45,7 +45,12 @@ CppSekai：Project SEKAI 风格 SUS 谱面 Windows 原生游玩器。
   usm 从 bundle 落盘再播、`MusicVideo2DModeData` 的 seek 帧表，以及 ms→帧的换算公式
   （`trunc(framerateN/1000 × ms/1000)`，**framerateN 是千分单位**、截断、clamp）。
   后半是分数公式：四因子连乘 + master `ingameNotes` 15 行系数全表（与我们的 `hudWeight()` 是
-  10:1 关系）+ `levelFactor = 1 + (lv-5)×0.005`（asm 实证）。**要做 MV 背景或调分数先看这篇。**
+  10:1 关系）+ `levelFactor = 1 + (lv-5)×0.005`（asm 实证）。
+  §1.7 是**资源站总表**：unipjsk / sekai.best 都**没有** 2D MV，只有
+  `storage.exmeaning.com` 有（186 首，`live/2dmode/original_mv/{id4}/{id4}.usm`，10~40MB/首）。
+  §2 的系数全部换成 master 真值（`ingameNotes` / `ingameNoteJudges` / `ingameCombos` /
+  `ingamePlayLevels` / `playLevelScores`），**分数与综合力线性相关、等级线与综合力无关**。
+  **要做 MV 背景、调分数、或查等级线先看这篇。**
 - `MULTI-LIVE-UI.md` —— **多人演出 UI 的原作结构（2026-11-15）**：`MultiLiveFrontView` 与
   单人 `LiveFrontView` 的逐字段差分（换 `MultiScoreView`/`MultiCutinManager`/`tapEffectArray`，
   加 `MultiThumbnailViewGroup`/`MultiFeverView`）、头像块内部**自带一整套 ComboView**、

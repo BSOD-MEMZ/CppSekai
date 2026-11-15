@@ -176,6 +176,24 @@ ls -la "$DIR"
 
 批量下载就外面再套一层 `for ID in 0075 0127 0200 0500; do ... done`。
 
+### 5. 2D MV（**不在 unipjsk**）
+
+演出背景那套 2D MV 是 `.usm` 视频，unipjsk 和 sekai.best **都没有**（2026-11-15 实测 404）。
+唯一带它的公开镜像是 `storage.exmeaning.com`：
+
+```
+https://storage.exmeaning.com/sekai-jp-assets/live/2dmode/original_mv/<id4>/<id4>.usm
+https://storage.exmeaning.com/sekai-jp-assets/live/2dmode/original_mv/<id4>/moviebundlebuilddata.json
+https://storage.exmeaning.com/sekai-jp-assets/live/2dmode/background/default/default.png
+```
+
+- 单个 usm **10~40 MB**，186 首歌有（id 清单见 `build/2dmv_ids.txt`，不入库）。
+- 想列某个 id 有哪些文件：
+  `curl "https://storage.exmeaning.com/api/assets/bundle-files?server=jp&path=live/2dmode/original_mv/0036"`
+- 技术细节（CriMana、按帧 seek、seek 表）见 [MV2D-SCORE.md](MV2D-SCORE.md)。
+
+> 目前 CppSekai **还不播视频**，下下来只能自己看。要做播放得先接 ffmpeg。
+
 ---
 
 ## 六、元数据 sidecar（可选，但强烈建议）

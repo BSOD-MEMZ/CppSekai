@@ -45,10 +45,12 @@
 
 ## 最近工作（细节见日志）
 - 11-15 逆向 2D MV 播放链路、分数公式、多人演出 UI：产出 `MV2D-SCORE.md`（CriMana 播 usm、
-  `frame=trunc(framerateN/1000×ms/1000)`、分数四因子、master `ingameNotes` 15 行系数表）
+  `frame=trunc(framerateN/1000×ms/1000)`、分数四因子、master 全部系数表）
   与 `MULTI-LIVE-UI.md`（多人=单人 HUD 换 3 零件 + 头像块自带 ComboView + Fever 全队一条）。
-  **结论：我们权重比例全对（差 10 倍归一化）、levelFactor 一字不差，只有连击系数原作是阈值查表。**
-  `HUD-UI-AUDIT.md` §4 的三条建议（判定字 324×96 等）**仍未落地**。
+  **结论：我们权重比例全对（差 10 倍归一化）、levelFactor 一字不差、连击系数也等价，
+  唯一实质差异是综合力写死 250000（原作取 DeckData.TotalPowerIncludeBuff）。**
+  **2D MV 只有 `storage.exmeaning.com` 有**（`live/2dmode/original_mv/{id4}/{id4}.usm`，186 首），
+  unipjsk / sekai.best 都没有。素材 dump 在 `build/multi_ui/`（脚本 `.workbuddy/tools/dump_multi_ui.py`）。
   反汇编依赖 capstone（装法见 `RE.md` §4.1b），so 在 `jp/libil2cpp_arm64.so`。
 - 11-07 演奏中顶部进度条可拖动 seek（音频/判定/渲染三层同步，score/combo 归零、跳过的音符不判 MISS）；
   产出 `HUD-UI-AUDIT.md`（HUD 是 SpriteRenderer + 世界坐标，prefab 无 rect，位置只能量截图）
