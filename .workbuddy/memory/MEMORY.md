@@ -44,6 +44,12 @@
 官方 2026-04-27：确认使用外部非公式应用 → 禁参加官方大会/活动（资格罚）。风险：资格罚 > 下架 > 诉讼，没走 DMCA。「repo 404」不能归因。
 
 ## 最近工作（细节见日志）
+- 11-15 逆向 2D MV 播放链路、分数公式、多人演出 UI：产出 `MV2D-SCORE.md`（CriMana 播 usm、
+  `frame=trunc(framerateN/1000×ms/1000)`、分数四因子、master `ingameNotes` 15 行系数表）
+  与 `MULTI-LIVE-UI.md`（多人=单人 HUD 换 3 零件 + 头像块自带 ComboView + Fever 全队一条）。
+  **结论：我们权重比例全对（差 10 倍归一化）、levelFactor 一字不差，只有连击系数原作是阈值查表。**
+  `HUD-UI-AUDIT.md` §4 的三条建议（判定字 324×96 等）**仍未落地**。
+  反汇编依赖 capstone（装法见 `RE.md` §4.1b），so 在 `jp/libil2cpp_arm64.so`。
 - 11-07 演奏中顶部进度条可拖动 seek（音频/判定/渲染三层同步，score/combo 归零、跳过的音符不判 MISS）；
   产出 `HUD-UI-AUDIT.md`（HUD 是 SpriteRenderer + 世界坐标，prefab 无 rect，位置只能量截图）
   与 `HAIKU-PORT.md`（miniaudio 无 Haiku 后端 / llvmpipe + 无 swap interval 是两大障碍）。
