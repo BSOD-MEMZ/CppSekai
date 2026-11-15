@@ -740,6 +740,12 @@ fs::path jacketPath(const fs::path& dir, const Song& song)
     return dir / (id4(song.id) + ".png");
 }
 
+// MV 统一放 <charts>/mv/<id4>.usm，演奏那边就按这个路径找。
+fs::path mvPath(const fs::path& dir, const Song& song)
+{
+    return dir / "mv" / (id4(song.id) + ".usm");
+}
+
 // The sidecar. Named here rather than inline in writeSidecar so the two places
 // that have to agree on it - writing it and deleting it - cannot drift apart.
 fs::path sidecarPath(const fs::path& dir, int id)
@@ -779,6 +785,15 @@ std::string audioUrl(const VocalVersion& version, int id)
         return std::string(kCnAssetBase) + "/music/long/" + asset + "/" + asset + ".mp3";
     }
     return "https://assets.unipjsk.com/ondemand/music/long/" + asset + "/" + asset + ".mp3";
+}
+
+// 2D MV（.usm）。**不在 unipjsk**：那边 404，只有 exmeaning 镜像有
+// （见 MV2D-SCORE.md 1.7）。总共只有 186 首带 2D MV，别的歌下下来是 404 ——
+// 那是正常的，不代表下载器坏了。
+std::string mvUrl(const Song& song)
+{
+    return "https://storage.exmeaning.com/sekai-jp-assets/live/2dmode/original_mv/"
+        + id4(song.id) + "/" + id4(song.id) + ".usm";
 }
 
 std::string jacketUrl(const Song& song)
@@ -895,6 +910,8 @@ struct Request
     std::vector<size_t> vocalIndexes; // indexes into Song::vocals
     bool jacket = true;
     bool sidecar = true;
+    // 2D MV：默认关。单首 10~40 MB，而且只有 186 首有。
+    bool mv = false;
 };
 
 // Builds jobs for one song. Existing files become Skipped jobs (shown as such in
@@ -938,6 +955,10 @@ void queueSong(const Song& song, const Request& request, const fs::path& dir, bo
     }
     if (request.jacket) {
         add(jacketUrl(song), jacketPath(dir, song));
+    }
+    if (request.mv) {
+        fs::create_directories(dir / "mv", ec);
+        add(mvUrl(song), mvPath(dir, song));
     }
     if (request.sidecar) {
         writeSidecar(dir, song, [&] {
@@ -1203,6 +1224,7 @@ namespace
     constexpr int kIdJacket = 1013;
     constexpr int kIdSidecar = 1014;
     constexpr int kIdSettings = 1015;
+    constexpr int kIdMv = 1021;
     constexpr int kIdTrayIcon = 1016;
     constexpr int kIdAliasGroup = 1017;
     constexpr int kIdAliasList = 1018;
@@ -1251,6 +1273,7 @@ namespace
     std::vector<std::string> gAliasRows;
     HWND gAliasList = nullptr;
     HWND gJacketCheck = nullptr;
+    HWND gMvCheck = nullptr;
     HWND gSidecarCheck = nullptr;
     HWND gSettingsButton = nullptr;
     HWND gDiffChecks[5] = {};
@@ -2397,8 +2420,11 @@ namespace
                 gJacketCheck = createInBox(L"BUTTON", L"曲绘", BS_AUTOCHECKBOX, kIdJacket);
                 gSidecarCheck = createInBox(L"BUTTON", L"元数据 (sidecar json)", BS_AUTOCHECKBOX,
                     kIdSidecar);
+                gMvCheck = createInBox(L"BUTTON", L"2D MV (.usm)", BS_AUTOCHECKBOX, kIdMv);
                 SendMessageW(gJacketCheck, BM_SETCHECK, BST_CHECKED, 0);
                 SendMessageW(gSidecarCheck, BM_SETCHECK, BST_CHECKED, 0);
+                // 默认不勾：单首 10~40 MB，而且很多歌根本没有 2D MV。
+                SendMessageW(gMvCheck, BM_SETCHECK, BST_UNCHECKED, 0);
 
                 // Alias panel: mirrors whatever song is selected in the main
                 // list on the left - one row per alias, empty when nothing is
@@ -2646,6 +2672,7 @@ namespace
                             SendMessageW(gDiffChecks[d], BM_GETCHECK, 0, 0) == BST_CHECKED;
                     }
                     request.jacket = SendMessageW(gJacketCheck, BM_GETCHECK, 0, 0) == BST_CHECKED;
+                    request.mv = SendMessageW(gMvCheck, BM_GETCHECK, 0, 0) == BST_CHECKED;
                     request.sidecar = SendMessageW(gSidecarCheck, BM_GETCHECK, 0, 0) == BST_CHECKED;
                     for (std::size_t v = 0; v < gVocalChecks.size(); ++v) {
                         if (SendMessageW(gVocalChecks[v], BM_GETCHECK, 0, 0) == BST_CHECKED) {
@@ -2659,7 +2686,8 @@ namespace
                     for (int d = 0; d < 5; ++d) {
                         anyDiff = anyDiff || request.diffs[d];
                     }
-                    if (!anyDiff && request.vocalIndexes.empty() && !request.jacket && !request.sidecar) {
+                    if (!anyDiff && request.vocalIndexes.empty() && !request.jacket && !request.sidecar
+                        && !request.mv) {
                         MessageBoxW(hwnd, L"右边至少要勾一样东西（难度 / 演唱版本 / 曲绘 / 元数据）。",
                             L"CppSekai 谱面下载器", MB_OK | MB_ICONINFORMATION);
                         return 0;
@@ -3127,6 +3155,7 @@ namespace
         // no matter how tall the panel is or how far the body has scrolled.
         const int sidecarY = panelH - dp(12) - rowHeight;
         const int jacketY = sidecarY - rowHeight;
+        const int mvY = jacketY - rowHeight;
 
         const SongFiles files = (songIndex >= 0 && static_cast<std::size_t>(songIndex) < gFiles.size())
             ? gFiles[static_cast<std::size_t>(songIndex)]
@@ -3143,13 +3172,16 @@ namespace
             for (HWND check : gDiffChecks) {
                 ShowWindow(check, SW_HIDE);
             }
-            gDetailWantedHeight = bodyTop + rowHeight + footerH;
+            gDetailWantedHeight = bodyTop + rowHeight * 2 + footerH;
             SetWindowTextW(gJacketCheck, L"曲绘");
             EnableWindow(gJacketCheck, FALSE);
             placeRow(gJacketCheck, jacketY);
             SetWindowTextW(gSidecarCheck, L"元数据 (sidecar json)");
             EnableWindow(gSidecarCheck, FALSE);
             placeRow(gSidecarCheck, sidecarY);
+            SetWindowTextW(gMvCheck, L"2D MV (.usm)");
+            EnableWindow(gMvCheck, FALSE);
+            placeRow(gMvCheck, mvY);
             return;
         }
         const Song& song = gSongs[static_cast<std::size_t>(songIndex)];
@@ -3233,6 +3265,8 @@ namespace
         // Rows start right under the title, which lives in the group box, so the
         // measured body is offset by however far down the container starts.
         gDetailWantedHeight += bodyTop;
+        // 多出来的一行 pinned 是 2D MV（曲绘 / 元数据之上）。
+        gDetailWantedHeight += rowHeight;
 
         SetWindowTextW(gJacketCheck, files.jacket ? L"曲绘  ✓已下载" : L"曲绘");
         EnableWindow(gJacketCheck, files.jacket ? FALSE : TRUE);
@@ -3244,6 +3278,10 @@ namespace
         EnableWindow(gSidecarCheck, files.sidecar ? FALSE : TRUE);
         SendMessageW(gSidecarCheck, BM_SETCHECK, files.sidecar ? BST_UNCHECKED : BST_CHECKED, 0);
         placeRow(gSidecarCheck, sidecarY);
+
+        SetWindowTextW(gMvCheck, L"2D MV (.usm)");
+        EnableWindow(gMvCheck, TRUE);
+        placeRow(gMvCheck, mvY);
         // (The wanted height was already published above the footer, where the
         // unscrolled body bottom is still known.)
     }
@@ -3529,6 +3567,7 @@ int main(int argc, char** argv)
     bool force = false;
     bool wantJacket = true;
     bool wantSidecar = true;
+    bool wantMv = false;
 
     const int argCount = static_cast<int>(args.size());
     for (int i = 1; i < argCount; ++i) {
@@ -3596,6 +3635,9 @@ int main(int argc, char** argv)
             wantJacket = false;
         } else if (arg == "--no-sidecar") {
             wantSidecar = false;
+        } else if (arg == "--mv") {
+            // 命令行模式默认不下 MV（10~40 MB/首），要就显式给。
+            wantMv = true;
         } else if (arg == "--help" || arg == "-h") {
             printUsage();
             return 0;
@@ -3675,6 +3717,7 @@ int main(int argc, char** argv)
             }
             request.jacket = wantJacket;
             request.sidecar = wantSidecar;
+            request.mv = wantMv;
             if (vocalArg == "all" || found->vocals.empty()) {
                 for (size_t v = 0; v < found->vocals.size(); ++v) {
                     request.vocalIndexes.push_back(v);

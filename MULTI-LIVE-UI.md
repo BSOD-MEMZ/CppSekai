@@ -267,7 +267,8 @@ MultiLivePartyMember member;
 ## 7. 如果要补，按性价比排
 
 1. **头像块（最值）**：哪怕是纯 ImGui 自绘（圆角卡面 + 边框 + 名字缩写），
-   放到右上角、每人一格、带独立 combo 大字。数据 `PartyPlayer` 已经全有了
+   **接在左上分数面板下面横着排一排**（2026-11-15 按实机观感定的，见 §10），
+   每人一格、带独立 combo 大字。数据 `PartyPlayer` 已经全有了
    （name/score/combo），只差一个卡面 id。
 2. **团队分条**：把 `ScoreView` 的数字换成 Σ 全队，条的比例尺按
    `ScoreGaugeCalculator.Create(s,a,b,c)` 那套重算（别复用单人刻度）。
@@ -364,3 +365,26 @@ python .workbuddy/tools/dump_multi_ui.py            # 默认读 jp/tex_all_sprit
 `m_ExternalRefs` 外部文件，名字不叫 dying/death，全量 sprite 里也没同名项）。
 从尺寸看 `death` 极可能就复用 `frame_multi_black`（156×156 纯黑块）+ 染色；
 `dying` 是同尺寸的另一张遮罩。真要确认得解 prefab 的 external refs 表，成本不值。
+
+
+---
+
+## 10. 位置这件事：我量不到，别把它当实测
+
+2026-11-15 第一版 HUD 把头像块摆成了**左缘竖排**，被用户当场指出不对（应该是
+接在分数条下面横着摆）。错因值得记下来，免得下次再犯：
+
+- `MultiThumbnailView` / `MultiScoreView` 这些节点挂的是 **`Transform` + `SpriteRenderer`**
+  （世界坐标），**不是 `RectTransform`**。`ms_geom.py` 读的是 `m_AnchoredPosition`，
+  对这些节点恒为 0，于是整棵树打出来全是 `pos=(0,0) size=(0,0)`。
+- 我当时没深究这个 0，直接照节点名想象了位置。**"全是 0" 不是"在原点"，是"读错字段"。**
+
+真正量位置需要：
+1. 读 `Transform.m_LocalPosition`（不是 `m_AnchoredPosition`）并逐级累加；
+2. 乘上 live 场景的正交相机尺寸才能变成 1920 画布像素 —— 而那个相机参数
+   要从**场景**里拿，不在 prefab 里；
+3. 或者最省事：**一张 1920×1080 的原作多人截图**，按 `select_phone_overlay.py`
+   那套叠图量。
+
+现在这版（横向一排，起点 `(36, 208)`，块 156×156、间距 12）**是按实机观感摆的，
+不是量出来的**。要更准就得先补上面三条里的一条。

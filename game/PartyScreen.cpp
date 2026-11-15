@@ -229,9 +229,11 @@ void drawPartyScores(platform::Renderer& renderer, const std::vector<platform::P
 
     const float block = 156.0f;
     const float tapGap = 12.0f;
-    const float rowH = block + 34.0f;
-    const float bx = 28.0f;
-    const float by = 236.0f;
+    // 接在左上分数面板下面**横着**排一排（和原作一样），不是靠左缘竖排 ——
+    // 之前那版是我照节点名猜的，prefab 里 HUD 是 Transform + 世界坐标、
+    // 没有 RectTransform，位置量不出来，只能按观感摆。
+    const float baseX = 36.0f;
+    const float baseY = 208.0f;
 
     // ---- 每个人的头像块（左缘竖排，避开左上的分数面板） -------------------
     int index = 0;
@@ -244,7 +246,8 @@ void drawPartyScores(platform::Renderer& renderer, const std::vector<platform::P
         const int cg = static_cast<int>((col >> 8) & 0xFF);
         const int cb = static_cast<int>((col >> 16) & 0xFF);
 
-        const float y = by + static_cast<float>(index) * (rowH + tapGap);
+        const float bx = baseX + static_cast<float>(index) * (block + tapGap);
+        const float y = baseY;
         ++index;
 
         const bool dead = player.life <= 0.001f;
@@ -374,7 +377,7 @@ void drawPartyScores(platform::Renderer& renderer, const std::vector<platform::P
     }
 
     if (!note.empty()) {
-        textLeft(c, body, 20.0f, bx + 4.0f, 1080.0f - 40.0f, paused ? kAccent : kTextFaint, note);
+        textLeft(c, body, 20.0f, baseX + 4.0f, 1080.0f - 40.0f, paused ? kAccent : kTextFaint, note);
     }
 }
 
