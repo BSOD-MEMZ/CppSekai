@@ -1125,6 +1125,16 @@ bool Renderer::setSongBackground(const std::uint8_t* rgba, int width, int height
 }
 
 
+void Renderer::setBackgroundVideo(bool video)
+{
+    if (mBackgroundIsVideo == video) {
+        return;
+    }
+    mBackgroundIsVideo = video;
+    // The background quad geometry differs between cover-crop and video-fit.
+    buildStaticVertices();
+}
+
 bool Renderer::updateSongBackground(const std::uint8_t* rgba, int width, int height, std::string& outError)
 {
     if (rgba == nullptr || width <= 0 || height <= 0) {
@@ -1310,15 +1320,58 @@ void Renderer::buildStaticVertices()
         push(3);
     };
 
-    const std::array<std::array<float, 2>, 4> backgroundPoints{{
-        {WORLD_BACKGROUND_LEFT + WORLD_BACKGROUND_WIDTH, WORLD_BACKGROUND_TOP},
-        {WORLD_BACKGROUND_LEFT + WORLD_BACKGROUND_WIDTH, WORLD_BACKGROUND_TOP + WORLD_BACKGROUND_HEIGHT},
-        {WORLD_BACKGROUND_LEFT, WORLD_BACKGROUND_TOP + WORLD_BACKGROUND_HEIGHT},
-        {WORLD_BACKGROUND_LEFT, WORLD_BACKGROUND_TOP},
-    }};
-    buildQuad(mStaticBackgroundVertices, mBackground, backgroundPoints,
-              {0.0f, 0.0f, static_cast<float>(mBackground.width), static_cast<float>(mBackground.height)},
-              {1.0f, 1.0f, 1.0f, 1.0f});
+    if (mBackgroundIsVideo) {
+        // 2D MV: show the *whole* frame. Invert worldToClip so the quad lands
+        // exactly on a 16:9 fit rect (letterboxed on non-16:9 windows) instead
+        // of the oversized cover-crop quad used for jacket images - that quad
+        // spans clip [-1.28, 1.28] x [-2.28, 2.28], i.e. it crops 22% of the
+        // video horizontally and 56% vertically.
+        const float sourceAspect = static_cast<float>(mWidth) / static_cast<float>(mHeight);
+        const float targetAspect = STAGE_TARGET_WIDTH / STAGE_TARGET_HEIGHT;
+        float fillWidth = STAGE_TARGET_WIDTH;
+        float fillHeight = STAGE_TARGET_HEIGHT;
+        if (targetAspect < sourceAspect) {
+            fillWidth = sourceAspect * STAGE_TARGET_HEIGHT;
+        } else {
+            fillHeight = STAGE_TARGET_WIDTH / sourceAspect;
+        }
+        const float videoAspect =
+            static_cast<float>(mBackground.width) / static_cast<float>(mBackground.height);
+        float fitW = fillWidth;
+        float fitH = fillWidth / videoAspect;
+        if (fitH > fillHeight) {
+            fitH = fillHeight;
+            fitW = fillHeight * videoAspect;
+        }
+        const float scaledWidth = STAGE_TARGET_WIDTH * STAGE_WIDTH_RATIO;
+        const float scaledHeight = STAGE_TARGET_HEIGHT * STAGE_HEIGHT_RATIO;
+        const float screenTop = STAGE_TARGET_HEIGHT * STAGE_TOP_RATIO;
+        auto toWorldX = [&](float clipX) { return clipX * fillWidth / (2.0f * scaledWidth); };
+        auto toWorldY = [&](float clipY) { return (screenTop - clipY * fillHeight * 0.5f) / scaledHeight; };
+        const float left = toWorldX(-fitW / fillWidth);
+        const float right = toWorldX(fitW / fillWidth);
+        const float top = toWorldY(fitH / fillHeight);
+        const float bottom = toWorldY(-fitH / fillHeight);
+        const std::array<std::array<float, 2>, 4> videoPoints{{
+            {right, top},
+            {right, bottom},
+            {left, bottom},
+            {left, top},
+        }};
+        buildQuad(mStaticBackgroundVertices, mBackground, videoPoints,
+                  {0.0f, 0.0f, static_cast<float>(mBackground.width), static_cast<float>(mBackground.height)},
+                  {1.0f, 1.0f, 1.0f, 1.0f});
+    } else {
+        const std::array<std::array<float, 2>, 4> backgroundPoints{{
+            {WORLD_BACKGROUND_LEFT + WORLD_BACKGROUND_WIDTH, WORLD_BACKGROUND_TOP},
+            {WORLD_BACKGROUND_LEFT + WORLD_BACKGROUND_WIDTH, WORLD_BACKGROUND_TOP + WORLD_BACKGROUND_HEIGHT},
+            {WORLD_BACKGROUND_LEFT, WORLD_BACKGROUND_TOP + WORLD_BACKGROUND_HEIGHT},
+            {WORLD_BACKGROUND_LEFT, WORLD_BACKGROUND_TOP},
+        }};
+        buildQuad(mStaticBackgroundVertices, mBackground, backgroundPoints,
+                  {0.0f, 0.0f, static_cast<float>(mBackground.width), static_cast<float>(mBackground.height)},
+                  {1.0f, 1.0f, 1.0f, 1.0f});
+    }
 
     const std::array<std::array<float, 2>, 4> stagePoints{{
         {WORLD_STAGE_LEFT + WORLD_STAGE_WIDTH, WORLD_STAGE_TOP},

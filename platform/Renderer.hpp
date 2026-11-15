@@ -92,6 +92,11 @@ class Renderer
     // change size mid-stream, so that only happens once.
     bool updateSongBackground(const std::uint8_t* rgba, int width, int height, std::string& outError);
 
+    // 2D MV frames go through the background texture, but unlike a jacket image
+    // the video must be shown in full: fit the 16:9 frame into the screen
+    // (letterboxed on non-16:9 windows) instead of the oversized cover-crop quad.
+    void setBackgroundVideo(bool video);
+
     // Album cover / jacket shown by the opening card and the song list.
     // Pass an empty path (or clearCover) when the chart has no jacket.
     bool loadCover(const std::string& path, std::string& outError);
@@ -244,6 +249,7 @@ class Renderer
     std::map<std::string, HudSprite> mHudSprites;
     bool mDrawCoreEffects = false;
     bool mTransparentBackground = false;
+    bool mBackgroundIsVideo = false;
 };
 
 } // namespace platform

@@ -10781,8 +10781,12 @@ int main(int argc, char** argv)
                         std::string mvErr;
                         (void)hint;
                         if (mvPlayer.open(mvUtf8, 640, mvErr)) {
+                            // 视频走「整帧适配」而不是封面的 cover-crop quad，
+                            // 否则画面被放大裁掉一圈。
+                            renderer.setBackgroundVideo(true);
                             // VideoPlayer 自己会打一行 [mv] opened src=.. out=..
                         } else {
+                            renderer.setBackgroundVideo(false);
                             platform::logf(platform::LogPlay, "[mv] skipped: %s\n", mvErr.c_str());
                         }
                         std::fflush(stdout);
@@ -10800,6 +10804,7 @@ int main(int argc, char** argv)
                 }
             } else if (!mvOpenedFor.empty()) {
                 // 关掉 MV：让静态舞台底板重新生成一次。
+                renderer.setBackgroundVideo(false);
                 mvPlayer.close();
                 mvOpenedFor.clear();
                 mvShownFrame = -1;
