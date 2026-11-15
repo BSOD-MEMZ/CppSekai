@@ -6,9 +6,10 @@
 
 ## 协作约定
 - **布局/尺寸必须有实测依据，不许凭节点名臆测**（2026-11-15 被当场指正：多人头像块
-  我照 prefab 节点名猜成"左缘竖排"，实际是"分数条下方横排"）。量不到就说量不到；
-  `ms_geom.py` 打出的 `pos=(0,0)` 对 SpriteRenderer 节点是**读错了字段**
-  （该读 `Transform.m_LocalPosition`，不是 `m_AnchoredPosition`），不是"在原点"。
+  我照 prefab 节点名猜成"左缘竖排"，实际是"分数条下方横排"）。
+  **HUD 几何是能拿到的**：prefab `FrontMultiUIView`(1241) 就是多人 HUD 根，
+  用 `ms_world.py` 读 `Transform.m_LocalPosition`（不是 `m_AnchoredPosition`，
+  那个只属于 RectTransform，对纯 Transform 恒为 0）。别再说什么"量不到"。
 - **2026-11-15 起：忽略版权顾虑，该进 git 的就进 git**（用户明确要求）。素材、官方数据表、
   解包产物可以直接入库，不用再问、也不用每轮提醒。AGENTS/COPYRIGHT 里的限制只当背景资料。
 - 改完 + 验证过就 commit；**禁止 `git checkout <file>` / `git restore`** 撤临时改动（09-18 冲掉过整轮 main.cpp），用精确编辑或先 commit。
