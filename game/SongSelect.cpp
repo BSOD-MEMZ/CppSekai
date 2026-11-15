@@ -4742,31 +4742,39 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         const ChartEntry& item = entries[static_cast<size_t>(selected)];
         const SongGroup& group = groups[static_cast<size_t>(groupIndex)];
 
-        // Jacket (top of the phone screen)
-        const float jw = sw * 0.62f;
+        // Jacket (top of the phone screen). All numbers are the official
+        // prefab's (704, CellPhone = 754.3 x 1416.7), measured 2026-11-15:
+        // JacketContent anchors 42px below the phone's top edge; inside it the
+        // *sharp* jacket is the square "Jacket" node (376x376, centre 238.5px
+        // below the content top, x offset -2.6) - so the jacket's top edge
+        // sits 92.5px below the phone top, clear of the notch band, whose
+        // bottom is at 67px. The 700x574 rect (JacketMask > Jacket, with
+        // UIPartsBlurMusicJacket inside) is only the BLUR BLEED area: it starts
+        // at the content top, i.e. tucks under the notch on purpose.
+        const float jw = 376.0f / 754.3f * phoneW;
         const float jh = jw;
-        const ImVec2 j0(cx - jw * 0.5f, scrY0 + phoneH * 0.020f);
+        const float pcx = phoneX + phoneW * (0.5f - 2.6f / 754.3f);
+        const float contentTop = phoneY + 42.0f / 1416.7f * phoneH;
+        const float jacketCy = contentTop + 238.5f / 1416.7f * phoneH;
+        const ImVec2 j0(pcx - jw * 0.5f, jacketCy - jh * 0.5f);
 
         // UIPartsBlurMusicJacket: the *same* jacket, blown up and smeared,
         // sitting immediately behind the art - it does NOT fill the phone.
-        // (It lives inside JacketContent > JacketMask > Jacket, i.e. it is part
-        // of the jacket block, and the sharp thumbnail covers its middle.) Three
-        // concentric copies with falling alpha are what turns the hard edge of
-        // an enlarged quad into a soft bleed, since a draw list cannot blur.
+        // (It lives inside JacketMask > Jacket, i.e. it is part of the jacket
+        // block, and the sharp thumbnail covers its middle.) The official
+        // bleed rect is 700x574 anchored at the content top - wider than the
+        // screen is tall relative to the jacket, but NOT the whole handset.
+        // Three concentric copies with falling alpha are what turns the hard
+        // edge of an enlarged quad into a soft bleed, since a draw list cannot
+        // blur. blurredJacketTex multiplies the texture by mask_smartphone.png
+        // (normalised against the *screen* rect), so whatever falls outside
+        // the glass is clipped by the mask, not by this quad.
         {
-            const float bleedW = phoneW * 1.05f;
+            const float bleedW = 700.0f / 754.3f * phoneW;
+            const float bleedH = 574.0f / 1416.7f * phoneH;
             const float hw = bleedW * 0.5f;
-            const float hh = bleedW * 0.5f;
-            const ImVec2 jc(j0.x + jw * 0.5f, j0.y + jh * 0.5f);
-            // The quad is wider than the handset. It used to paint over the
-            // bezel and the notch (rounded corners cannot clip to a screen
-            // shape); blurredJacketTex now multiplies the texture by
-            // mask_smartphone.png, so whatever falls outside the screen is
-            // simply gone and the corners come from the mask, not from here.
-            // Normalised against the *screen* rect, not the handset: the mask
-            // describes the glass, so mapping it to the whole phone (bezel
-            // included) put the clip line inside the bezel and the smear still
-            // ran over the top edge.
+            const float hh = bleedH * 0.5f;
+            const ImVec2 jc(pcx, contentTop + hh);
             const float u0 = (jc.x - hw - scrX0) / (scrX1 - scrX0);
             const float v0 = (jc.y - hh - scrY0) / (scrY1 - scrY0);
             const float u1 = (jc.x + hw - scrX0) / (scrX1 - scrX0);
