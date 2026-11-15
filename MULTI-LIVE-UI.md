@@ -369,22 +369,61 @@ python .workbuddy/tools/dump_multi_ui.py            # 默认读 jp/tex_all_sprit
 
 ---
 
-## 10. 位置这件事：我量不到，别把它当实测
+## 10. 位置：实测出来了（2026-11-15 修正）
 
-2026-11-15 第一版 HUD 把头像块摆成了**左缘竖排**，被用户当场指出不对（应该是
-接在分数条下面横着摆）。错因值得记下来，免得下次再犯：
+上一版我写"量不到位置"，**那是错的**。错在两点，都在我这边：
 
-- `MultiThumbnailView` / `MultiScoreView` 这些节点挂的是 **`Transform` + `SpriteRenderer`**
-  （世界坐标），**不是 `RectTransform`**。`ms_geom.py` 读的是 `m_AnchoredPosition`，
-  对这些节点恒为 0，于是整棵树打出来全是 `pos=(0,0) size=(0,0)`。
-- 我当时没深究这个 0，直接照节点名想象了位置。**"全是 0" 不是"在原点"，是"读错字段"。**
+1. 找错 prefab —— 真正的多人 HUD 根叫 **`FrontMultiUIView`（prefab 1241，332 个节点）**，
+   不是 `MultiLiveFrontView`（那是脚本名，不是资产名）。同族的还有 `FrontUIView`(1238)
+   单人 / `FrontVRView`(1237) / `FrontRankUIView`(1239) / `FrontMusicVideoView`(1240)。
+2. 读错字段 —— `ms_geom.py` 读 `m_AnchoredPosition`，那只存在于 `RectTransform`。
+   HUD 节点是 `Transform`，要读 **`m_LocalPosition`**（新脚本 `ms_world.py` 干这个，
+   顺带逐级累加出世界坐标）。
 
-真正量位置需要：
-1. 读 `Transform.m_LocalPosition`（不是 `m_AnchoredPosition`）并逐级累加；
-2. 乘上 live 场景的正交相机尺寸才能变成 1920 画布像素 —— 而那个相机参数
-   要从**场景**里拿，不在 prefab 里；
-3. 或者最省事：**一张 1920×1080 的原作多人截图**，按 `select_phone_overlay.py`
-   那套叠图量。
+### 实测值（`front_multi_ui.world.txt`）
 
-现在这版（横向一排，起点 `(36, 208)`，块 156×156、间距 12）**是按实机观感摆的，
-不是量出来的**。要更准就得先补上面三条里的一条。
+```
+LeftTopAnchor              world=(-10.880,  5.000)
+  MultiThumbnailViewGroup  world=( -8.732,  3.234)  scale=0.800
+    MultiThumbnailView     world=( -8.732,  3.234)   ← 槽 0（自己）
+    MultiThumbnailView     world=( -7.905,  3.234)
+    MultiThumbnailView     world=( -7.098,  3.234)
+    MultiThumbnailView     world=( -6.281,  3.234)
+    MultiThumbnailView     world=( -5.468,  3.234)   ← 槽 4
+MultiScoreView             world=(-10.880,  5.000)  ← 同一个锚点，分数面板
+RightTopAnchor             world=( 10.880,  5.000)
+  LifeView                 world=( 10.880,  5.000)
+```
+
+**五个块 y 完全相同、x 递增 0.82 单位 —— 横排，接在分数面板下面。**
+槽位间距 0.82 单位，组缩放 0.8。
+
+换到 1920×1080 画布（`pixels_to_units = 108`，锚点 ±10.88×±5 说明 prefab 是按
+**19.5:9 手机**摆的，1 单位 = 108 px）：
+
+| | 世界单位 | 像素 |
+|---|---|---|
+| 第 1 块中心 x（距左边） | 2.148 | **232** |
+| 块中心 y（距顶） | 1.766 | **190** |
+| 槽间距 | 0.82 | **88.6** |
+| 槽位数 | 5 | — |
+
+### 块内还有这些（`MultiThumbnailView` 1224）
+
+```
+ComboRoot       local y=-0.610  scale=0.20   ← 连击群在块下方，整体缩到 20%
+  Combo         local y=-1.600  scale=2.00   （154px 的数字缩下来约 30px 高）
+YouIcon         local y=-0.693  scale=1.25   ← "YOU" 标签，块底下方约 20px
+ThumbnailRoot / ThumbnailTurnRoot / dying / death / Thumbnail / frame_player_multi  全在原点
+```
+
+注意 `frame_player_multi` 是 **20×20 的九宫格**（ImGui 没有九宫格路径，直接拉伸会糊成
+一层白罩），实测过，所以现在块边框是自绘圆角描边。
+
+### 复现
+
+```bash
+cd /d/Tools/rea/work/jp
+python ms_world.py 1241 front_multi_ui     # 多人 HUD 根，含 5 个头像块
+python ms_world.py 1224 ml_thumb_world     # 单个块内部
+```

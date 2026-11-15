@@ -227,18 +227,22 @@ void drawPartyScores(platform::Renderer& renderer, const std::vector<platform::P
     static const ImU32 kSlotColors[4] = {IM_COL32(255, 102, 153, 255), IM_COL32(64, 172, 240, 255),
         IM_COL32(255, 190, 40, 255), IM_COL32(70, 210, 160, 255)};
 
-    const float block = 156.0f;
-    const float tapGap = 12.0f;
-    // 接在左上分数面板下面**横着**排一排（和原作一样），不是靠左缘竖排 ——
-    // 之前那版是我照节点名猜的，prefab 里 HUD 是 Transform + 世界坐标、
-    // 没有 RectTransform，位置量不出来，只能按观感摆。
-    const float baseX = 36.0f;
-    const float baseY = 208.0f;
+    // ---- 几何：原作的实测值（FrontMultiUIView, prefab 1241） --------------
+    // 五个槽位横排在左上分数面板下面，`MultiThumbnailViewGroup` 挂在
+    // LeftTopAnchor(-10.880, 5.0) 下，组缩放 0.8，块中心 x 从 -8.732 起、
+    // 每个 +0.82 单位，五个块 y 全是 3.234。按 pixels_to_units=108 换算：
+    //   起点 232 px、y 190 px、间距 88.6 px
+    // （prefab 是按 19.5:9 摆的，锚点 x = ±10.88 对应 2.148 单位的左侧留白。）
+    const float block = 80.0f;
+    const float step = 88.6f;
+    const float firstCx = 232.0f;
+    const float cy = 190.0f;
+    const int kSlots = 5;
 
-    // ---- 每个人的头像块（左缘竖排，避开左上的分数面板） -------------------
-    int index = 0;
+    // 槽位决定 x（掉线的人位置也不动，和原作一样）。自己的那块带 YOU 标记，
+    // 所以这里**不跳过自己**。
     for (const platform::PartyPlayer& player : players) {
-        if (player.slot == mySlot) {
+        if (player.slot < 0 || player.slot >= kSlots) {
             continue;
         }
         const ImU32 col = kSlotColors[((player.slot % 4) + 4) % 4];
@@ -246,37 +250,36 @@ void drawPartyScores(platform::Renderer& renderer, const std::vector<platform::P
         const int cg = static_cast<int>((col >> 8) & 0xFF);
         const int cb = static_cast<int>((col >> 16) & 0xFF);
 
-        const float bx = baseX + static_cast<float>(index) * (block + tapGap);
-        const float y = baseY;
-        ++index;
+        const float bx = firstCx + static_cast<float>(player.slot) * step - block * 0.5f;
+        const float y = cy - block * 0.5f;
 
         const bool dead = player.life <= 0.001f;
         const bool dying = !dead && player.life < 0.3f;
 
         // Plate. Dead = washed out, dying = a red wash creeping up the block.
         c.dl->AddRectFilled(ImVec2(c.x(bx), c.y(y)), ImVec2(c.x(bx + block), c.y(y + block)),
-            IM_COL32(12, 14, 24, dead ? 120 : 205), c.s(16.0f));
-        c.dl->AddRectFilled(ImVec2(c.x(bx), c.y(y)), ImVec2(c.x(bx + block), c.y(y + 5.0f)),
-            dead ? IM_COL32(90, 96, 112, 200) : col, c.s(16.0f));
+            IM_COL32(12, 14, 24, dead ? 120 : 205), c.s(10.0f));
+        c.dl->AddRectFilled(ImVec2(c.x(bx), c.y(y)), ImVec2(c.x(bx + block), c.y(y + 3.0f)),
+            dead ? IM_COL32(90, 96, 112, 200) : col, c.s(10.0f));
         if (dying) {
             const float fill = std::clamp(1.0f - player.life / 0.3f, 0.0f, 1.0f);
             c.dl->AddRectFilled(ImVec2(c.x(bx), c.y(y + block * (1.0f - fill * 0.55f))),
                 ImVec2(c.x(bx + block), c.y(y + block)),
-                IM_COL32(230, 60, 80, static_cast<int>(70 + 60 * fill)), c.s(16.0f));
-            img("multi_dying", bx + block - 16.0f, y + block * 0.5f - 26.0f, 10.0f, 64.0f,
+                IM_COL32(230, 60, 80, static_cast<int>(70 + 60 * fill)), c.s(10.0f));
+            img("multi_dying", bx + block - 8.0f, y + block * 0.5f - 14.0f, 5.0f, 33.0f,
                 IM_COL32(255, 255, 255, 220));
             c.dl->AddRect(ImVec2(c.x(bx), c.y(y)), ImVec2(c.x(bx + block), c.y(y + block)),
-                IM_COL32(240, 70, 90, static_cast<int>(120 + 100 * fill)), c.s(16.0f), 0, c.s(3.0f));
+                IM_COL32(240, 70, 90, static_cast<int>(120 + 100 * fill)), c.s(10.0f), 0, c.s(2.0f));
         }
 
         // Initial as a stand-in for the card thumbnail (we have no card data).
         {
             const std::string initial = firstGlyph(player.name);
-            const float px = 46.0f * c.scale;
+            const float px = 26.0f * c.scale;
             const float tw = textWidth(title, px, initial);
             c.dl->AddText(title, px,
                 ImVec2(c.x(bx + block * 0.5f) - tw * 0.5f,
-                    textTopForCenterPx(title, px, c.y(y + 62.0f), initial)),
+                    textTopForCenterPx(title, px, c.y(y + block * 0.42f), initial)),
                 dead ? IM_COL32(150, 155, 170, 200) : IM_COL32(cr, cg, cb, 235), initial.c_str());
         }
 
@@ -284,8 +287,8 @@ void drawPartyScores(platform::Renderer& renderer, const std::vector<platform::P
         // nine-slice path, so stretching it just smears a white wash over the
         // block (tried it - see MULTI-LIVE-UI.md 9). Draw the rim by hand.
         c.dl->AddRect(ImVec2(c.x(bx), c.y(y)), ImVec2(c.x(bx + block), c.y(y + block)),
-            dead ? IM_COL32(120, 126, 142, 220) : IM_COL32(cr, cg, cb, 235), c.s(16.0f), 0,
-            c.s(3.0f));
+            dead ? IM_COL32(120, 126, 142, 220) : IM_COL32(cr, cg, cb, 235), c.s(10.0f), 0,
+            c.s(2.0f));
         if (dead) {
             img("multi_death", bx, y, block, block, IM_COL32(255, 255, 255, 210));
         }
@@ -296,7 +299,7 @@ void drawPartyScores(platform::Renderer& renderer, const std::vector<platform::P
             char digits[12];
             std::snprintf(digits, sizeof(digits), "%d", player.combo);
             const int count = static_cast<int>(std::strlen(digits));
-            float heights = 42.0f;
+            float heights = 24.0f;
             float total = 0.0f;
             float widths[12] = {0.0f};
             for (int i = 0; i < count && i < 12; ++i) {
@@ -321,20 +324,20 @@ void drawPartyScores(platform::Renderer& renderer, const std::vector<platform::P
             for (int i = 0; i < count && i < 12; ++i) {
                 char key[16];
                 std::snprintf(key, sizeof(key), "multi_d%c", digits[i]);
-                img(key, cx, y + block - heights - 10.0f, widths[i], heights,
+                img(key, cx, y + block - heights - 4.0f, widths[i], heights,
                     IM_COL32(255, 255, 255, 255));
                 cx += widths[i];
             }
         }
 
-        // Name (ellipsized) + score under the block.
-        const float nameY = y + block + 4.0f;
-        textLeft(c, body, 20.0f, bx, nameY + 10.0f, dead ? IM_COL32(140, 146, 162, 220) : kText,
-            ellipsize(body, 20.0f * c.scale, player.name, c.s(96.0f)));
-        char scoreText[32];
-        std::snprintf(scoreText, sizeof(scoreText), "%.0f", player.score);
-        textRight(c, body, 21.0f, bx + block, nameY + 10.0f,
-            dead ? IM_COL32(140, 146, 162, 220) : IM_COL32(cr, cg, cb, 240), scoreText);
+        // 「YOU」标签：原作放在块正下方（`YouIcon` 节点，local y=-0.693、
+        // scale 1.25，换算下来比块宽略窄、贴着块底）。自己的名字/分数原作
+        // **不在这块里显示**（`MultiThumbnailView` 节点树没有 Text 子节点），
+        // 所以这里也不画 —— 认人靠卡面，我们暂时用首字代替卡面。
+        if (player.slot == mySlot) {
+            img("multi_you", bx + block * 0.5f - 30.0f, y + block + 3.0f, 60.0f, 31.0f,
+                IM_COL32(255, 255, 255, 235));
+        }
     }
 
     // ---- 团队合計分条（生命条正下方） --------------------------------------
@@ -377,7 +380,7 @@ void drawPartyScores(platform::Renderer& renderer, const std::vector<platform::P
     }
 
     if (!note.empty()) {
-        textLeft(c, body, 20.0f, baseX + 4.0f, 1080.0f - 40.0f, paused ? kAccent : kTextFaint, note);
+        textLeft(c, body, 20.0f, firstCx - 40.0f, 1080.0f - 40.0f, paused ? kAccent : kTextFaint, note);
     }
 }
 
