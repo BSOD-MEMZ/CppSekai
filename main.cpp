@@ -10690,6 +10690,26 @@ int main(int argc, char** argv)
             // page - the reader sees it on its next frame).
             if (party.active()) {
                 party.setPlayingScore(hudState.score, hudState.combo, hudState.lifeRatio);
+                // 团队分条（原作 MultiScoreView，prefab 1226）：多人时顶部
+                // 分数面板的数字是**全队合计**（UpdateScore 传 LiveScore[]
+                // 自己求和），条的比例尺也是团队版（MultiLiveScoreData 的
+                // S/A/B/C 四档）。我们拿不到原作每首歌的团队阈值表，用等效
+                // 近似：数字 = Σ 全队；条与评级字母按「人均分」过单人公式
+                // —— 等价于阈值 × 人数，别复用单人刻度直接填 Σ。
+                const std::vector<platform::PartyPlayer> teamPlayers = party.players();
+                double teamScore = 0.0;
+                int teamCount = 0;
+                for (const platform::PartyPlayer& p : teamPlayers) {
+                    teamScore += p.score;
+                    teamCount += 1;
+                }
+                if (teamCount > 0) {
+                    hudState.score = teamScore;
+                    const game::ScoreRank teamRank =
+                        game::scoreRankAndBar(teamScore / teamCount, judgement.chartRating());
+                    hudState.rank = teamRank.rank;
+                    hudState.scoreBarRatio = teamRank.bar;
+                }
             }
 
             // Damage vignette state: any life drop *flashes* the corners.
