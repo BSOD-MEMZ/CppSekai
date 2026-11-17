@@ -921,6 +921,7 @@ std::vector<SongFiles> scanDownloaded(const std::vector<Song>& songs, const fs::
         const int wantCharts = files.wantCharts > 0 ? files.wantCharts : 5;
         files.complete = files.haveCharts >= wantCharts && files.jacket && files.sidecar;
         files.any = files.haveCharts > 0 || files.jacket || files.sidecar
+            || files.mvOriginal || files.mvSekai
             || std::any_of(files.vocal.begin(), files.vocal.end(), [](bool v) { return v; });
         out[i] = std::move(files);
     }
@@ -1603,6 +1604,12 @@ namespace
         }
     }
 
+    // Defined below songIsDone's own body; rebuildList needs it to decide which
+    // rows may still be ticked (and it depends on gMvChoice, not just on what is
+    // on disk - a song whose charts are all there but whose MV is not must stay
+    // tickable when the MV dropdown asks for that version).
+    bool songIsDone(int songIndex);
+
     void rebuildList(const std::string& filter)
     {
         // Remember what was ticked.
@@ -1713,15 +1720,22 @@ namespace
             }
             setColumn(kColVersions, widen(std::to_string(song.vocals.size()) + " 版本"));
             const SongFiles& files = gFiles[static_cast<std::size_t>(index)];
-            if (files.complete) {
+            // The state column follows songIsDone(), not files.complete: with
+            // the MV dropdown set to a version that is not on disk yet, the song
+            // is *not* done even though every chart/jacket/sidecar is there -
+            // it used to read 已下载 here while the tick was refused, which is
+            // exactly the "already complete, can't fetch the MV" report.
+            if (songIsDone(index)) {
                 setColumn(kColState, L"已下载");
+            } else if (files.complete) {
+                setColumn(kColState, L"缺 MV");
             } else if (files.any) {
                 setColumn(kColState, L"部分");
             }
-            // A song whose files are all there cannot be queued again: its tick
+            // A song with nothing left to fetch cannot be queued again: its tick
             // is forced off here and reverted in LVN_ITEMCHANGED.
             const auto state = checked.find(index);
-            const bool wantChecked = !files.complete && state != checked.end() && state->second;
+            const bool wantChecked = !songIsDone(index) && state != checked.end() && state->second;
             ListView_SetCheckState(gList, row, wantChecked ? TRUE : FALSE);
             gRowSong.push_back(index);
         }
@@ -1837,7 +1851,7 @@ namespace
         const Song& song = gSongs[static_cast<std::size_t>(gDetailSong)];
         const fs::path dir(gOutDir);
         std::vector<fs::path> targets;
-        targets.reserve(7 + song.vocals.size());
+        targets.reserve(9 + song.vocals.size());
         for (int d = 0; d < 5; ++d) {
             targets.push_back(chartPath(dir, song.id, kDiffNames[d]));
         }
@@ -1846,6 +1860,11 @@ namespace
         }
         targets.push_back(jacketPath(dir, song));
         targets.push_back(sidecarPath(dir, song.id));
+        // 2D MV (mv/<id4>.usm / mv/<id4>_sekai.usm) is part of this song too.
+        // Left behind, a stale MV made the next download of the same song claim
+        // the MV was already there, so a delete has to take it as well.
+        targets.push_back(mvPath(dir, song, false));
+        targets.push_back(mvPath(dir, song, true));
 
         std::size_t removed = 0;
         long long freed = 0;
@@ -2738,7 +2757,7 @@ namespace
                     // form, not like a delete form. Default answer is 否.
                     const std::wstring question = L"删除《" + widen(song.title)
                         + L"》在本地已下载的文件？\n\n"
-                          L"谱面 / 音频 / 曲绘 / 元数据都会删掉，游戏里这首歌会回到未下载状态。\n"
+                          L"谱面 / 音频 / 曲绘 / 2D MV / 元数据都会删掉，游戏里这首歌会回到未下载状态。\n"
                           L"目录：" + fs::path(gOutDir).native();
                     if (MessageBoxW(hwnd, question.c_str(), L"CppSekai 谱面下载器",
                             MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES) {
@@ -2838,6 +2857,18 @@ namespace
                     return 0;
                 }
                 if (id == kIdSearch && HIWORD(wParam) == EN_CHANGE) {
+                    rebuildList(windowText(gSearch));
+                    return 0;
+                }
+                if (id == kIdMv && HIWORD(wParam) == CBN_SELCHANGE) {
+                    // The MV dropdown changes what "done" means for every row
+                    // (see songIsDone): switching to 原曲/セカイ MV has to unlock
+                    // the songs whose charts are on disk but whose MV is not.
+                    // Without this the list kept the state from the *previous*
+                    // selection, which is why "add the MV to songs I already
+                    // downloaded" was impossible - every row looked complete,
+                    // greyed out, and refused its tick.
+                    gMvChoice = ComboBox_GetCurSel(gMvCombo);
                     rebuildList(windowText(gSearch));
                     return 0;
                 }
@@ -3243,7 +3274,6 @@ namespace
         // no matter how tall the panel is or how far the body has scrolled.
         const int sidecarY = panelH - dp(12) - rowHeight;
         const int jacketY = sidecarY - rowHeight;
-        const int mvY = jacketY - rowHeight;
 
         const SongFiles files = (songIndex >= 0 && static_cast<std::size_t>(songIndex) < gFiles.size())
             ? gFiles[static_cast<std::size_t>(songIndex)]
