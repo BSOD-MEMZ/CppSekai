@@ -93,6 +93,11 @@ CppSekai：Project SEKAI 风格 SUS 谱面 Windows 原生游玩器。
   它是 1170 宽的居中条，我们是通栏，只搬一半必崩（§5 有全部数字和原因）。
   另记了两条序列化坑：`m_LocalScale` 大量非 1、`UVModule.tilesX` 不代表在用。
   **再动结算布局先看这篇。**
+- `UI-STRINGS.md` —— **会显示给玩家的字符串清单（2026-11-18）**：547 条、87 个区块，
+  按界面分组并带 `文件:行`。做多语言 / 统一口径 / 改文案前先翻它。
+  由 `.workbuddy/tools/gen_ui_string_inventory.py` 生成，改完 UI 文字重跑一遍。
+  不收日志、内部错误、数据表（歌名 / 别名 / 剧情 json）和贴图里的字。
+  **`platform/ChartDlGuide.cpp` 里那几条中文是匹配下载器状态栏用的，别翻译。**
 - `CREDITS.md` —— 借用清单：每个来源是谁的、什么许可、放在哪（含 Fontworks 字体这条独立风险）。
 - `COPYRIGHT.md` —— 版权与风险：什么能发、什么不能发。
 - `README.md` —— 面向玩家的说明（只放用户最需要的东西，技术细节一律挪到本文件，别往 README 加）。
