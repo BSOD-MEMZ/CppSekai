@@ -256,6 +256,32 @@ Background2DView               (场景里偏在 x=100，不在 HUD 层)
 
 ## 1.8 我们（CppSekai）现在的状态
 
+> **2026-11-17 更新：下面「零视频通路」那一段已经过时，保留作为决策记录。**
+> 现在三条都做了：`platform/VideoPlayer.cpp`（子进程 ffmpeg 解 usm，进程边界 =
+> 许可边界，不链 ffmpeg 库）、`Renderer::updateSongBackground`（`glTexSubImage2D`
+> 到 MV 纹理 + 整帧适配 quad）、帧号按 `songTime + musicStartPos + offset` 换算
+> （§1.5 的公式）。设置 > 演出 > MV = 2D MV 打开。
+
+**intro 之后怎么出现（2026-11-17 定的规则）**：**硬切**，不渐变。
+
+| 阶段 | 背景 | 依据 |
+|---|---|---|
+| 开头卡片期间 | 舞台底板（`stage.png`/封面模糊），**视频 alpha = 0** | 卡片不能漏 MV |
+| 卡片结束的那一帧 | 视频 **alpha = 1**，底板直接被盖住 | 原作 MV 模式就是硬切 |
+| `stage` quad（音符区/舞台前景） | 仍按 `openingPlayfieldVisibility` 淡入 1.8s | 它是前景，压在视频之上 |
+
+之前把视频 alpha 直接绑在 `openingPlayfieldVisibility` 上，于是 MV 跟着那 1.8s
+从紫底板里浮出来 —— 看起来就是「先一个紫色舞台背景，再慢慢变成视频」，是 bug 不是设计。
+两个防退化条件（`main.cpp` 渲染循环里的 `mvReady`）：至少解出一帧（`mvShownFrame >= 0`）、
+且解码器**追上过**时钟要的帧（`mvFrameCaughtUp`，粘性标记 —— 用实时 lag 判断的话，
+MV 比谱面短时播完帧号就停了，歌尾会退回底板）。
+`--screenshot` 会打 `[mv] shot frame=N lag=M`，用来区分「MV 这一帧本身是黑的」和
+「纹理里根本没有帧」—— 截图看不出来。
+
+---
+
+### 当初的调研（保留）
+
 只有 `game/StageBackground.cpp`（封面投到舞台屏的静态合成，上游 `bggen v3` 移植），
 本质等价于原作的 `jacketModeRoot`。**零视频通路。**
 
