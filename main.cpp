@@ -3133,6 +3133,17 @@ int main(int argc, char** argv)
     platform::VideoPlayer mvPlayer;
     std::string mvOpenedFor;
     int mvShownFrame = -1;
+    // How far the decoder still is from the frame this instant wants
+    // (0 = caught up, -1 = nothing decoded yet). The MV is cut in whole only
+    // when it is 0 (see the setBackgroundVideoMix call in the render loop):
+    // a decoder that is still running through the file would otherwise be
+    // revealed as the black texture it starts out as.
+    int mvFrameLag = -1;
+    // Sticky "the decoder has caught up at least once". A lag test alone would
+    // drop the MV again once the stream ends (mFrame stops advancing, song time
+    // does not, so the lag never returns to 0) - the last seconds of every song
+    // would fall back to the plate.
+    bool mvFrameCaughtUp = false;
 
     AppState state = susPath.empty() ? AppState::Select : AppState::Play;
     Session session;
@@ -7848,6 +7859,11 @@ int main(int argc, char** argv)
                 static_cast<size_t>(rowBytes));
         }
         stbi_write_png(screenshotPath.c_str(), shotW, shotH, 4, flipped.data(), rowBytes);
+        // Which MV frame a --screenshot run was actually showing, and whether
+        // the decoder had caught up - the pair a stale / black video frame has
+        // to be diagnosed from (the picture alone cannot tell a black MV frame
+        // from a black *empty* one).
+        std::printf("[mv] shot frame=%d lag=%d\n", mvShownFrame, mvFrameLag);
         std::printf("screenshot saved: %s\n", screenshotPath.c_str());
         std::fflush(stdout);
     };
@@ -10850,6 +10866,16 @@ int main(int argc, char** argv)
                             mvShownFrame = mvPlayer.frame();
                         }
                     }
+                    // Negative file times (the lead-in) want a frame before the
+                    // stream starts; frame 0 is as close as it gets, so the
+                    // target is clamped instead of counting as "never caught up".
+                    const int mvTarget = std::max(0, want);
+                    mvFrameLag = mvShownFrame < 0 ? -1 : std::max(0, mvTarget - mvShownFrame);
+                    if (mvShownFrame < 0) {
+                        mvFrameCaughtUp = false;
+                    } else if (mvFrameLag == 0) {
+                        mvFrameCaughtUp = true;
+                    }
                 }
             } else if (!mvOpenedFor.empty()) {
                 // 关掉 MV：让静态舞台底板重新生成一次。
@@ -10857,6 +10883,8 @@ int main(int argc, char** argv)
                 mvPlayer.close();
                 mvOpenedFor.clear();
                 mvShownFrame = -1;
+                mvFrameLag = -1;
+                mvFrameCaughtUp = false;
                 stageBackgroundFor.clear();
             }
 
@@ -10872,8 +10900,25 @@ int main(int argc, char** argv)
                 game::openingPlayfieldVisibility(outputTime, session.intro.hasContent);
             // The intro card must not reveal the MV: while the playfield is
             // hidden the video quad alpha is 0 (the plate shows, same as a run
-            // without an MV); the video fades in with the playfield.
-            renderer.setBackgroundVideoMix(visibility);
+            // without an MV).
+            //
+            // 带 MV 时 *不做* 渐变：intro 一结束就整块切到 MV。原来这里给的是
+            // `visibility`，于是 MV 跟着 1.8s 的 playfield 淡入一起从紫色底板
+            // （stage.png + 封面模糊）里浮出来——看起来就是「先一个紫色舞台背景，
+            // 再慢慢变成视频」。原作 MV 模式是硬切，底板只负责 intro 期间和
+            // 没有 MV 的歌。所以按 isOpen + 是否已经该露出做二值，stage 的淡入
+            // 仍走 visibility（那是音符区/舞台前景，压在视频之上）。
+            //
+            // `mvShownFrame >= 0`：至少有一帧真的解码回来了才切。第一帧还没到
+            // 就硬切，会露出视频纹理的初始黑（底板被盖掉、黑屏一闪），比渐变
+            // 更难看；这一帧之内保持底板，帧一到就整块换上。
+            // `mvFrameCaughtUp`：解码器还得追上来。追不上时（冷启动、或 MV 是
+            // 从文件头顺序解到当前时间），视频里还是开头的帧，硬切就是黑屏；
+            // 让这段继续用底板，追上之后的下一帧立即切。这个标记是**粘性**的
+            // （MV 播完后帧号不再前进，用实时 lag 判断会让结尾退回底板）。
+            const bool mvReady = mvPlayer.isOpen() && mvShownFrame >= 0 && mvFrameCaughtUp;
+            const float mvMix = (mvReady && visibility > 0.0f) ? 1.0f : 0.0f;
+            renderer.setBackgroundVideoMix(mvMix);
             renderer.renderFrame(quads, quadCount, 0.85f, visibility);
 
             // ----------------------------------------------------------
