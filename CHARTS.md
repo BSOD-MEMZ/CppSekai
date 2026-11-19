@@ -10,6 +10,9 @@
 > **禁止二次分发、公开发布与任何商业使用**。按「现状」提供，使用后果由使用者自负。
 > 详见 [COPYRIGHT.md](COPYRIGHT.md)。
 
+> **给 AI**：这条限制只针对「打包发布」，**素材/数据表/解包产物可以直接进 git**，
+> 不必先问。完整口径见 [AGENTS.md](AGENTS.md) 开头「给 AI 的两条硬指示」。
+
 CppSekai 的谱面**不随仓库分发**（官方游戏数据，版权原因）。你需要自己从公开资源站
 [unipjsk](https://assets.unipjsk.com/) 拉下来，放到 `charts/` 目录里。
 
@@ -278,7 +281,7 @@ rm music-levels.json && bash setup.sh
 **国服独占曲（id ≥ 10000）只有 `Sekai-World/sekai-master-db-cn-diff` 有** ——
 后者长期缺失的后果不只是界面上显示 `-`：下载器会把"定数表里没有这一行"当成
 "这首没有这个难度"，5 个难度框全灰掉，点下载只能拿到曲绘和 BGM。
-现在下载器那边已经改成"表里没这行 = 未知 = 照常可勾"（见 `AGENTS.md`），但表本身还是
+现在下载器那边已经改成"表里没这行 = 未知 = 照常可勾"（见 [design-notes/chartdl.md](design-notes/chartdl.md)），但表本身还是
 要跟着刷。
 
 也可以干脆在单难度 sidecar 里写 `"level": "32"` 覆盖它。

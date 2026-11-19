@@ -2674,8 +2674,8 @@ namespace
                     addTrayIcon(hwnd);
                     if (gTrayAdded) {
                         ShowWindow(hwnd, SW_HIDE);
-                        showBalloon(hwnd, L"CppSekai 谱面下载器",
-                            L"已隐藏到托盘，下载会继续。双击托盘图标可以恢复窗口。");
+                        showBalloon(hwnd, L"CppSekai 谱面下载器仍在运行",
+                            L"双击托盘图标可恢复窗口。");
                         return 0;
                     }
                     // No icon appeared, so there would be no way back: exit
@@ -2757,7 +2757,7 @@ namespace
                     // form, not like a delete form. Default answer is 否.
                     const std::wstring question = L"删除《" + widen(song.title)
                         + L"》在本地已下载的文件？\n\n"
-                          L"谱面 / 音频 / 曲绘 / 2D MV / 元数据都会删掉，游戏里这首歌会回到未下载状态。\n"
+                          L"谱面 / 音频 / 曲绘 / 2D MV / 元数据等将被永久删除。\n"
                           L"目录：" + fs::path(gOutDir).native();
                     if (MessageBoxW(hwnd, question.c_str(), L"CppSekai 谱面下载器",
                             MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES) {
@@ -2795,7 +2795,7 @@ namespace
                     }
                     if (!anyDiff && request.vocalIndexes.empty() && !request.jacket && !request.sidecar
                         && !request.mv) {
-                        MessageBoxW(hwnd, L"右边至少要勾一样东西（难度 / 演唱版本 / 曲绘 / 元数据）。",
+                        MessageBoxW(hwnd, L"请选择要下载的文件。",
                             L"CppSekai 谱面下载器", MB_OK | MB_ICONINFORMATION);
                         return 0;
                     }
@@ -2839,7 +2839,7 @@ namespace
                     }
                     if (queued == 0) {
                         MessageBoxW(hwnd, skippedDone > 0
-                                ? L"勾选的歌曲都已经下载过了，没有需要下载的文件。"
+                                ? L"所有歌曲已下载完成。"
                                 : L"没有勾选任何歌曲。",
                             L"CppSekai 谱面下载器", MB_OK | MB_ICONINFORMATION);
                         return 0;
@@ -3381,13 +3381,13 @@ namespace
         // measured body is offset by however far down the container starts.
         gDetailWantedHeight += bodyTop;
 
-        SetWindowTextW(gJacketCheck, files.jacket ? L"曲绘  ✓已下载" : L"曲绘");
+        SetWindowTextW(gJacketCheck, files.jacket ? L"曲绘 已下载" : L"曲绘");
         EnableWindow(gJacketCheck, files.jacket ? FALSE : TRUE);
         SendMessageW(gJacketCheck, BM_SETCHECK, files.jacket ? BST_UNCHECKED : BST_CHECKED, 0);
         placeRow(gJacketCheck, jacketY);
 
         SetWindowTextW(gSidecarCheck,
-            files.sidecar ? L"元数据 (sidecar json)  ✓已下载" : L"元数据 (sidecar json)");
+            files.sidecar ? L"元数据 (sidecar json) 已下载" : L"元数据 (sidecar json)");
         EnableWindow(gSidecarCheck, files.sidecar ? FALSE : TRUE);
         SendMessageW(gSidecarCheck, BM_SETCHECK, files.sidecar ? BST_UNCHECKED : BST_CHECKED, 0);
         placeRow(gSidecarCheck, sidecarY);

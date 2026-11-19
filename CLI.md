@@ -10,6 +10,9 @@
 > **禁止二次分发、公开发布与任何商业使用**。按「现状」提供，使用后果由使用者自负。
 > 详见 [COPYRIGHT.md](COPYRIGHT.md)。
 
+> **给 AI**：这条限制只针对「打包发布」，**素材/数据表/解包产物可以直接进 git**，
+> 不必先问。完整口径见 [AGENTS.md](AGENTS.md) 开头「给 AI 的两条硬指示」。
+
 讲清楚**怎么从命令行把游戏跑起来**：参数、返回值、日志去哪、无头自检怎么用。
 选曲界面的交互、设置面板的各项说明在 [README.md](README.md)，谱面怎么下在 [CHARTS.md](CHARTS.md)。
 
@@ -232,7 +235,7 @@ cppsekai [--sus <file.sus>] [--bgm <audio>] [--charts <dir>] [--cover <image>]
   日志应有 `[audio] seek to … (file …)`、`[judge] seek to … (N note(s) consumed silently)`、
   `[seek] …`、`[seek-test] clock now …`（**这个值必须等于目标**，不等就是时钟锚点错了），
   随后 `[stats]` 的 score/combo 从 0 重新长而 **miss=0**（跳过的音符不判 MISS）。
-  多人游玩下会被忽略（`[seek] ignored`）。细节见 AGENTS.md「演奏中的进度条拖动」。
+  多人游玩下会被忽略（`[seek] ignored`）。细节见 [design-notes/playback-seek.md](design-notes/playback-seek.md)。
 - **进度条悬停态**：`CPSEKAI_SEEK_HOVER=1` 假装指针停在进度条上（真鼠标在无头会话里
   动不了），用来截「加粗 + 白钮 + `1:24 / 3:07`」那一帧。文字用的是游戏的正文条
   （微软雅黑），不是 ImGui 默认点阵字。
@@ -244,7 +247,7 @@ cppsekai [--sus <file.sus>] [--bgm <audio>] [--charts <dir>] [--cover <image>]
   `CPSEKAI_BANNER_T=0.19 bash .workbuddy/tools/shot.sh shots/banner.png --sus build/charts/0001_easy.sus --auto --no-party --result-at 0.3 --screenshot-time 0.6`
   —— 0.06 字母还在中心挤着、0.19 刚到位（加法层拉满、纯白）、0.70 背光铺开（米白带光晕，
   背景已被半透明遮罩压暗）、1.40 背景基本黑掉而字还亮着、1.50 全黑切结算。
-  正常跑不设这个变量。细节见 AGENTS.md「曲末的 LIVE CLEAR 大字」。
+  正常跑不设这个变量。细节见 [design-notes/live-clear-banner.md](design-notes/live-clear-banner.md)。
 - **某个键"按了没反应"**：`CPSEKAI_KEY_LOG=1` 会把每一笔按键打一行
   （`[key] sym=0x… (名字) scancode=… mod=… repeat=…`）。先用它确认这一笔到底有没有变成
   `SDL_KEYDOWN`、变成的是哪个 keysym——媒体键、手柄、输入法相关的怪问题都该从这一行开始查。
@@ -254,7 +257,7 @@ cppsekai [--sus <file.sus>] [--bgm <audio>] [--charts <dir>] [--cover <image>]
   `build/winsend.exe <标题子串> key <虚拟键码>` / `click <客户区x> <y>`。
   修饰键组合用 `chord <修饰键vk> <键vk>`（如 Ctrl+O = `chord 17 79`）；系统键用
   `syskey <vk>`；**要测菜单的 Alt 访问键只能用真键盘注入** `real <vk>` / `realalt <vk>`
-  （合成消息进不了菜单模式，原因见 AGENTS.md「原生菜单栏」）。
+  （合成消息进不了菜单模式，原因见 [design-notes/native-menu.md](design-notes/native-menu.md)）。
   注意 `key` 的 lParam 必须带**扫描码**（`MapVirtualKey`）——SDL 是从 lParam 的 16..23 位读扫描码的，
   以前这里传 0，事件会被 SDL 丢掉：窗口过程明明收到了 `WM_KEYDOWN`，游戏里毫无反应（2026-10-06 修的）。
   媒体键（0xB0..0xB7）还要置扩展键位（bit24），否则扫描码会撞上普通键（0x22 是 G）。

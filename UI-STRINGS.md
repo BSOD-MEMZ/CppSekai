@@ -275,7 +275,7 @@
 | 文件:行 | 原文 |
 |---|---|
 | `main.cpp:6557` | 要退出吗？ |
-| `main.cpp:6559` | 这一局还在进行中，现在退出不会保存本局的成绩。 |
+| `main.cpp:6559` | 现在退出不会保存本局的成绩。 |
 | `main.cpp:6561` | 继续演出 |
 | `main.cpp:6561` | 退出 |
 
@@ -297,7 +297,7 @@
 | `main.cpp:6746` | 删除这首歌？ |
 | `main.cpp:6748` | 歌曲： |
 | `main.cpp:6750` | 位置： |
-| `main.cpp:6751` | 删掉无法恢复；这个目录里别的歌不受影响。 |
+| `main.cpp:6751` | 本操作不可逆！ |
 | `main.cpp:6753` | 取消 |
 | `main.cpp:6753` | 删除 |
 
@@ -506,7 +506,7 @@
 
 | 文件:行 | 原文 |
 |---|---|
-| `game/SongSelect.cpp:5512` | 这首曲子没有其他演唱版本 |
+| `game/SongSelect.cpp:5512` | 暂无其他演唱版本 |
 
 ### 选曲 · 个人资料卡
 
@@ -530,8 +530,8 @@
 | `game/SongSelect.cpp:5670` | 猜歌 |
 | `game/SongSelect.cpp:5678` | 正在准备题库… |
 | `game/SongSelect.cpp:5678` | 没有可用的题库 |
-| `game/SongSelect.cpp:5682` | 第一次打开要把别名表过一遍，只需要一次。 |
-| `game/SongSelect.cpp:5683` | 找不到 music-aliases.json，或者别名表太小，凑不出四个选项。 |
+| `game/SongSelect.cpp:5682` | 首次加载请耐心等待。 |
+| `game/SongSelect.cpp:5683` | 找不到 music-aliases.json 或别名表过小。 |
 | `game/SongSelect.cpp:5700` | 关闭 |
 | `game/SongSelect.cpp:5706` | 这个别名指的是哪首歌？ |
 | `game/SongSelect.cpp:5797` | 答对了！ |

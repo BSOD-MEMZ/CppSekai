@@ -251,7 +251,7 @@ m_ReferencePixelsPerUnit: 1
 
 - 左侧列表 = 搜索框（33 高）+ 排序/分组胶囊 + 滚动行（84 / 选中 128）。
 - 右侧 = **倾斜 +5° 的"手机面板"**：曲绘、标题、难度圆片、确定按钮全在里面，
-  顶点统一绕手机中心旋转（见 AGENTS.md「选曲界面」一节）。
+  顶点统一绕手机中心旋转（见 [design-notes/songselect-scroll.md](design-notes/songselect-scroll.md)）。
 - 行内 5 个指示是 `indicate_back_new.png`（38×38 原图）缩到 18 贴，
   上面再叠 `clear_indicate.png`（金）/ `fullcombo_indicate.png`（粉）。
 
@@ -415,7 +415,7 @@ A1 的判据：改完填进 §4，**每一项 / 原作都落在 0.72~0.78**，�
 
 ## 10. 下次开工接上（新 session 从这看）
 
-读三份就够：本文件 → `AGENTS.md` 的「选曲界面」那一段（现有视觉规则）→ `RE.md`（要重新取数据时才看）。
+读三份就够：本文件 → [design-notes/songselect-scroll.md](design-notes/songselect-scroll.md)（现有视觉规则）→ `RE.md`（要重新取数据时才看）。
 
 **先确认环境**（AssetRipper 不会自己常驻，必须用后台任务起，否则进程随命令结束被带走）：
 
@@ -443,4 +443,4 @@ cd /d/Tools/rea/work/jp && python arip_search.py "MusicSelect" PrefabHierarchyOb
 ## 11. 相关但独立的一摊事
 
 触摸特效（`game/TapEffect.*`）同样是照原作粒子系统还原的，但**已经做完并提交**，
-参数与坑记在 `AGENTS.md` 的「触摸特效」一节；原理和取数方法见 [RE.md](RE.md) §4.3。
+参数与坑记在 [design-notes/touches-effect.md](design-notes/touches-effect.md)；原理和取数方法见 [RE.md](RE.md) §4.3。

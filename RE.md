@@ -36,7 +36,7 @@ D:\Tools\rea\work\
     dump\             dump.cs 82MB / il2cpp.h 238MB / script.json 249MB / DummyDll(159 个)
     GameData\         base + UnityDataAssetPack + config 合并后的 624MB（喂 AssetRipper）
     global-metadata-decrypted.dat
-    libil2cpp_arm64.so
+    lib\arm64-v8a\libil2cpp.so       199 MB（Il2CppDumper / capstone 的输入）
     as_out\ sprite-geometry.csv mesh_out\ tex_tap\ tex_sekai\ fx_touch\ ms_*.json/txt
     RE-report-jp.md   逆向报告（含触摸特效参数、选曲界面几何）
   pjsk_6.4.0\         国服 6.4.0（卡在 AES，只留证据）
@@ -436,7 +436,7 @@ json.dump(idx, open('sprite_sizes.json', 'w'))
 | 选曲界面里"手机"是什么 | `ScreenLayerFreeLiveCellPhone`（prefab **704**）：754.3×1416.7、中心 (562,-202)、3° 逆时针；规矩见 [SELECT-UI.md](SELECT-UI.md) §3.6 |
 | 结论汇总 | `jp/RE-report-jp.md`（§8 触摸特效参数、§11 选曲界面几何） |
 | 曲末特效（2026-10-31） | `jp/fx_result_*/`（树 + 组件 YAML）、`jp/clip_{liveclear,fullcombo,allperfect}.txt`、`jp/tex_result/{FullCombo,AllPerfect}.png`；规格见 [RESULT-FX.md](RESULT-FX.md) |
-| 对项目的落地规格 | [SELECT-UI.md](SELECT-UI.md)（选曲）、[RESULT-FX.md](RESULT-FX.md)（曲末特效）、AGENTS.md「触摸特效」一节 |
+| 对项目的落地规格 | [SELECT-UI.md](SELECT-UI.md)（选曲）、[RESULT-FX.md](RESULT-FX.md)（曲末特效）、[design-notes/touches-effect.md](design-notes/touches-effect.md) |
 
 ## 7. 还没做的
 

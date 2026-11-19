@@ -5509,7 +5509,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         if (vocalVersions.empty()) {
             addTextCentered(dl, body, 18.0f * k,
                 ImVec2((vpCardL + vpCardR) * 0.5f, (vpListTop + vpListBot) * 0.5f),
-                IM_COL32(178, 178, 198, 255), "这首曲子没有其他演唱版本");
+                IM_COL32(178, 178, 198, 255), "暂无其他演唱版本");
         }
         ImGui::PopClipRect();
 
@@ -5679,8 +5679,8 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
                 ImGui::PopFont();
 
                 ImGui::SetCursorScreenPos(ImVec2(leftX, topY + 152.0f * s));
-                ui::caption(gGuess.loading ? "第一次打开要把别名表过一遍，只需要一次。"
-                                           : "找不到 music-aliases.json，或者别名表太小，凑不出四个选项。",
+                ui::caption(gGuess.loading ? "首次加载请耐心等待。"
+                                           : "找不到 music-aliases.json，或者别名表过小。",
                     17.0f * s, ui::kTitleText, interior);
 
                 if (gGuess.loading) {

@@ -6556,7 +6556,7 @@ int main(int argc, char** argv)
         }
         const int action = ui::eulaDialog(renderer, "##closeask", "要退出吗？",
             {
-                "这一局还在进行中，现在退出不会保存本局的成绩。",
+                "现在退出不会保存本局的成绩。",
             },
             nullptr, nullptr, {std::string("继续演出"), std::string("退出")}, {true, false},
             closeAskPadChoice);
