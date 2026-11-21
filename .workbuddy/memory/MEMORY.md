@@ -82,6 +82,10 @@
 ## 最近工作（细节见日志）
 - 11-21 逆向原作设置界面 `OptionDialog`(prefab 1647)：窗口 1168 宽 / Large 1032 高 /
   圆角 16 / 阴影黑 20% / **开合 = DOScale 0↔1、0.125s、Linear**；产出 `OPTION-UI.md`。
+  **并已落进 `game/Ui.cpp`**（圆角 14→16、动画 0.16→0.125 + 改线性、起始缩放 0）。
+- 11-21 逆向多人结算 MVP：**谁拿 MVP 是服务器 `mvpFlg` 给的**，
+  `Setup()` 只全关、`ShowEffect()` 才点亮；缎带骑在玩家卡顶边 +318、
+  MVP 240×52 / SUPER STAR 278×52；爆闪 0.333s@60fps。产出 `MULTI-RESULT-MVP.md`。
 - 11-19 `AGENTS.md` 拆成「主文件 + `design-notes/` 43 篇」（主文件 326KB → 48KB，不再被 64KB 预算截断）。
 - 11-18 2D MV intro 硬切；产出 `UI-STRINGS.md`（547 条可显示字符串，翻译用）。
 - 11-15 逆向 2D MV 播放链路、分数公式、多人演出 UI：产出 `MV2D-SCORE.md` 与 `MULTI-LIVE-UI.md`。
