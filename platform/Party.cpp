@@ -25,9 +25,20 @@ constexpr int kTitleBytes = 192;
 constexpr LONG kStaleMs = 6000;
 // v2: added trackEndMs (the host's run length).
 // v3: added the per-seat lead-in skip counter (skipReq).
+// v4: added the per-seat result block (P/G/Gr/B/M, maxCombo, flags) and the
+//     host's award decision (awardGen / mvpSlot / superStarSlot) - the multi
+//     result screen needs everybody's final stats, not just the live score.
 // The layout is part of the protocol, so an old build simply opens a different
 // mapping instead of reading these fields at the wrong offsets.
-constexpr wchar_t kMappingName[] = L"Local\\CppSekai.Party.v3";
+constexpr wchar_t kMappingName[] = L"Local\\CppSekai.Party.v4";
+
+// Seat flags for the result block (SharedSeat::resFlags).
+enum SeatResultFlag
+{
+    SeatResCleared = 1 << 0,
+    SeatResFullCombo = 1 << 1,
+    SeatResAllPerfect = 1 << 2,
+};
 
 struct SharedSeat
 {
@@ -43,6 +54,21 @@ struct SharedSeat
     // the host (see PartyLink::requestSkip). Per seat so no two windows ever
     // write the same word.
     volatile LONG skipReq;
+    // ---- final result of the run that just ended (v4) --------------------
+    // Written once by the owner when its live ends, tagged with the room's
+    // resultGen so a stale block from the previous round is never mistaken for
+    // this one. `resReady` is what the host waits on before it decides awards.
+    volatile LONG resReady;
+    volatile LONG resGen;
+    volatile LONG resPerfect;
+    volatile LONG resGreat;
+    volatile LONG resGood;
+    volatile LONG resBad;
+    volatile LONG resMiss;
+    volatile LONG resMaxCombo;
+    volatile LONG resLifePermille;
+    volatile LONG resScore;
+    volatile LONG resFlags;
     char name[kPartyNameBytes];
 };
 
@@ -76,6 +102,20 @@ struct SharedBlock
     // Length of the live the host is running, in milliseconds (0 = not
     // published yet). Written once per run, right after the host's chart loads.
     volatile LONG trackEndMs;
+    // ---- multi result awards (v4, host only) ------------------------------
+    // `resultGen` is bumped by the host every time a run starts charging; it is
+    // the round id the per-seat result blocks are tagged with. `awardGen` is the
+    // round the decision below belongs to, so a reader can tell "decided for the
+    // round I am showing" from "left over from the previous one".
+    //
+    // MVP / SUPER STAR are the *host's* call because the official client does not
+    // compute them either - the server hands every score row a `mvpFlg` /
+    // `superStarFlg` (see MULTI-RESULT-MVP.md 4.1). We have no server, so the
+    // host plays that part: it is the only window that sees everybody's stats.
+    volatile LONG resultGen;
+    volatile LONG awardGen;
+    volatile LONG mvpSlot;
+    volatile LONG superStarSlot;
     char songKey[kSongKeyBytes];
     char songTitle[kTitleBytes];
     SharedSeat seats[kPartyMaxSlots];
@@ -208,6 +248,17 @@ bool PartyLink::init()
         seat.combo = 0;
         seat.lifePermille = 1000;
         seat.skipReq = 0;
+        seat.resReady = 0;
+        seat.resGen = 0;
+        seat.resPerfect = 0;
+        seat.resGreat = 0;
+        seat.resGood = 0;
+        seat.resBad = 0;
+        seat.resMiss = 0;
+        seat.resMaxCombo = 0;
+        seat.resLifePermille = 0;
+        seat.resScore = 0;
+        seat.resFlags = 0;
         seat.name[0] = '\0';
         std::atomic_thread_fence(std::memory_order_release);
         if (InterlockedCompareExchange(&seat.alive, 1, 0) != 0) {
@@ -530,6 +581,12 @@ void PartyLink::beginLoading()
     gBlock->startHi = 0;
     gBlock->hostClockValid = 0;
     gBlock->epoch = gBlock->epoch + 1;
+    // New round: the award decision from the previous one is void, and every
+    // seat's result block is stale until it re-tags itself with this gen.
+    gBlock->resultGen = gBlock->resultGen + 1;
+    gBlock->awardGen = 0;
+    gBlock->mvpSlot = -1;
+    gBlock->superStarSlot = -1;
     gBlock->phase = PartyCharging;
     InterlockedIncrement(&gBlock->seq);
     platform::logf(platform::LogParty, "[party] loading: everybody ready, charts loading (epoch %ld)\n",
@@ -715,6 +772,258 @@ bool PartyLink::allLoaded() const
         }
     }
     return inRoom >= 1;
+}
+
+// ---------------------------------------------------------------------------
+// Multi result: per-seat final stats + the host's award decision.
+//
+// The official client never decides who is MVP - the server hands every score
+// row its own `mvpFlg` / `superStarFlg` (dump.cs TypeDefIndex 3698, see
+// MULTI-RESULT-MVP.md 4.1), and the cell just does SetActive on them. We have no
+// server, so the host plays that part: it is the only window that can see
+// everybody's stats, and it publishes the answer into the control block so all
+// windows show the same winner even though each one draws its own screen.
+//
+// The rule is ours, not the official one (which is server-side and unknown):
+//   MVP        - 存活者里分数最高；全都没存活时退化成"分数最高"。
+//                并列按原作 CompareRows 的顺序比：Score -> Perfect ->
+//                MaxCombo -> Life(MultiLiveUtility.CompareRows, RVA 0x4FDB6E8).
+//   SUPER STAR - 存活 + All Perfect 的人里分数最高的那个，且不与 MVP 重复
+//                （缎带只有一个坑，原作 mvp 和 superStar 两个节点同位置）。
+// Anything either of these could not prove from the published stats stays
+// undecided (-1) rather than guessed.
+// ---------------------------------------------------------------------------
+
+void PartyLink::publishResult(const PartyResult& result)
+{
+    if (!mActive || gBlock == nullptr) {
+        return;
+    }
+    SharedSeat& seat = gBlock->seats[mSlot];
+    const LONG gen = gBlock->resultGen;
+    // Fill the payload first, flag it last: a reader that still sees the old
+    // resReady keeps the old numbers, which is exactly the previous round.
+    seat.resPerfect = result.perfect;
+    seat.resGreat = result.great;
+    seat.resGood = result.good;
+    seat.resBad = result.bad;
+    seat.resMiss = result.miss;
+    seat.resMaxCombo = result.maxCombo;
+    seat.resScore = static_cast<LONG>(std::llround(result.score));
+    seat.resLifePermille = static_cast<LONG>(std::lround(std::clamp(result.life, 0.0f, 1.0f) * 1000.0f));
+    LONG flags = 0;
+    if (result.cleared) {
+        flags |= SeatResCleared;
+    }
+    if (result.fullCombo) {
+        flags |= SeatResFullCombo;
+    }
+    if (result.allPerfect) {
+        flags |= SeatResAllPerfect;
+    }
+    seat.resFlags = flags;
+    seat.resGen = gen;
+    std::atomic_thread_fence(std::memory_order_release);
+    seat.resReady = 1;
+}
+
+bool PartyLink::allResultsIn() const
+{
+    if (!mActive || gBlock == nullptr) {
+        return false;
+    }
+    const LONG gen = gBlock->resultGen;
+    int inRound = 0;
+    for (int i = 0; i < kPartyMaxSlots; ++i) {
+        const SharedSeat& seat = gBlock->seats[i];
+        if (seat.alive == 0) {
+            continue;
+        }
+        const bool reported = seat.resReady != 0 && seat.resGen == gen;
+        if (reported) {
+            ++inRound;
+            continue;
+        }
+        // A seat that is on the song select and has *not* reported never played
+        // this round, so it is not waited for. (One that reported and then walked
+        // back to the select screen is already counted above, which is what stops
+        // a fast player's 继续 from making the host decide too early.)
+        if (seat.seat == PartySeatLobby) {
+            continue;
+        }
+        return false;
+    }
+    return inRound >= 1;
+}
+
+bool PartyLink::decideAwards()
+{
+    if (!mActive || gBlock == nullptr || !isHost()) {
+        return false;
+    }
+    const LONG gen = gBlock->resultGen;
+    if (gBlock->awardGen == gen && gBlock->mvpSlot >= 0) {
+        return true; // already decided for this round
+    }
+    if (!allResultsIn()) {
+        return false;
+    }
+
+    struct Row
+    {
+        int slot = -1;
+        long long score = 0;
+        int perfect = 0;
+        int maxCombo = 0;
+        int life = 0;
+        bool cleared = false;
+        bool allPerfect = false;
+    };
+    std::vector<Row> rows;
+    for (int i = 0; i < kPartyMaxSlots; ++i) {
+        const SharedSeat& seat = gBlock->seats[i];
+        if (seat.alive == 0 || seat.seat == PartySeatLobby) {
+            continue;
+        }
+        if (seat.resReady == 0 || seat.resGen != gen) {
+            continue;
+        }
+        Row row;
+        row.slot = i;
+        row.score = seat.resScore;
+        row.perfect = seat.resPerfect;
+        row.maxCombo = seat.resMaxCombo;
+        row.life = seat.resLifePermille;
+        row.cleared = (seat.resFlags & SeatResCleared) != 0;
+        row.allPerfect = (seat.resFlags & SeatResAllPerfect) != 0;
+        rows.push_back(row);
+    }
+    if (rows.empty()) {
+        return false;
+    }
+
+    // Same lexicographic order the official ranking uses, so a tie lands on the
+    // same player the game would have ranked first.
+    const auto better = [](const Row& a, const Row& b) {
+        if (a.score != b.score) {
+            return a.score > b.score;
+        }
+        if (a.perfect != b.perfect) {
+            return a.perfect > b.perfect;
+        }
+        if (a.maxCombo != b.maxCombo) {
+            return a.maxCombo > b.maxCombo;
+        }
+        return a.life > b.life;
+    };
+
+    // MVP: cleared players first; if the whole room failed, fall back to the
+    // whole room (somebody has to hold the ribbon, and the official screen does
+    // show it on a failed run too).
+    const Row* mvp = nullptr;
+    for (const Row& row : rows) {
+        if (!row.cleared) {
+            continue;
+        }
+        if (mvp == nullptr || better(row, *mvp)) {
+            mvp = &row;
+        }
+    }
+    if (mvp == nullptr) {
+        for (const Row& row : rows) {
+            if (mvp == nullptr || better(row, *mvp)) {
+                mvp = &row;
+            }
+        }
+    }
+
+    const Row* superStar = nullptr;
+    for (const Row& row : rows) {
+        if (row.slot == (mvp != nullptr ? mvp->slot : -1) || !row.cleared || !row.allPerfect) {
+            continue;
+        }
+        if (superStar == nullptr || better(row, *superStar)) {
+            superStar = &row;
+        }
+    }
+
+    InterlockedIncrement(&gBlock->seq);
+    gBlock->mvpSlot = mvp != nullptr ? mvp->slot : -1;
+    gBlock->superStarSlot = superStar != nullptr ? superStar->slot : -1;
+    gBlock->awardGen = gen;
+    InterlockedIncrement(&gBlock->seq);
+    platform::logf(platform::LogParty, "[party] awards: mvp=%d superStar=%d (%d rows)\n",
+        static_cast<int>(gBlock->mvpSlot), static_cast<int>(gBlock->superStarSlot),
+        static_cast<int>(rows.size()));
+    std::fflush(stdout);
+    return true;
+}
+
+int PartyLink::mvpSlot() const
+{
+    if (!mActive || gBlock == nullptr) {
+        return -1;
+    }
+    if (gBlock->awardGen != gBlock->resultGen) {
+        return -1; // stale decision from a previous round
+    }
+    return gBlock->mvpSlot;
+}
+
+int PartyLink::superStarSlot() const
+{
+    if (!mActive || gBlock == nullptr) {
+        return -1;
+    }
+    if (gBlock->awardGen != gBlock->resultGen) {
+        return -1;
+    }
+    return gBlock->superStarSlot;
+}
+
+std::vector<PartyResultRow> PartyLink::results() const
+{
+    std::vector<PartyResultRow> list;
+    if (!mActive || gBlock == nullptr) {
+        return list;
+    }
+    const LONG gen = gBlock->resultGen;
+    const LONG host = gBlock->hostSlot;
+    for (int i = 0; i < kPartyMaxSlots; ++i) {
+        const SharedSeat& seat = gBlock->seats[i];
+        if (seat.alive == 0) {
+            continue;
+        }
+        // Only "has reported for this round" matters - deliberately not the seat
+        // state, so a player who already pressed 继续 does not vanish from
+        // everybody else's members page mid-draw.
+        if (seat.resReady == 0 || seat.resGen != gen) {
+            continue;
+        }
+        PartyResultRow row;
+        row.slot = i;
+        row.host = (i == host);
+        row.name = readUtf8(seat.name, kPartyNameBytes);
+        if (row.name.empty()) {
+            row.name = "玩家 " + std::to_string(i + 1);
+        }
+        row.perfect = seat.resPerfect;
+        row.great = seat.resGreat;
+        row.good = seat.resGood;
+        row.bad = seat.resBad;
+        row.miss = seat.resMiss;
+        row.maxCombo = seat.resMaxCombo;
+        row.score = static_cast<double>(seat.resScore);
+        row.life = static_cast<float>(seat.resLifePermille) / 1000.0f;
+        row.cleared = (seat.resFlags & SeatResCleared) != 0;
+        row.fullCombo = (seat.resFlags & SeatResFullCombo) != 0;
+        row.allPerfect = (seat.resFlags & SeatResAllPerfect) != 0;
+        list.push_back(row);
+    }
+    std::sort(list.begin(), list.end(), [](const PartyResultRow& a, const PartyResultRow& b) {
+        return a.slot < b.slot;
+    });
+    return list;
 }
 
 } // namespace platform

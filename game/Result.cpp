@@ -841,6 +841,293 @@ Canvas makeCanvas(ImDrawList* dl, int windowW, int windowH, float uiScale)
     c.oy = (static_cast<float>(windowH) - kCanvasH * c.scale) * 0.5f;
     return c;
 }
+// ---------------------------------------------------------------------------
+// 多人结算 - the members page (2026-11-21, see MULTI-RESULT-MVP.md).
+//
+// The official multi result is three pages: summary (avatar row + total score) ->
+// detail (one card per player, MVP ribbon on the winner) -> score. We already
+// draw summary and score; this inserts the middle one, and only when the run was
+// a multi live (ResultData::members is empty for solo, and the screen then keeps
+// its two pages and its original timings).
+//
+// ---- where every number below comes from -------------------------------
+//
+// `MultiLiveResultMemberScoreDetailPlayerCell` (prefab 1193), a 336x632 cell on
+// the 2520x1440 phone canvas. The page places five of them at x =
+// 240.5 / 600.5 / 960.5 / 1320.5 / 1680.5 (step 360) in prefab 666's
+// `MultiLivePartyScoreDetail > Root > Player > Player_root_0N`.
+//
+// All rects below were resolved with the anchor/pivot rule (rect_resolve.py),
+// in *prefab units* with the origin at the cell's centre and +y up. They are
+// NOT invented: each one is the node's resolved absolute rect.
+//
+//   ExistPlayerBase  336x592  c(0,+20)    bg_base_r48_wh  sliced  #EBEBF2
+//   Empty            340x484  c(0,+74)    base_wh                #444466
+//     - the deck-card art area. The real cell fills it with the player's card
+//       image; when there is none the prefab shows this flat #444466 block, so
+//       that is what we draw (our party protocol carries no card art).
+//   Score            336x56   c(0,-8.1)   base_wh  #EBEBF2 @0.8
+//   ScoreNumber      338x56   c(-3,-8.1)  Text 48px  #444466
+//     - its m_text is '<color=#91A2AFFF>0000000</color><color=#444...', i.e.
+//       the leading zeros are the grey #91A2AF and only the significant digits
+//       are the dark #444466. Padded to 7 characters.
+//   NameText         316x58.9 c(0,-71.2)  Text 28px  #555577
+//   IndexColor       64.1x19.7 c(79.1,-268.9) base_wh #FF5577
+//     - the player's name-colour bar, bottom right.
+//   FullCombo        272x38   c(+2,+44)   txt_result_fullCombo
+//   AllPerfect       290x38   c(0,+44)    txt_result_allPerfect
+//   fx_result_MVP     100x100 c(0,+318)   -> its MVP ribbon 240x52 at c(0,+318)
+//   fx_result_SuperStar 100x100 c(0,+317.2) -> SuperStar ribbon 278x52 c(0,+317.2)
+//
+// Deliberately NOT drawn, because our party protocol has no data for them and a
+// stand-in would be an invention: the deck-card art itself, the card's Lv band
+// (that is the *card's* level), the three honor slots, and the PlayerFrameCell
+// frame (a `useSharedSprite` resolved at run time).
+
+constexpr float kMemberCardW = 252.0f;  // 336 * 0.75 (2520 -> 1920 canvas)
+constexpr float kMemberGap = 18.0f;
+constexpr float kMemberRowY = 556.0f;   // card centre in our 1080-tall canvas
+constexpr float kMemberPageSec = 2.6f;  // same beat as the summary page
+
+// The prefab's own colours (see the table above).
+constexpr ImU32 kCardPanel = IM_COL32(235, 235, 242, 255); // #EBEBF2
+constexpr ImU32 kCardScore = IM_COL32(68, 68, 102, 255);   // #444466
+constexpr ImU32 kCardScoreZero = IM_COL32(145, 162, 175, 255); // #91A2AF
+constexpr ImU32 kCardName = IM_COL32(85, 85, 119, 255);    // #555577
+constexpr ImU32 kCardIndex = IM_COL32(255, 85, 119, 255);  // #FF5577
+
+// Texture drawn 1:1 at the node's rect (the 9-slice border is handled by the
+// sprite itself where it matters; these are all small fixed-size pieces).
+void blitMemberSprite(const Canvas& c, const platform::Renderer::HudSprite* sprite, float cx, float cy,
+    float w, float h, ImU32 tint)
+{
+    if (sprite == nullptr || sprite->id == 0 || w <= 0.0f || h <= 0.0f) {
+        return;
+    }
+    c.dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(sprite->id)),
+        ImVec2(c.x(cx - w * 0.5f), c.y(cy - h * 0.5f)), ImVec2(c.x(cx + w * 0.5f), c.y(cy + h * 0.5f)),
+        ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), tint);
+}
+
+// One seat's card. `u` is prefab-units -> canvas pixels (cardW / 336); `t` is the
+// page-local clock and `stagger` this card's delay.
+void drawMemberCard(platform::Renderer& renderer, const Canvas& c, const platform::PartyResultRow& row,
+    float cardCx, float cardCy, float u, float t, float stagger, bool isMvp, bool isSuperStar)
+{
+    ImDrawList* dl = c.dl;
+    const float in = easeOutCubic(span(t, stagger, 0.32f));
+    if (in <= 0.002f) {
+        return;
+    }
+    const int alpha = static_cast<int>(255.0f * in);
+    const float rise = (1.0f - in) * 18.0f; // a short lift; the official cell only fades
+    const float cx = cardCx;
+    const float cy = cardCy + rise;
+
+    // Helpers in prefab units, relative to the cell centre.
+    const auto tint = [&](ImU32 colour, float mul) {
+        return (colour & ~IM_COL32_A_MASK)
+            | (static_cast<ImU32>(std::clamp((colour >> IM_COL32_A_SHIFT) * mul * (255.0f / 255.0f)
+                        * static_cast<float>(alpha) / 255.0f, 0.0f, 255.0f))
+                << IM_COL32_A_SHIFT);
+    };
+
+    // --- panel: 336x592 r48 #EBEBF2 ---------------------------------------
+    {
+        const float pw = 336.0f * u;
+        const float ph = 592.0f * u;
+        const float px = cx;
+        const float py = cy - 20.0f * u; // c(0,+20) in prefab units, +y up
+        const ImVec2 lo(c.x(px - pw * 0.5f), c.y(py - ph * 0.5f));
+        const ImVec2 hi(c.x(px + pw * 0.5f), c.y(py + ph * 0.5f));
+        const float round = 48.0f * u * c.scale;
+        ui::dropShadow(dl, lo, hi, round, c.scale, 0.9f, 1.0f);
+        dl->AddRectFilled(lo, hi, tint(kCardPanel, 1.0f), round);
+    }
+
+    // --- deck-card art area ------------------------------------------------
+    //
+    // The prefab fills 340x484 at c(0,+74) with the player's card image; without
+    // one it shows `Empty`, a flat #444466 block. We have no card art in the
+    // party protocol, and drawing that dark block makes the name (#555577) and
+    // the honours unreadable on top of it - in the real cell they sit on a
+    // bright card image, not on the empty-state block. So the panel keeps its
+    // own #EBEBF2 here and nothing is painted over it.
+    //
+    // That is a deliberate deviation, not a layout guess: the rect and both
+    // colours are the prefab's, we simply do not have the image that belongs in
+    // it.
+
+    // --- score plate: 336x56 #EBEBF2 @0.8 ---------------------------------
+    {
+        const float sw = 336.0f * u;
+        const float sh = 56.0f * u;
+        const float sx = cx;
+        const float sy = cy + 8.1f * u; // c(0,-8.1)
+        dl->AddRectFilled(ImVec2(c.x(sx - sw * 0.5f), c.y(sy - sh * 0.5f)),
+            ImVec2(c.x(sx + sw * 0.5f), c.y(sy + sh * 0.5f)), tint(kCardPanel, 0.8f));
+    }
+
+    // --- score number: 48px, leading zeros grey ---------------------------
+    {
+        ImFont* font = boldFont() != nullptr ? boldFont() : bodyFont();
+        char digits[16];
+        std::snprintf(digits, sizeof(digits), "%07.0f", row.score);
+        const float px = 48.0f * u * c.scale;
+        const std::string text(digits);
+        // Split into the leading-zero run and the rest, then centre the whole
+        // run on the plate - the prefab's Text is one centred string with two
+        // inline colours, so the total width is what gets centred.
+        std::size_t firstSignificant = 0;
+        while (firstSignificant + 1 < text.size() && text[firstSignificant] == '0') {
+            ++firstSignificant;
+        }
+        const float totalW = font->CalcTextSizeA(px, FLT_MAX, 0.0f, text.c_str()).x;
+        float penX = c.x(cx + 3.0f * u) - totalW * 0.5f; // the node sits at c(-3)
+        const float top = textTopForCenterPx(font, px, c.y(cy + 8.1f * u), text);
+        if (firstSignificant > 0) {
+            const std::string zeros = text.substr(0, firstSignificant);
+            dl->AddText(font, px, ImVec2(penX, top), tint(kCardScoreZero, 1.0f), zeros.c_str());
+            penX += font->CalcTextSizeA(px, FLT_MAX, 0.0f, zeros.c_str()).x;
+        }
+        dl->AddText(font, px, ImVec2(penX, top), tint(kCardScore, 1.0f),
+            text.substr(firstSignificant).c_str());
+    }
+
+    // --- name: 28px #555577 ----------------------------------------------
+    textCentered(c, boldFont() != nullptr ? boldFont() : bodyFont(), 28.0f * u, cx,
+        cy + 71.2f * u, tint(kCardName, 1.0f), row.name);
+
+    // --- name-colour bar: 64.1x19.7 #FF5577 at c(79.1,-268.9) -------------
+    {
+        const float bw = 64.1f * u;
+        const float bh = 19.72f * u;
+        const float bx = cx + 79.1f * u;
+        const float by = cy + 268.9f * u;
+        dl->AddRectFilled(ImVec2(c.x(bx - bw * 0.5f), c.y(by - bh * 0.5f)),
+            ImVec2(c.x(bx + bw * 0.5f), c.y(by + bh * 0.5f)), tint(kCardIndex, 1.0f), 4.0f * u * c.scale);
+    }
+
+    // --- FULL COMBO / ALL PERFECT plate: 272x38 / 290x38 at c(y +44) ------
+    // They are sprites (txt_result_fullCombo / txt_result_allPerfect), and we
+    // already ship both from the single-player screen.
+    {
+        const platform::Renderer::HudSprite* badge = nullptr;
+        float bw = 0.0f;
+        if (row.allPerfect) {
+            badge = renderer.hud("result_badge_allperfect");
+            bw = 290.0f;
+        } else if (row.fullCombo) {
+            badge = renderer.hud("result_badge_fullcombo");
+            bw = 272.0f;
+        }
+        if (badge != nullptr && badge->id != 0 && badge->height > 0) {
+            // The node is 272x38 (AllPerfect 290x38) but the PNG carries glow
+            // padding, so keep the sprite's own aspect and match the node's
+            // width instead of squashing 300x56 into 272x38.
+            const float boxW = bw * u;
+            const float boxH = boxW * static_cast<float>(badge->height)
+                / static_cast<float>(badge->width);
+            blitMemberSprite(c, badge, cx, cy - 44.0f * u, boxW, boxH, IM_COL32(255, 255, 255, alpha));
+        }
+    }
+
+    // --- the ribbon: straddles the panel's top edge ----------------------
+    //
+    // Timing is clip_result_MVP (0.3333 s @60fps, MULTI-RESULT-MVP.md 3):
+    //   sash  - scale 0.9 -> 1.0 and alpha 0 -> 1 over the first 0.25 s,
+    //   stars - nothing until 0.1667 s, then fade in by 0.2833 s,
+    //   the container also squashes in y (90 -> 80 -> 90) around 0.167 s.
+    // No slide, no overshoot.
+    const platform::Renderer::HudSprite* ribbon = nullptr;
+    float ribbonW = 0.0f;
+    float ribbonY = 0.0f;
+    if (isMvp) {
+        ribbon = renderer.hud("result_ribbon_mvp");
+        ribbonW = 240.0f;
+        ribbonY = 318.0f;
+    } else if (isSuperStar) {
+        ribbon = renderer.hud("result_ribbon_superstar");
+        ribbonW = 278.0f;
+        ribbonY = 317.2f;
+    }
+    if (ribbon == nullptr || ribbon->id == 0) {
+        return;
+    }
+    const float r0 = 0.42f; // the sash lands a beat after the card settles
+    const float rt = clamp01((t - stagger - r0) / 0.25f);
+    if (rt <= 0.002f) {
+        return;
+    }
+    const float sashScale = 0.9f + 0.1f * rt;
+    const float squash = 1.0f - 0.11f * std::sin(rt * 3.14159265f); // y only
+    blitMemberSprite(c, ribbon, cx, cy - ribbonY * u, ribbonW * u * sashScale,
+        ribbonW * u * sashScale * (52.0f / ribbonW) * squash,
+        IM_COL32(255, 255, 255, static_cast<int>(255.0f * clamp01(rt * 2.2f))));
+
+    // --- 4 hand-placed sparkles (prefab offsets, asymmetric on purpose) ---
+    const platform::Renderer::HudSprite* kira = renderer.hud("result_mvp_kira");
+    const platform::Renderer::HudSprite* glow = renderer.hud("result_mvp_kira_glow");
+    const float starT = clamp01((t - stagger - r0 - 0.1667f) / 0.1166f);
+    if (starT > 0.002f && kira != nullptr && kira->id != 0) {
+        // The offsets are in the *MVP* prefab's units; the SuperStar ribbon is
+        // 278 wide against 240, so they spread with it.
+        const float spread = ribbonW / 240.0f;
+        static const float kStarX[4] = {-87.9f, -73.2f, 93.92f, 77.01f};
+        static const float kStarY[4] = {-38.2f, 40.5f, -39.26f, 43.13f};
+        const int starAlpha = static_cast<int>(255.0f * starT);
+        const ImU32 starTint = IM_COL32(255, 255, 255, starAlpha);
+        for (int i = 0; i < 4; ++i) {
+            const float sx = cx + kStarX[i] * u * spread;
+            const float sy = cy - ribbonY * u + kStarY[i] * u * spread; // prefab +y up
+            if (glow != nullptr && glow->id != 0) {
+                blitMemberSprite(c, glow, sx, sy, 60.0f * u * spread, 60.0f * u * spread, starTint);
+            }
+            blitMemberSprite(c, kira, sx, sy, 20.0f * u * spread, 20.0f * u * spread, starTint);
+        }
+    }
+}
+
+void drawMembersPage(platform::Renderer& renderer, const ResultData& data, float t, const Canvas& c,
+    float windowW, float windowH)
+{
+    const float in = easeOutCubic(span(t, 0.0f, 0.30f));
+    drawResultBackdrop(c, windowW, windowH, 1.0f);
+    // Hand over on black so the page change is not a hard cut, same as the
+    // summary does coming out of the banner.
+    const float fromBlack = 1.0f - easeOutCubic(span(t, 0.0f, 0.22f));
+    if (fromBlack > 0.004f) {
+        c.dl->AddRectFilled(ImVec2(0.0f, 0.0f), ImVec2(windowW, windowH),
+            IM_COL32(0, 0, 0, static_cast<int>(255.0f * fromBlack)));
+    }
+    (void)in;
+
+    const std::size_t count = data.members.size();
+    if (count == 0) {
+        return;
+    }
+
+    // Five cards at the prefab's 252 fit without shrinking; a wider room does
+    // shrink, and everything scales together through `u` so the card keeps the
+    // official proportions instead of getting a different layout.
+    const float available = kCanvasW - 2.0f * 60.0f;
+    const float n = static_cast<float>(count);
+    float cardW = kMemberCardW;
+    if (n * kMemberCardW + (n - 1.0f) * kMemberGap > available) {
+        cardW = (available - (n - 1.0f) * kMemberGap) / n;
+    }
+    const float u = cardW / 336.0f;
+    const float totalW = n * cardW + (n - 1.0f) * kMemberGap;
+    const float startX = (kCanvasW - totalW) * 0.5f;
+
+    for (std::size_t i = 0; i < count; ++i) {
+        const platform::PartyResultRow& row = data.members[i];
+        const float cardCx = startX + static_cast<float>(i) * (cardW + kMemberGap) + cardW * 0.5f;
+        const float stagger = 0.05f + static_cast<float>(i) * 0.06f;
+        drawMemberCard(renderer, c, row, cardCx, kMemberRowY, u, t, stagger,
+            row.slot == data.mvpSlot, row.slot == data.superStarSlot);
+    }
+}
 
 void drawResult(platform::Renderer& renderer, const ResultData& data, float elapsedSec,
     int windowW, int windowH, float uiScale)
@@ -851,6 +1138,11 @@ void drawResult(platform::Renderer& renderer, const ResultData& data, float elap
     // The official screen runs in two parts: the summary banner first, then the
     // score page. Everything below is written against the score page's own clock,
     // so the summary's time is simply taken off the front of it.
+    //
+    // A multi live adds one page in the middle (summary -> members -> score),
+    // because that is where the official client shows the player cards and the
+    // MVP ribbon. Solo runs keep the original two pages and their timings, so
+    // nothing about the single-player screen moved.
     constexpr float kSummarySec = 2.6f;
     const float sinceEnter = std::max(elapsedSec, 0.0f);
     if (sinceEnter < kSummarySec) {
@@ -858,7 +1150,14 @@ void drawResult(platform::Renderer& renderer, const ResultData& data, float elap
             static_cast<float>(windowH));
         return;
     }
-    const float t = std::max(sinceEnter - kSummarySec, 0.0f);
+    const bool multi = !data.members.empty();
+    if (multi && sinceEnter < kSummarySec + kMemberPageSec) {
+        drawMembersPage(renderer, data, sinceEnter - kSummarySec, c, static_cast<float>(windowW),
+            static_cast<float>(windowH));
+        return;
+    }
+    const float pageOffset = multi ? kSummarySec + kMemberPageSec : kSummarySec;
+    const float t = std::max(sinceEnter - pageOffset, 0.0f);
     // Same backdrop as the summary - the two pages are one screen in the
     // original, only the content changes.
     drawResultBackdrop(c, static_cast<float>(windowW), static_cast<float>(windowH), 1.0f);

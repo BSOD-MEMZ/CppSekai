@@ -90,6 +90,41 @@ fx_result_XXX      100×100
 
 ## 2 MVP 缎带的位置与结构
 
+### 2.0 玩家卡的完整实测几何（prefab 1193，336×632 单元格，原点在中心、+y 向上）
+
+这张表是 `rect_resolve.py` 按 Unity 的 anchor/pivot 规则解出来的**绝对矩形**，
+不是从节点名猜的。`anchoredPosition` 单独看没有意义（没有锚点就是一堆 0）。
+
+| 节点 | rect | 中心 | sprite / 文字 | 颜色 |
+|---|---|---|---|---|
+| `ExistPlayerBase` | 336×592 | (0, **+20**) | `bg_base_r48_wh` sliced | **`#EBEBF2`** |
+| `Empty`（卡面区） | 340×484 | (0, +74) | `base_wh` | **`#444466`** |
+| `Lv` 条 | 340×48 | (0, +6.7) | `bg_base_wh` | `#EBEBF2` @0.4，文字 28px 白 |
+| `UIPartsMasterLv` | 72×72 | (+126, +34) | `masterRank_L_5` | 白 |
+| `Attribute` | 64×68 | (−130, +282) | `icon_attribute_cool_64` | 白 |
+| `Rarity` | 133.7×52 | (−92.8, +60) | 4×`rarity_star_normal` 40×40 | 白 |
+| `Score` 分数条 | 336×56 | (0, **−8.1**) | `base_wh` | `#EBEBF2` **@0.8** |
+| `ScoreNumber` | 338×56 | (−3, −8.1) | Text **48px** | **`#444466`** |
+| `NameText` | 316×58.9 | (0, **−71.2**) | Text **28px** | **`#555577`** |
+| `MainHonor` | 304×64 | (−0.5, −140.4) | 称号（运行时） | — |
+| `SubHonor1` / `SubHonor2` | 144×64 | (∓80, −212.7) | 称号 | — |
+| `IndexColor` 指名色条 | 64.1×19.72 | (+79.1, **−268.9**) | `base_wh` | **`#FF5577`** |
+| `FullCombo` | 272×38 | (+2, **+44**) | `txt_result_fullCombo` | 白 |
+| `AllPerfect` | 290×38 | (0, +44) | `txt_result_allPerfect` | 白 |
+| `PlayerFrameCell` | 340×596 | (0, +20) | `useSharedSprite`（运行时） | — |
+| MVP 缎带 | 240×52 | (0, **+318**) | `ribbon_h40_mvp` | 白 |
+| SUPER STAR 缎带 | 278×52 | (0, +317.2) | `ribbon_h40_superstar` | 白 |
+
+**三个容易做错的点：**
+
+1. **卡是 `#EBEBF2` + 圆角 48**，不是深色。`bg_base_r48_wh` 的九宫格 border 是 **52**
+   （= 48 圆角 + 4 抗锯齿余量，和 `r16`→21 是同一个套路）。
+2. **分数是 48px `#444466`，而且带前导灰零**：`ScoreNumber.m_text` 是
+   `'<color=#91A2AFFF>0000000</color><color=#444…'` —— 补到 7 位，**前面补的 0 是灰的
+   `#91A2AF`**，只有有效位是深色。少这一步数字会显得很轻。
+3. **卡里没有判定计数**。PERFECT/GREAT/… 只在 score 页，detail 卡上只有分数。
+   （我第一版在这里画了六格判定 + 圆盘头像 + 七种座位色，**全是编的**，已删。）
+
 ### 2.1 挂在玩家卡的**顶边**
 
 detail 玩家卡 `MultiLiveResultMemberScoreDetailPlayerCell` = **336×632**，
@@ -311,6 +346,35 @@ CanvasGroup  playerRootCanvasGroup;
 ---
 
 ## 6 我们要做的话（对照我们现状）
+
+### 6.0 已落地（2026-11-21，`game/Result.cpp` 的 `drawMembersPage`）
+
+多人局结算现在是**三页**：summary → **members** → score；单人局仍是两页、时长不变
+（`kSummarySec = 2.6`，多人再加 `kMemberPageSec = 2.6`）。成员页只画 prefab 里
+**量到的东西**：
+
+| 画了 | 来源 |
+|---|---|
+| `#EBEBF2` 圆角 48 面板 336×592 | `ExistPlayerBase` |
+| `#EBEBF2` @0.8 分数条 336×56 | `Score` |
+| 48px `#444466` 分数，前导灰零 `#91A2AF` | `ScoreNumber` |
+| 28px `#555577` 名字 | `NameText` |
+| `#FF5577` 指名色条 64.1×19.72 | `IndexColor` |
+| FULL COMBO / ALL PERFECT 徽章 272×38 / 290×38 | `FullCombo` / `AllPerfect` |
+| MVP 240×52 / SUPER STAR 278×52 缎带 + 4 颗星 | §1、§2 |
+
+**故意没画**（我们的协议里没有这些数据，画个替身就是编）：
+卡面图（`Empty` 那块 `#444466` 也没画 —— 名字 `#555577` 压在上面会看不见，
+而那层深色在原作里是「这个位置没人」的状态）、卡自己的 `Lv` 条（那是**卡的等级**不是玩家的）、
+三个称号槽、`PlayerFrameCell` 的框（`useSharedSprite`，运行时才解析）。
+
+MVP / SUPER STAR 由**房主**算完写进共享块（`PartyLink::decideAwards`），
+因为原作这个标记是服务器发的；规则是我们的，写在 §4.2 和代码注释里。
+
+调试：`CPSEKAI_RESULT_PARTY=<n>` 配合 `--result-preview --screenshot-time 4.5`
+可以无头截出成员页（真人多开打一局没法自动截图）。
+
+### 6.1 还没做的（按性价比）
 
 我们目前**没有多人结算**：`game/Result.cpp` 只做单人，`PartyScreen` 只管演奏中的队友条。
 所以这一块是"从零加"，不是"改"。

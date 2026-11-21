@@ -83,6 +83,32 @@ struct PartyState
     std::string songTitle;
 };
 
+// What one player's run ended with, published once when its live stops. This is
+// the payload the multi result screen is drawn from - the live scoreboard in
+// PartyPlayer is the *running* score and is cleared as soon as the run ends.
+struct PartyResult
+{
+    int perfect = 0;
+    int great = 0;
+    int good = 0;
+    int bad = 0;
+    int miss = 0;
+    int maxCombo = 0;
+    double score = 0.0;
+    float life = 1.0f; // 0..1 (our life is normalised)
+    bool cleared = false;
+    bool fullCombo = false;
+    bool allPerfect = false;
+};
+
+// One row of the "everybody's final numbers" list, as read back by any window.
+struct PartyResultRow : PartyResult
+{
+    int slot = -1;
+    bool host = false;
+    std::string name;
+};
+
 // Debug trace (CPSEKAI_MP_TRACE=1): one [sync] line per second per instance,
 // carrying the shared QPC next to the local song clock so two logs can be
 // diffed for drift.
@@ -184,6 +210,32 @@ class PartyLink
     // PartySeatLoaded). A seat that sat the round out (PartySeatLobby) is
     // skipped, exactly like allReady().
     bool allLoaded() const;
+
+    // ---- multi result (v4) -------------------------------------------------
+    // Publish *this* seat's final numbers. Called once, on the frame the local
+    // live ends; tagged with the room's current resultGen so a block left over
+    // from the previous round is never read as this round's.
+    void publishResult(const PartyResult& result);
+    // Host side of the same handshake: true once every seat that played this
+    // round has published. A seat still on the song select never played, so it
+    // is not waited for.
+    bool allResultsIn() const;
+    // Host only: decide MVP / SUPER STAR from the published rows and publish the
+    // answer. Returns true once it is decided for this round (idempotent - the
+    // decision is made once and then reused). False while rows are still
+    // missing, which is why the caller keeps calling it every frame.
+    //
+    // The rule is ours: the official client does not compute these at all, the
+    // server hands each score row a mvpFlg / superStarFlg (see
+    // MULTI-RESULT-MVP.md 4.1). MVP = best cleared player by
+    // score > perfect > maxCombo > life (the official ranking order); SUPER STAR
+    // = best cleared all-perfect player other than the MVP.
+    bool decideAwards();
+    // -1 = not decided (or decided for a different round).
+    int mvpSlot() const;
+    int superStarSlot() const;
+    // Every published row for the round being shown, ordered by seat.
+    std::vector<PartyResultRow> results() const;
 
     static std::uint64_t nowCounter();
     static double counterFrequency();

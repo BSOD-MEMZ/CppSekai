@@ -1063,6 +1063,17 @@ bool Renderer::loadHud(const std::string& overlayDir, std::string& outError)
     // mat_common_kira_add_v2_01 ("particle add" shader). A 16x16 soft dot.
     add("result_kira", "result/kira.png");
 
+    // ---- 多人结算的 MVP 缎带（2026-11-21，见 MULTI-RESULT-MVP.md）----------
+    // 日服 7.1.0 的 ribbon_h40_mvp / ribbon_h40_superstar 原尺寸，240x52 / 278x52。
+    // 玩家卡顶上那条绶带就是它们，不要自己画"粉色圆角块 + 字"——原作的红带两端
+    // 有燕尾切口和一条深一号的阴影边，自绘对不上。
+    add("result_ribbon_mvp", "result/ribbon_h40_mvp.png");
+    add("result_ribbon_superstar", "result/ribbon_h40_superstar.png");
+    // MVP 缎带四角那四颗星（各带一层 60x60 的加法辉光）。20x20 的小星星本体，
+    // 辉光是 eff_kira_glow_h24_wh_yw（黄白）。
+    add("result_mvp_kira", "result/kira_h20.png");
+    add("result_mvp_kira_glow", "result/kira_glow.png");
+
     outError.clear();
     return !mHudSprites.empty();
 }

@@ -8,9 +8,11 @@
 // for the character, which we do not draw.
 #pragma once
 
+#include "platform/Party.hpp"
 #include "platform/Renderer.hpp"
 
 #include <string>
+#include <vector>
 
 namespace game
 {
@@ -49,6 +51,21 @@ struct ResultData
     double playerExpNeed = 0.0; // what that next rank costs
     int expGain = 0;            // granted by this run
     int rankUps = 0;            // > 0 -> the screen shows 等级提升
+
+    // ---- multi live (2026-11-21) -------------------------------------------
+    // Empty = solo run, and the screen keeps its two pages (summary -> score).
+    // Non-empty = the room's final numbers, and a members page is inserted in
+    // the middle (summary -> members -> score), which is where the official
+    // client shows the player cards and the MVP ribbon.
+    //
+    // The rows come from platform::PartyLink::results(), i.e. every window's
+    // published final stats. `mvpSlot` / `superStarSlot` are the host's decision
+    // (the official client gets them from the server instead - see
+    // MULTI-RESULT-MVP.md). -1 = nobody.
+    std::vector<platform::PartyResultRow> members;
+    int mvpSlot = -1;
+    int superStarSlot = -1;
+    int mySlot = -1; // this window's own seat, for the YOU mark
 };
 
 // Draws the whole screen on ImGui's background draw list (call after

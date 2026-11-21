@@ -7308,6 +7308,65 @@ int main(int argc, char** argv)
         resultData.fullCombo = !resultData.failed && resultData.miss == 0;
         resultData.allPerfect = resultData.fullCombo && resultData.great == 0
             && resultData.good == 0 && resultData.bad == 0;
+        // CPSEKAI_RESULT_PARTY=<n>: preview the *multi* result page with n
+        // fabricated members. A real multi live needs two windows playing one
+        // song together, which --screenshot cannot set up, so this is the only
+        // way to look at the members page (and the MVP ribbon) headlessly. The
+        // numbers are made up; who wins is decided here the same way the host
+        // decides it, so the ribbon lands where it would in a real room.
+        if (const char* partyPreview = std::getenv("CPSEKAI_RESULT_PARTY")) {
+            const int count = std::clamp(std::atoi(partyPreview), 1, platform::kPartyMaxSlots);
+            static const char* kNames[platform::kPartyMaxSlots] = {"星乃一歌", "花里みのり", "小豆沢こはね",
+                "天馬司", "桃井愛莉", "日野森雫", "東雲絵名", "朝比奈まふゆ"};
+            static const int kScores[platform::kPartyMaxSlots] = {940021, 918330, 901745, 887002,
+                862119, 848530, 800412, 774028};
+            for (int i = 0; i < count; ++i) {
+                platform::PartyResultRow row;
+                row.slot = i;
+                row.host = (i == 0);
+                row.name = kNames[i % platform::kPartyMaxSlots];
+                row.score = static_cast<double>(kScores[i % platform::kPartyMaxSlots]);
+                row.perfect = 634 - i * 11;
+                row.great = 32 + i * 4;
+                row.good = 4 + i;
+                row.bad = 2 + i / 2;
+                row.miss = i == count - 1 ? 3 : (i % 3);
+                row.maxCombo = 361 - i * 17;
+                // Seat 2 is made all-perfect (and not the top scorer) so the
+                // preview exercises the SUPER STAR ribbon as well as the MVP one.
+                if (i == 2) {
+                    row.great = 0;
+                    row.good = 0;
+                    row.bad = 0;
+                    row.miss = 0;
+                }
+                row.life = 1.0f;
+                row.cleared = true;
+                row.fullCombo = row.miss == 0;
+                row.allPerfect = row.fullCombo && row.great == 0 && row.good == 0 && row.bad == 0;
+                resultData.members.push_back(row);
+            }
+            // Same rule as PartyLink::decideAwards: best cleared by score, and
+            // SUPER STAR goes to a different all-perfect player if there is one.
+            int best = 0;
+            for (int i = 1; i < count; ++i) {
+                if (resultData.members[i].score > resultData.members[best].score) {
+                    best = i;
+                }
+            }
+            resultData.mvpSlot = best;
+            resultData.superStarSlot = -1;
+            for (int i = 0; i < count; ++i) {
+                if (i != best && resultData.members[i].allPerfect) {
+                    resultData.superStarSlot = i;
+                    break;
+                }
+            }
+            resultData.mySlot = 0;
+            platform::logf(platform::LogPlay, "[result] party preview: %d members, mvp=%d superStar=%d\n",
+                count, resultData.mvpSlot, resultData.superStarSlot);
+            std::fflush(stdout);
+        }
         beginSessionClockPending = false;
         audio.stopMusic();
         state = AppState::Result;
@@ -10582,6 +10641,25 @@ int main(int argc, char** argv)
                     // round: see the song-select branch) so the others stop
                     // following a clock that is about to stop; everybody shows
                     // up as 结算中.
+                    //
+                    // Publish the final numbers *first*: the multi result screen
+                    // is drawn from these rows, and the host decides MVP /
+                    // SUPER STAR out of them (see PartyLink::decideAwards). The
+                    // rule mirrors buildResultData's so the card and the local
+                    // summary can never disagree about who cleared / full-combo'd.
+                    platform::PartyResult mine;
+                    mine.perfect = st.perfect;
+                    mine.great = st.great;
+                    mine.good = st.good;
+                    mine.bad = st.bad;
+                    mine.miss = st.miss;
+                    mine.maxCombo = st.maxCombo;
+                    mine.score = st.score;
+                    mine.life = game::kMaxLife > 0.0f ? st.life / game::kMaxLife : 0.0f;
+                    mine.cleared = st.life > 0.0f;
+                    mine.fullCombo = mine.cleared && st.miss == 0;
+                    mine.allPerfect = mine.fullCombo && st.great == 0 && st.good == 0 && st.bad == 0;
+                    party.publishResult(mine);
                     party.setHostPaused(false);
                     party.setSeat(platform::PartySeatResult);
                     if (party.isHost()) {
@@ -11278,6 +11356,27 @@ int main(int argc, char** argv)
             renderer.renderFrame(nullptr, 0, 0.85f, 0.0f);
 
             const float resultElapsed = static_cast<float>(uiClock - resultShownAt);
+
+            // ---- multi live: keep the members page fed --------------------
+            //
+            // The rows are published by each window *when its own live ends*, so
+            // when this window switches to the result they may not all be in yet
+            // (a slower window is still playing). Re-read them every frame while
+            // the members page is up rather than snapshotting once: the page
+            // simply draws whoever has reported, and the last cards fill in as
+            // they arrive. The host also decides the awards here, for the same
+            // reason - it must wait for the final row.
+            if (party.active()) {
+                if (party.isHost()) {
+                    party.decideAwards(); // idempotent; no-op until every row is in
+                }
+                if (resultElapsed < 6.0f) { // past the members page: stop polling
+                    resultData.members = party.results();
+                    resultData.mvpSlot = party.mvpSlot();
+                    resultData.superStarSlot = party.superStarSlot();
+                    resultData.mySlot = party.slot();
+                }
+            }
             // The result screen's own cues, one shot each (see resultSeStage).
             // 0.00 = the summary rises out of black; 0.25 = its score bar has
             // faded in; 2.75 = the score page's "新纪录!" lands (page 2 starts at
