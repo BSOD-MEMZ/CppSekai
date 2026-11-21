@@ -44,6 +44,15 @@ CppSekai：Project SEKAI 风格 SUS 谱面 Windows 原生游玩器。
   （无回弹、无位移，遮罩 25ms）、页签高 72 / 文字 28px / 选中态是**关掉底块露出深蓝 50% 遮罩**，
   外加数字选择器、按钮、关闭 X、滚动条、页内 32px 行距的全部尺寸。
   **动设置卡片或任何弹窗的圆角/阴影/开合动画前先看这篇。**
+- `MULTI-RESULT-MVP.md` —— **多人结算 + MVP 的原作规格（2026-11-21）**：prefab 666 / 1193 / 1428 / 1424 的节点树、
+  **谁拿 MVP 是服务器给的（`UserMultiLiveClearScoreResponse.mvpFlg`，还有个独立的 `superStarFlg`）**，
+  客户端 `Setup()` 只把徽章全关、`ShowEffect()`（RVA `0x640D774`）才按 flag 点亮；
+  缎带骑在玩家卡**顶边 +318**（卡 336×632），MVP 缎带 **240×52** / SUPER STAR **278×52**，
+  外加 4 颗手摆的星星（各带 60×60 辉光）；爆闪 `clip_result_MVP` **0.333s @60fps**
+  （缎带 scale 0.9→1.0 + alpha 0→1 在前 0.25s，星星延后到 0.167s 才淡入，
+  y 在 0.167→0.183 压一下 90→80→90）；技术排名用 `Score→Perfect→Combo→Life` 字典序。
+  样张 [`docs/mvp-ribbon-family.png`](docs/mvp-ribbon-family.png)、[`docs/mvp-sprites.png`](docs/mvp-sprites.png)。
+  **做多人结算前先看这篇。**
 - `MV2D-SCORE.md` —— **演出时怎么放 2D MV + 分数公式（2026-11-15）**：`LiveModeType` 五档
   （High3D/Default3D/**Mode2D**/Low/OriginalMV）、`Background2DView` 的 `movieModeRoot` /
   `jacketModeRoot` 两个子模式、播放器是 **CriWare Sofdec2（CriMana）**不是 VideoPlayer、
