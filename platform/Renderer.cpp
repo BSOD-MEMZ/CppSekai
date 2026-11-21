@@ -1237,6 +1237,60 @@ void Renderer::clearCover()
     mCover.height = 0;
 }
 
+// ---- card art ("卡面") -----------------------------------------------------
+//
+// One texture per distinct file, uploaded on first use. The cap matters: a player
+// browsing the picker could otherwise touch hundreds of 800x493 sheets in one
+// session, and nothing would ever free them.
+namespace
+{
+    constexpr std::size_t kCardArtCacheMax = 24;
+}
+
+const Renderer::HudSprite* Renderer::cardArt(const std::string& path, std::string* error)
+{
+    if (path.empty()) {
+        return nullptr;
+    }
+    const auto found = mCardArt.find(path);
+    if (found != mCardArt.end()) {
+        return found->second.id != 0 ? &found->second : nullptr;
+    }
+    // Simple FIFO eviction: the picker draws a whole page at a time and the
+    // result screen draws at most kPartyMaxSlots cards, so recency beyond
+    // insertion order buys nothing worth the bookkeeping.
+    if (mCardArt.size() >= kCardArtCacheMax) {
+        auto oldest = mCardArt.begin();
+        if (oldest->second.id != 0) {
+            glDeleteTextures(1, &oldest->second.id);
+        }
+        mCardArt.erase(oldest);
+    }
+    std::string localError;
+    const Texture texture = loadTextureFromFile(path, localError);
+    if (texture.id == 0) {
+        // Cache the miss so a missing file is not re-opened every frame.
+        mCardArt[path] = HudSprite{0, 0, 0};
+        if (error != nullptr && error->empty()) {
+            *error = localError;
+        }
+        return nullptr;
+    }
+    HudSprite sprite{texture.id, texture.width, texture.height};
+    mCardArt[path] = sprite;
+    return &mCardArt[path];
+}
+
+void Renderer::clearCardArt()
+{
+    for (auto& entry : mCardArt) {
+        if (entry.second.id != 0) {
+            glDeleteTextures(1, &entry.second.id);
+        }
+    }
+    mCardArt.clear();
+}
+
 namespace
 {
     // The playfield is a fake-perspective space: a lane coordinate x at

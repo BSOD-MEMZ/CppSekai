@@ -945,18 +945,40 @@ void drawMemberCard(platform::Renderer& renderer, const Canvas& c, const platfor
         dl->AddRectFilled(lo, hi, tint(kCardPanel, 1.0f), round);
     }
 
-    // --- deck-card art area ------------------------------------------------
+    // --- deck-card art: the player's 卡面 ----------------------------------
     //
-    // The prefab fills 340x484 at c(0,+74) with the player's card image; without
-    // one it shows `Empty`, a flat #444466 block. We have no card art in the
-    // party protocol, and drawing that dark block makes the name (#555577) and
-    // the honours unreadable on top of it - in the real cell they sit on a
-    // bright card image, not on the empty-state block. So the panel keeps its
-    // own #EBEBF2 here and nothing is painted over it.
+    // 340x484 at c(0,+74), clipped by the panel's top rounding (the prefab wraps
+    // it in a Mask). The source is the card sheet: 2338x1440 landscape, so it is
+    // cover-fitted and centre-cropped - the character sits near the middle of
+    // those sheets, which is what makes a plain centre crop read correctly.
     //
-    // That is a deliberate deviation, not a layout guess: the rect and both
-    // colours are the prefab's, we simply do not have the image that belongs in
-    // it.
+    // No card picked (or the art was never downloaded) -> nothing is painted and
+    // the panel's own #EBEBF2 stays, which is the honest "no art" look. The
+    // prefab's alternative is `Empty`, a flat #444466 block, but that is the
+    // *empty slot* state and it buries the name and the honours.
+    {
+        const std::string cardPath = cardArtPath(row.card);
+        const platform::Renderer::HudSprite* art =
+            cardPath.empty() ? nullptr : renderer.cardArt(cardPath);
+        if (art != nullptr && art->width > 0 && art->height > 0) {
+            const float aw = 340.0f * u;
+            const float ah = 484.0f * u;
+            const ImVec2 lo(c.x(cx - aw * 0.5f), c.y(cy - 74.0f * u - ah * 0.5f));
+            const ImVec2 hi(c.x(cx + aw * 0.5f), c.y(cy - 74.0f * u + ah * 0.5f));
+            const float srcW = static_cast<float>(art->width);
+            const float srcH = static_cast<float>(art->height);
+            const float boxW = aw * c.scale;
+            const float boxH = ah * c.scale;
+            const float fit = std::max(boxW / srcW, boxH / srcH);
+            const float visibleW = std::clamp(boxW / (srcW * fit), 0.0f, 1.0f);
+            const float visibleH = std::clamp(boxH / (srcH * fit), 0.0f, 1.0f);
+            const float u0 = (1.0f - visibleW) * 0.5f;
+            const float v0 = (1.0f - visibleH) * 0.5f;
+            dl->AddImageRounded(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(art->id)),
+                lo, hi, ImVec2(u0, v0), ImVec2(u0 + visibleW, v0 + visibleH),
+                IM_COL32(255, 255, 255, alpha), 48.0f * u * c.scale, ImDrawFlags_RoundCornersTop);
+        }
+    }
 
     // --- score plate: 336x56 #EBEBF2 @0.8 ---------------------------------
     {

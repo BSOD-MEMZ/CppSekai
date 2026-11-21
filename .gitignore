@@ -53,3 +53,8 @@ __pycache__/
 shrink_log.txt
 # 一次性发布文案草稿（内容是当时的活动文案，留在历史里就够了）
 release_note.txt
+
+# Master-data cache for .workbuddy/tools/fetch_card_art.py. 36 MB and the tool
+# re-downloads it on demand, so it is not worth carrying in git.
+.workbuddy/tools/cards.json
+.workbuddy/tools/gameCharacters.json

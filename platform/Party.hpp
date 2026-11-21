@@ -99,6 +99,9 @@ struct PartyResult
     bool cleared = false;
     bool fullCombo = false;
     bool allPerfect = false;
+    // The card bundle the player picked in 设置 > 账户 ("res001_no056"), so the
+    // other windows can draw this seat's 卡面 too. Empty = no card.
+    std::string card;
 };
 
 // One row of the "everybody's final numbers" list, as read back by any window.

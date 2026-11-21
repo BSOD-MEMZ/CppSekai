@@ -28,9 +28,11 @@ constexpr LONG kStaleMs = 6000;
 // v4: added the per-seat result block (P/G/Gr/B/M, maxCombo, flags) and the
 //     host's award decision (awardGen / mvpSlot / superStarSlot) - the multi
 //     result screen needs everybody's final stats, not just the live score.
+// v5: the result block also carries the seat's chosen card bundle ("卡面"), so
+//     every window can draw another player's card art and not just its own.
 // The layout is part of the protocol, so an old build simply opens a different
 // mapping instead of reading these fields at the wrong offsets.
-constexpr wchar_t kMappingName[] = L"Local\\CppSekai.Party.v4";
+constexpr wchar_t kMappingName[] = L"Local\\CppSekai.Party.v5";
 
 // Seat flags for the result block (SharedSeat::resFlags).
 enum SeatResultFlag
@@ -69,6 +71,10 @@ struct SharedSeat
     volatile LONG resLifePermille;
     volatile LONG resScore;
     volatile LONG resFlags;
+    // The player's chosen card bundle name ("res001_no056"), copied from the
+    // account at publish time. Text, not an id: the asset lookup is by bundle
+    // name and the id would need the 36 MB master table to resolve.
+    char resCard[kPartyNameBytes];
     char name[kPartyNameBytes];
 };
 
@@ -822,6 +828,7 @@ void PartyLink::publishResult(const PartyResult& result)
         flags |= SeatResAllPerfect;
     }
     seat.resFlags = flags;
+    copyUtf8(seat.resCard, kPartyNameBytes, result.card);
     seat.resGen = gen;
     std::atomic_thread_fence(std::memory_order_release);
     seat.resReady = 1;
@@ -1018,6 +1025,7 @@ std::vector<PartyResultRow> PartyLink::results() const
         row.cleared = (seat.resFlags & SeatResCleared) != 0;
         row.fullCombo = (seat.resFlags & SeatResFullCombo) != 0;
         row.allPerfect = (seat.resFlags & SeatResAllPerfect) != 0;
+        row.card = readUtf8(seat.resCard, kPartyNameBytes);
         list.push_back(row);
     }
     std::sort(list.begin(), list.end(), [](const PartyResultRow& a, const PartyResultRow& b) {

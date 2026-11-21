@@ -456,6 +456,14 @@ std::string gSelectAssetDir; // set via setSelectAssetDir()
         gVocalPrefMode = clamped;
         gVocalPrefSinger = singer;
     }
+std::string cardArtPath(const std::string& bundle)
+{
+    if (gSelectAssetDir.empty() || bundle.empty()) {
+        return {};
+    }
+    return gSelectAssetDir + "\\card\\" + bundle + ".png";
+}
+
 void setSelectAssetDir(const std::string& dir)
 {
     gSelectAssetDir = dir;
@@ -1305,6 +1313,7 @@ void loadUserData(const std::string& path, UserSettings& settings,
             account.name = a.value("name", account.name);
             account.org = a.value("org", account.org);
             account.note = a.value("note", account.note);
+        account.card = a.value("card", account.card);
             account.rank = a.value("rank", account.rank);
             account.exp = a.value("exp", account.exp);
             account.plays = a.value("plays", account.plays);
@@ -1474,6 +1483,7 @@ void saveUserData(const std::string& path, const UserSettings& settings,
         {"name", account.name},
         {"org", account.org},
         {"note", account.note},
+        {"card", account.card},
         {"rank", account.rank},
         {"exp", account.exp},
         {"plays", account.plays},

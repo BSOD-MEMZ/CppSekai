@@ -1289,6 +1289,8 @@ int main(int argc, char** argv)
     bool singerPanelShot = false;  // headless check: force the 切换歌手 panel open
     std::string playerSpec;        // --player 昵称[:组织]
     bool playerSpecGiven = false;
+    std::string cliCard;           // --card <bundle>：卡面，只塞内存不写盘
+    bool cliCardGiven = false;
     int playerRankGiven = -1;      // --player-rank
     double playerExpGiven = -1.0;  // --player-exp: fraction towards the next rank
     int liveBonusGiven = -1;       // --live-bonus: 覆盖本次运行的演出能量（不落盘）
@@ -1565,6 +1567,12 @@ int main(int argc, char** argv)
             testRestart = true;
         } else if (arg == "--restart-at" && i + 1 < utf8Argc) {
             restartAtSec = std::atof(utf8Argv[++i]);
+        } else if (arg == "--card" && i + 1 < utf8Argc) {
+            // Headless check aid: pick the account's 卡面 without touching
+            // userdata.json, same contract as --player. The bundle name is what
+            // fetch_card_art.py writes, e.g. res001_no056.
+            cliCard = utf8Argv[++i];
+            cliCardGiven = true;
         } else if (arg == "--result-preview") {
             // Debug: show the result screen right away. Without --result-at
             // the sample numbers of the reference screenshot are used, which
@@ -1955,6 +1963,9 @@ int main(int argc, char** argv)
     }
     // --player / --player-rank override what the file just loaded (headless
     // checks: they must never write a fixture into the player's own save).
+    if (cliCardGiven) {
+        account.card = cliCard;
+    }
     if (playerSpecGiven) {
         const size_t sep = playerSpec.find(':');
         account.name = sep == std::string::npos ? playerSpec : playerSpec.substr(0, sep);
@@ -6032,6 +6043,140 @@ int main(int argc, char** argv)
                             persistUserData();
                         }
                     });
+
+                // --- 卡面 (2026-11-21) ---------------------------------------
+                // The cards under assets/card/ are what fetch_card_art.py has
+                // downloaded; card-index.tsv is written by the same tool and is
+                // plain TSV on purpose (this file has no json parser). Picking
+                // one only stores the bundle name - the art is looked up by
+                // bundle at draw time, so a missing file degrades to "no card"
+                // instead of breaking the save.
+                {
+                    struct CardEntry
+                    {
+                        std::string bundle;
+                        std::string character;
+                        std::string attr;
+                        std::string rarity;
+                    };
+                    static std::vector<CardEntry> cards;
+                    static bool cardsLoaded = false;
+                    if (!cardsLoaded) {
+                        cardsLoaded = true;
+                        const std::string indexPath = baseDir + "assets\\card\\card-index.tsv";
+                        const std::string text = readFile(indexPath);
+                        std::size_t cursor = 0;
+                        while (cursor < text.size()) {
+                            const std::size_t eol = text.find('\n', cursor);
+                            const std::string line = text.substr(cursor,
+                                eol == std::string::npos ? std::string::npos : eol - cursor);
+                            cursor = eol == std::string::npos ? text.size() : eol + 1;
+                            if (line.empty() || line[0] == '#') {
+                                continue;
+                            }
+                            std::vector<std::string> fields;
+                            std::size_t start = 0;
+                            while (true) {
+                                const std::size_t tab = line.find('\t', start);
+                                fields.push_back(line.substr(start,
+                                    tab == std::string::npos ? std::string::npos : tab - start));
+                                if (tab == std::string::npos) {
+                                    break;
+                                }
+                                start = tab + 1;
+                            }
+                            if (fields.size() >= 4) {
+                                cards.push_back(CardEntry{fields[0], fields[1], fields[2], fields[3]});
+                            }
+                        }
+                    }
+
+                    contentLeft();
+                    colSet(1);
+                    ui::sectionLabel("卡面", interior);
+                    contentLeft();
+                    if (cards.empty()) {
+                        ImGui::PushFont(game::bodyFont(), 20.0f * s);
+                        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(122, 122, 148, 255));
+                        ImGui::TextUnformatted("还没有卡面。用 fetch_card_art.py 下载后重开即可。");
+                        ImGui::PopStyleColor();
+                        ImGui::PopFont();
+                    } else {
+                        // A grid of thumbnails. 5 per row at the settings card's
+                        // inner width, which keeps each tile ~3:2 like the art.
+                        const float gap = 10.0f * s;
+                        const int perRow = 5;
+                        const float tileW = (interior - gap * (perRow - 1)) / perRow;
+                        const float tileH = tileW * 457.0f / 800.0f;
+                        const float labelH = 20.0f * s;
+                        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(gap, gap));
+                        for (std::size_t i = 0; i < cards.size(); ++i) {
+                            if (i % perRow != 0) {
+                                ImGui::SameLine();
+                            }
+                            const CardEntry& card = cards[i];
+                            ImGui::PushID(0x6000 + static_cast<int>(i));
+                            const std::string path = game::cardArtPath(card.bundle);
+                            const platform::Renderer::HudSprite* art =
+                                path.empty() ? nullptr : renderer.cardArt(path);
+                            const ImVec2 p0 = ImGui::GetCursorScreenPos();
+                            const bool hit = ImGui::InvisibleButton("##card", ImVec2(tileW, tileH + labelH));
+                            const bool hovered = ImGui::IsItemHovered();
+                            const bool chosen = account.card == card.bundle;
+                            ImDrawList* cdl = ImGui::GetWindowDrawList();
+                            // Cover-fit the 800x457 sheet into the tile.
+                            if (art != nullptr && art->id != 0) {
+                                const float fit = std::max(tileW / static_cast<float>(art->width),
+                                    tileH / static_cast<float>(art->height));
+                                const float visW = std::clamp(tileW / (art->width * fit), 0.0f, 1.0f);
+                                const float visH = std::clamp(tileH / (art->height * fit), 0.0f, 1.0f);
+                                const float u0 = (1.0f - visW) * 0.5f;
+                                const float v0 = (1.0f - visH) * 0.5f;
+                                cdl->AddImageRounded(
+                                    reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(art->id)),
+                                    p0, ImVec2(p0.x + tileW, p0.y + tileH), ImVec2(u0, v0),
+                                    ImVec2(u0 + visW, v0 + visH),
+                                    IM_COL32(255, 255, 255, hovered || chosen ? 255 : 205),
+                                    10.0f * s, ImDrawFlags_RoundCornersTop);
+                            } else {
+                                cdl->AddRectFilled(p0, ImVec2(p0.x + tileW, p0.y + tileH),
+                                    IM_COL32(226, 226, 236, 255), 10.0f * s, ImDrawFlags_RoundCornersTop);
+                            }
+                            cdl->AddRect(p0, ImVec2(p0.x + tileW, p0.y + tileH),
+                                chosen ? IM_COL32(119, 237, 221, 255)
+                                       : (hovered ? IM_COL32(160, 160, 190, 255)
+                                                  : IM_COL32(210, 210, 224, 255)),
+                                10.0f * s, ImDrawFlags_RoundCornersTop, chosen ? 3.0f * s : 1.5f * s);
+                            // Label under the tile: romaji name + 属性 + 稀有度.
+                            char label[96];
+                            std::snprintf(label, sizeof(label), "%s  %s★%s", card.character.c_str(),
+                                card.rarity.c_str(), card.attr.c_str());
+                            cdl->AddText(game::bodyFont(), 13.0f * s,
+                                ImVec2(p0.x + 2.0f * s, p0.y + tileH + 3.0f * s),
+                                chosen ? IM_COL32(68, 68, 102, 255) : IM_COL32(120, 120, 148, 255),
+                                label);
+                            if (hit) {
+                                account.card = card.bundle;
+                                persistUserData();
+                                platform::logf(platform::LogPlay, "[account] card -> %s\n",
+                                    card.bundle.c_str());
+                                std::fflush(stdout);
+                            }
+                            ImGui::PopID();
+                        }
+                        ImGui::PopStyleVar();
+                        contentLeft();
+                        // Clearing the card is a real choice (the official cell
+                        // has a no-card state), so it gets its own button rather
+                        // than being reachable only by deleting userdata.json.
+                        if (!account.card.empty()) {
+                            if (ui::capsuleButton("不用卡面", ImVec2(interior * 0.35f, 44.0f * s), false)) {
+                                account.card.clear();
+                                persistUserData();
+                            }
+                        }
+                    }
+                }
             } else if (tab == 6) {
                 // 关于: 一页流水信息，不分组（2026-11-01 用户要求）。
                 // 短页上再加几条灰条只是多几块分隔；从上往下读完就行。
@@ -7344,6 +7489,10 @@ int main(int argc, char** argv)
                 row.cleared = true;
                 row.fullCombo = row.miss == 0;
                 row.allPerfect = row.fullCombo && row.great == 0 && row.good == 0 && row.bad == 0;
+                // Every preview seat borrows the local account's card art: the
+                // point of the preview is to check the cell's crop and chrome,
+                // and a real room would have one bundle per seat.
+                row.card = account.card;
                 resultData.members.push_back(row);
             }
             // Same rule as PartyLink::decideAwards: best cleared by score, and
@@ -10659,6 +10808,7 @@ int main(int argc, char** argv)
                     mine.cleared = st.life > 0.0f;
                     mine.fullCombo = mine.cleared && st.miss == 0;
                     mine.allPerfect = mine.fullCombo && st.great == 0 && st.good == 0 && st.bad == 0;
+                    mine.card = account.card;
                     party.publishResult(mine);
                     party.setHostPaused(false);
                     party.setSeat(platform::PartySeatResult);

@@ -76,6 +76,12 @@ struct AccountData
     std::string name; // 昵称
     std::string org;  // 学校 / 组织
     std::string note; // 个性签名
+    // 卡面 (2026-11-21): the card bundle name the player picked in
+    // 设置 > 账户, e.g. "res001_no056". Stored as the bundle name rather than a
+    // full path so moving the assets folder or switching to the after-training
+    // art does not need a data migration. Empty = no card (the cell then shows
+    // the plain frame, same as the official "no card" state).
+    std::string card;
 
     int rank = 1;
     // Exp banked towards the *next* rank, i.e. addPlayerExp() already rolled
@@ -507,6 +513,12 @@ void applyFavorites(std::vector<ChartEntry>& entries, const std::vector<int>& fa
 // frame and the clear indicators) load from <dir>\select\<name>.png.
 // Call once at startup.
 void setSelectAssetDir(const std::string& dir);
+
+// Absolute path of one card's art: <assets>\card\<bundle>.png. Empty when the
+// assets root was never set. The file may not exist - the art is downloaded by
+// .workbuddy/tools/fetch_card_art.py and only a starter set ships with the
+// build, so callers must treat a missing file as "no art", not as an error.
+std::string cardArtPath(const std::string& bundle);
 
 // Optional song-select backdrop (the blurred desktop wallpaper). `texture` 0
 // falls back to the built-in gradient. texW/texH are the texture's pixel size
