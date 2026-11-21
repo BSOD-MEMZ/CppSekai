@@ -61,52 +61,6 @@ void textLeft(const Canvas& c, ImFont* font, float size, float vx, float centerV
         text.c_str());
 }
 
-void textRight(const Canvas& c, ImFont* font, float size, float vx, float centerVy, ImU32 col,
-    const std::string& text)
-{
-    if (font == nullptr || text.empty()) {
-        return;
-    }
-    const float px = size * c.scale;
-    c.dl->AddText(font, px,
-        ImVec2(c.x(vx) - textWidth(font, px, text), textTopForCenterPx(font, px, c.y(centerVy), text)),
-        col, text.c_str());
-}
-
-// Cuts `text` to whatever fits in `maxPx`, keeping whole UTF-8 code points.
-std::string ellipsize(ImFont* font, float pixelSize, const std::string& text, float maxPx)
-{
-    if (font == nullptr || text.empty() || maxPx <= 0.0f) {
-        return text;
-    }
-    if (textWidth(font, pixelSize, text) <= maxPx) {
-        return text;
-    }
-    std::string out;
-    const float ellipsisW = textWidth(font, pixelSize, "...");
-    std::size_t cursor = 0;
-    while (cursor < text.size()) {
-        const unsigned char lead = static_cast<unsigned char>(text[cursor]);
-        std::size_t len = 1;
-        if ((lead & 0xE0) == 0xC0) {
-            len = 2;
-        } else if ((lead & 0xF0) == 0xE0) {
-            len = 3;
-        } else if ((lead & 0xF8) == 0xF0) {
-            len = 4;
-        }
-        len = std::min(len, text.size() - cursor);
-        const std::string next = out + text.substr(cursor, len);
-        if (textWidth(font, pixelSize, next) + ellipsisW > maxPx) {
-            break;
-        }
-        out = next;
-        cursor += len;
-    }
-    return out + "...";
-}
-
-
 // First UTF-8 code point of `text` (the stand-in "card thumbnail" initial).
 // substr(0, 1) would cut a multi-byte CJK glyph in half and the font renderer
 // would draw nothing at all.

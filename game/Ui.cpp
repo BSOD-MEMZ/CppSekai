@@ -94,12 +94,13 @@ namespace
     }
 
     // Card geometry in "design pixels" (860p reference), scaled by scale().
-    // kCardRadius is NOT the reference's 20px copied literally. Its card radius
-    // is 20 against a 60px control, and this build's capsule is ~41*s, so the
-    // equivalent here is ~14*s - the current value is already the same
-    // radius-to-control ratio (0.34 against 0.333). Pasting "20" in would have
-    // made our corners proportionally half again as round as theirs.
-    constexpr float kCardRadius = 14.0f;
+    //
+    // 2026-11-21: the radius and the whole entrance curve are now the official
+    // dialog's measured values instead of a ratio estimate. OptionDialog's card
+    // (prefab 1647) uses `bg_base_r16_wh`, whose alpha arc fits a 16.25px radius
+    // at 1080p - see OPTION-UI.md 3.1. The old 14 was derived from a 20/60
+    // radius-to-control ratio on a 860p reference and landed 2px tight.
+    constexpr float kCardRadius = 16.0f;
     // How far a halo shadow reaches outward, in design pixels (x scale()). The
     // reference's `0 0 8px` was measured to die by ~10px on a 60px control, which
     // is 8.8px at 1080p - so this is the measured reach, rounded down a touch so
@@ -108,16 +109,23 @@ namespace
     constexpr float kCapsuleH = 66.0f;
     constexpr float kCloseDraw = 26.0f; // drawn X size
     constexpr float kCloseHit = 38.0f;  // hitbox (bigger than the drawing)
-    constexpr float kAnimSec = 0.16f;   // card scale in/out duration
+    // Official dialog entrance/exit (DialogBase.OpenAnimation VA 0x4C4C9F4):
+    // DOScale(1f, 0.125f).SetEase(Ease.Linear), starting from localScale = 0.
+    // So: 0 -> 1 in 125ms on a *linear* curve, and nothing else (no slide, no
+    // overshoot, no alpha ramp of its own - the alpha rides the scale here).
+    constexpr float kAnimSec = 0.125f;  // card scale in/out duration
     constexpr float kHeaderH = 44.0f;   // draggable strip height
     // Height of the tab row (2026-10-11). Taller than the 42 it was: the
     // official row is the card's whole header, and the close X has to fit
     // inside it (8*s + kCloseHit = 46*s) - which it does exactly at 46.
     constexpr float kTabRowH = 46.0f;
 
+    // Identity. Kept as a named helper because beginCard() documents the curve
+    // as "linear like the official dialog"; if that ever changes, change it
+    // here and the comment stays true.
     float easeInOut(float t)
     {
-        return t * t * (3.0f - 2.0f * t);
+        return t;
     }
 
     struct CardState
@@ -467,10 +475,17 @@ bool beginCard(const char* id, ImVec2* center, ImVec2* size, bool showClose, boo
     if (const char* frozen = std::getenv("CPSEKAI_CARD_T")) {
         st.t = std::clamp(static_cast<float>(std::atof(frozen)), 0.0f, 1.0f);
     }
-    // Scale from a small dot in the middle (official dialogs start at roughly
-    // a third of their size, not 92%). At t == 1 this is exactly 1.0, so a
+    // Scale from nothing in the middle: the official dialog's window starts at
+    // localScale = 0 and DOScales to 1 linearly over 125ms (see kAnimSec). The
+    // old curve started at 0.34 and rode a smoothstep, which read as a "pop
+    // from a third" rather than a grow. At t == 1 this is exactly 1.0, so a
     // settled card has no transform at all and its hit boxes are its own.
-    const float k = 0.34f + 0.66f * easeInOut(st.t);
+    //
+    // The alpha in endCard() still rides this same number. The official one
+    // only scales (its card is opaque the whole way), but a truly 0-sized
+    // opaque card strobes for one frame at t=0, and alpha-follows-scale is
+    // what keeps the contents from flashing in ahead of the body.
+    const float k = easeInOut(st.t);
     st.k = k;
 
     // Animated geometry around the (dragged) center. Computed up front so the
@@ -968,7 +983,7 @@ void infoRows(const std::vector<std::pair<std::string, std::string>>& rows, floa
     const float boxH = static_cast<float>(rows.size()) * rowH + pad * 2.0f;
     ImGui::Dummy(ImVec2(rowW, boxH + 6.0f * s));
 
-    dl->AddRectFilled(pos, ImVec2(pos.x + rowW, pos.y + boxH), kRowsBg, 14.0f * s);
+    dl->AddRectFilled(pos, ImVec2(pos.x + rowW, pos.y + boxH), kRowsBg, kCardRadius * s);
     const float splitX = pos.x + rowW * 0.52f;
     float y = pos.y + pad;
     for (const auto& row : rows) {
@@ -1143,7 +1158,7 @@ bool combo(const char* id, const char* preview, const std::vector<std::string>& 
     ImGui::PushStyleColor(ImGuiCol_Header, IM_COL32(232, 228, 242, 255));        // picked row
     ImGui::PushStyleColor(ImGuiCol_HeaderHovered, IM_COL32(243, 240, 250, 255)); // hovered row
     ImGui::PushStyleColor(ImGuiCol_HeaderActive, IM_COL32(224, 219, 238, 255));
-    const float popupRound = 14.0f * s;
+    const float popupRound = kCardRadius * s;
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, pillRound);
     ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, popupRound);
     ImGui::PushStyleVar(ImGuiStyleVar_PopupBorderSize, 0.0f);
