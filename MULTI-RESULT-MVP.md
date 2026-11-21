@@ -362,11 +362,19 @@ CanvasGroup  playerRootCanvasGroup;
 | `#FF5577` 指名色条 64.1×19.72 | `IndexColor` |
 | FULL COMBO / ALL PERFECT 徽章 272×38 / 290×38 | `FullCombo` / `AllPerfect` |
 | MVP 240×52 / SUPER STAR 278×52 缎带 + 4 颗星 | §1、§2 |
+| 卡面 340×484 cover-fit + 顶部圆角裁切 | `MultiLivePlayerDeckCard` + `Mask` |
+
+**卡面（2026-11-21 补）**：`character/member/<assetbundleName>/card_normal.png` 是
+**2338×1440 的横构图插画**（不是裁好的竖版卡），所以进 340×484 那块要 cover-fit 居中裁。
+原作这里用的是 `card_normal.png` 里再切出来的 `player_cell_result` 竖版 sprite
+（`CardUtility.CARD_CUTOUT_SPRITE_NAME_RESULT`），我们拿不到那个切图，就自己裁 ——
+插画的角色基本在正中，居中裁出来是对的。协议 v5 的 `resCard` 让别人的卡面也能显示。
 
 **故意没画**（我们的协议里没有这些数据，画个替身就是编）：
-卡面图（`Empty` 那块 `#444466` 也没画 —— 名字 `#555577` 压在上面会看不见，
-而那层深色在原作里是「这个位置没人」的状态）、卡自己的 `Lv` 条（那是**卡的等级**不是玩家的）、
-三个称号槽、`PlayerFrameCell` 的框（`useSharedSprite`，运行时才解析）。
+卡自己的 `Lv` 条（那是**卡的等级**不是玩家的）、三个称号槽、
+`PlayerFrameCell` 的框（`useSharedSprite`，运行时才解析）。
+`Empty` 那块 `#444466` 也不画 —— 那是「这个位置没人」的状态，而且名字 `#555577`
+压在上面会看不见。
 
 MVP / SUPER STAR 由**房主**算完写进共享块（`PartyLink::decideAwards`），
 因为原作这个标记是服务器发的；规则是我们的，写在 §4.2 和代码注释里。

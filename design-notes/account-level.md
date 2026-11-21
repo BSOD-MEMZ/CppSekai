@@ -43,4 +43,22 @@
 - **坑**：`--sus` 的相对路径在 Git Bash 下不可靠（MSYS 会改写 `../x` 这类参数，
   实测 `--sus ../charts/x.sus` 和 `--sus charts/x.sus` 都读不到，绝对路径正常）。
   脚本里一律给绝对路径。另外 `--screenshot` 收的是**文件路径**不是目录，指到目录上会静默不写。
+## 卡面（2026-11-21 加）
 
+`AccountData.card` 存的是**卡的 bundle 名**（`res001_no056`），不是路径也不是 id：
+
+- 路径会在换 assets 目录 / 换分辨率后失效；
+- id 要用 36 MB 的 master 表反查 bundle，而画的时候需要的正是 bundle。
+
+`userdata.json` 的 `account.card` 读写成对，空串 = 没选卡面（结算卡就只画面板）。
+设置 → 账户 里是一个缩略图网格（读 `assets/card/card-index.tsv`），点一下即存；
+另有「不用卡面」把它清回空串 —— 原作结算卡本来就有无卡状态，不该只能靠改存档回去。
+
+贴图走 `Renderer::cardArt(path)`：按路径缓存、**上限 24 张**。选卡界面一页会同时显示
+十几张 800×457 的图，没有缓存的话同一张每帧都会重新上传。
+
+无头检查：`--card res001_no056`（只改内存，和 `--player` 同性质）；
+配合 `CPSEKAI_RESULT_PARTY=5 --result-preview --screenshot-time 4.5` 可以截出
+「五人成员页 + 每人一张卡面」。
+
+卡面素材怎么来、为什么只入库 24 张，见 [`tools.md`](tools.md) 里的 `fetch_card_art.py`。
