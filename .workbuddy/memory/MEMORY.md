@@ -62,16 +62,26 @@
 - 手写 COM vtable 按位置寻址，GUID 对着工具链头文件核。
 - 命令共用挂起通道，每消费一条补 `EndMenu()`；「灰掉」只是 UI，处理端要再挡一道。
 
-## 逆向工具链（2026-11-19 校正）
-- so 路径：`D:\Tools\rea\work\jp\lib\arm64-v8a\libil2cpp.so`（199 MB）。
-  **不是** `jp/libil2cpp_arm64.so`——那条路径已不存在（旧记忆写错）。
+## 逆向工具链（2026-11-21 校正）
+- so 路径：**`D:\Tools\rea\work\jp\libil2cpp_arm64.so`（199 MB）**。
+  `jp\lib\arm64-v8a\libil2cpp.so` **不存在**（11-19 那条"校正"写反了，已撤回）；
+  `jp\GameData\lib\arm64-v8a\libil2cpp.so` 是**同 sha256** 的另一份，也能用
+  （`41E2D8FA…23F1D1`）。
 - 反汇编：`python .workbuddy/tools/il2cpp_disasm.py <so> --va 0x… --count N`，
-  依赖 capstone（已装 5.0.7）。类名提取用 `q.py`、prefab 几何用 `ms_geom.py` / `ms_world.py`
-  （**后两个 2026-11-19 复查时在工作目录里已不存在，需要时按 RE.md 重建**）。
+  依赖 capstone（已装 5.0.7）。类名提取用 `q.py`。
+- prefab 几何：AssetRipper 必须 `run_in_background` 起并 `--headless --port 17654`，
+  `POST /LoadFolder` 字段小写 `path`（302=受理）。工具全在 `D:\Tools\rea\work\jp\`：
+  `arip.py`（HTTP 客户端）/ `arip_dump.py`（逐节点组件 YAML）/ `sprite_info.py`
+  （sprite 九宫格 border）/ `so_xref.py`（adrp+ldr 交叉引用）。
+  **`m_Children` 才是可信的父子关系**，`m_Father` 反查会把树走断。
+- **浮点常量一律按位复核**：`mov w8,#-0x…` 别信 disasm 的注释，
+  用 `struct.unpack('<f', struct.pack('<I', imm16<<hw))`。踩过 -72 被读成 -3.65。
 - REA 已接进 DSH（`~/.dsh/profiles/desktop/cordis.patch.yml` 里 `mcp-rea`），
   但 Windows 的 Ghidra provider 只收 **PE**，arm64 ELF 走不了它 —— pjsk 的 so 仍用 capstone 那条路。
 
 ## 最近工作（细节见日志）
+- 11-21 逆向原作设置界面 `OptionDialog`(prefab 1647)：窗口 1168 宽 / Large 1032 高 /
+  圆角 16 / 阴影黑 20% / **开合 = DOScale 0↔1、0.125s、Linear**；产出 `OPTION-UI.md`。
 - 11-19 `AGENTS.md` 拆成「主文件 + `design-notes/` 43 篇」（主文件 326KB → 48KB，不再被 64KB 预算截断）。
 - 11-18 2D MV intro 硬切；产出 `UI-STRINGS.md`（547 条可显示字符串，翻译用）。
 - 11-15 逆向 2D MV 播放链路、分数公式、多人演出 UI：产出 `MV2D-SCORE.md` 与 `MULTI-LIVE-UI.md`。

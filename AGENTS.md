@@ -37,6 +37,13 @@ CppSekai：Project SEKAI 风格 SUS 谱面 Windows 原生游玩器。
   位置只能量截图）、缺的三块（技能显示、生命条内的跳过键、AP 连击层）、
   判定字 324×96 vs 我们 310×81、以及控件几何表（复选框 72×74、开关 180.8×100、
   滑杆 560×24、标准按钮 336×96、对话框 1168 宽、关闭 X 44×44）。**再动 HUD 尺寸前先看这篇。**
+- `OPTION-UI.md` —— **原作设置弹窗的实测规格（2026-11-21）**：prefab `OptionDialog`(1647) 整棵树、
+  窗口 1168 宽 / Large 档 **1032** 高（= 72+64+752+144；`DialogSizeFitter.SIZE_DIC` asm 常量
+  **336 / 688 / 1032**，页签版再让 72）、**圆角 16px**（`bg_base_r16_wh` 九宫格 border **21 ≠ 半径 16**）、
+  阴影黑 **20%** / 外扩 **8** / 模糊 ≈12px、**开合动画 = DOScale 0↔1 / 0.125s / `Ease.Linear`**
+  （无回弹、无位移，遮罩 25ms）、页签高 72 / 文字 28px / 选中态是**关掉底块露出深蓝 50% 遮罩**，
+  外加数字选择器、按钮、关闭 X、滚动条、页内 32px 行距的全部尺寸。
+  **动设置卡片或任何弹窗的圆角/阴影/开合动画前先看这篇。**
 - `MV2D-SCORE.md` —— **演出时怎么放 2D MV + 分数公式（2026-11-15）**：`LiveModeType` 五档
   （High3D/Default3D/**Mode2D**/Low/OriginalMV）、`Background2DView` 的 `movieModeRoot` /
   `jacketModeRoot` 两个子模式、播放器是 **CriWare Sofdec2（CriMana）**不是 VideoPlayer、
