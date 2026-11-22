@@ -535,6 +535,8 @@ bool gFinalConfirmOpen = false;
 // 最终页开始钮（160x160）在窗口坐标里的中心；main 的白色爆闪从这起，
 // 不是选曲手机那颗 258x96 确定的位置。
 ImVec2 gFinalPlayCenter{0.0f, 0.0f};
+// 同一帧里手机屏幕的倾斜后 AABB（窗口坐标），给 main 的爆闪当遮罩范围。
+ImVec4 gFinalPhoneScreen{0.0f, 0.0f, 0.0f, 0.0f};
 int gFinalEntry = -1;
 int gFinalDifficulty = 3;
 int gFinalVocal = 0;
@@ -2825,6 +2827,45 @@ namespace
         }
     }
 
+    // Asymmetric 9-slice. Unity sprites can have different left/right/top/bottom
+    // borders (bg_base_half_r16_wh is 左21/下1/右21/上25, btn_round_h80_wh is
+    // 左28/右12); forcing them through the symmetric helper above stretches the
+    // wrong cap and is what made the deck name bar and the MV button look cut
+    // wrong. `l`/`r`/`t`/`b` are source-pixel borders.
+    void addNinePatch4(ImDrawList* dl, GLuint tex, int texW, int texH, const ImVec2& p0,
+        const ImVec2& p1, float l, float r, float t, float b, float s, ImU32 tint)
+    {
+        if (tex == 0) {
+            return;
+        }
+        const float w = p1.x - p0.x;
+        const float h = p1.y - p0.y;
+        const float lSrc = l;
+        const float rSrc = r;
+        const float tSrc = t;
+        const float bSrc = b;
+        l = std::min(l * s, w * 0.5f);
+        r = std::min(r * s, w * 0.5f);
+        t = std::min(t * s, h * 0.5f);
+        b = std::min(b * s, h * 0.5f);
+        const float u1 = lSrc / static_cast<float>(texW);
+        const float u2 = 1.0f - rSrc / static_cast<float>(texW);
+        const float v1 = tSrc / static_cast<float>(texH);
+        const float v2 = 1.0f - bSrc / static_cast<float>(texH);
+        const float xs[4] = {p0.x, p0.x + l, p1.x - r, p1.x};
+        const float ys[4] = {p0.y, p0.y + t, p1.y - b, p1.y};
+        const float us[4] = {0.0f, u1, u2, 1.0f};
+        const float vs[4] = {0.0f, v1, v2, 1.0f};
+        for (int row = 0; row < 3; ++row) {
+            for (int col = 0; col < 3; ++col) {
+                dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(tex)),
+                    ImVec2(xs[col], ys[row]), ImVec2(xs[col + 1], ys[row + 1]),
+                    ImVec2(us[col], vs[row]), ImVec2(us[col + 1], vs[row + 1]), tint);
+            }
+        }
+    }
+
+
     // Level text: the chart's own #PLAYLEVEL / sidecar, else the official table
     // for its difficulty. Charts with no data at all show "-" instead of 0.
     const char* levelText(const ChartEntry& entry, char* buf, size_t bufSize)
@@ -2860,10 +2901,80 @@ namespace
         }
     }
 
+    // 选曲页的背景（壁纸 / 玻璃 / bg_common 图案 + 压暗 + 慢速光斑）。最终确认页
+    // 必须原样继承这一层 —— 之前它自己把 bg_common 拉伸到窗口，既没有 cover-fit
+    // 也没有压暗，和上一屏明显不是一个背景。抽成一个函数，两边共用。
+    void drawSelectBackground(platform::Renderer& renderer, ImDrawList* dl, float w, float h,
+        float timeSec)
+    {
+        const bool drawFill = !gSelectFillDisabled;
+        if (!drawFill) {
+            return;
+        }
+        if (gSelectBackdropTex != 0 && gSelectBackdropW > 0 && gSelectBackdropH > 0) {
+            const float srcAspect = static_cast<float>(gSelectBackdropW) / static_cast<float>(gSelectBackdropH);
+            const float dstAspect = w / h;
+            float dw = w;
+            float dh = h;
+            if (srcAspect > dstAspect) {
+                dw = h * srcAspect;
+            } else {
+                dh = w / srcAspect;
+            }
+            const ImVec2 p0((w - dw) * 0.5f, (h - dh) * 0.5f);
+            dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(gSelectBackdropTex)),
+                p0, ImVec2(p0.x + dw, p0.y + dh));
+            if (gSelectBackdropDim > 0.0f) {
+                const int alpha = static_cast<int>(std::clamp(gSelectBackdropDim, 0.0f, 1.0f) * 255.0f);
+                dl->AddRectFilled(ImVec2(0, 0), ImVec2(w, h), IM_COL32(8, 10, 24, alpha));
+            }
+            const GLuint patternTex = selectBgTex(renderer, "bg_common");
+            if (patternTex != 0) {
+                constexpr float kPatternAspect = 2048.0f / 1261.0f;
+                const float dstAspect = w / h;
+                float dw = w;
+                float dh = h;
+                if (kPatternAspect > dstAspect) {
+                    dw = h * kPatternAspect;
+                } else {
+                    dh = w / kPatternAspect;
+                }
+                const ImVec2 p0((w - dw) * 0.5f, (h - dh) * 0.5f);
+                dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(patternTex)),
+                    p0, ImVec2(p0.x + dw, p0.y + dh), ImVec2(0, 0), ImVec2(1, 1),
+                    IM_COL32(255, 255, 255, 110));
+            }
+        } else {
+            const GLuint patternTex = selectBgTex(renderer, "bg_common");
+            if (patternTex != 0) {
+                constexpr float kPatternAspect = 2048.0f / 1261.0f;
+                const float dstAspect = w / h;
+                float dw = w;
+                float dh = h;
+                if (kPatternAspect > dstAspect) {
+                    dw = h * kPatternAspect;
+                } else {
+                    dh = w / kPatternAspect;
+                }
+                const ImVec2 p0((w - dw) * 0.5f, (h - dh) * 0.5f);
+                dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(patternTex)),
+                    p0, ImVec2(p0.x + dw, p0.y + dh));
+            } else {
+                dl->AddRectFilledMultiColor(ImVec2(0, 0), ImVec2(w, h),
+                    IM_COL32(30, 26, 58, 255), IM_COL32(52, 40, 88, 255),
+                    IM_COL32(20, 18, 40, 255), IM_COL32(46, 36, 78, 255));
+                const float glowX = w * (0.5f + 0.35f * std::sin(timeSec * 0.25f));
+                dl->AddCircleFilled(ImVec2(glowX, h * 0.35f), h * 0.6f,
+                    IM_COL32(120, 130, 230, 30), 64);
+            }
+        }
+    }
+
+
     // 最终确认页：ScreenLayerFreeLiveFinalConfirmation（prefab 703，它继承
     // ScreenLayerDeckEditBase）+ 右侧同一台 ScreenLayerFreeLiveCellPhone（704）。
     // 左边是卡组确认（选卡组 / 综合力 / 5 个空槽），右边是选曲时那台手机
-    // （曲绘 / 标题 / 难度 / 确定）。整页自绘，不创建 ImGui item。
+    // （曲绘 / 标题 / 难度 / 开始钮）。整页自绘，不创建 ImGui item。
     int drawFinalConfirm(platform::Renderer& renderer, const std::vector<ChartEntry>& entries,
         int entryIndex, int difficulty, int vocalIndex, float w, float h, float k, float timeSec,
         ImFont* title, ImFont* body, int deckPower, bool& autoLive, int& mvMode)
@@ -2895,14 +3006,9 @@ namespace
         // The final-confirmation prefab has no full-screen backdrop node; it
         // sits over the select background. Use the official bg_common asset
         // instead of an invented gradient.
-        const GLuint bgCommon = selectBgTex(renderer, "bg_common");
-        if (bgCommon != 0) {
-            dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(bgCommon)),
-                ImVec2(0.0f, 0.0f), ImVec2(w, h), ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f),
-                IM_COL32(255, 255, 255, 255));
-        } else {
-            dl->AddRectFilled(ImVec2(0.0f, 0.0f), ImVec2(w, h), IM_COL32(35, 32, 60, 255));
-        }
+        // Same backdrop as the select screen: wallpaper/dim/pattern, cover-fit.
+        // (Not a stretched bg_common - that made the two screens look different.)
+        drawSelectBackground(renderer, dl, w, h, static_cast<float>(timeSec));
 
         // Absolute rects from prefab 703 (1920x1080 reference, computed from
         // RectTransform anchorMin/Max + anchoredPosition + pivot):
@@ -2910,27 +3016,19 @@ namespace
         //   DeckBase  x=70.4  y=256.0 w=1080.0 h=624.0
         //   card row  x=78.4  y=346.0 w=200 h=510, gap 16（DeckCardList 的顶边）
         const float cx = 960.0f * k; // 画布中心（内容会被整体平移 (ox,oy)）
-        const float bgW = 1546.1597f * k;
-        const float bgH = 555.27515f * k;
-        const float bgX = 56.0f * k;
-        const float bgY = 303.8f * k;
         const float deckW = 1080.0f * k;
         const float deckH = 623.97f * k;
         const float deckX = 70.4f * k;
         const float deckY = 256.0f * k;
 
-        // 画布内容从这层白底开始；上面的 bg_common 是"窗口背景"，不跟着平移。
+        // 画布内容从这层底板开始；上面的背景是窗口背景，不跟着平移。
+        //
+        // prefab 703 在 DeckBase 下面还有一张 1546.2x555.3 的纯白 BG
+        // (`bg_base_r20_wh`)。它只会在 DeckBase 左边露出 14px 宽的两小条白边
+        // （其余部分被 DeckBase 和手机盖住），看起来像一张切坏的白框；而
+        // DeckBase 本身就是 #DFDFEA/80% 的同一块面板。这里不画那张隐藏 BG，
+        // 让面板直接透出选曲背景（和原作截图的面板一致）。
         const int contentVtx0 = dl->VtxBuffer.Size;
-        const GLuint bgTex = finalTex(renderer, "bg_base_r20_wh");
-        if (bgTex != 0) {
-            // 9-slice, not a stretched 50x50 sprite: stretching turns the
-            // rounded corners into a giant ellipse.
-            addNinePatch(dl, bgTex, 50, 50, ImVec2(bgX, bgY), ImVec2(bgX + bgW, bgY + bgH),
-                24.0f, 24.0f, k, IM_COL32(255, 255, 255, 255));
-        } else {
-            dl->AddRectFilled(ImVec2(bgX, bgY), ImVec2(bgX + bgW, bgY + bgH),
-                IM_COL32(255, 255, 255, 255), 20.0f * k);
-        }
         const GLuint deckTex = finalTex(renderer, "bg_base_three_r16_wh");
         if (deckTex != 0) {
             addNinePatch(dl, deckTex, 36, 36, ImVec2(deckX, deckY),
@@ -2982,14 +3080,15 @@ namespace
 
         {
             // DeckName 375.7x55.4 @ (70.4,200.7)：当前卡组的名字条。
-            // bg_base_half_r16_wh 的 Border 是 (左21/下1/右21/上25)，没有对称
-            // 九宫格（我们的 addNinePatch 只吃对称值），硬套会把上下边拉成一条
-            // 怪线 —— 换成四角都是 21 的 bg_base_r16_wh。
+            // bg_base_half_r16_wh 的 Border 是 (左21/下1/右21/上25)，不是对称
+            // 九宫格；用 addNinePatch4 按真实边框切（上圆角、下直角）。
             const ImVec2 n0(70.4f * k, 200.7f * k);
             const ImVec2 n1(446.1f * k, 256.1f * k);
-            const GLuint nameTex = finalTex(renderer, "bg_base_r16_wh");
+            const GLuint nameTex = finalTex(renderer, "bg_base_half_r16_wh");
             if (nameTex != 0) {
-                addNinePatch(dl, nameTex, 42, 42, n0, n1, 21.0f, 21.0f, k,
+                // Real sprite: 42x26, Border 左21/下1/右21/上25 (top corners
+                // rounded, bottom square). The asymmetric slicer preserves it.
+                addNinePatch4(dl, nameTex, 42, 26, n0, n1, 21.0f, 21.0f, 25.0f, 1.0f, k,
                     IM_COL32(223, 223, 234, 204));
             } else {
                 dl->AddRectFilled(n0, n1, IM_COL32(223, 223, 234, 204), 16.0f * k);
@@ -3164,6 +3263,25 @@ namespace
                 const float pdy = playC.y - pivot.y;
                 gFinalPlayCenter = ImVec2(pivot.x + pdx * tc - pdy * ts + ox,
                     pivot.y + pdx * ts + pdy * tc + oy);
+                // Phone screen AABB for main's confirmation flash (it washes the
+                // handset instead of the whole window). Same 3.4%/3.0% bezel
+                // insets the select screen uses.
+                const float sx0 = phoneX + phoneW * 0.034f;
+                const float sx1 = phoneX + phoneW * 0.966f;
+                const float sy0 = phoneY + phoneH * 0.030f;
+                const float sy1 = phoneY + phoneH * 0.970f;
+                const auto tp = [&](float x, float y) {
+                    const float dx = x - pivot.x;
+                    const float dy = y - pivot.y;
+                    return ImVec2(pivot.x + dx * tc - dy * ts + ox, pivot.y + dx * ts + dy * tc + oy);
+                };
+                const ImVec2 c0 = tp(sx0, sy0);
+                const ImVec2 c1 = tp(sx1, sy0);
+                const ImVec2 c2 = tp(sx1, sy1);
+                const ImVec2 c3 = tp(sx0, sy1);
+                gFinalPhoneScreen = ImVec4(
+                    std::min({c0.x, c1.x, c2.x, c3.x}), std::min({c0.y, c1.y, c2.y, c3.y}),
+                    std::max({c0.x, c1.x, c2.x, c3.x}), std::max({c0.y, c1.y, c2.y, c3.y}));
             }
             {
                 const GLuint glow = selectTex(renderer, "eff_btn_circle_h80_a70_wh");
@@ -3187,43 +3305,31 @@ namespace
                         IM_COL32(62, 62, 95, 255));
                 }
             }
-            // Click -> a short mint ring burst, then hand the entry back to main
-            // (main's confirm-white-flash covers the load, same as the select 确定).
+            // Idle ripple: the button keeps breathing even when nobody clicks
+            // it (two staggered mint rings, 1.8s cycle), like the original's
+            // looping SoloLiveFinalConfirm effect.
             {
-                static float fxAt = -1.0f;
-                // Reset if a previous run was interrupted.
-                if (fxAt >= 0.0f && static_cast<float>(timeSec) - fxAt > 1.0f) {
-                    fxAt = -1.0f;
+                constexpr float kCycle = 1.8f;
+                const float phase = std::fmod(static_cast<float>(timeSec), kCycle) / kCycle;
+                for (int r = 0; r < 2; ++r) {
+                    float p = phase + 0.5f * static_cast<float>(r);
+                    p -= std::floor(p);
+                    const float rad = playD * 0.5f + 58.0f * ps * p;
+                    const int a = static_cast<int>(85.0f * (1.0f - p));
+                    dl->AddCircle(playC, rad, IM_COL32(119, 238, 221, a), 64, 3.0f * ps);
                 }
-                const float now = static_cast<float>(timeSec);
-                if (fxAt < 0.0f && clicked) {
-                    const ImVec2 lm(mouse.x - pivot.x, mouse.y - pivot.y);
-                    const ImVec2 lp(pivot.x + lm.x * tc + lm.y * ts, pivot.y - lm.x * ts + lm.y * tc);
-                    const float half = playD * 0.5f;
-                    if (lp.x >= playC.x - half && lp.x <= playC.x + half
-                        && lp.y >= playC.y - half && lp.y <= playC.y + half) {
-                        fxAt = now;
-                        ui::se(ui::SeStart);
-                    }
-                }
-                if (fxAt >= 0.0f) {
-                    const float t = now - fxAt;
-                    if (t < 0.36f) {
-                        for (int r = 0; r < 3; ++r) {
-                            const float p = std::clamp((t - 0.05f * static_cast<float>(r)) / 0.30f, 0.0f, 1.0f);
-                            if (p <= 0.0f) {
-                                continue;
-                            }
-                            const float rad = (playD * 0.5f) * (1.0f + 1.8f * p);
-                            dl->AddCircle(playC, rad, IM_COL32(119, 238, 221,
-                                static_cast<int>(200.0f * (1.0f - p))), 64, 4.0f * ps);
-                        }
-                        dl->AddCircleFilled(playC, playD * (0.5f + t * 0.8f),
-                            IM_COL32(255, 255, 255, static_cast<int>(120.0f * (1.0f - t / 0.36f))), 48);
-                    } else {
-                        fxAt = -1.0f;
-                        phoneStartHit = true;
-                    }
+            }
+            // Click: hand the entry back immediately. main's confirmation burst
+            // + white flash is the SAME effect as the select 确定 (decideBurst /
+            // confirmFlashActive) and starts from this button (gFinalPlayCenter).
+            if (clicked) {
+                const ImVec2 lm(mouse.x - pivot.x, mouse.y - pivot.y);
+                const ImVec2 lp(pivot.x + lm.x * tc + lm.y * ts, pivot.y - lm.x * ts + lm.y * tc);
+                const float half = playD * 0.5f;
+                if (lp.x >= playC.x - half && lp.x <= playC.x + half
+                    && lp.y >= playC.y - half && lp.y <= playC.y + half) {
+                    phoneStartHit = true;
+                    ui::se(ui::SeStart);
                 }
             }
 
@@ -3266,19 +3372,34 @@ namespace
         const float mvH = 72.0f * k;
         const GLuint mvTex = finalTex(renderer, "btn_round_h80_wh");
         if (mvTex != 0) {
-            dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(mvTex)),
-                ImVec2(mvX, mvY), ImVec2(mvX + mvW, mvY + mvH), ImVec2(0.0f, 0.0f),
-                ImVec2(1.0f, 1.0f), IM_COL32(255, 255, 255, 255));
+            // 106x96, Border 左28/右12 (Unity order 左/下/右/上). 之前直接
+            // AddImage 拉到 176x72，把两端的胶囊和阴影都压扁了。
+            addNinePatch4(dl, mvTex, 106, 96, ImVec2(mvX, mvY), ImVec2(mvX + mvW, mvY + mvH),
+                28.0f, 12.0f, 0.0f, 0.0f, k, IM_COL32(255, 255, 255, 255));
         } else {
             dl->AddRectFilled(ImVec2(mvX, mvY), ImVec2(mvX + mvW, mvY + mvH),
                 IM_COL32(255, 255, 255, 235), 16.0f * k);
         }
-        static const char* kMvNames[3] = {"无 MV", "原曲 MV", "2D MV"};
-        addTextCentered(dl, body, 28.0f * k, ImVec2(mvX + mvW * 0.5f, mvY + mvH * 0.5f),
-            IM_COL32(68, 68, 102, 255), kMvNames[std::clamp(mvMode, 0, 2)]);
-        if (hit(mvX, mvY, mvW, mvH)) {
-            mvMode = (std::clamp(mvMode, 0, 2) + 1) % 3;
-            ui::se(ui::SeClick);
+        // MV: only the modes this song actually has files for. `songBadges`
+        // checks charts/mv/<id4>.usm and <id4>_sekai.usm - both are 2D MVs, so
+        // mvMode 2 covers either; there is no 3D renderer, so mode 1 is never
+        // offered. No file at all -> the button is a static "无 MV".
+        {
+            const SongBadges& mb = songBadges(entry.musicId);
+            const bool has2d = mb.original || mb.mv2d;
+            if (mvMode == 1) {
+                mvMode = 0; // 3D/original MV is not implemented
+            }
+            if (mvMode == 2 && !has2d) {
+                mvMode = 0;
+            }
+            static const char* kMvNames[3] = {"无 MV", "原曲 MV", "2D MV"};
+            addTextCentered(dl, body, 28.0f * k, ImVec2(mvX + mvW * 0.5f, mvY + mvH * 0.5f),
+                IM_COL32(68, 68, 102, 255), kMvNames[std::clamp(mvMode, 0, 2)]);
+            if (has2d && hit(mvX, mvY, mvW, mvH)) {
+                mvMode = (mvMode == 2) ? 0 : 2;
+                ui::se(ui::SeClick);
+            }
         }
 
         const float autoX = 822.6f * k;
@@ -3293,16 +3414,30 @@ namespace
                 ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), IM_COL32(255, 255, 255, 255));
         }
 
-        // UIPartsToggle: Bg On #FF77AA, Off #444466, knob toggle_btn_wh, text
-        // ON/OFF 29px white.
-        dl->AddRectFilled(ImVec2(autoX, autoY), ImVec2(autoX + autoW, autoY + autoH),
-            autoLive ? IM_COL32(255, 119, 170, 255) : IM_COL32(68, 68, 102, 255),
-            autoH * 0.5f);
-        const float knob = autoH - 8.0f * k;
-        const float knobX = autoX + 4.0f * k + (autoLive ? autoW - knob - 8.0f * k : 0.0f);
-        dl->AddCircleFilled(ImVec2(knobX + knob * 0.5f, autoY + autoH * 0.5f), knob * 0.5f,
-            IM_COL32(255, 255, 255, 255), 32);
-        addTextLeft(dl, body, 22.0f * k,
+        // UIPartsToggle: track bg_base_round_h56_wh (66x56, Border 33/28),
+        // knob 72x72 overhanging the 152x56 track by 8 on the active side
+        // (prefab On knob centre +47.5 from track centre, Off -47.5), text 29px.
+        const GLuint trackTex = finalTex(renderer, "bg_base_round_h56_wh");
+        const ImU32 trackCol = autoLive ? IM_COL32(255, 119, 170, 255) : IM_COL32(68, 68, 102, 255);
+        if (trackTex != 0) {
+            addNinePatch4(dl, trackTex, 66, 56, ImVec2(autoX, autoY),
+                ImVec2(autoX + autoW, autoY + autoH), 33.0f, 33.0f, 28.0f, 28.0f, k, trackCol);
+        } else {
+            dl->AddRectFilled(ImVec2(autoX, autoY), ImVec2(autoX + autoW, autoY + autoH),
+                trackCol, autoH * 0.5f);
+        }
+        const float knob = 72.0f * k;
+        const float knobCx = autoX + autoW * 0.5f + (autoLive ? 47.5f : -47.5f) * k;
+        const GLuint knobTex = selectTex(renderer, "btn_circle80_wh");
+        if (knobTex != 0) {
+            dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(knobTex)),
+                ImVec2(knobCx - knob * 0.5f, autoY + autoH * 0.5f - knob * 0.5f),
+                ImVec2(knobCx + knob * 0.5f, autoY + autoH * 0.5f + knob * 0.5f));
+        } else {
+            dl->AddCircleFilled(ImVec2(knobCx, autoY + autoH * 0.5f), knob * 0.5f,
+                IM_COL32(255, 255, 255, 255), 32);
+        }
+        addTextLeft(dl, body, 26.0f * k,
             ImVec2(autoX + (autoLive ? 24.0f * k : 58.0f * k), autoY + autoH * 0.5f),
             IM_COL32(255, 255, 255, 255), autoLive ? "ON" : "OFF");
         if (hit(autoX, autoY, autoW, autoH)) {
@@ -4099,6 +4234,9 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             // page's big play button, not from the (not drawn) select phone.
             if (confirmCenter != nullptr) {
                 *confirmCenter = gFinalPlayCenter;
+            }
+            if (confirmPhoneScreen != nullptr) {
+                *confirmPhoneScreen = gFinalPhoneScreen;
             }
         }
         ImGui::End();

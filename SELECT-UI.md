@@ -992,8 +992,8 @@ const std::string candidates[] = {
 |---|---|---|
 | 卡组选择器胶囊 | (70.4,127.6) 720×56 | `bg_base_round_h56_wh`，#BCBCD0/90%；左右各一颗 80×108 箭头 |
 | 卡组名条 | (70.4,200.7) 375.7×55.4 | `bg_base_half_r16_wh`，#DFDFEA/80% |
-| 白色底板 `BG` | (56,303.8) 1546.2×555.3 | `bg_base_r20_wh` 纯白；底部 152px 是 `bg_base_r20u_yw` 黄条（资源没导出，暂缺） |
-| 卡组底板 `DeckBase` | (70.4,256) 1080×624 | `bg_base_three_r16_wh`，#DFDFEA/80% |
+| 白色底板 `BG` | (56,303.8) 1546.2×555.3 | `bg_base_r20_wh` 纯白；**不画**：它只会在 DeckBase 左边露 14px 白边，看起来像切坏的框 |
+| 卡组底板 `DeckBase` | (70.4,256) 1080×624 | `bg_base_three_r16_wh`，#DFDFEA/80%（Border 17） |
 | 综合力 | 标题 (73.3,300)、icon (221.4,278.8) 38×42、数值右对齐到 x=430.2 | 32px；`Value` 是 280 宽的右对齐框，不是左对齐 |
 | info / 羁绊 | info 72² @(441.8,263.5)；羁绊按钮 254×72 @(530.6,263.5) | 羁绊我们没有，**没画**（不造假按钮） |
 | 5 张卡 | 200×510，间距 16，从 x=78.4、**y=346** 起 | 卡槽空态：`base_wh` #B0BDC8 + 72 圆 + 36 加号 |
@@ -1011,8 +1011,24 @@ const std::string candidates[] = {
 - 顶栏：`UIPartsBackButton` 96² @(16,16)（`btn_circle80_wh` + `icon_back_wh` 42²）
   与 `UIPartsMenuButton` 96² @(1808,16)（`icon_menu_wh` 40×34），图标染 #444466，
   和选曲顶栏同一套；菜单钮回选曲并打开抽屉（抽屉只有选曲页那一份，不复制）。
-- 点开始钮先放 0.36s 的薄荷色扩散环，然后把 entry 交回 main，main 的白色爆闪
-  接着盖住谱面加载（和选曲 确定 同一条路径）。
+- 背景：**不再自己画 bg_common**，而是调用和选曲页同一个 `drawSelectBackground()`
+  （壁纸分支 + 压暗 + bg_common 图案 cover-fit / 玻璃模式直接透明）。之前把
+  bg_common 拉伸满窗口，和上一屏不是一个背景。
+- MV：按 `songBadges(entry.musicId)` 的**实际文件**给选项 ——
+  `charts/mv/<id4>.usm` 或 `<id4>_sekai.usm` 存在才允许切到「2D MV」；一个都没有
+  就只显示静态「无 MV」。没有 3D 渲染，所以「原曲 MV」档不出现。
+- AUTO：`bg_auto`（180×110 的 AUTO 底板）+ `bg_base_round_h56_wh` 九宫格轨道 +
+  72×72 圆钮（On 中心 +47.5、Off -47.5，钮比轨道大 8px，和 prefab 一样）；
+  之前是自己画 48px 小圆 + 一条 152×56 的纯色胶囊，所以看着惨。
+- 开始钮：常驻两圈 1.8s 循环 ripple；点击**立即**返回 entry，不再自己放 0.36s
+  特效 —— main 的 `decideBurst` + `confirmFlashActive` 就是选曲「确定」那套华丽
+  爆闪，起点用 `gFinalPlayCenter`、遮罩用 `gFinalPhoneScreen`。
+- 卡组名条 / MV 按钮 / 轨道都用新的 **`addNinePatch4` 非对称九宫格**：
+  `bg_base_half_r16_wh` 左21/下1/右21/上25、`btn_round_h80_wh` 左28/右12 ——
+  之前用对称 helper 把两端的胶囊/阴影切坏了。
+- **不画** prefab 里那张 1546×555 的隐藏白 BG (`bg_base_r20_wh`)：它只在
+  DeckBase 左边露出两条 14px 白边，看起来像切坏的白框；DeckBase 自己就是
+  #DFDFEA/80% 的面板，直接透出选曲背景即可（和参考截图一致）。
 - **切图**：面板 sprite 的 Border 全部按 AssetRipper 的 `m_Border` 取 —— `bg_base_r20_wh` 24、
   `bg_base_three_r16_wh` **17**（之前用 16）、`bg_base_round_h56_wh` 横 33 / 竖 28
   （之前 28/28）、`bg_base_half_r16_wh` 是 **左21/下1/右21/上25 的非对称九宫格**，
