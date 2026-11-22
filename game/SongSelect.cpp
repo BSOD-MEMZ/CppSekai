@@ -2986,13 +2986,14 @@ namespace
         const ChartEntry& entry = entries[static_cast<size_t>(entryIndex)];
         ImDrawList* dl = ImGui::GetWindowDrawList();
         const ImGuiIO& io = ImGui::GetIO();
-        // 最终确认页整页是 1920x1080 的绝对坐标。缩放调小以后窗口比画布大，
-        // 把这张"画布"居中而不是贴左上角（选曲页是两栏，必须各自贴边；这一页
-        // 是单栏，居中才是缩放该有的样子）。做法：内容顶点统一平移 (ox,oy)，
-        // 命中测试把鼠标反向平移；背景图仍然铺满窗口（它不属于画布）。
-        const float ox = (w - 1920.0f * k) * 0.5f;
-        const float oy = (h - 1080.0f * k) * 0.5f;
-        const ImVec2 mouse(io.MousePos.x - ox, io.MousePos.y - oy);
+        // Fit the 1920x1080 page into the window (min of width/height), then
+        // anchor the deck to the left and the phone to the right - the same
+        // edge rule as the select screen. Centering the whole canvas made a
+        // 20:9 window crop the bottom controls.
+        k = std::min(k, h / 1080.0f);
+        constexpr float ox = 0.0f;
+        constexpr float oy = 0.0f;
+        const ImVec2 mouse(io.MousePos.x, io.MousePos.y);
         const bool clicked = ui::mouseClicked(ImGuiMouseButton_Left);
         if (ui::keyPressed(ImGuiKey_Escape)) {
             ui::se(ui::SeWindowClose);
@@ -3015,7 +3016,7 @@ namespace
         //   BG        x=56.0  y=303.8 w=1546.2 h=555.3
         //   DeckBase  x=70.4  y=256.0 w=1080.0 h=624.0
         //   card row  x=78.4  y=346.0 w=200 h=510, gap 16（DeckCardList 的顶边）
-        const float cx = 960.0f * k; // 画布中心（内容会被整体平移 (ox,oy)）
+        const float cx = w * 0.5f; // toast 按窗口居中（内容已改成左右贴边）
         const float deckW = 1080.0f * k;
         const float deckH = 623.97f * k;
         const float deckX = 70.4f * k;
@@ -3185,7 +3186,7 @@ namespace
         {
             const float phoneW = 754.3f * k;
             const float phoneH = 1416.7f * k;
-            const float phoneX = 1899.15f * k - phoneW;
+            const float phoneX = w - 20.8f * k - phoneW;
             const float phoneY = 33.6f * k;
             const float ps = phoneW / 754.3f;
             const auto PX = [&](float x) { return phoneX + x * ps; };
@@ -3457,7 +3458,7 @@ namespace
             const float tw = ts.x + 42.0f * k;
             const float th = 48.0f * k;
             const float tx = cx - tw * 0.5f;
-            const float ty = 1080.0f * k - 156.0f * k;
+            const float ty = h - 156.0f * k;
             dl->AddRectFilled(ImVec2(tx, ty), ImVec2(tx + tw, ty + th),
                 IM_COL32(20, 19, 40, 235), 12.0f * k);
             addTextCentered(dl, body, 22.0f * k, ImVec2(cx, ty + th * 0.5f),
