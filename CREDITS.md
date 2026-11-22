@@ -126,6 +126,8 @@ CppSekai (AGPL-3.0-only)  ← 本仓库        加平台层、判定引擎、UI�
 > 并把「字烤进图里」的两类拆到语言目录：`assets/select/ja-JP/` 与 `zh-CN/`
 > 各一份 `icon_tab_{all,other}_{on,off}.png` + `songlevel.png`
 > （日文是官方 `txt_musicLv`/`icon_tab_*`，中文是同形状重绘，见 SELECT-UI.md）。
+> 另把原作 `MenuDialog` 的 15 张 `btn_menu_*` 整卡 + `icon_menu_*` 零件放进
+> `Drafts/menu-dialog/`（给 PS 改中文标题用，**不进发布包**），来源仍是同一套解包。
 > 来源仍是同一个日服 7.1.0 解包 / `tex_all_sprite`，没有新增外部许可。
 
 `assets/se/**`、`charts/**`、`toolchain/` 等确实不在库里（gitignore 生效）。

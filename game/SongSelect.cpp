@@ -2857,9 +2857,10 @@ namespace
         }
     }
 
-    // 最终确认页的轻量版：ScreenLayerFreeLiveFinalConfirmation 的 5 空槽、
-    // 自动演出、MV、综合力和 Start。整个页面自绘，不创建 ImGui item，所以
-    // 底下的列表/手机不会抢到这一帧的输入。
+    // 最终确认页：ScreenLayerFreeLiveFinalConfirmation（prefab 703，它继承
+    // ScreenLayerDeckEditBase）+ 右侧同一台 ScreenLayerFreeLiveCellPhone（704）。
+    // 左边是卡组确认（选卡组 / 综合力 / 5 个空槽），右边是选曲时那台手机
+    // （曲绘 / 标题 / 难度 / 确定）。整页自绘，不创建 ImGui item。
     int drawFinalConfirm(platform::Renderer& renderer, const std::vector<ChartEntry>& entries,
         int entryIndex, int difficulty, int vocalIndex, float w, float h, float k, float timeSec,
         ImFont* title, ImFont* body, int deckPower, bool& autoLive, int& mvMode)
@@ -2904,7 +2905,7 @@ namespace
         // RectTransform anchorMin/Max + anchoredPosition + pivot):
         //   BG        x=56.0  y=303.8 w=1546.2 h=555.3
         //   DeckBase  x=70.4  y=256.0 w=1080.0 h=624.0
-        //   card row  x=78.4  y=601.0 w=200 h=510, gap 16
+        //   card row  x=78.4  y=346.0 w=200 h=510, gap 16（DeckCardList 的顶边）
         const float cx = 960.0f * k; // 画布中心（内容会被整体平移 (ox,oy)）
         const float bgW = 1546.1597f * k;
         const float bgH = 555.27515f * k;
@@ -2937,25 +2938,90 @@ namespace
                 IM_COL32(223, 223, 234, 204), 16.0f * k);
         }
 
-        // TotalPower / DeckTotalPowerView/WithoutEventLimit/Value:
-        // value rect x=150.2 y=285.0 w=280 h=32, icon 38x42 at x=330 y=251.
-        // The prefab has no title/artist node on this screen (music info lives
-        // on the phone screen), so do not invent a header here.
-        (void)title;
+        // DeckSelector（prefab 703 顶部）：左/右箭头 + 720x56 的 #BCBCD0/90%
+        // 胶囊。只有一套卡组，所以箭头画成禁用态，不假装能切。
+        {
+            const GLuint arrowTex = finalTex(renderer, "btn_arrow_switching_wh");
+            // 左箭头 80x108 @ (0.8,104.6)，右箭头 @ (788.1,104.6)。
+            for (int side = 0; side < 2; ++side) {
+                const float ax = (side == 0 ? 0.8f : 788.1f) * k;
+                const float ay = 104.6f * k;
+                if (arrowTex != 0) {
+                    dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(arrowTex)),
+                        ImVec2(ax, ay), ImVec2(ax + 80.0f * k, ay + 108.0f * k),
+                        ImVec2(side == 0 ? 1.0f : 0.0f, 0.0f), ImVec2(side == 0 ? 0.0f : 1.0f, 1.0f),
+                        IM_COL32(255, 255, 255, 110));
+                } else {
+                    const ImVec2 c(ax + 40.0f * k, ay + 54.0f * k);
+                    const float d = 18.0f * k;
+                    if (side == 0) {
+                        dl->AddTriangleFilled(ImVec2(c.x + d, c.y - d), ImVec2(c.x + d, c.y + d),
+                            ImVec2(c.x - d, c.y), IM_COL32(255, 255, 255, 110));
+                    } else {
+                        dl->AddTriangleFilled(ImVec2(c.x - d, c.y - d), ImVec2(c.x - d, c.y + d),
+                            ImVec2(c.x + d, c.y), IM_COL32(255, 255, 255, 110));
+                    }
+                }
+            }
+            const ImVec2 sel0(70.4f * k, 127.6f * k);
+            const ImVec2 sel1(790.5f * k, 183.6f * k);
+            const GLuint selTex = finalTex(renderer, "bg_base_round_h56_wh");
+            if (selTex != 0) {
+                addNinePatch(dl, selTex, 28, 28, sel0, sel1, 28.0f, 28.0f, k,
+                    IM_COL32(188, 188, 208, 230));
+            } else {
+                dl->AddRectFilled(sel0, sel1, IM_COL32(188, 188, 208, 230), 28.0f * k);
+            }
+            addTextCentered(dl, body, 30.0f * k,
+                ImVec2((sel0.x + sel1.x) * 0.5f, (sel0.y + sel1.y) * 0.5f),
+                IM_COL32(68, 68, 102, 255), "默认队伍");
+        }
+
+        // DeckName 375.7x55.4 @ (70.4,200.7)：当前卡组的名字条。
+        {
+            const ImVec2 n0(70.4f * k, 200.7f * k);
+            const ImVec2 n1(446.1f * k, 256.1f * k);
+            const GLuint nameTex = finalTex(renderer, "bg_base_half_r16_wh");
+            if (nameTex != 0) {
+                addNinePatch(dl, nameTex, 28, 28, n0, n1, 16.0f, 16.0f, k,
+                    IM_COL32(223, 223, 234, 204));
+            } else {
+                dl->AddRectFilled(n0, n1, IM_COL32(223, 223, 234, 204), 16.0f * k);
+            }
+            addTextLeft(dl, body, 28.0f * k, ImVec2(n0.x + 21.0f * k, (n0.y + n1.y) * 0.5f),
+                IM_COL32(85, 85, 119, 255), "当前队伍");
+            // 右侧的编辑铅笔（纯装饰，不假装能点）。
+            const ImVec2 pc(n1.x - 24.0f * k, (n0.y + n1.y) * 0.5f);
+            dl->AddLine(ImVec2(pc.x - 8.0f * k, pc.y + 8.0f * k),
+                ImVec2(pc.x + 8.0f * k, pc.y - 8.0f * k), IM_COL32(148, 148, 175, 255), 3.0f * k);
+        }
+
+        // 综合力：Label 174x56 @ (51.1,272)（左对齐“综合力”）、icon 38x42、
+        // 数值 280x32 右对齐到 x=430.2。之前把数值左对齐到 150，和标题叠在一起。
         {
             const GLuint icon = finalTex(renderer, "icon_deckPower_wh");
             char pwr[64];
             std::snprintf(pwr, sizeof(pwr), "%d", deckPower);
+            addTextLeft(dl, body, 32.0f * k, ImVec2(73.3f * k, 300.0f * k),
+                IM_COL32(68, 68, 102, 255), "综合力");
             const float iconS = 38.0f * k;
-            const float iconX = 330.0f * k;
-            const float iconY = 251.0f * k;
             if (icon != 0) {
                 dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(icon)),
-                    ImVec2(iconX, iconY), ImVec2(iconX + iconS, iconY + 42.0f * k),
+                    ImVec2(221.4f * k, 278.8f * k), ImVec2(221.4f * k + iconS, 278.8f * k + 42.0f * k),
                     ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), IM_COL32(68, 68, 102, 255));
             }
-            addTextLeft(dl, body, 30.0f * k, ImVec2(150.2f * k, 285.0f * k),
+            const ImVec2 vs = body->CalcTextSizeA(32.0f * k, FLT_MAX, 0.0f, pwr);
+            addTextLeft(dl, body, 32.0f * k, ImVec2(430.2f * k - vs.x, 300.0f * k),
                 IM_COL32(85, 85, 119, 255), pwr);
+            // info 按钮 72x72 @ (441.8,263.5)：点一下说明综合力怎么来的。
+            const ImVec2 ic(441.8f * k + 36.0f * k, 263.5f * k + 36.0f * k);
+            dl->AddCircleFilled(ic, 36.0f * k, IM_COL32(255, 255, 255, 255), 40);
+            addTextCentered(dl, body, 30.0f * k, ic, IM_COL32(68, 68, 102, 255), "i");
+            if (hit(ic.x - 36.0f * k, ic.y - 36.0f * k, 72.0f * k, 72.0f * k)) {
+                gFinalToast = "综合力 = 队伍里 5 张卡片的数值合计";
+                gFinalToastUntil = static_cast<double>(timeSec) + 2.6;
+                ui::se(ui::SeClick);
+            }
         }
 
         // Five empty deck slots (DeckCard 200x510, gap 16).
@@ -3002,54 +3068,49 @@ namespace
         }
 
         bool phoneStartHit = false;
-        // Right: ScreenLayerFreeLiveCellPhone (prefab 704), official container
-        // 754.3x1416.7 at centre (1522,742), local z=+3deg (right end up).
-        // It is added at runtime by forceAddCellPhoneScreen; the prefab itself
-        // only contains the left deck page.
+        // Right: ScreenLayerFreeLiveCellPhone (prefab 704) at the SAME geometry
+        // as the select screen: 754.3x1416.7, right edge 1899.15, top 33.6,
+        // tilted +3deg about its centre. The final page used to draw a 562-wide
+        // copy with hand-tuned offsets (jacket 229px low, a green disc instead of
+        // the 258x96 确定) - that is why it looked nothing like the real phone.
         {
-            // 用户 2026-11-21：第一屏和第二屏是同一台手机，别在这里另造一套几何。
-            // ⚠ 但选曲页的手机在 2026-11-22 已经改回 prefab 原始尺寸（754.3 宽、
-            // 中心 1522,742），这里还是 562 宽 / 1609,618 —— 两块**不再一样大**了。
-            // 保留 562 是因为这张卡片的按钮/外框全用绝对坐标摆的，把手机放大到
-            // 754 会顶出屏幕；要真正合并得连卡片布局一起重做，不是改一个常数的事。
-            const float pcx = 1609.0f * k;
-            const float pcy = 618.0f * k;
-            const float pw = 562.0f * k;
-            const float ph = pw * (1416.7f / 754.3f);
-            const float q = pw / 754.3f;
-            const float pTop = pcy - ph * 0.5f;
+            const float phoneW = 754.3f * k;
+            const float phoneH = 1416.7f * k;
+            const float phoneX = 1899.15f * k - phoneW;
+            const float phoneY = 33.6f * k;
+            const float ps = phoneW / 754.3f;
+            const auto PX = [&](float x) { return phoneX + x * ps; };
+            const auto PY = [&](float y) { return phoneY + y * ps; };
+            const ImVec2 pivot(phoneX + phoneW * 0.5f, phoneY + phoneH * 0.5f);
+            constexpr float kTiltDeg = 3.0f;
+            const float tr = kTiltDeg * 3.14159265358979f / 180.0f;
+            const float tc = std::cos(tr);
+            const float ts = std::sin(tr);
             const int phoneVtx0 = dl->VtxBuffer.Size;
             const GLuint phoneFrame = selectTex(renderer, "img_smartphone");
             if (phoneFrame != 0) {
                 dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(phoneFrame)),
-                    ImVec2(pcx - pw * 0.5f, pTop), ImVec2(pcx + pw * 0.5f, pTop + ph),
-                    ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), IM_COL32(255, 255, 255, 255));
+                    ImVec2(phoneX, phoneY), ImVec2(phoneX + phoneW, phoneY + phoneH));
             } else {
-                dl->AddRectFilled(ImVec2(pcx - pw * 0.5f, pTop), ImVec2(pcx + pw * 0.5f, pTop + ph),
-                    IM_COL32(62, 58, 88, 245), 48.0f * k);
+                dl->AddRectFilledMultiColor(ImVec2(phoneX, phoneY),
+                    ImVec2(phoneX + phoneW, phoneY + phoneH), IM_COL32(56, 48, 98, 255),
+                    IM_COL32(38, 32, 72, 255), IM_COL32(30, 26, 58, 255), IM_COL32(46, 40, 84, 255));
             }
-            // Jacket 376x376, top edge 229 below the handset top, centre x -2.6.
-            const float jd = 376.0f * q;
-            const float jx = pcx - 2.6f * q;
-            const float jy = pTop + 229.0f * q;
-            addJacket(dl, thumbFor(renderer, entry.coverPath),
-                ImVec2(jx - jd * 0.5f, jy), ImVec2(jx + jd * 0.5f, jy + jd), 8.0f * k);
-            // MusicInfoContent: title 440.2x50 at y=+52 (from its centre),
-            // artist 440.2x28 at y=+8, vocal 440.2x28 at y=-29.
-            // MusicInfoContent is a 440.2-wide block whose pivot is its centre;
-            // addTextLeft wants the left edge, hence -220.1, not -75.3.
-            const float infoLeft = pcx - (75.3f + 220.1f) * q;
-            const float infoTop = jy + jd + 40.0f * q;
-            const std::string t = ellipsize(body, 36.0f * q, entry.title, 440.0f * q);
-            addTextLeft(dl, body, 36.0f * q, ImVec2(infoLeft, infoTop),
+            const float jx = PX(186.5f);
+            const float jy = PY(92.5f);
+            const float jd = 376.0f * ps;
+            addJacket(dl, thumbFor(renderer, entry.coverPath), ImVec2(jx, jy),
+                ImVec2(jx + jd, jy + jd), 0.0f);
+            const float contentL = PX(81.7f);
+            const float textMaxW = 440.2f * ps;
+            const std::string t = ellipsize(title, 36.0f * ps, entry.title, textMaxW);
+            addTextLeft(dl, title, 36.0f * ps, ImVec2(contentL, PY(513.9f)),
                 IM_COL32(255, 255, 255, 255), t.c_str());
-            const std::string a = ellipsize(body, 28.0f * q,
-                entry.artist.empty() ? "-" : entry.artist, 440.0f * q);
-            addTextLeft(dl, body, 28.0f * q, ImVec2(infoLeft, infoTop + 50.0f * q),
+            const std::string a = ellipsize(body, 28.0f * ps,
+                entry.artist.empty() ? "-" : entry.artist, textMaxW);
+            addTextLeft(dl, body, 28.0f * ps, ImVec2(contentL, PY(557.0f)),
                 IM_COL32(215, 212, 235, 255), a.c_str());
             {
-                // Vo. line follows the selected vocal version, not the union of
-                // every version (the old code showed all five singers).
                 std::string vocalLine;
                 const std::vector<VocalVersion> versions = availableVocals(entry);
                 if (vocalIndex >= 0 && vocalIndex < static_cast<int>(versions.size())) {
@@ -3064,59 +3125,141 @@ namespace
                     vocalLine = entry.vocal;
                 }
                 if (!vocalLine.empty()) {
-                    const std::string v = ellipsize(body, 28.0f * q, "Vo. " + vocalLine, 440.0f * q);
-                    addTextLeft(dl, body, 28.0f * q, ImVec2(infoLeft, infoTop + 88.0f * q),
+                    const std::string v = ellipsize(body, 28.0f * ps, "Vo. " + vocalLine, textMaxW);
+                    addTextLeft(dl, body, 28.0f * ps, ImVec2(contentL, PY(594.9f)),
                         IM_COL32(215, 212, 235, 255), v.c_str());
                 }
             }
-            // Difficulty label (UIPartsMusicDifficultyLabelWithIcon 144x40).
-            const float dlW = 144.0f * q;
-            const float dlH = 40.0f * q;
-            const float dlX = pcx - dlW * 0.5f;
-            const float dlY = infoTop + 150.0f * q;
-            dl->AddRectFilled(ImVec2(dlX, dlY), ImVec2(dlX + dlW, dlY + dlH),
-                kDiffColors[std::clamp(difficulty, 0, kDiffCount - 1)], dlH * 0.5f);
-            addTextCentered(dl, body, 24.0f * q,
-                ImVec2(pcx, dlY + dlH * 0.5f), IM_COL32(255, 255, 255, 255),
-                kDiffNames[std::clamp(difficulty, 0, kDiffCount - 1)]);
-            // Play button (MainButtonContent/PositiveButton) — a mint disc with
-            // the official play triangle; the exact 258x96 capsule is behind it.
-            const float playD = 132.0f * q;
-            const ImVec2 playC(pcx, pTop + 900.0f * q);
-            dl->AddCircleFilled(playC, playD * 0.5f, IM_COL32(106, 232, 208, 255), 48);
-            const ImVec2 triA(playC.x - 16.0f * q, playC.y - 25.0f * q);
-            const ImVec2 triB(playC.x + 26.0f * q, playC.y);
-            const ImVec2 triC(playC.x - 16.0f * q, playC.y + 25.0f * q);
-            dl->AddTriangleFilled(triA, triB, triC, IM_COL32(62, 62, 95, 255));
-            if (hit(playC.x - playD * 0.5f, playC.y - playD * 0.5f, playD, playD)) {
-                phoneStartHit = true;
+            // Difficulty row (read-only on this page): the same five 96px pads
+            // as the select phone, filled from the OTHER charts of this song in
+            // `entries` (same musicId + difficulty name). Selecting a different
+            // difficulty here would be a different chart, so the pads are not
+            // clickable - they only show what the deck is about to play.
+            {
+                const ChartEntry* byDiff[kDiffCount] = {};
+                for (const ChartEntry& e : entries) {
+                    const bool sameSong = (entry.musicId != 0 && e.musicId == entry.musicId)
+                        || (entry.musicId == 0 && e.title == entry.title);
+                    if (!sameSong) {
+                        continue;
+                    }
+                    const std::string dn = toUpper(e.difficulty);
+                    for (int d = 0; d < kDiffCount; ++d) {
+                        if (dn == kDiffNames[d]) {
+                            byDiff[d] = &e;
+                        }
+                    }
+                }
+                static const char* kOff[kDiffCount] = {
+                    "btn_difficulty_easy_off", "btn_difficulty_normal_off",
+                    "btn_difficulty_hard_off", "btn_difficulty_expert_off",
+                    "btn_difficulty_master_off"};
+                static const char* kOn[kDiffCount] = {
+                    "btn_difficulty_easy_on", "btn_difficulty_normal_on",
+                    "btn_difficulty_hard_on", "btn_difficulty_expert_on",
+                    "btn_difficulty_master_on"};
+                const GLuint ringTex = selectTex(renderer, "eff_btn_difficulty_selected_wh");
+                const GLuint glowTex = selectTex(renderer, "eff_btn_circle_h80_a70_wh");
+                const float imgD = 112.0f * ps;
+                const float selD = 136.0f * ps;
+                float dx = PX(137.2f);
+                for (int d = 0; d < kDiffCount; ++d) {
+                    const bool active = (d == difficulty);
+                    const ImVec2 c(dx, PY(710.2f));
+                    if (active && ringTex != 0) {
+                        dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(ringTex)),
+                            ImVec2(c.x - selD * 0.5f, c.y - selD * 0.5f),
+                            ImVec2(c.x + selD * 0.5f, c.y + selD * 0.5f));
+                    }
+                    if (active && glowTex != 0) {
+                        const float gw = 104.0f * ps;
+                        const ImU32 glowCol = (kDiffColors[d] & ~IM_COL32_A_MASK) | (150u << IM_COL32_A_SHIFT);
+                        dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(glowTex)),
+                            ImVec2(c.x - gw * 0.5f, c.y - gw * 0.5f),
+                            ImVec2(c.x + gw * 0.5f, c.y + gw * 0.5f), ImVec2(0.0f, 0.0f),
+                            ImVec2(1.0f, 1.0f), glowCol);
+                    }
+                    const GLuint dt = selectTex(renderer, active ? kOn[d] : kOff[d]);
+                    if (dt != 0) {
+                        dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(dt)),
+                            ImVec2(c.x - imgD * 0.5f, c.y - imgD * 0.5f),
+                            ImVec2(c.x + imgD * 0.5f, c.y + imgD * 0.5f), ImVec2(0.0f, 0.0f),
+                            ImVec2(1.0f, 1.0f),
+                            byDiff[d] != nullptr ? IM_COL32(255, 255, 255, 255)
+                                                 : IM_COL32(120, 126, 145, 255));
+                    } else {
+                        dl->AddCircleFilled(c, 96.0f * ps * 0.5f,
+                            byDiff[d] != nullptr ? kDiffColors[d] : IM_COL32(120, 126, 145, 255), 40);
+                    }
+                    char lvBuf[16];
+                    const char* lv = byDiff[d] != nullptr ? levelText(*byDiff[d], lvBuf, sizeof(lvBuf)) : "-";
+                    addTextCentered(dl, body, 46.0f * ps, c, IM_COL32(255, 255, 255, 255), lv);
+                    addTextCentered(dl, body, 24.0f * ps,
+                        ImVec2(c.x - 1.63f * ps, c.y + 66.77f * ps),
+                        byDiff[d] != nullptr ? IM_COL32(255, 255, 255, 255)
+                                             : IM_COL32(150, 150, 170, 255),
+                        kDiffNames[d]);
+                    dx += 120.0f * ps;
+                }
             }
-            // Bottom utility row: gear + singer, 80x80.
-            const GLuint gearTex = finalTex(renderer, "icon_setting_wh");
-            const GLuint singerTex = selectTex(renderer, "singer");
-            const float utilY = pTop + 1010.0f * q;
-            if (gearTex != 0) {
-                dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(gearTex)),
-                    ImVec2(pcx - 92.0f * q, utilY), ImVec2(pcx - 12.0f * q, utilY + 80.0f * q),
-                    ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), IM_COL32(235, 235, 245, 220));
+
+            // 确定 (PositiveButton): 258x96 @ (245.1,807.4), the official mint
+            // outline + halo, same as the select screen.
+            const float okW = 258.0f * ps;
+            const float okH = 96.0f * ps;
+            const ImVec2 okA(PX(245.1f), PY(807.4f));
+            const ImVec2 okB(okA.x + okW, okA.y + okH);
+            const GLuint okGlowTex = selectTex(renderer, "eff_btn_round_h80_a70_wh");
+            const GLuint okLineTex = selectTex(renderer, "btn_round_line_h80_wh");
+            if (okGlowTex != 0) {
+                addNinePatch(dl, okGlowTex, 112, 104, ImVec2(okA.x - 5.0f * ps, okA.y - 5.0f * ps),
+                    ImVec2(okB.x + 5.0f * ps, okB.y + 5.0f * ps), 56.0f, 52.0f, ps,
+                    IM_COL32(255, 255, 255, 30));
             }
-            if (singerTex != 0) {
-                dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(singerTex)),
-                    ImVec2(pcx + 12.0f * q, utilY), ImVec2(pcx + 92.0f * q, utilY + 80.0f * q),
-                    ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), IM_COL32(235, 235, 245, 220));
+            if (okLineTex != 0) {
+                addNinePatch(dl, okLineTex, 106, 96, okA, okB, 52.0f, 0.0f, ps,
+                    IM_COL32(119, 238, 221, 255));
+            } else {
+                dl->AddRect(okA, okB, IM_COL32(119, 238, 221, 255), okH * 0.5f, 0, 2.0f * ps);
             }
-            // Same tilt as the select-screen phone: the prefab's quaternion is
-            // -3.00 deg in Unity's y-up frame = +3 deg in ours (right end lower).
-            // This used to be +5 deg, which was a hand-tuned guess from before
-            // the quaternion was decoded.
-            const float ang = 3.0f * 3.14159265f / 180.0f;
-            const float ca = std::cos(ang);
-            const float sa = std::sin(ang);
+            addTextCentered(dl, body, 32.0f * ps, ImVec2((okA.x + okB.x) * 0.5f, (okA.y + okB.y) * 0.5f),
+                IM_COL32(119, 238, 221, 255), "确定");
+            // Hit test: undo the tilt around the phone centre, then compare in
+            // flat phone-local coordinates.
+            {
+                const ImVec2 lm(mouse.x - pivot.x, mouse.y - pivot.y);
+                const ImVec2 lp(pivot.x + lm.x * tc + lm.y * ts, pivot.y - lm.x * ts + lm.y * tc);
+                if (clicked && lp.x >= okA.x && lp.x <= okB.x && lp.y >= okA.y && lp.y <= okB.y) {
+                    phoneStartHit = true;
+                }
+            }
+
+            // Bottom utility row (same two icons as the select phone): gear at
+            // local x 281.45, singer at 469.45, 80x80 at y 898.5. Decorative on
+            // this page - the deck/confirm controls are the interactive ones.
+            {
+                const GLuint gearTex = finalTex(renderer, "icon_setting_wh");
+                const GLuint singerTex = selectTex(renderer, "singer");
+                const float iy = PY(898.5f);
+                const float iw = 80.0f * ps;
+                if (gearTex != 0) {
+                    dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(gearTex)),
+                        ImVec2(PX(281.45f) - iw * 0.5f, iy), ImVec2(PX(281.45f) + iw * 0.5f, iy + iw),
+                        ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), IM_COL32(235, 235, 245, 210));
+                }
+                if (singerTex != 0) {
+                    dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(singerTex)),
+                        ImVec2(PX(469.45f) - iw * 0.5f, iy), ImVec2(PX(469.45f) + iw * 0.5f, iy + iw),
+                        ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), IM_COL32(235, 235, 245, 210));
+                }
+            }
+
+            // Tilt every vertex added for the phone (frame, art, text, button).
             for (int v = phoneVtx0; v < dl->VtxBuffer.Size; ++v) {
                 ImVec2& p = dl->VtxBuffer[v].pos;
-                const float dx = p.x - pcx;
-                const float dy = p.y - pcy;
-                p = ImVec2(pcx + dx * ca - dy * sa, pcy + dx * sa + dy * ca);
+                const float dx = p.x - pivot.x;
+                const float dy = p.y - pivot.y;
+                p = ImVec2(pivot.x + dx * tc - dy * ts, pivot.y + dx * ts + dy * tc);
             }
         }
 
@@ -3198,7 +3341,6 @@ namespace
                 dl->VtxBuffer[v].pos.y += oy;
             }
         }
-        (void)vocalIndex;
         return finalResult;
     }
 } // namespace
@@ -6585,34 +6727,11 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             ui::se(ui::SeWindowClose);
             gMenuOpen = false;
         }
-        const int menuAlpha = static_cast<int>(246.0f * menuEase); // 原作 80%，见下
-        const int menuAlphaBottom = static_cast<int>(252.0f * menuEase);
-        // Bg：纯色 #444466，满高、贴右。左缘一条 2px 的淡白边把抽屉和
-        // 背景分开（原作贴图没有投影）。
-        //
-        // 原作是 80%（204）—— 它底下那张选曲背景是深色的，透 20% 刚好。
-        // 我们底下是整台**浅色手机**（难度圆盘、确定键都在这一带），而且
-        // 卡片自己也是 80% 白：两层半透明叠起来，手机的「EASY/NORMAL/…」
-        // 会透过白卡，像水印。所以面板收到 96.5%（卡片那一带），卡片以下
-        // 再收到 99%，只留 24k 过渡避免硬边。留住一点"半透明抽屉"的意思，
-        // 但不让底下的控件变成鬼影。
-        const float panelSolidY = 664.4f * k; // 第三行卡片的底边
-        if (panelSolidY < h) {
-            dl->AddRectFilled(ImVec2(menuX0, 0.0f), ImVec2(menuX0 + menuW, panelSolidY),
-                IM_COL32(68, 68, 102, menuAlpha));
-            const float ramp = std::min(24.0f * k, h - panelSolidY);
-            dl->AddRectFilledMultiColor(ImVec2(menuX0, panelSolidY),
-                ImVec2(menuX0 + menuW, panelSolidY + ramp),
-                IM_COL32(68, 68, 102, menuAlpha), IM_COL32(68, 68, 102, menuAlpha),
-                IM_COL32(68, 68, 102, menuAlphaBottom), IM_COL32(68, 68, 102, menuAlphaBottom));
-            if (panelSolidY + ramp < h) {
-                dl->AddRectFilled(ImVec2(menuX0, panelSolidY + ramp), ImVec2(menuX0 + menuW, h),
-                    IM_COL32(68, 68, 102, menuAlphaBottom));
-            }
-        } else {
-            dl->AddRectFilled(ImVec2(menuX0, 0.0f), ImVec2(menuX0 + menuW, h),
-                IM_COL32(68, 68, 102, menuAlpha));
-        }
+        const int menuAlpha = static_cast<int>(204.0f * menuEase); // 原作 80%
+        // Bg：纯色 #444466 / 80%、满高、贴右（原作 MenuDialog 的 Bg）。左缘一条
+        // 2px 的淡白边把抽屉和背景分开（原作贴图没有投影）。
+        dl->AddRectFilled(ImVec2(menuX0, 0.0f), ImVec2(menuX0 + menuW, h),
+            IM_COL32(68, 68, 102, menuAlpha));
         dl->AddRectFilled(ImVec2(menuX0, 0.0f), ImVec2(menuX0 + 2.0f * k, h),
             IM_COL32(255, 255, 255, static_cast<int>(26.0f * menuEase)));
 
@@ -6750,23 +6869,6 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
                     ic0, ic1, ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f),
                     IM_COL32(68, 68, 102, static_cast<int>((190.0f + 50.0f * glow) * menuEase)));
             }
-        }
-
-        // 底部页脚：抽屉是满高的，8 件之后的空白用一条分隔线 + 关闭提示收个尾
-        // （不是装饰：点左侧空白 / Esc 都能关，但玩家不一定知道）。
-        {
-            const float footY = h - 92.0f * k;
-            dl->AddRectFilled(ImVec2(menuX0 + 24.0f * k, footY),
-                ImVec2(menuX0 + menuW - 24.0f * k, footY + 2.0f * k),
-                IM_COL32(255, 255, 255, static_cast<int>(34.0f * menuEase)));
-            addTextLeft(dl, body, 18.0f * k, ImVec2(menuX0 + 24.0f * k, footY + 26.0f * k),
-                IM_COL32(214, 214, 232, static_cast<int>(170.0f * menuEase)),
-                "Esc 或点左侧空白关闭");
-            const char* mark = "CppSekai";
-            const ImVec2 markSize = body->CalcTextSizeA(18.0f * k, FLT_MAX, 0.0f, mark);
-            addTextLeft(dl, body, 18.0f * k,
-                ImVec2(menuX0 + menuW - 24.0f * k - markSize.x, footY + 26.0f * k),
-                IM_COL32(214, 214, 232, static_cast<int>(120.0f * menuEase)), mark);
         }
 
         if (menuCommand != 0) {
