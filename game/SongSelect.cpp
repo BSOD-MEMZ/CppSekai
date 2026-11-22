@@ -532,6 +532,9 @@ void debugOpenMenuDrawer(bool open)
 // 开始，而是先停在这里；Start 才把 action 交给 main。整个页面在
 // drawSongSelect 顶部单独绘制，底下的列表/手机不参与命中测试。
 bool gFinalConfirmOpen = false;
+// 最终页开始钮（160x160）在窗口坐标里的中心；main 的白色爆闪从这起，
+// 不是选曲手机那颗 258x96 确定的位置。
+ImVec2 gFinalPlayCenter{0.0f, 0.0f};
 int gFinalEntry = -1;
 int gFinalDifficulty = 3;
 int gFinalVocal = 0;
@@ -2931,7 +2934,7 @@ namespace
         const GLuint deckTex = finalTex(renderer, "bg_base_three_r16_wh");
         if (deckTex != 0) {
             addNinePatch(dl, deckTex, 36, 36, ImVec2(deckX, deckY),
-                ImVec2(deckX + deckW, deckY + deckH), 16.0f, 16.0f, k,
+                ImVec2(deckX + deckW, deckY + deckH), 17.0f, 17.0f, k,
                 IM_COL32(223, 223, 234, 204));
         } else {
             dl->AddRectFilled(ImVec2(deckX, deckY), ImVec2(deckX + deckW, deckY + deckH),
@@ -2967,7 +2970,7 @@ namespace
             const ImVec2 sel1(790.5f * k, 183.6f * k);
             const GLuint selTex = finalTex(renderer, "bg_base_round_h56_wh");
             if (selTex != 0) {
-                addNinePatch(dl, selTex, 28, 28, sel0, sel1, 28.0f, 28.0f, k,
+                addNinePatch(dl, selTex, 66, 56, sel0, sel1, 33.0f, 28.0f, k,
                     IM_COL32(188, 188, 208, 230));
             } else {
                 dl->AddRectFilled(sel0, sel1, IM_COL32(188, 188, 208, 230), 28.0f * k);
@@ -2977,13 +2980,16 @@ namespace
                 IM_COL32(68, 68, 102, 255), "默认队伍");
         }
 
-        // DeckName 375.7x55.4 @ (70.4,200.7)：当前卡组的名字条。
         {
+            // DeckName 375.7x55.4 @ (70.4,200.7)：当前卡组的名字条。
+            // bg_base_half_r16_wh 的 Border 是 (左21/下1/右21/上25)，没有对称
+            // 九宫格（我们的 addNinePatch 只吃对称值），硬套会把上下边拉成一条
+            // 怪线 —— 换成四角都是 21 的 bg_base_r16_wh。
             const ImVec2 n0(70.4f * k, 200.7f * k);
             const ImVec2 n1(446.1f * k, 256.1f * k);
-            const GLuint nameTex = finalTex(renderer, "bg_base_half_r16_wh");
+            const GLuint nameTex = finalTex(renderer, "bg_base_r16_wh");
             if (nameTex != 0) {
-                addNinePatch(dl, nameTex, 28, 28, n0, n1, 16.0f, 16.0f, k,
+                addNinePatch(dl, nameTex, 42, 42, n0, n1, 21.0f, 21.0f, k,
                     IM_COL32(223, 223, 234, 204));
             } else {
                 dl->AddRectFilled(n0, n1, IM_COL32(223, 223, 234, 204), 16.0f * k);
@@ -3039,7 +3045,11 @@ namespace
             const float x = cardsX + static_cast<float>(i) * (cardW + gap);
             const ImVec2 p0(x, cardsY);
             const ImVec2 p1(x + cardW, cardsY + cardH);
-            dl->AddRectFilled(p0, p1, IM_COL32(176, 189, 200, 255), 16.0f * k);
+            // Empty slot: prefab 703's `Empty/Frame` is `base_wh` (Border 0) -
+            // a FLAT #B0BDC8 rectangle, not a 16px pill. The rounding people
+            // see on filled cards comes from `cardFrame_M_4` on top of the art;
+            // there is no frame on an empty slot.
+            dl->AddRectFilled(p0, p1, IM_COL32(176, 189, 200, 255));
             const ImVec2 c((p0.x + p1.x) * 0.5f, (p0.y + p1.y) * 0.5f);
             const float d = 72.0f * k;
             if (circleTex != 0) {
@@ -3130,107 +3140,90 @@ namespace
                         IM_COL32(215, 212, 235, 255), v.c_str());
                 }
             }
-            // Difficulty row (read-only on this page): the same five 96px pads
-            // as the select phone, filled from the OTHER charts of this song in
-            // `entries` (same musicId + difficulty name). Selecting a different
-            // difficulty here would be a different chart, so the pads are not
-            // clickable - they only show what the deck is about to play.
+            // 最终确认页没有难度选择：只留 144x40 的难度牌（UIPartsMusicDifficultyLabel），
+            // 下面是手机自己的 SoloLiveFinalConfirmButton（160x160，btn_play_gn）。
+            // 这来自 prefab 704 的 `SoloLiveFinalConfirmButton` 节点，不是我们画的绿圆。
             {
-                const ChartEntry* byDiff[kDiffCount] = {};
-                for (const ChartEntry& e : entries) {
-                    const bool sameSong = (entry.musicId != 0 && e.musicId == entry.musicId)
-                        || (entry.musicId == 0 && e.title == entry.title);
-                    if (!sameSong) {
-                        continue;
+                const int d = std::clamp(difficulty, 0, kDiffCount - 1);
+                const float lw = 144.0f * ps;
+                const float lh = 40.0f * ps;
+                const ImVec2 l0(PX(303.0f), PY(637.3f));
+                dl->AddRectFilled(l0, ImVec2(l0.x + lw, l0.y + lh), kDiffColors[d], lh * 0.5f);
+                addTextCentered(dl, body, 24.0f * ps,
+                    ImVec2(l0.x + lw * 0.5f, l0.y + lh * 0.5f),
+                    IM_COL32(255, 255, 255, 255), kDiffNames[d]);
+            }
+            // Play button: prefab 704 `SoloLiveFinalConfirmButton` / `PlayButton`
+            // = 160x160 at phone-local (482..642, -386.5..-226.5) in the 1920
+            // overlay -> local top-left (297.1, 732.9), centre (377.1, 812.9).
+            // The 258x96 PositiveButton is the *select* mode and is hidden here.
+            const ImVec2 playC(PX(377.1f), PY(812.9f));
+            const float playD = 160.0f * ps;
+            {
+                const float pdx = playC.x - pivot.x;
+                const float pdy = playC.y - pivot.y;
+                gFinalPlayCenter = ImVec2(pivot.x + pdx * tc - pdy * ts + ox,
+                    pivot.y + pdx * ts + pdy * tc + oy);
+            }
+            {
+                const GLuint glow = selectTex(renderer, "eff_btn_circle_h80_a70_wh");
+                if (glow != 0) {
+                    const float gd = 180.0f * ps;
+                    dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(glow)),
+                        ImVec2(playC.x - gd * 0.5f, playC.y - gd * 0.5f),
+                        ImVec2(playC.x + gd * 0.5f, playC.y + gd * 0.5f), ImVec2(0.0f, 0.0f),
+                        ImVec2(1.0f, 1.0f), IM_COL32(119, 238, 221, 40));
+                }
+                const GLuint playTex = finalTex(renderer, "btn_play_gn");
+                if (playTex != 0) {
+                    dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(playTex)),
+                        ImVec2(playC.x - playD * 0.5f, playC.y - playD * 0.5f),
+                        ImVec2(playC.x + playD * 0.5f, playC.y + playD * 0.5f));
+                } else {
+                    dl->AddCircleFilled(playC, playD * 0.5f, IM_COL32(119, 238, 221, 255), 48);
+                    dl->AddTriangleFilled(ImVec2(playC.x - 18.0f * ps, playC.y - 28.0f * ps),
+                        ImVec2(playC.x + 28.0f * ps, playC.y),
+                        ImVec2(playC.x - 18.0f * ps, playC.y + 28.0f * ps),
+                        IM_COL32(62, 62, 95, 255));
+                }
+            }
+            // Click -> a short mint ring burst, then hand the entry back to main
+            // (main's confirm-white-flash covers the load, same as the select 确定).
+            {
+                static float fxAt = -1.0f;
+                // Reset if a previous run was interrupted.
+                if (fxAt >= 0.0f && static_cast<float>(timeSec) - fxAt > 1.0f) {
+                    fxAt = -1.0f;
+                }
+                const float now = static_cast<float>(timeSec);
+                if (fxAt < 0.0f && clicked) {
+                    const ImVec2 lm(mouse.x - pivot.x, mouse.y - pivot.y);
+                    const ImVec2 lp(pivot.x + lm.x * tc + lm.y * ts, pivot.y - lm.x * ts + lm.y * tc);
+                    const float half = playD * 0.5f;
+                    if (lp.x >= playC.x - half && lp.x <= playC.x + half
+                        && lp.y >= playC.y - half && lp.y <= playC.y + half) {
+                        fxAt = now;
+                        ui::se(ui::SeStart);
                     }
-                    const std::string dn = toUpper(e.difficulty);
-                    for (int d = 0; d < kDiffCount; ++d) {
-                        if (dn == kDiffNames[d]) {
-                            byDiff[d] = &e;
+                }
+                if (fxAt >= 0.0f) {
+                    const float t = now - fxAt;
+                    if (t < 0.36f) {
+                        for (int r = 0; r < 3; ++r) {
+                            const float p = std::clamp((t - 0.05f * static_cast<float>(r)) / 0.30f, 0.0f, 1.0f);
+                            if (p <= 0.0f) {
+                                continue;
+                            }
+                            const float rad = (playD * 0.5f) * (1.0f + 1.8f * p);
+                            dl->AddCircle(playC, rad, IM_COL32(119, 238, 221,
+                                static_cast<int>(200.0f * (1.0f - p))), 64, 4.0f * ps);
                         }
-                    }
-                }
-                static const char* kOff[kDiffCount] = {
-                    "btn_difficulty_easy_off", "btn_difficulty_normal_off",
-                    "btn_difficulty_hard_off", "btn_difficulty_expert_off",
-                    "btn_difficulty_master_off"};
-                static const char* kOn[kDiffCount] = {
-                    "btn_difficulty_easy_on", "btn_difficulty_normal_on",
-                    "btn_difficulty_hard_on", "btn_difficulty_expert_on",
-                    "btn_difficulty_master_on"};
-                const GLuint ringTex = selectTex(renderer, "eff_btn_difficulty_selected_wh");
-                const GLuint glowTex = selectTex(renderer, "eff_btn_circle_h80_a70_wh");
-                const float imgD = 112.0f * ps;
-                const float selD = 136.0f * ps;
-                float dx = PX(137.2f);
-                for (int d = 0; d < kDiffCount; ++d) {
-                    const bool active = (d == difficulty);
-                    const ImVec2 c(dx, PY(710.2f));
-                    if (active && ringTex != 0) {
-                        dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(ringTex)),
-                            ImVec2(c.x - selD * 0.5f, c.y - selD * 0.5f),
-                            ImVec2(c.x + selD * 0.5f, c.y + selD * 0.5f));
-                    }
-                    if (active && glowTex != 0) {
-                        const float gw = 104.0f * ps;
-                        const ImU32 glowCol = (kDiffColors[d] & ~IM_COL32_A_MASK) | (150u << IM_COL32_A_SHIFT);
-                        dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(glowTex)),
-                            ImVec2(c.x - gw * 0.5f, c.y - gw * 0.5f),
-                            ImVec2(c.x + gw * 0.5f, c.y + gw * 0.5f), ImVec2(0.0f, 0.0f),
-                            ImVec2(1.0f, 1.0f), glowCol);
-                    }
-                    const GLuint dt = selectTex(renderer, active ? kOn[d] : kOff[d]);
-                    if (dt != 0) {
-                        dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(dt)),
-                            ImVec2(c.x - imgD * 0.5f, c.y - imgD * 0.5f),
-                            ImVec2(c.x + imgD * 0.5f, c.y + imgD * 0.5f), ImVec2(0.0f, 0.0f),
-                            ImVec2(1.0f, 1.0f),
-                            byDiff[d] != nullptr ? IM_COL32(255, 255, 255, 255)
-                                                 : IM_COL32(120, 126, 145, 255));
+                        dl->AddCircleFilled(playC, playD * (0.5f + t * 0.8f),
+                            IM_COL32(255, 255, 255, static_cast<int>(120.0f * (1.0f - t / 0.36f))), 48);
                     } else {
-                        dl->AddCircleFilled(c, 96.0f * ps * 0.5f,
-                            byDiff[d] != nullptr ? kDiffColors[d] : IM_COL32(120, 126, 145, 255), 40);
+                        fxAt = -1.0f;
+                        phoneStartHit = true;
                     }
-                    char lvBuf[16];
-                    const char* lv = byDiff[d] != nullptr ? levelText(*byDiff[d], lvBuf, sizeof(lvBuf)) : "-";
-                    addTextCentered(dl, body, 46.0f * ps, c, IM_COL32(255, 255, 255, 255), lv);
-                    addTextCentered(dl, body, 24.0f * ps,
-                        ImVec2(c.x - 1.63f * ps, c.y + 66.77f * ps),
-                        byDiff[d] != nullptr ? IM_COL32(255, 255, 255, 255)
-                                             : IM_COL32(150, 150, 170, 255),
-                        kDiffNames[d]);
-                    dx += 120.0f * ps;
-                }
-            }
-
-            // 确定 (PositiveButton): 258x96 @ (245.1,807.4), the official mint
-            // outline + halo, same as the select screen.
-            const float okW = 258.0f * ps;
-            const float okH = 96.0f * ps;
-            const ImVec2 okA(PX(245.1f), PY(807.4f));
-            const ImVec2 okB(okA.x + okW, okA.y + okH);
-            const GLuint okGlowTex = selectTex(renderer, "eff_btn_round_h80_a70_wh");
-            const GLuint okLineTex = selectTex(renderer, "btn_round_line_h80_wh");
-            if (okGlowTex != 0) {
-                addNinePatch(dl, okGlowTex, 112, 104, ImVec2(okA.x - 5.0f * ps, okA.y - 5.0f * ps),
-                    ImVec2(okB.x + 5.0f * ps, okB.y + 5.0f * ps), 56.0f, 52.0f, ps,
-                    IM_COL32(255, 255, 255, 30));
-            }
-            if (okLineTex != 0) {
-                addNinePatch(dl, okLineTex, 106, 96, okA, okB, 52.0f, 0.0f, ps,
-                    IM_COL32(119, 238, 221, 255));
-            } else {
-                dl->AddRect(okA, okB, IM_COL32(119, 238, 221, 255), okH * 0.5f, 0, 2.0f * ps);
-            }
-            addTextCentered(dl, body, 32.0f * ps, ImVec2((okA.x + okB.x) * 0.5f, (okA.y + okB.y) * 0.5f),
-                IM_COL32(119, 238, 221, 255), "确定");
-            // Hit test: undo the tilt around the phone centre, then compare in
-            // flat phone-local coordinates.
-            {
-                const ImVec2 lm(mouse.x - pivot.x, mouse.y - pivot.y);
-                const ImVec2 lp(pivot.x + lm.x * tc + lm.y * ts, pivot.y - lm.x * ts + lm.y * tc);
-                if (clicked && lp.x >= okA.x && lp.x <= okB.x && lp.y >= okA.y && lp.y <= okB.y) {
-                    phoneStartHit = true;
                 }
             }
 
@@ -3339,6 +3332,57 @@ namespace
             for (int v = contentVtx0; v < dl->VtxBuffer.Size; ++v) {
                 dl->VtxBuffer[v].pos.x += ox;
                 dl->VtxBuffer[v].pos.y += oy;
+            }
+        }
+
+        // Header: the final page inherits the select header's two round buttons
+        // (prefab 694: 96x96 at (16,16) and (1808,16), btn_circle80_wh +
+        // icon_back_wh 42x42 / icon_menu_wh 40x34, tint #444466). They are drawn
+        // in WINDOW coordinates after the ox/oy shift, so at uiScale<1 they stay
+        // pinned to the window corners exactly like on the select screen.
+        {
+            const float btnD = 96.0f * k;
+            const float top = 16.0f * k;
+            const float leftX = 16.0f * k;
+            const float rightX = w - 16.0f * k - btnD;
+            const GLuint circleTex = selectTex(renderer, "btn_circle80_wh");
+            const GLuint backTex = selectTex(renderer, "icon_back_wh");
+            const GLuint menuTex = selectTex(renderer, "icon_menu_wh");
+            const auto headerButton = [&](float x, const char* id, GLuint icon, float iw, float ih) {
+                ImGui::SetCursorScreenPos(ImVec2(x, top));
+                ImGui::PushID(id);
+                ImGui::InvisibleButton("##hdr", ImVec2(btnD, btnD));
+                const bool hot = ImGui::IsItemHovered();
+                const bool hit = ImGui::IsItemClicked();
+                ImGui::PopID();
+                const ImVec2 c(x + btnD * 0.5f, top + btnD * 0.5f);
+                if (circleTex != 0) {
+                    dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(circleTex)),
+                        ImVec2(x, top), ImVec2(x + btnD, top + btnD), ImVec2(0.0f, 0.0f),
+                        ImVec2(1.0f, 1.0f), IM_COL32(255, 255, 255, hot ? 255 : 235));
+                } else {
+                    dl->AddCircleFilled(c, btnD * 0.5f, IM_COL32(255, 255, 255, 235), 40);
+                }
+                if (icon != 0) {
+                    dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(icon)),
+                        ImVec2(c.x - iw * 0.5f, c.y - ih * 0.5f),
+                        ImVec2(c.x + iw * 0.5f, c.y + ih * 0.5f), ImVec2(0.0f, 0.0f),
+                        ImVec2(1.0f, 1.0f), IM_COL32(68, 68, 102, 255));
+                }
+                return hit;
+            };
+            const bool backHit = headerButton(leftX, "finalback", backTex, 42.0f * k, 42.0f * k);
+            const bool menuHit = headerButton(rightX, "finalmenu", menuTex, 40.0f * k, 34.0f * k);
+            if (backHit || menuHit) {
+                gFinalConfirmOpen = false;
+                if (menuHit) {
+                    // The drawer lives on the select screen; go back there and
+                    // open it, so the final page does not need a second copy of
+                    // the whole MenuDialog.
+                    gMenuOpen = true;
+                }
+                ui::se(ui::SeClick);
+                finalResult = SelectNone;
             }
         }
         return finalResult;
@@ -4051,6 +4095,11 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             selected = gFinalEntry;
             vocalIndex = gFinalVocal;
             action = finalAction;
+            // main's white burst / decide burst should start from the final
+            // page's big play button, not from the (not drawn) select phone.
+            if (confirmCenter != nullptr) {
+                *confirmCenter = gFinalPlayCenter;
+            }
         }
         ImGui::End();
         if (gSelectFillDisabled) {
