@@ -78,46 +78,52 @@ BottomLeft/AutoLiveToggle
                       两者不可能同时可见 —— 我们的摆法见 §3.1
 ```
 
-### 3.1 AUTO 那一坨到底怎么摆（2026-11-22 第二轮）
+### 3.1 AUTO 那张卡片（2026-11-22 第三轮，照国服截图重做）
 
-三个数字互相打架，得先把它们分开看：
+原作的 AUTO 是**一张卡片**：卡片上烤着 "AUTO" 字样，卡片**里面**左边是开关
+（白色圆钮 + 状态字「开启 / 关闭」），右边一颗白色小圆齿轮 —— 齿轮在卡片里，
+点它进设置。prefab 里这几个零件都在 `AutoLiveToggle` 底下：
 
-1. `AutoLiveToggle.sizeDelta.x = 0` —— 节点只有 110 高、宽度没有。Image 是
-   Sliced（border 119/0/51/0，**左 119 装 "AUTO" 三个字母、右 51 是右圆头**），
-   这种切法就是给"横向拉伸"用的，所以宽度一定是代码给的（`SetNativeSize` 之类）。
-   既然宽度是运行时给的，`y=932.4` 也不是能直接用的渲染位置。
-2. `ToggleRoot` 挂在节点的**左下角**（anchor 0,0 / pos 0,0），所以轨道永远在
-   节点的竖直中线下方、水平居中：822.6..974.6 / 1014.4..1070.4。
-3. 小齿轮 `ConsecutiveAutoLiveSetting` 72×72 的中心是 (898.6, 1042.4) —— **和轨道中心
-   是同一个点**。两者只能二选一（原作用 `consecutiveAutoLiveSettingRoot` 在
-   `SetConsecutiveAutoLiveView()` 里切）。
+| 零件 | prefab 值 | 说明 |
+|---|---|---|
+| `Image` | `bg_auto` 180×110，**Sliced border 119/0/51/0** | 左 119 装 "AUTO"、右 51 是右圆头，中间 10px 是给**横向拉伸**用的；70% 白烤在贴图里 |
+| `ToggleRoot` | 822.6, 1014.4 / 152×56 | `Bg` = `bg_base_round_h56_wh`（33/28/33/28）：On `#FF77AA` / Off `#444466` |
+| 旋钮 | 72×72（可见圆 56） | On 中心 (946.1,1042.4)、Off 中心 (850.6,1042.4) |
+| `TextOn`/`TextOff` | 29px 白，中心 872.6 / 923.8 | 状态字在**旋钮对面** |
+| `ConsecutiveAutoLiveSetting` | 72×72（`btn_circle56_wh` + 32×32 `icon_setting`） | 齿轮 |
 
-所以我们的摆法：
-- 卡片 **180×110，底边对齐轨道底边** → 960.4..1070.4（上 54px 放 "AUTO"、下 56px 放开关）。
-  照 932.4 画的话卡片和开关会叠成"两个互相错开的胶囊"，这就是之前"明显不对"的来源。
-- 小齿轮放卡片右侧 8px、竖直对齐开关中心：**996.6..1068.6 / 1006.4..1078.4**，
-  点它 = 直接打开设置卡（不走原作那个"連続オートライブ設定"）。
+⚠ **prefab 把齿轮摆在 AUTO 的正中**（898.6, 1042.4）——和开关是同一个点，
+那是"开关和齿轮互斥"的摆法，两者不可能同时可见。国服版是**并排**放在一张更宽的
+卡片里，所以这里按内容把卡片撑开：
 
+```
+卡片   802.6..1074.6  x  960.4..1070.4   (272x110，底边对齐轨道底边)
+轨道   822.6..974.6   x  1014.4..1070.4  (prefab 原值，不动)
+齿轮   982.6..1054.6  x  1006.4..1078.4  (可见圆 1014.4..1070.4，和轨道齐)
+```
 
-## 3. 明确**不**画的东西（每条都有 `m_IsActive=0` 或代码开关的依据）
-
-| 节点 | 依据 |
-|---|---|
-| `BG` / `BGUnder` | `m_IsActive=0`。BG 是 1546×555 的**不透明纯白**，而且是 DeckBase 的后一个兄弟（Unity 里会盖住面板），只在面板左边露 14px、上边露 48px —— 像一张切坏的白框，原作这一页它就是关的 |
-| `BottomRight`（決定 354.5×116 + 齿轮） | `m_IsActive=0`。开始键是手机上的 `SoloLiveFinalConfirmButton` |
-| `DeckInfo`（阵型缎带 / 5 个 DanceFormationCell / 変更 钮） | `m_IsActive=0` |
-| `TotalPower/WithEventLimit` | 活动加成那条红牌；`WithoutEventLimit` 才是常显那条，代码二选一 |
-| `DeckCard/Exist`、`Leader`、`Selected`、`Lock` | 真实卡组数据（暂时忽略）；后三个本身 `m_IsActive=0` |
-| `OpenBondRankDialogButton` | 角色羁绊按钮（用户要求先不画） |
-| `OriginalMemberButton` | 原始成员 MV（同上） |
-| `ConsecutiveAutoLiveRoot` | 连续自动演出，只有订阅状态才由 `SetConsecutiveAutoLiveView()` 打开 |
-| `SwapMember`（「メンバー入替」勾选框） | prefab 里 `m_IsActive=1`，但勾选框在 931.6..986.6、标签 200×32 从 1001 排到 **1201**，末端 51px 落在手机底下（手机左缘 1144.9），原作不可能这么摆；而且它属于卡组编成模式（`IsMemberSwapMode`），这页不做编成 |
+另外两条硬事实：`AutoLiveToggle.sizeDelta.x = 0`（Image 根本画不出来，宽度/高度都是
+运行时给的，所以 prefab 里那个 `y=932.4` 不能当渲染位置）；把卡片顶边贴 932.4 会
+和开关叠成"两个互相错开的胶囊"，这就是前两版看着不对的原因。
 
 ## 4. 右侧手机（prefab 704）
 
 `CellPhone` 的 anchoredPosition 是 **(562, −202)**、尺寸 754.3×1416.7、绕中心 **+3°**
 （`TransformList/DefaultPosition`，全游戏只有一个位置，**最终页和选曲页一样**）。
 换算到 1920 画布：x 1144.85..1899.15、y 33.65..1450.35。
+
+**两页共用一份 `phoneScreenRect(w,h,k)`（game/SongSelect.cpp）** —— 换页时手机不可能
+再挪位。两个坑都是这条规则治好的：
+
+1. 最终页以前多夹了一次 `k = min(k, h/1080)`：窗口高度不是 1080（最大化后被任务栏
+   吃掉一截、或 125% 缩放的 1440p）时，最终页整体缩到 0.94 倍，手机跟着变小。
+   现在**两页用同一个 k**（选曲页的"按宽度匹配 + 锁 100%"）。
+2. 垂直位置：原作是中心锚点（中心 = 画布中心 + 202），画布矮时整台手机上移、把
+   确定留在屏内；缩放调小后画布高于 1080 时中心锚点又把它往下推。规则是
+   `y = min(33.6k, h/2 + 202k − 754.3k/2)`，两页都必须用它。
+
+实测（1920×1017 与 1920×1080 各截两页，取手机左缘在第 400/600/800 行的 x）：
+两页逐行完全相同。
 
 页面内关键零件（手机局部坐标，乘 `754.3/754.3` 的比例）：
 
@@ -150,31 +156,32 @@ changeVocalButton.enabled = info.EnableChangeVocalButton;  // 只改 enabled，�
 左格点开设置卡，右格换音源版本。
 
 
-## 5. 页面转场：淡出 → 换页 → 淡入（不是闪白）
+## 5. 页面转场：内容淡出 → 换页 → 内容淡入（**不铺白色**）
 
-原作的 screen layer 切换走 `SekaiTransitionController`：一个全屏盖色（`coverFader`）+
-`FadeOut(duration)` / `FadeIn(duration)` / `FadeOutSimple`，也就是**先淡出到盖色、换页、
-再从盖色淡入**。我们 2026-11-22 之前是翻页那一帧直接铺一层 **210/255** 的白再衰减 0.24s，
-于是进出最终页各闪一次，看起来就是"两段屏闪白"。
+原作的 screen layer 切换走 `SekaiTransitionController`：`coverFader` + `FadeOut(duration)`
+/ `FadeIn(duration)`。2026-11-22 第一版我把它做成"淡出到**纯白**、换页、再从纯白淡入"，
+结果淡出到底的那一帧本身就是一次白闪 —— 用户一眼看出来，我还在逐帧图上说"没有"，
+那是错的：**只要画面上出现过一整帧纯白，它就是闪白**。
 
-现在照原作拆成三段（`game/SongSelect.cpp` 里 `requestPageSwitch` / `tickPageSwitch` /
-`drawPageTransition`）：
+现在的做法（`pageFadeContentAlpha` / `fadeContentVertices` / `tickPageFadeEnd`）：
+
+- 两页画的是**同一张背景**（壁纸 / bg_common，像素一致），所以只淡"背景之后的顶点"：
+  把整段 VtxBuffer 的颜色 alpha 乘一个 0→1 的系数。背景始终不动 → 没有白、没有黑。
+- `kPageFadeOut = 0.15` / `kPageFadeIn = 0.21`；**换页动作推到淡出结束那一帧**
+  （`tickPageSwitch`），所以旧页在变淡的过程里还在正常出帧。
+- 选曲页有**两个 draw list**（窗口 + 列表子窗口 `listDl`），两个都要乘，
+  不然列表会留在原地。最终页只有一个。
+- 淡出期间整页吃点击（`pageSwitchBusy()`）。
+- 返回方向（ESC / 左上返回钮）走同一个 `requestPageSwitch(false, …)`。
+
+全屏平均亮度的实测（960×540，`CPSEKAI_FINAL_FADE=1.0`）：
 
 ```
-t=0            点 确定 / Enter          requestPageSwitch(true, now, ...)   只记状态
-t=0 .. 0.15    旧页正常出帧，白盖色 0→1  drawPageTransition（alpha = t / kPageFadeOut）
-t=0.15         真正换页（一帧）          tickPageSwitch：gFinalConfirmOpen = 目标
-t=0.15 .. 0.36 新页从纯白淡出来          alpha = 1 − (t−0.15) / kPageFadeIn
+1.00 → 119.6   1.05 → 115.0   1.10 → 110.2   1.13 → 106.9   (旧页淡到底)
+1.16 → 105.2   1.20 → 114.9   1.26 → 126.7   1.32 → 132.5   1.38 → 135.5 (新页)
 ```
 
-- `kPageFadeOut = 0.15` / `kPageFadeIn = 0.21`，盖色用**白**（和 确定/开始 的爆闪同色，
-  衔接处看不出第二条边界）。
-- **换页动作必须推到淡出结束**（`tickPageSwitch`）—— 在点击那一帧就翻页的话，
-  旧页一帧都没有淡出过程，又变回闪屏。
-- 淡出期间整页吃掉点击（`pageSwitchBusy()`），不然白屏上还能先爆一颗闪。
-- 返回方向（ESC / 左上返回钮 / 抽屉里的"离开这一页"命令）走同一个 `requestPageSwitch(false, …)`。
-- 调试：`CPSEKAI_FINAL_FADE=<sec>` 在选曲页 t=秒 处自动触发一次"去最终页"的转场，
-  配 `--screenshot-time` 抓中间帧：`1.08` 淡出、`1.26` 淡入（`--width 960 --height 540` 够快）。
+单调下、单调上，**中间没有尖峰**（第一版那里会冲到 253 又掉回来）。
 
 ## 6. 验收手法
 

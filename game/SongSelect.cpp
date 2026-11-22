@@ -3055,25 +3055,82 @@ namespace
         gFinalBurstQueued = false;
     }
 
-    void drawPageTransition(ImDrawList* dl, float w, float h, float now)
+    // 转场期间**内容**的不透明度：淡出 1→0、换页、淡入 0→1。
+    //
+    // ⚠ 这里绝对不能铺白色盖色 —— 铺了就是"闪白"：淡出到纯白的那一帧本身就是
+    // 一次白闪（2026-11-22 第一版就是这么做的，用户一眼就看出来）。两页画的
+    // 是**同一张背景**（壁纸 / bg_common，像素一致），所以正确的做法是把背景
+    // 之后的顶点整体乘 alpha：旧页内容渐隐 → 换页 → 新页内容渐显，背景一直在，
+    // 没有白。
+    float pageFadeContentAlpha(float now)
+    {
+        if (!pageSwitchBusy()) {
+            return 1.0f;
+        }
+        const float t = now - gPageFade.at;
+        if (!gPageFade.switched) {
+            return std::clamp(1.0f - t / kPageFadeOut, 0.0f, 1.0f);
+        }
+        return std::clamp((t - kPageFadeOut) / kPageFadeIn, 0.0f, 1.0f);
+    }
+
+    // 把 `dl` 里从 `vtx0` 开始的顶点（以及 `extra` 的**全部**顶点）乘一个 alpha。
+    // `extra` 是选曲页那个列表子窗口的 draw list —— 子窗口是另一张列表、渲染在
+    // 父窗口之后，只淡父窗口的话列表会留在原地。
+    void fadeContentVertices(ImDrawList* dl, int vtx0, ImDrawList* extra, float f)
+    {
+        if (f >= 0.999f) {
+            return;
+        }
+        const auto scale = [f](ImDrawList* list, int first) {
+            if (list == nullptr) {
+                return;
+            }
+            const int n = list->VtxBuffer.Size;
+            for (int i = std::max(0, first); i < n; ++i) {
+                ImU32& c = list->VtxBuffer[i].col;
+                const unsigned a = (c >> 24) & 0xFFu;
+                const unsigned na = static_cast<unsigned>(static_cast<float>(a) * f + 0.5f);
+                c = (c & 0x00FFFFFFu) | (na << 24);
+            }
+        };
+        scale(dl, vtx0);
+        scale(extra, 0);
+    }
+
+    // 转场结束后清状态（每帧末尾调一次）。
+    void tickPageFadeEnd(float now)
     {
         if (!pageSwitchBusy()) {
             return;
         }
-        const float t = now - gPageFade.at;
-        if (t >= kPageFadeOut + kPageFadeIn) {
+        if (now - gPageFade.at >= kPageFadeOut + kPageFadeIn) {
             gPageFade = PageFadeState{};
-            return;
         }
-        float a = 1.0f;
-        if (!gPageFade.switched) {
-            a = t / kPageFadeOut;
-        } else {
-            a = 1.0f - (t - kPageFadeOut) / kPageFadeIn;
-        }
-        a = std::clamp(a, 0.0f, 1.0f);
-        dl->AddRectFilled(ImVec2(0.0f, 0.0f), ImVec2(w, h),
-            IM_COL32(255, 255, 255, static_cast<int>(255.0f * a)));
+    }
+
+    // ScreenLayerFreeLiveCellPhone 的屏幕矩形 —— **选曲页和最终确认页共用这一份**。
+    // 以前两页各写一遍，最终页少了"画布矮时改用中心锚点"那条规则，于是窗口高度
+    // < 1080（最大化后被任务栏吃掉一截就是这样）时，手机在两页之间会上下跳
+    // ——用户报的"换页后不是同一台手机"。
+    struct PhoneRect
+    {
+        float x, y, w, h, ps;
+    };
+    PhoneRect phoneScreenRect(float w, float h, float k)
+    {
+        PhoneRect r{};
+        r.w = 754.3f * k;
+        r.h = 1416.7f * k;
+        r.x = w - 20.8f * k - r.w;
+        // 原作是中心锚点（中心 = 画布中心 + 202）：画布矮时整台手机上移，把
+        // "确定"留在屏内；但缩放调小以后画布比 1080 高，中心锚点反而把它往下推。
+        // 取两者里更靠上的那个。
+        const float yTop = 33.6f * k;
+        const float yCentered = h * 0.5f + 202.0f * k - r.h * 0.5f;
+        r.y = std::min(yTop, yCentered);
+        r.ps = r.w / 754.3f;
+        return r;
     }
 
     // 右上角菜单抽屉（原作 ScreenLayerHeader 的 menuButton -> MenuDialog，
@@ -3293,11 +3350,12 @@ namespace
         }
         ImDrawList* dl = ImGui::GetWindowDrawList();
         const ImGuiIO& io = ImGui::GetIO();
-        // Fit the 1920x1080 page into the window (min of width/height), then
-        // anchor the deck to the left and the phone to the right - the same
-        // edge rule as the select screen. Centering the whole canvas made a
-        // 20:9 window crop the bottom controls.
-        k = std::min(k, h / 1080.0f);
+        // ⚠ **不要再按 h/1080 二次夹 k**。选曲页的 k 是"按宽度匹配 + 锁 100%"，
+        // 而这里以前多夹了一次 min(k, h/1080)：窗口高度一旦不是 1080（最大化后
+        // 被任务栏吃掉一截、或者 125% 缩放的 1440p），最终页就整体缩到 0.94 倍，
+        // 于是"换页后手机变小/位置变了"。两页必须是同一个 k —— 边距本来就都写成
+        // `w - 20.8k`、`33.6k`，贴边规则自己会处理好宽高比。
+        (void)h;
         constexpr float ox = 0.0f;
         constexpr float oy = 0.0f;
         const ImVec2 mouse(io.MousePos.x, io.MousePos.y);
@@ -3467,6 +3525,41 @@ namespace
             }
         }
 
+        // ---- DeckView/DeckBase/SwapMember（checkbox + 标签）---------------------
+        // prefab：SwapMember 挂在 DeckBase 顶边右侧 (192.1,291.5)，子节点
+        //   UIPartsCheckBox 55x55 → CheckBox 56x56 @ 931.6,271.6（bg_base_r16_wh，
+        //   Sliced 21/21/21/21，白）+ Shadow 72x72 + Check（勾，m_IsActive=0）
+        //   Text 200x32 @ 1001,283.2，32px #444466
+        // 上一版整块被我跳过，理由是"标签 200 宽会伸出面板"——那是照日文
+        // 「メンバー入替」6 个字算的；国服截图里这颗勾选框的标签是**「排序」**
+        // 两个字、左对齐在 1001，正好落在面板里。所以按 prefab 画回来。
+        {
+            const Rect box = R(931.6f, 271.6f, 56.0f, 56.0f);
+            const ImU32 labelCol = rgba(0.26666668f, 0.26666668f, 0.4f, 1.0f);
+            const bool on = sortMode != nullptr && *sortMode != 0;
+            slice(finalTex(renderer, "bg_base_r16_wh"), 44, 44, 21.0f, 21.0f, 21.0f, 21.0f,
+                box.x0, box.y0, box.x1, box.y1, IM_COL32(255, 255, 255, 255));
+            if (on) {
+                // 勾：prefab 的 Check 44x34 @937.6,282.6（icon_check_pk 贴图缺失 →
+                // 用两条线画同一个勾，位置尺寸一致）。
+                const ImVec2 a(946.0f * k, 300.0f * k);
+                const ImVec2 b(954.0f * k, 308.0f * k);
+                const ImVec2 c(972.0f * k, 290.0f * k);
+                dl->AddLine(a, b, labelCol, 4.0f * k);
+                dl->AddLine(b, c, labelCol, 4.0f * k);
+            }
+            addTextLeft(dl, body, 32.0f * k, ImVec2(1001.0f * k, 299.2f * k), labelCol, "排序");
+            const float hitW = (1001.0f - 931.6f + 72.0f) * k;
+            if (hit(box.x0, box.y0, hitW, box.y1 - box.y0)) {
+                if (sortMode != nullptr) {
+                    *sortMode = (*sortMode == 0) ? 1 : 0;
+                    gFinalToast = (*sortMode == 0) ? "排序：按名称" : "排序：按等级";
+                    gFinalToastUntil = static_cast<double>(timeSec) + 2.0;
+                }
+                ui::se(ui::SeClick);
+            }
+        }
+
         // ---- DeckView/DeckCardList --------------------------------------------
         // HorizontalLayoutGroup：m_ChildAlignment=4 (MiddleCenter)、**m_Spacing=7.66**
         // （不是 16）。容器是 0 宽竖条：x 中心 609.6、y 346..856。
@@ -3510,11 +3603,12 @@ namespace
         // as the select screen: 754.3x1416.7, right edge 1899.15, top 33.6,
         // tilted +3deg about its centre (TransformList/DefaultPosition = (562,-202)).
         {
-            const float phoneW = 754.3f * k;
-            const float phoneH = 1416.7f * k;
-            const float phoneX = w - 20.8f * k - phoneW;
-            const float phoneY = 33.6f * k;
-            const float ps = phoneW / 754.3f;
+            const PhoneRect pr = phoneScreenRect(w, h, k);
+            const float phoneW = pr.w;
+            const float phoneH = pr.h;
+            const float phoneX = pr.x;
+            const float phoneY = pr.y;
+            const float ps = pr.ps;
             const auto PX = [&](float x) { return phoneX + x * ps; };
             const auto PY = [&](float y) { return phoneY + y * ps; };
             const ImVec2 pivot(phoneX + phoneW * 0.5f, phoneY + phoneH * 0.5f);
@@ -3752,23 +3846,26 @@ namespace
         }
 
         // ---- BottomLeft/AutoLiveToggle ----------------------------------------
-        // 容器在 prefab 里是 0x110（代码里 SetNativeSize），bg_auto 是 180x110、
-        //   Sliced (border 119/0/51/0)、m_Color 白 —— 70% 的白色烤在贴图里，
-        //   "AUTO" 四个字母也烤在贴图上。中心 x=898.6、上边 932.4。
-        // ToggleRoot 822.6,1014.4  152x56：
-        //   Bg      bg_base_round_h56_wh (33/28/33/28)：On #FF77AA / Off #444466
-        //   Toggle  72x72 toggle_btn_wh（**贴图缺失**，用同尺寸的 btn_circle_h56_wh）
-        //           On 中心 (946.1,1042.4)、Off 中心 (850.6,1042.4)
-        //   TextOn / TextOff 29px 白，框 772.6..972.6 / 888.8..958.8，垂直中心 1041.9
+        // 原作的 AUTO 是**一张卡片**：卡片上烤着 "AUTO" 字样，卡片里面左边是开关
+        // （白色圆钮 + 状态字），右边是一颗白色小圆齿轮（点开设置）。用户给的
+        // 国服截图就是这个结构 —— "设置按钮在 auto 里面"。
+        //
+        // prefab 拆开看零件都在（AutoLiveToggle 底下）：
+        //   Image   bg_auto 180x110，Sliced **119/0/51/0** —— 左 119 装 "AUTO"
+        //           三个字母、右 51 是右圆头，中间 10px 就是给**横向拉伸**用的
+        //   ToggleRoot 822.6,1014.4 152x56（Bg bg_base_round_h56_wh 33/28/33/28，
+        //           Off #444466 / On #FF77AA；旋钮 72x72，可见圆 56）
+        //   ConsecutiveAutoLiveSetting 72x72（btn_circle56_wh + 32x32 icon_setting）
+        // ⚠ prefab 把齿轮摆在 AUTO 的**正中**（和开关同一个点）—— 那是"开关/齿轮
+        // 互斥"的摆法，两者不可能同时可见；国服版是**并排**放在一张更宽的卡片里，
+        // 所以卡片按内容撑到 272 宽，齿轮放在开关右边：
+        //   卡片 802.6..1074.6 x 960.4..1070.4（高 110，底边对齐轨道底边）
+        //   轨道 822.6..974.6 x 1014.4..1070.4（prefab 原值，不动）
+        //   齿轮 982.6..1054.6 x 1006.4..1078.4（可见圆 1014.4..1070.4，和轨道齐）
         {
-            // 卡片顶边的那条实测是 932.4，但那个节点的 sizeDelta.x 是 **0**
-            // （Image 根本画不出来，宽度/位置由代码给），所以 932.4 不能当真值：
-            // 按"卡片包住开关"的意图把底边对齐到轨道底边（1070.4），
-            // 180x110 → 960.4..1070.4，正好上 54px 放 "AUTO" 字、下 56px 放开关。
-            // 上一版照 932.4 画，卡片和开关叠成"两个互相错开的胶囊"，就是看着不对的原因。
-            const Rect card = R(808.6f, 960.4f, 180.0f, 110.0f);
-            plain(finalTex(renderer, "bg_auto"), card.x0, card.y0, card.x1, card.y1,
-                IM_COL32(255, 255, 255, 255));
+            const Rect card = R(802.6f, 960.4f, 272.0f, 110.0f);
+            slice(finalTex(renderer, "bg_auto"), 180, 110, 119.0f, 0.0f, 51.0f, 0.0f,
+                card.x0, card.y0, card.x1, card.y1, IM_COL32(255, 255, 255, 255));
             const Rect track = R(822.6f, 1014.4f, 152.0f, 56.0f);
             slice(finalTex(renderer, "bg_base_round_h56_wh"), 66, 56, 33.0f, 28.0f, 33.0f, 28.0f,
                 track.x0, track.y0, track.x1, track.y1,
@@ -3780,31 +3877,26 @@ namespace
             plain(finalTex(renderer, "btn_circle_h56_wh"), knobCx - knob * 0.5f,
                 knobCy - knob * 0.5f, knobCx + knob * 0.5f, knobCy + knob * 0.5f,
                 IM_COL32(255, 255, 255, 255));
+            // 状态字在旋钮对面（prefab 的 TextOn/TextOff 就是这么摆的）。
             addTextCentered(dl, body, 29.0f * k,
                 ImVec2((autoLive ? 872.6f : 923.8f) * k, 1041.9f * k), IM_COL32(255, 255, 255, 255),
-                autoLive ? "ON" : "OFF");
+                autoLive ? "开启" : "关闭");
             if (hit(track.x0, track.y0, track.x1 - track.x0, track.y1 - track.y0)) {
                 autoLive = !autoLive;
                 ui::se(ui::SeClick);
             }
-            // AUTO 旁边那颗小齿轮 = prefab 里 AutoLiveToggle/ConsecutiveAutoLiveRoot/
-            // ConsecutiveAutoLiveSetting（72x72 的 `btn_circle56_wh` + 32x32 的
-            // `icon_setting` 染 #444466）。**prefab 把它摆在 AUTO 的正中**（和开关同
-            // 一个点），两者不可能同时可见；按用户实测的样子放在卡片右侧 8px、
-            // 竖直对齐开关中心：x 996.6..1068.6 / y 1006.4..1078.4。
-            // 点它 = 直接打开设置卡（不走原作那个"连続オートライブ設定"）。
+            // 卡片右侧那颗小齿轮（**在卡片里**，不是外面）
             {
-                const Rect g = R(996.6f, 1006.4f, 72.0f, 72.0f);
+                const Rect g = R(982.6f, 1006.4f, 72.0f, 72.0f);
                 const bool gHot = hover(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0) && !finalMenuUp;
                 plain(selectTex(renderer, "btn_circle56_wh"), g.x0, g.y0, g.x1, g.y1,
-                    IM_COL32(255, 255, 255, gHot ? 255 : 235));
+                    IM_COL32(255, 255, 255, gHot ? 255 : 245));
                 const float gi = 16.0f * k;
                 const ImVec2 gc((g.x0 + g.x1) * 0.5f, (g.y0 + g.y1) * 0.5f);
                 plain(finalTex(renderer, "icon_setting_wh"), gc.x - gi, gc.y - gi, gc.x + gi,
                     gc.y + gi, rgba(0.26666668f, 0.26666668f, 0.4f, 1.0f));
                 if (hit(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0)) {
                     ui::se(ui::SeClick);
-                    requestPageSwitch(false, static_cast<float>(timeSec));
                     autoGearSettingsHit = true;
                 }
             }
@@ -3935,6 +4027,10 @@ namespace
                 }
             }
         }
+        // 转场：把背景之后的顶点整体乘 alpha（背景不淡）。header / 抽屉也在这之后
+        // 画的，所以一起淡 —— 换页那 0.36 s 里它们跟着内容走。
+        fadeContentVertices(dl, contentVtx0, nullptr,
+            pageFadeContentAlpha(static_cast<float>(timeSec)));
         return finalResult;
     }
 } // namespace
@@ -4680,7 +4776,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
                 *confirmPhoneScreen = gFinalPhoneScreen;
             }
         }
-        drawPageTransition(dl, w, h, static_cast<float>(timeSec));
+        tickPageFadeEnd(static_cast<float>(timeSec));
         ImGui::End();
         if (gSelectFillDisabled) {
             ImGui::PopStyleColor();
@@ -4760,6 +4856,9 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             dl->AddCircleFilled(ImVec2(glowX, h * 0.35f), h * 0.6f, IM_COL32(120, 130, 230, 30), 64);
         }
     }
+
+    // 转场只淡"内容"，背景不淡：两页的背景是同一份像素，渐隐渐显时纹丝不动。
+    const int pageFadeVtx0 = dl->VtxBuffer.Size;
 
     const ImU32 white = IM_COL32(255, 255, 255, 255);
     const ImU32 grayText = IM_COL32(178, 178, 198, 255);
@@ -6246,17 +6345,13 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     //     中心锚点会把手机往下推，顶部反而空一大块；原作的静态上缘就是 33.6。
     // 宽度大于画布时（窗口很矮/很窄）仍然按 33.6k 贴顶、底部被切，和原作
     // "手机比屏幕高"的观感一致。
-    const float phoneW = 754.3f * k;
-    const float phoneH = 1416.7f * k;
-    const float phoneX = w - 20.8f * k - phoneW;
-    // 垂直：原作是中心锚点（中心 = 画布中心 + 202），画布矮（21:9）时整台手机上移，
-    // 把"确定"留在屏内；但缩放调小以后画布比 1080 高，中心锚点会把手机往下推，
-    // 顶上反而空一大块。所以取"上缘 33.6k"和"原作中心锚点"里更靠上的那个：
-    //   16:9 100% → 两者都是 33.6；16:9 70% → 33.6*0.7 贴顶；
-    //   21:9 → 中心锚点更靠上，和原作一致（顶部被切、确定可见）。
-    const float phoneYTop = 33.6f * k;
-    const float phoneYCentered = h * 0.5f + 202.0f * k - phoneH * 0.5f;
-    const float phoneY = std::min(phoneYTop, phoneYCentered);
+    // 几何全部来自 phoneScreenRect()：最终确认页用的是**同一个函数**，
+    // 两页的手机不可能再对不上（见那里的注释）。
+    const PhoneRect phoneRect = phoneScreenRect(w, h, k);
+    const float phoneW = phoneRect.w;
+    const float phoneH = phoneRect.h;
+    const float phoneX = phoneRect.x;
+    const float phoneY = phoneRect.y;
     // Tutorial anchor: the phone panel is the "pick a song here" surface, and a
     // spotlight around the whole panel reads far better than one around the
     // EASY circle (which also used to dim 确定).
@@ -7543,7 +7638,8 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             }
         }
     }
-    drawPageTransition(dl, w, h, static_cast<float>(timeSec));
+    fadeContentVertices(dl, pageFadeVtx0, listDl, pageFadeContentAlpha(static_cast<float>(timeSec)));
+    tickPageFadeEnd(static_cast<float>(timeSec));
     ImGui::End();
     ImGui::PopStyleVar(2);
     if (gSelectFillDisabled) {
