@@ -170,3 +170,31 @@
   3. **master 里所有日文字段都是乱码**（prefix / cardSkillName / gachaPhrase，
      原始字节不是 UTF-8 且已被有损替换，latin-1 → EUC-JP 也救不回来）。所以角色名取
      gameCharacters.json 的 givenNameEnglish / firstNameEnglish（干净的罗马音）。
+
+## 2026-11-22 新增：读 prefab / 屏数据的那一组（[`SELECT-HEADER.md`](../SELECT-HEADER.md) 用的）
+
+都在 `.workbuddy/tools/`，都走 AssetRipper 的本地 HTTP API（`127.0.0.1:17654`，
+**必须 `--noproxy`**，否则系统代理会把请求转去外网）：
+
+- `hdr_rects.py <dump.json> [关键词…]` —— 把 `ms_geom.py` 的 dump 解成 1920×1080
+  绝对矩形（anchor/pivot/sizeDelta + 父链；`anchoredPosition` 是 **pivot 相对量**，
+  按 anchor 角算会整片飘走，见 [SELECT-UI.md](../SELECT-UI.md)）。顺带写 `.rects.json`。
+- `go_components.py <goPathId> [prefabPathId]` —— 单个 GameObject 的组件原文
+  （`spriteName` / `m_Color` / `m_IsActive`），查「这颗钮用的是哪张图」最快。
+- `entry_resolve.py [collectionId]` —— 把 `EntryScreenLayers*`（每屏一份 `ScreenLayerData`）
+  里的 PPtr 解成 bundle 索引；于是能直接读 `ScreenLayerFreeLiveMusicSelect` 那份
+  （`I:3487`）拿 `DisplayHeader` / `DisplayPlayerInfo` 这些开关。
+- `arip_find.py <关键词> [类名]` —— 搜索并打印**能直接喂 curl 的 `Path=` 句柄**，
+  比 `arip_search.py` 多这一步。
+- `glb_tree.py <x.glb>` —— AssetRipper 导出的 prefab glb 转成缩进树（只有名字/层级/TRS，
+  **没有 RectTransform 的 anchor**，几何还得走 `ms_geom.py`）。
+- `render_topbar.py` —— 重画 [`docs/select-topbar-1920.png`](../docs/select-topbar-1920.png)
+  （贴图读 `D:/Tools/rea/work/jp/tex_all_sprite`，输出到 `docs/`）。
+- `prefab_layout.py <dump.json> [--filter a,b] [--depth N]` —— `deep_dump.py` 的 JSON 解成
+  **树 + 驱动布局的字段**（`HorizontalLayoutGroup` 的 spacing/align/childControl/expand/reverse、
+  `Image` 的 spriteName/type/alpha、TMP 字号、`RectMask2D` 的 softness）。layout group 的子物体
+  在 prefab 里 `anchoredPosition` 全是 (0,0)，**只能靠这一栏的 spacing + 自己的 size 推**；
+  [SELECT-CELLPHONE.md](../SELECT-CELLPHONE.md) §7.4 的列表行几何就是它跑出来的。
+- `il2cpp_xref_bl.py <libil2cpp.so> <VA>` —— 扫全库找 BL/B 到某个地址的调用点（找
+  "谁调了这个 Setup" 用）。配 `il2cpp_disasm.py` 看调用点的实参寄存器：
+  `SetupCommonButtonContent` 的 `enableSetting` 就是靠 `mov w2, wzr` 定的。

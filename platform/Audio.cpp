@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 
 namespace platform
 {
@@ -430,6 +431,176 @@ void AudioEngine::stopPreview()
     }
     mPreviewActive = false;
     mPreviewPath.clear();
+    // The spectrum tap owns a second decoder on the same file; drop it with
+    // the preview so switching songs never leaves a stale handle behind.
+    if (mSpecDecoderOpen) {
+        ma_decoder_uninit(&mSpecDecoder);
+        mSpecDecoderOpen = false;
+    }
+    mSpecDecoderFailed = false;
+    mSpecDecodedFrame = 0;
+    mSpecWindowCount = 0;
+    mSpecBands.fill(0.0f);
+}
+
+// Six log-spaced bands, ~60 Hz .. 2 kHz. NOTE: the original reads 16 levels
+// from BGMPlayer and shows indices 0/3/6/9/12/14 (prefab 1129); that band
+// table lives in the game, not in the prefab, so the edges below are ours -
+// the *look* (six low/mid bars) is what we are matching, not the exact bins.
+bool AudioEngine::previewSpectrum(float outBands[6])
+{
+    constexpr int kWindow = 1024; // matches the FFT size the card was tuned for
+    static const float kBandHz[6] = {60.0f, 120.0f, 240.0f, 480.0f, 960.0f, 1920.0f};
+
+    for (int i = 0; i < 6; ++i) {
+        outBands[i] = 0.0f;
+    }
+    if (!mPreviewActive || !mPreviewLoaded || mPaused || mPreviewPath.empty() || mSpecDecoderFailed) {
+        return false;
+    }
+    // Its own decoder at f32/stereo; miniaudio converts whatever the file holds.
+    if (!mSpecDecoderOpen) {
+        const ma_decoder_config cfg = ma_decoder_config_init(ma_format_f32, 2, 0);
+        if (ma_decoder_init_file(mPreviewPath.c_str(), &cfg, &mSpecDecoder) != MA_SUCCESS) {
+            mSpecDecoderFailed = true; // one unreadable file must not retry every frame
+            return false;
+        }
+        mSpecDecoderOpen = true;
+        mSpecWindowCount = 0;
+        mSpecDecodedFrame = 0;
+        // Start where the playhead already is (the clip begins at ~35% of the
+        // track, so decoding from frame 0 would analyse the intro and never
+        // catch up: the tap only ever reads forward).
+        ma_uint64 startCursor = 0;
+        if (ma_sound_get_cursor_in_pcm_frames(&mPreviewSound, &startCursor) == MA_SUCCESS) {
+            const ma_uint64 back = startCursor > kWindow ? startCursor - kWindow : 0;
+            if (ma_decoder_seek_to_pcm_frame(&mSpecDecoder, back) == MA_SUCCESS) {
+                mSpecDecodedFrame = back;
+            }
+        }
+    }
+    ma_uint64 cursor = 0;
+    if (ma_sound_get_cursor_in_pcm_frames(&mPreviewSound, &cursor) != MA_SUCCESS) {
+        return false;
+    }
+    const ma_uint32 ch = mSpecDecoder.outputChannels != 0 ? mSpecDecoder.outputChannels : 1;
+    const ma_uint32 sr = mSpecDecoder.outputSampleRate != 0 ? mSpecDecoder.outputSampleRate : 44100;
+    const ma_uint64 chunk = sr / 30; // analyse at ~30 Hz, not every frame
+
+    // Keep the tap in lockstep with the playhead by decoding *forward* - a seek
+    // per frame would be far more expensive on a compressed file. A backward
+    // jump (the 30 s clip looping, or a carried vocal switch) re-syncs once.
+    if (cursor + kWindow < mSpecDecodedFrame || mSpecDecodedFrame > cursor + 2 * sr) {
+        const ma_uint64 back = cursor > kWindow ? cursor - kWindow : 0;
+        ma_decoder_seek_to_pcm_frame(&mSpecDecoder, back);
+        mSpecDecodedFrame = back;
+        mSpecWindowCount = 0;
+    }
+    if (cursor <= mSpecDecodedFrame + chunk) {
+        // Nothing new yet: keep showing the last measurement.
+        for (int i = 0; i < 6; ++i) {
+            outBands[i] = mSpecBands[static_cast<size_t>(i)];
+        }
+        return true;
+    }
+    ma_uint64 want = cursor - mSpecDecodedFrame;
+    // Big enough to catch up after a slow frame, small enough to stay cheap.
+    if (want > static_cast<ma_uint64>(kWindow * 2)) {
+        want = static_cast<ma_uint64>(kWindow * 2);
+    }
+    std::array<float, kWindow * 4> tmp{};
+    const ma_uint64 tmpFrames = static_cast<ma_uint64>(tmp.size() / (ch != 0 ? ch : 1));
+    if (want > tmpFrames) {
+        want = tmpFrames; // a >2-channel file must not overrun the buffer
+    }
+    ma_uint64 got = 0;
+    if (ma_decoder_read_pcm_frames(&mSpecDecoder, tmp.data(), want, &got) != MA_SUCCESS || got == 0) {
+        mSpecDecoderFailed = true;
+        return false;
+    }
+    mSpecDecodedFrame += got;
+    // Mix to mono and keep only the newest kWindow samples. Shifting per sample
+    // would be O(kWindow) *per frame* (millions of moves a second); drop the
+    // obsolete head once instead.
+    ma_uint64 firstNew = 0;
+    if (got >= static_cast<ma_uint64>(kWindow)) {
+        firstNew = got - static_cast<ma_uint64>(kWindow);
+        mSpecWindowCount = 0;
+    } else {
+        const int keep = std::min(mSpecWindowCount, kWindow - static_cast<int>(got));
+        if (keep < mSpecWindowCount) {
+            std::memmove(mSpecWindow.data(), mSpecWindow.data() + (mSpecWindowCount - keep),
+                sizeof(float) * static_cast<size_t>(keep));
+        }
+        mSpecWindowCount = keep;
+    }
+    for (ma_uint64 n = firstNew; n < got; ++n) {
+        float mono = 0.0f;
+        for (ma_uint32 c = 0; c < ch; ++c) {
+            mono += tmp[static_cast<size_t>(n * ch + c)];
+        }
+        mSpecWindow[static_cast<size_t>(mSpecWindowCount++)] = mono / static_cast<float>(ch);
+    }
+    if (mSpecWindowCount < kWindow) {
+        for (int i = 0; i < 6; ++i) {
+            outBands[i] = mSpecBands[static_cast<size_t>(i)];
+        }
+        return true;
+    }
+    // Hann window, built once: computing cos() per sample per tone put ~37k
+    // cosines into every analysis (30 a second) for no benefit.
+    static const std::array<float, kWindow> kHann = [] {
+        std::array<float, kWindow> w{};
+        for (int n = 0; n < kWindow; ++n) {
+            w[static_cast<size_t>(n)] = 0.5f - 0.5f * std::cos(2.0f * 3.14159265f *
+                static_cast<float>(n) / static_cast<float>(kWindow - 1));
+        }
+        return w;
+    }();
+    // Band energy, not a single bin: a lone Goertzel frequency systematically
+    // under-reads high bands (their energy is spread over many bins while the
+    // bass fundamental sits in one), which made the right half of the widget
+    // dead. Each band sums the magnitudes of six log-spaced tones inside it.
+    // Then a one-pole smoother, because the original reads an already-smoothed
+    // spectrum and raw frames flicker.
+    for (int b = 0; b < 6; ++b) {
+        const double lo = static_cast<double>(kBandHz[b]);
+        const double hi = static_cast<double>(kBandHz[b] * 2.0f);
+        float sum = 0.0f;
+        for (int k = 0; k < 6; ++k) {
+            const double f = lo * std::pow(hi / lo, (static_cast<double>(k) + 0.5) / 6.0);
+            const double w = 2.0 * 3.14159265358979 * f / static_cast<double>(sr);
+            const float coeff = static_cast<float>(2.0 * std::cos(w));
+            float s1 = 0.0f;
+            float s2 = 0.0f;
+            for (int n = 0; n < kWindow; ++n) {
+                const float s0 = mSpecWindow[static_cast<size_t>(n)] * kHann[static_cast<size_t>(n)]
+                    + coeff * s1 - s2;
+                s2 = s1;
+                s1 = s0;
+            }
+            const float power = s1 * s1 + s2 * s2 - coeff * s1 * s2;
+            sum += power > 0.0f ? std::sqrt(power) : 0.0f;
+        }
+        // Headroom: a Goertzel bin of a 1024-sample Hann window reads about
+        // N/4 of the tone's amplitude when the tone sits on the bin, and a
+        // six-tone band sum lands ordinary music around 3% of N. 22 is a
+        // display gain - calibrated so forte passages reach the top of the bar
+        // and quiet ones sit low - not a measurement of anything.
+        //
+        // Octave tilt: music falls off ~6 dB/octave, so a flat analyser draws
+        // a staircase whose right half looks dead (measured: 49/62, 23/49,
+        // 12/23 per octave here). Every hardware analyser compensates with a
+        // pink-ish tilt; we take HALF of it (2^(0.4*b) = +2.4 dB/octave) so the
+        // bars keep a visible decline instead of flattening into a block.
+        const float mean = sum / 6.0f;
+        const float tilt = std::pow(2.0f, 0.4f * static_cast<float>(b));
+        const float mag = std::min(1.0f, mean / static_cast<float>(kWindow) * 22.0f * tilt);
+        const float prev = mSpecBands[static_cast<size_t>(b)];
+        mSpecBands[static_cast<size_t>(b)] = mag > prev ? prev + (mag - prev) * 0.55f : prev + (mag - prev) * 0.16f;
+        outBands[b] = mSpecBands[static_cast<size_t>(b)];
+    }
+    return true;
 }
 
 bool AudioEngine::startResultBgm(const std::string& path, float volume, std::string& outError)

@@ -86,7 +86,7 @@ cppsekai [--sus <file.sus>] [--bgm <audio>] [--charts <dir>] [--cover <image>]
          [--select-id <musicId>] [--select-vocal <n>] [--dump-events <n>]
          [--test-restart] [--restart-at <sec>]
          [--result-preview] [--result-at <sec>] [--confirm-flash [<sec>]]
-         [--profile] [--guess] [--singer-panel] [--player <昵称[:组织]>]
+         [--profile] [--guess] [--singer-panel] [--select-menu] [--player <昵称[:组织]>]
          [--player-rank <n>] [--help]
 ```
 
@@ -148,7 +148,9 @@ cppsekai [--sus <file.sus>] [--bgm <audio>] [--charts <dir>] [--cover <image>]
 | `--profile` | 启动即打开选曲界面的**个人资料卡**（平时要点右上角的等级牌才出来），配合 `--screenshot` 截它 |
 | `--unit <0-7>` | 启动即把左侧**团体页签**选到第 n 个（0 全部 / 1 VS / 2 L/N / 3 MMJ / 4 VBS / 5 W×S / 6 25時 / 7 その他），配合 `--screenshot` 截过滤后的列表。**注意它会写进存档**（团体页签是设置项），调试完跑一次 `--unit 0` 复位 |
 | `--select-filter` | 启动即打开选曲界面的**筛选**卡片（平时点顶栏那颗筛选圆钮），配合 `--screenshot` 截它 |
-| `--guess` | 启动即打开**猜歌**卡片（平时要点选曲界面头排的「猜歌」按钮），配合 `--screenshot` 截它 |
+| `--select-menu` | 启动即打开选曲界面的**右侧菜单抽屉**（平时点右上角那颗汉堡钮；对应原作 `MenuDialog`），配合 `--screenshot` 截它 |
+| `--lang <zh-CN\|ja-JP>` | 选曲界面**带字贴图**的语言目录（`assets/select/zh-CN` / `ja-JP`：团体页签的「全部/其他」与「歌曲等级/楽曲Lv.」）。默认 `zh-CN`；界面文字本身暂时仍是中文 |
+| `--guess` | 启动即打开**猜歌**卡片（平时点菜单抽屉里的「猜歌」），配合 `--screenshot` 截它 |
 | `--singer-panel` | 启动即打开**切换歌手**面板（平时要点手机面板底部那颗麦克风按钮），配合 `--select-id <音乐 id>` + `--screenshot` 截它 |
 | `--story-test [<id>]` | 启动即播放新手教学（默认脚本 id `tutorial`），跳过首启/EULA 判定。配合 `--screenshot` 截教学页；脚本在 `assets/story/scripts/tutorial.json`，字段见 `STORY-UI.md` |
 | `--story-step <n>` | 配合 `--story-test`：直接跳到第 n 步（0 基）。常用：0 场景标题 / 1 对话 / 3 用户名卡片 / 6 选项 / 20 设置聚光灯 / 32 设备卡片 / 33 触摸图 / 35 键位页 |

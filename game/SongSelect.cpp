@@ -23,6 +23,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -469,9 +470,63 @@ void setSelectAssetDir(const std::string& dir)
     gSelectAssetDir = dir;
 }
 
+// ---------------------------------------------------------------------------
+// 界面语言（assets/select/<lang>/ 这一层）
+//
+// 有些贴图把文字**烤进了图里**，没法用字体替换：团体页签的「すべて / その他」
+// 是官方 sprite，选中卡的「楽曲Lv.」牌也是。所以这些图按语言分目录：
+//
+//     assets/select/zh-CN/songlevel.png      歌曲等级
+//     assets/select/ja-JP/songlevel.png      楽曲Lv.（官方 txt_musicLv）
+//
+// selectTex() 先找 <lang>/，再退到 ja-JP/，最后才是 select/ 根下 —— 所以
+// 根目录只放与语言无关的图（手机框、按钮、图标），有文字的才进语言目录。
+// 默认 zh-CN（本作品界面就是中文）；CPSEKAI_LANG=ja-JP 可切过去，以后接设置项
+// 时直接调 setSelectLanguage()。
+// ---------------------------------------------------------------------------
+static std::string& selectLanguageRef()
+{
+    static std::string lang = [] {
+        const char* env = std::getenv("CPSEKAI_LANG");
+        return (env != nullptr && std::strcmp(env, "ja-JP") == 0) ? std::string("ja-JP")
+                                                                 : std::string("zh-CN");
+    }();
+    return lang;
+}
+
+void setSelectLanguage(const std::string& lang)
+{
+    selectLanguageRef() = (lang == "ja-JP") ? "ja-JP" : "zh-CN";
+}
+
+static bool selectLangIsJa()
+{
+    return selectLanguageRef() == "ja-JP";
+}
+
 // Profile card (the account) is open. Module state so --profile can force it
 // open in a headless run.
 bool gProfileOpen = false;
+
+// 右上角菜单抽屉（对应原作 ScreenLayerHeader 的 menuButton -> MenuDialog）。
+// gMenuOpen 是目标态，menuUp 是"正在显示或正在收起"（动画期间也要挡住底下的
+// 输入，否则关到一半还能点到手机面板）。--select-menu 可强制打开截图。
+bool gMenuOpen = false;
+
+bool menuDrawerOpen()
+{
+    return gMenuOpen;
+}
+
+void closeMenuDrawer()
+{
+    gMenuOpen = false;
+}
+
+void debugOpenMenuDrawer(bool open)
+{
+    gMenuOpen = open;
+}
 
 // 最终确认页（ScreenLayerFreeLiveFinalConfirmation 的轻量版）。确定不再直接
 // 开始，而是先停在这里；Start 才把 action 交给 main。整个页面在
@@ -1739,12 +1794,16 @@ namespace
 {
     constexpr int kDiffCount = 5;
     const char* kDiffNames[kDiffCount] = {"EASY", "NORMAL", "HARD", "EXPERT", "MASTER"};
+    // Official difficulty tints, read off `ScreenLayerFreeLiveCellPhone` (704):
+    // the pads' FrontGlowCover (eff_btn_circle_h80_a70_wh) carries exactly these
+    // colours, so they are the game's own EASY/NORMAL/HARD/EXPERT/MASTER values -
+    // not an approximation picked off a screenshot.
     const ImU32 kDiffColors[kDiffCount] = {
-        IM_COL32(75, 207, 138, 255),   // EASY   green
-        IM_COL32(90, 140, 255, 255),   // NORMAL blue
-        IM_COL32(242, 150, 77, 255),   // HARD   orange
-        IM_COL32(239, 90, 102, 255),   // EXPERT red
-        IM_COL32(181, 91, 255, 255),   // MASTER purple
+        IM_COL32(17, 221, 119, 255),   // EASY   #11DD77
+        IM_COL32(51, 204, 255, 255),   // NORMAL #33CCFF
+        IM_COL32(255, 204, 0, 255),    // HARD   #FFCC00
+        IM_COL32(255, 68, 119, 255),   // EXPERT #FF4477
+        IM_COL32(204, 51, 255, 255),   // MASTER #CC33FF
     };
 
     // One song (grouped by title) and which entry provides each difficulty.
@@ -2402,18 +2461,28 @@ namespace
     }
 
     // The best-score badge the reference phone panel puts on the right of the
-    // song info: a translucent white disc with the game's own
-    // score/rank/chr/<x>.png letter in it (d/c/b/a/s, each PNG pre-coloured),
-    // or "--" while the chart has no record at all.
+    // song info: the official RankBase disc + the official rank glyph.
+    //   RankBase : btn_circle_h96_a20_wh  112x112, white at 20% **baked into the
+    //              sprite** (m_Color is plain white) - not a 32% hand-tinted disc.
+    //   Rank     : icon_scoreRank_s_<a..s>  68x76, pre-coloured per rank
+    //              (A purple / S pink / ...), 68x76 inside the 112 disc.
+    // `--` still stands in for "no record at all".
+    GLuint selectTex(platform::Renderer& renderer, const char* name);
     void drawBestScoreBadge(ImDrawList* dl, platform::Renderer& renderer, ImFont* font,
         double bestScore, float chartRating, float diameter, float centerX, float centerY)
     {
         const ImVec2 center(centerX, centerY);
-        const float radius = diameter * 0.5f;
+        const float k = diameter / 112.0f; // 112 = the prefab's RankBase size
         const bool played = bestScore > 0.0;
-        // Measured off the reference: white over the panel at ~32% (a plain
-        // white disc reads the same there), dimmer when there is no record.
-        dl->AddCircleFilled(center, radius, played ? IM_COL32(255, 255, 255, 82) : IM_COL32(255, 255, 255, 52), 48);
+
+        const GLuint baseTex = selectTex(renderer, "btn_circle_h96_a20_wh");
+        if (baseTex != 0) {
+            dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(baseTex)),
+                ImVec2(center.x - 56.0f * k, center.y - 56.0f * k),
+                ImVec2(center.x + 56.0f * k, center.y + 56.0f * k));
+        } else {
+            dl->AddCircleFilled(center, diameter * 0.5f, IM_COL32(255, 255, 255, 51), 48);
+        }
 
         if (!played) {
             const char* dashes = "--";
@@ -2426,22 +2495,16 @@ namespace
 
         const ScoreRank rank = scoreRankAndBar(bestScore, chartRating);
         const char letter = rank.rank >= 'a' && rank.rank <= 's' ? rank.rank : 'd';
-        const auto* glyph = renderer.hud(std::string("rank_char_") + letter);
-        if (glyph == nullptr || glyph->id == 0) {
-            return;
+        const std::string texName = std::string("icon_scoreRank_s_") + letter;
+        const GLuint glyph = selectTex(renderer, texName.c_str());
+        if (glyph != 0) {
+            // Rank node is 68x76 inside the 112 RankBase (pivot centred).
+            const float gw = 68.0f * k;
+            const float gh = 76.0f * k;
+            dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(glyph)),
+                ImVec2(center.x - gw * 0.5f, center.y - gh * 0.5f),
+                ImVec2(center.x + gw * 0.5f, center.y + gh * 0.5f));
         }
-        // score/rank/chr/<x>.png is 224x266 with the letter's ink 185x242 at
-        // +20+16; the reference draws that ink 0.686 of the badge across, so
-        // the whole PNG is drawn a little larger and shifted by the ink offset.
-        constexpr float kInkH = 242.0f / 266.0f;
-        constexpr float kInkCx = 112.5f / 224.0f;
-        constexpr float kInkCy = 137.0f / 266.0f;
-        const float imgH = diameter * 0.686f / kInkH;
-        const float imgW = imgH * (static_cast<float>(glyph->width) / static_cast<float>(glyph->height));
-        const float imgCx = center.x + (0.5f - kInkCx) * imgW;
-        const float imgCy = center.y + (0.5f - kInkCy) * imgH;
-        dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(glyph->id)),
-            ImVec2(imgCx - imgW * 0.5f, imgCy - imgH * 0.5f), ImVec2(imgCx + imgW * 0.5f, imgCy + imgH * 0.5f));
     }
 
     // The handset's screen shape (rounded corners + the notch), used to keep the
@@ -2660,16 +2723,33 @@ namespace
     }
 
     // Cached textures from assets/select (phone frame, buttons, indicators).
+    //
+    // 语言目录优先：<select>\<lang>\<name>.png -> <select>\ja-JP\<name>.png ->
+    // <select>\<name>.png。根目录只放与语言无关的图；把文字烤进图里的
+    // （团体页签、楽曲Lv. 牌）放语言目录，见 selectLanguageRef() 上面的说明。
     GLuint selectTex(platform::Renderer& renderer, const char* name)
     {
         static std::map<std::string, GLuint> cache;
-        auto it = cache.find(name);
+        const std::string key = selectLanguageRef() + '|' + name;
+        auto it = cache.find(key);
         if (it == cache.end()) {
-            std::string err;
-            const GLuint id = gSelectAssetDir.empty()
-                ? 0
-                : renderer.loadUiTexture(gSelectAssetDir + "\\select\\" + name + ".png", err);
-            it = cache.emplace(name, id).first;
+            GLuint id = 0;
+            if (!gSelectAssetDir.empty()) {
+                std::string err;
+                const std::string stem = gSelectAssetDir + "\\select\\";
+                const std::string candidates[] = {
+                    stem + selectLanguageRef() + "\\" + name + ".png",
+                    stem + "ja-JP\\" + name + ".png",
+                    stem + name + ".png",
+                };
+                for (const std::string& path : candidates) {
+                    id = renderer.loadUiTexture(path, err);
+                    if (id != 0) {
+                        break;
+                    }
+                }
+            }
+            it = cache.emplace(key, id).first;
         }
         return it->second;
     }
@@ -2791,7 +2871,13 @@ namespace
         const ChartEntry& entry = entries[static_cast<size_t>(entryIndex)];
         ImDrawList* dl = ImGui::GetWindowDrawList();
         const ImGuiIO& io = ImGui::GetIO();
-        const ImVec2 mouse = io.MousePos;
+        // 最终确认页整页是 1920x1080 的绝对坐标。缩放调小以后窗口比画布大，
+        // 把这张"画布"居中而不是贴左上角（选曲页是两栏，必须各自贴边；这一页
+        // 是单栏，居中才是缩放该有的样子）。做法：内容顶点统一平移 (ox,oy)，
+        // 命中测试把鼠标反向平移；背景图仍然铺满窗口（它不属于画布）。
+        const float ox = (w - 1920.0f * k) * 0.5f;
+        const float oy = (h - 1080.0f * k) * 0.5f;
+        const ImVec2 mouse(io.MousePos.x - ox, io.MousePos.y - oy);
         const bool clicked = ui::mouseClicked(ImGuiMouseButton_Left);
         if (ui::keyPressed(ImGuiKey_Escape)) {
             ui::se(ui::SeWindowClose);
@@ -2819,7 +2905,7 @@ namespace
         //   BG        x=56.0  y=303.8 w=1546.2 h=555.3
         //   DeckBase  x=70.4  y=256.0 w=1080.0 h=624.0
         //   card row  x=78.4  y=601.0 w=200 h=510, gap 16
-        const float cx = w * 0.5f;
+        const float cx = 960.0f * k; // 画布中心（内容会被整体平移 (ox,oy)）
         const float bgW = 1546.1597f * k;
         const float bgH = 555.27515f * k;
         const float bgX = 56.0f * k;
@@ -2829,6 +2915,8 @@ namespace
         const float deckX = 70.4f * k;
         const float deckY = 256.0f * k;
 
+        // 画布内容从这层白底开始；上面的 bg_common 是"窗口背景"，不跟着平移。
+        const int contentVtx0 = dl->VtxBuffer.Size;
         const GLuint bgTex = finalTex(renderer, "bg_base_r20_wh");
         if (bgTex != 0) {
             // 9-slice, not a stretched 50x50 sprite: stretching turns the
@@ -2919,9 +3007,11 @@ namespace
         // It is added at runtime by forceAddCellPhoneScreen; the prefab itself
         // only contains the left deck page.
         {
-            // 用户 2026-11-21：第一屏和第二屏是同一台手机。复用选曲页
-            // ScreenLayerFreeLiveCellPhone 的现值（562 宽、中心 1609,618、
-            // +5°），不要在这里另造一套 754/1522 的几何。
+            // 用户 2026-11-21：第一屏和第二屏是同一台手机，别在这里另造一套几何。
+            // ⚠ 但选曲页的手机在 2026-11-22 已经改回 prefab 原始尺寸（754.3 宽、
+            // 中心 1522,742），这里还是 562 宽 / 1609,618 —— 两块**不再一样大**了。
+            // 保留 562 是因为这张卡片的按钮/外框全用绝对坐标摆的，把手机放大到
+            // 754 会顶出屏幕；要真正合并得连卡片布局一起重做，不是改一个常数的事。
             const float pcx = 1609.0f * k;
             const float pcy = 618.0f * k;
             const float pw = 562.0f * k;
@@ -3015,8 +3105,11 @@ namespace
                     ImVec2(pcx + 12.0f * q, utilY), ImVec2(pcx + 92.0f * q, utilY + 80.0f * q),
                     ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), IM_COL32(235, 235, 245, 220));
             }
-            // Same +5deg as the select-screen phone.
-            const float ang = 5.0f * 3.14159265f / 180.0f;
+            // Same tilt as the select-screen phone: the prefab's quaternion is
+            // -3.00 deg in Unity's y-up frame = +3 deg in ours (right end lower).
+            // This used to be +5 deg, which was a hand-tuned guess from before
+            // the quaternion was decoded.
+            const float ang = 3.0f * 3.14159265f / 180.0f;
             const float ca = std::cos(ang);
             const float sa = std::sin(ang);
             for (int v = phoneVtx0; v < dl->VtxBuffer.Size; ++v) {
@@ -3081,25 +3174,32 @@ namespace
             ui::se(ui::SeClick);
         }
 
+        int finalResult = SelectNone;
         if (phoneStartHit) {
             // The phone's play button is the original start control; no extra
             // "开始" capsule outside the handset.
             gFinalConfirmOpen = false;
-            return entryIndex;
+            finalResult = entryIndex;
         }
-        if (timeSec < gFinalToastUntil && !gFinalToast.empty()) {
+        if (finalResult == SelectNone && timeSec < gFinalToastUntil && !gFinalToast.empty()) {
             const ImVec2 ts = body->CalcTextSizeA(22.0f * k, FLT_MAX, 0.0f, gFinalToast.c_str());
             const float tw = ts.x + 42.0f * k;
             const float th = 48.0f * k;
             const float tx = cx - tw * 0.5f;
-            const float ty = h - 156.0f * k;
+            const float ty = 1080.0f * k - 156.0f * k;
             dl->AddRectFilled(ImVec2(tx, ty), ImVec2(tx + tw, ty + th),
                 IM_COL32(20, 19, 40, 235), 12.0f * k);
             addTextCentered(dl, body, 22.0f * k, ImVec2(cx, ty + th * 0.5f),
                 IM_COL32(255, 255, 255, 255), gFinalToast.c_str());
         }
+        if (ox != 0.0f || oy != 0.0f) {
+            for (int v = contentVtx0; v < dl->VtxBuffer.Size; ++v) {
+                dl->VtxBuffer[v].pos.x += ox;
+                dl->VtxBuffer[v].pos.y += oy;
+            }
+        }
         (void)vocalIndex;
-        return SelectNone;
+        return finalResult;
     }
 } // namespace
 
@@ -3595,7 +3695,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     int& vocalIndex,
     float uiScale, ImVec2* confirmCenter, ImVec4* confirmPhoneScreen, int deckPower, bool* autoLive,
     int* mvMode, const AccountData* account, const SelectPartyInfo* party, SelectPartyResult* partyOut,
-    int* favoriteToggle, bool nativeMenuBar, int* deleteRequest)
+    int* favoriteToggle, bool nativeMenuBar, int* deleteRequest, const float* previewBands)
 {
     int action = SelectNone;
     // 多人游玩: the room owns the song. The host keeps a normal, fully
@@ -3610,14 +3710,24 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     const float w = viewport->WorkSize.x;
     const float h = viewport->WorkSize.y;
-    // 1080p reference layout. The user's UI scale multiplies it, which zooms the
-    // whole screen: kBase stays "how big is the window", k is what everything is
-    // laid out with. The phone panel below is the one piece sized from the window
-    // itself, so it multiplies the scale as well - otherwise the list would grow
-    // while the panel stayed put.
-    const float scale = std::clamp(uiScale, 0.5f, 2.0f);
-    const float kBase = std::clamp(h / 1080.0f, 0.5f, 2.0f);
-    const float k = kBase * scale;
+    // 画布基准：原作 CanvasScaler 是 **ScaleWithScreenSize / 1920x1080 /
+    // matchWidthOrHeight = 0（按宽度匹配）**（SELECT-UI.md §2 的 YAML 原文）。
+    // 也就是说窗口变宽变窄时，UI 的"设计单位"始终是 1920 宽，只有高度会多出来
+    // 或裁掉 —— 这就是原作在 4:3 / 21:9 上都不散架的原因。我们以前用的是
+    // h/1080（按高度匹配）：16:9 两者相同，但窗口一窄（1024x768）k 反而变大，
+    // 右侧 1522k 的手机直接被推出屏幕，这就是"响应式糟糕"的根因。
+    //
+    // uiScale 是**用户缩放**，乘在 fit 之后的画布比例上。<1 时整个界面变小，
+    // 左右两块各自贴边（列表贴左、手机贴右），中间留白随窗口变宽；这一点和
+    // 原作的锚点规则一致（列表锚左、手机锚在右侧内容区、顶栏零件锚右）。
+    //
+    // >100% 不乘进去：选曲页是"列表 912 + 间隙 21 + 手机 754 + 边距 20.8 = 1920"
+    // 的固定两栏，画布一旦窄于 1920 两栏必然重叠（Unity 里也是这个结果：它只是
+    // 把 UI 画到屏幕外）。所以选曲/最终确认页把缩放上限锁在 100%，结算页不受
+    // 影响（那是单栏版式，Result.cpp 自己算 canvas）。
+    const float fit = std::clamp(w / 1920.0f, 0.4f, 4.0f);
+    const float scale = std::clamp(uiScale, 0.5f, 1.0f);
+    const float k = fit * scale;
 
     static std::vector<SongGroup> groups;
     static int groupIndex = 0;
@@ -3772,6 +3882,15 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         }
     }
 
+    // Debug (`CPSEKAI_SELECT_MENU=1`): open the right-hand menu for screenshots.
+    {
+        static bool menuDebugOpened = false;
+        if (!menuDebugOpened && std::getenv("CPSEKAI_SELECT_MENU") != nullptr) {
+            menuDebugOpened = true;
+            gMenuOpen = true;
+        }
+    }
+
     // 最终确认页：确定之后停在这里，Start 才把 action 交回 main。整页自绘，
     // 所以这一帧不会让底下的列表/手机拿到输入。
     if (gFinalConfirmOpen) {
@@ -3918,6 +4037,29 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     const float vocalPW = std::min(956.0f * k, w * 0.4979f);
     const float vocalPX0 = w + (1.0f - vocalEase) * (vocalPW + 44.0f * k) - vocalPW;
 
+    // 右上角菜单抽屉（原作 ScreenLayerHeader 的 menuButton -> MenuDialog，见
+    // SELECT-UI.md §「右上角菜单」）。它和 切换歌手 是同一类右侧 SubWindow，
+    // 两个叠在一起没有意义，所以谁开就收另一个。
+    const float menuT = ui::anim(0x4a57b000u, gMenuOpen, 20.0f);
+    const bool menuUp = gMenuOpen || menuT > 0.0005f;
+    const float menuEase = easeOutCubic(menuT);
+    // MenuDialog prefab 1775：Bg x=56..960（1920 画布）→ 904 宽、满高、贴右缘；
+    // 内容区 856 宽（左右各 24）；关闭钮 44x44、右缘 18.1、顶 18.5。
+    const float menuW = 904.0f * k;
+    const float menuX0 = w - menuW * menuEase;
+    // 抽屉/卡片任意一个立着的时候，底下那一层（列表、手机、顶栏）的点击都要
+    // 关掉。抽屉是半透明的，视觉上还看得见，但输入归它。
+    const bool overlayUp = vocalPanelUp || menuUp;
+    if (gMenuOpen && gVocalPanelOpen) {
+        gVocalPanelOpen = false;
+    }
+    // Esc 关抽屉。main 的 escape 链会先问 menuDrawerOpen()，所以这里拿到的是
+    // 没被别人吃掉的那一次按键。
+    if (gMenuOpen && ui::keyPressed(ImGuiKey_Escape, false)) {
+        ui::se(ui::SeWindowClose);
+        gMenuOpen = false;
+    }
+
     // ------------------------------------------------------------------
     // Left: 团体页签 + song list
     //
@@ -3941,19 +4083,34 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     //   UIPartsDropdown      280 x 56   @ (1476.5, 36) 排序下拉
     // 三者的顶边不同（28 / 27 / 36）、高度也不同（72 / 72 / 56）：原作就是让它们
     // 垂直居中对齐在 y=64 这条线上，不是拉成一样高。
-    // 原作**没有**菜单钮 —— 那一颗是我们自己的，插在筛选左边一格。
+    // 2026-11-22（SELECT-HEADER.md）：原作**有**菜单钮，它在全局顶栏 prefab
+    // `ScreenLayerHeader` 里，96x96、右缘留 16（x 1808..1904）、图标是
+    // `icon_menu_wh` 40x34 染 #444466。我们以前把它塞在筛选左边（1296.3）并缩到
+    // 72，那是自己发明的；现在按原作摆回最右。
+    // 同一份数据里顶栏还有「返回钮 96x96 @(16,16)」和「SOLO LIVE + ▶楽曲選択」标题块，
+    // **这两个我们故意不做**（用户 2026-11-22 明确要求）：左边那一格空着，标题块也
+    // 不画 —— 搜索框保持原作的 x=196，中间这一条就不会被顶栏挤掉。
     static char searchBuf[64] = "";
     const float searchX = 196.0f * k;
     const float searchW = 760.8f * k;
     const float searchH = 72.0f * k;
     const float headerRowY = 28.0f * k;
     const float filterBtnD = 72.0f * k;
-    const float filterBtnX = 1380.3f * k;
+    // 筛选 / 排序贴右缘，不是写死 x：按宽度匹配之后（k 可能小于 1）绝对坐标
+    // 会让它们离开菜单钮几百像素。原作的这三个零件也是同一个
+    // `TopRIght` 容器里的（MusicSelectListContent 右端），这里保持"离右缘
+    // 467.7 / 163.5"这两个间距，菜单钮再往右 51.5。
+    //   筛选右缘 = w - (1920 - 1452.3)k = w - 467.7k
+    //   排序左缘 = w - (1920 - 1476.5)k = w - 443.5k
+    const float filterBtnX = w - 539.7f * k; // 右缘 w-467.7k（宽 72k）
     const float filterBtnY = 27.0f * k;
-    const float menuBtnX = 1296.3f * k;
-    const float menuBtnY = 27.0f * k;
+    // 菜单钮：96x96，右缘 16（= 1920-96-16 = 1808），顶边 16（比筛选/排序高，原作如此）。
+    // 用 `w -` 而不是写死 1808，和等级牌（`w - 26k`）同一套算法，窗口不是 16:9 时也贴右。
+    const float menuBtnD = 96.0f * k;
+    const float menuBtnX = w - 16.0f * k - menuBtnD;
+    const float menuBtnY = 16.0f * k;
     const float comboW = 280.0f * k;
-    const float comboX0 = 1476.5f * k;
+    const float comboX0 = w - 443.5f * k;
     const float comboY = 36.0f * k;
     const float sortH = 56.0f * k;
     // 多人游玩 member: the header row stays fully usable. Only the *list* is
@@ -3967,7 +4124,11 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, IM_COL32(255, 255, 255, 235));
     ImGui::PushStyleColor(ImGuiCol_FrameBgActive, IM_COL32(255, 255, 255, 255));
     ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(70, 70, 90, 255));
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, searchH * 0.5f);
+    // Radius comes from the official sprite: `btn_round_r16_wh` is 56x56 with
+    // m_Border 28 on all four sides, so a 72-tall search field keeps **28** -r
+    // corners (a 16px flat run in the middle), it is NOT a full 36r capsule.
+    // The old `searchH * 0.5f` made it rounder than the reference.
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 28.0f * k);
     // Text Area in the prefab starts 10px inside the pill and the magnifier
     // sits at its RIGHT end (IconRoot centre x=914.8, 34x34) - the opposite of
     // the usual convention, and the one thing that makes the field read as the
@@ -3983,8 +4144,11 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     // past its right edge, which left it hanging outside the box.)
     // Same faint shadow the combo boxes get, so the whole header row reads as
     // one lifted row instead of "one field with a shadow, two without".
+    // 2026-11-22: rounding follows the shape (28, not 36) and the shadow is
+    // softened - the official pill (`btn_round_r16_wh`) has no baked shadow at
+    // all, so a full-strength one read as a grey smear under a flatter pill.
     ui::dropShadow(dl, ImVec2(searchX, headerRowY), ImVec2(searchX + searchW, headerRowY + searchH),
-        searchH * 0.5f, k);
+        28.0f * k, k, 0.55f);
     // 搜索框的右键菜单（复制 / 剪切 / 粘贴 / 清空）。ImGui 不公开 InputTextState，
     // 所以用一个 CallbackAlways 把选区两端抄出来 —— 剪切和复制要知道选了哪一段。
     struct SearchEditSnapshot
@@ -4002,8 +4166,14 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         return 0;
     };
     ImGui::SetNextItemWidth(searchW);
+    // 抽屉/卡片立着的时候搜索框只负责显示：用 BeginDisabled 拦住输入，但把
+    // DisabledAlpha 顶到 1，所以外观不变（原作那层后面照样是亮的）。
+    ImGui::PushStyleVar(ImGuiStyleVar_DisabledAlpha, 1.0f);
+    ImGui::BeginDisabled(overlayUp);
     ImGui::InputTextWithHint("##search", "搜索", searchBuf, sizeof(searchBuf),
         ImGuiInputTextFlags_CallbackAlways, searchEditCallback, &searchSel);
+    ImGui::EndDisabled();
+    ImGui::PopStyleVar();
     const bool searchRightClicked = ImGui::IsItemClicked(ImGuiMouseButton_Right);
     ImGui::PopFont();
     ImGui::PopStyleVar(2);
@@ -4121,7 +4291,10 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             float wOn;
             float hOn;
         };
-        static const UnitTabIcon kIcons[kSelectUnitTabCount] = {
+        // 中文版的两个文字页签是 112x112 / 128x112 的方画布（字在中间，透明
+        // 留白让它们和六个团体 logo 一样居中）；日文原版是 77x29 / 128x85 的
+        // 长条。尺寸跟着语言走，不能统一 —— 见 assets/select/{ja-JP,zh-CN}/。
+        static const UnitTabIcon kIconsJa[kSelectUnitTabCount] = {
             {"icon_tab_all_off", "icon_tab_all_on", 77.0f, 29.0f, 128.0f, 85.0f},
             {"icon_tab_unit_vs_off", "icon_tab_unit_vs_on", 112.0f, 112.0f, 112.0f, 112.0f},
             {"icon_tab_unit_ln_off", "icon_tab_unit_ln_on", 112.0f, 112.0f, 112.0f, 112.0f},
@@ -4131,9 +4304,27 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             {"icon_tab_unit_25_off", "icon_tab_unit_25_on", 112.0f, 112.0f, 112.0f, 112.0f},
             {"icon_tab_other_off", "icon_tab_other_on", 82.0f, 30.0f, 128.0f, 86.0f},
         };
-        const float cellH = 100.0f * k;
+        static const UnitTabIcon kIconsZh[kSelectUnitTabCount] = {
+            {"icon_tab_all_off", "icon_tab_all_on", 112.0f, 112.0f, 128.0f, 112.0f},
+            {"icon_tab_unit_vs_off", "icon_tab_unit_vs_on", 112.0f, 112.0f, 112.0f, 112.0f},
+            {"icon_tab_unit_ln_off", "icon_tab_unit_ln_on", 112.0f, 112.0f, 112.0f, 112.0f},
+            {"icon_tab_unit_mj_off", "icon_tab_unit_mj_on", 112.0f, 112.0f, 112.0f, 112.0f},
+            {"icon_tab_unit_vb_off", "icon_tab_unit_vb_on", 112.0f, 112.0f, 112.0f, 112.0f},
+            {"icon_tab_unit_ws_off", "icon_tab_unit_ws_on", 112.0f, 112.0f, 112.0f, 112.0f},
+            {"icon_tab_unit_25_off", "icon_tab_unit_25_on", 112.0f, 112.0f, 112.0f, 112.0f},
+            {"icon_tab_other_off", "icon_tab_other_on", 112.0f, 112.0f, 128.0f, 112.0f},
+        };
+        const UnitTabIcon* kIcons = selectLangIsJa() ? kIconsJa : kIconsZh;
+        // 16:9 时每个格子 100k、整条 800k，居中后上下各余 56k（和 prefab 一致）。
+        // 更扁的窗口（21:9 / 20:9）画布高度只有 800 多，8x100 会顶出底板之外
+        // —— 原作那条 strip 也会挤，但 Tab 会跑到圆角外面。这里把格子按
+        // "底板高度 / 8" 收一下，图标跟着缩，底板永远是完整的。
+        const float stripH = stripBot - stripTop;
+        const float cellH = std::min(100.0f * k, stripH / static_cast<float>(kSelectUnitTabCount));
+        const float iconScale = cellH / (100.0f * k);
         const float stripCx = unitStripX + unitStripW * 0.5f;
-        const float cellsTop = (stripTop + stripBot) * 0.5f - cellH * kSelectUnitTabCount * 0.5f;
+        const float cellsTop = (stripTop + stripBot) * 0.5f
+            - cellH * static_cast<float>(kSelectUnitTabCount) * 0.5f;
         for (int i = 0; i < kSelectUnitTabCount; ++i) {
             const float cellY = cellsTop + cellH * static_cast<float>(i);
             const bool on = (i == unitTab);
@@ -4141,11 +4332,11 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             ImGui::SetCursorScreenPos(ImVec2(unitStripX, cellY));
             const bool clicked = ImGui::InvisibleButton(
                 (std::string("##unittab") + std::to_string(i)).c_str(), ImVec2(unitStripW, cellH));
-            const bool hovered = ImGui::IsItemHovered();
+            const bool hovered = !overlayUp && ImGui::IsItemHovered();
             const UnitTabIcon& ic = kIcons[i];
             const GLuint tex = selectTex(renderer, on ? ic.on : ic.off);
-            const float iw = (on ? ic.wOn : ic.w) * k;
-            const float ih = (on ? ic.hOn : ic.h) * k;
+            const float iw = (on ? ic.wOn : ic.w) * k * iconScale;
+            const float ih = (on ? ic.hOn : ic.h) * k * iconScale;
             if (tex != 0) {
                 const ImVec2 c(stripCx, cellY + cellH * 0.5f);
                 // Off tabs are plain white; the hover lifts them a little so the
@@ -4159,7 +4350,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
                     on ? IM_COL32(255, 255, 255, 255) : IM_COL32(255, 255, 255, 190),
                     i == 0 ? "ALL" : "UNIT");
             }
-            if (clicked && unitTab != i) {
+            if (clicked && !overlayUp && unitTab != i) {
                 ui::se(ui::SeClick);
                 unitTab = i;
                 platform::logf(platform::LogSelect, "[select] 团体页签 -> %d\n", unitTab);
@@ -4438,7 +4629,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     // 多人游玩: a member's list is a read-only mirror of the host's song, not a
     // control surface - gating the one flag that every pointer path below asks
     // for is what turns "no drag" into "no wheel, no tap, no fling" as well.
-    const bool listHovered = !partyReadOnly && !indexOpen
+    const bool listHovered = !partyReadOnly && !indexOpen && !overlayUp
         && (dragging || (inViewRect && ImGui::IsWindowHovered()));
 
     // Intro animation: this function redraws every frame while the Select state
@@ -4824,6 +5015,17 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         // green 2D MV. No 3D badge - we do not render 3D MVs.
         // Label style per the sprites: text filled with the badge border
         // colour (bl 102,204,255 / gn 119,238,221), sized ~0.56 of the badge.
+        // MV badges, right-aligned. Numbers from prefab 1129: MVMode is a
+        // 439.3x100 HorizontalLayoutGroup (ChildAlignment = 5 MiddleRight,
+        // Spacing 8, ReverseArrangement 1) whose children are 79x48.
+        // Neutral MVMode is at x 426.9..866.3 y_cell 51.6..151.6 -> centre
+        // y_cell 101.6, right edge 28.7 inside the cell and 42.4 above its
+        // bottom; Highlight MVMode is x 438.1..877.5 y_cell 97.6..197.6 ->
+        // centre y_cell 147.6, right edge 17.5 inside and 39.4 above the
+        // 230-tall card's bottom. Label TMP is 28.
+        // WHICH badges show is decided by the mv/ folder, not the master
+        // categories: original <id4>.usm -> blue 原曲, <id4>_sekai.usm ->
+        // green 2D MV. No 3D badge - we do not render 3D MVs.
         const auto drawMvBadges = [&](const ImVec2& r0, const ImVec2& r1, bool highlight) {
             const SongBadges& badges = songBadges(g.musicId);
             if (!badges.original && !badges.mv2d) {
@@ -4831,13 +5033,12 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             }
             const float bs = compactH / 144.0f;
             const float bhh = 48.0f * bs;
-            const float bww = 78.98f * bs;
+            const float bww = 79.0f * bs;
             const float gap = 8.0f * bs;
             // Absolute offsets from the row's bottom / right edge, exactly as
-            // the prefab has them: Neutral MVMode sits 66.4 above the bottom
-            // and 28.7 from the right edge, Highlight 39.4 and 17.5 (the card
-            // is 230 tall, so a *fraction* of the row height would drift).
-            const float bcy = r1.y - (highlight ? 39.4f : 66.4f) * bs;
+            // the prefab has them (a *fraction* of the row height would drift,
+            // since the card is 230 tall and the compact row 144).
+            const float bcy = r1.y - (highlight ? 39.4f : 42.4f) * bs;
             const float bx0 = r1.x - (highlight ? 17.5f : 28.7f) * bs;
             struct BadgeDef
             {
@@ -4863,67 +5064,113 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
                 // corner survives scaling.
                 addNinePatch(listDl, badgeTex(renderer, def.tex), 32, 32, ImVec2(bx, by),
                     ImVec2(bx + bww, by + bhh), 12.0f, 12.0f, bs, IM_COL32(255, 255, 255, 255));
-                addTextCentered(listDl, body, bhh * 0.64f,
+                addTextCentered(listDl, body, 28.0f * bs,
                     ImVec2(bx + bww * 0.5f, bcy - 1.0f * bs), def.labelCol, def.label);
                 bx -= gap;
             }
         };
 
+        // ------------------------------------------------------------------
+        // Row geometry, every number from prefab 1129 (MusicSelectListCell).
+        //
+        // Which prefab: prefab 702's MusicSelectListView.listViewItemPrefab is
+        // {m_FileID 21, m_PathID 506}. File 21 of that serialized file is the
+        // bundle db02094472f894a81a8d59032b4fe140, and 506 there is the
+        // MusicSelectListCell MonoBehaviour - the field's type is ListViewItem,
+        // i.e. a component reference, not a GameObject. So the cells are
+        // 895x144 (230 when selected), centred in the 912-wide list column.
+        // MusicSelectSingleListCell (912 wide) is NOT this list.
+        //
+        // Both contents are CENTRE-anchored and larger than the 144 cell:
+        // Highlight 895x230 (y_cell -43..187) and Neutral 895x192 (-24..168).
+        // So every y below is quoted as an offset from the cell centre
+        // (centre = y_cell 72):  offset = y_cell - 72.
+        // ------------------------------------------------------------------
         if (isSel) {
-            // Expanded card: the original's Highlight is one bg_base_r20_wh
-            // sliced image at white 60% (a=0.6) - flat fill, no outline. The
-            // old white AddRect border here was wrong: the prefab has no
-            // border/Outline component at all.
+            // Highlight: bg_base_r20_wh, sliced, white 60%, no outline.
             listDl->AddRectFilled(p0, p1, IM_COL32(255, 255, 255, 153), cardRadius);
 
-            // Level badge: the level number of the selected difficulty in a
-            // filled circle, with the "歌曲等级" caption plate resting on the
-            // circle's upper edge (prefab PlayLv 96x96 at x=48; the card is 230
-            // tall so the plate gets room above it).
-            const float tagW = 104.0f * k;
-            const float tagH = tagW * 48.0f / 128.0f;
-            const float badgeL = p0.x + 24.0f * k;
-            const float tagY = p0.y + 36.0f * k;
-            const float ccx = badgeL + tagW * 0.5f;
-            const float ccy = tagY + tagH + 34.0f * k;
-            listDl->AddCircleFilled(ImVec2(ccx, ccy), 46.0f * k, diffColor);
-            addTextCentered(listDl, title, 46.0f * k, ImVec2(ccx, ccy - 2.0f * k), white, rowLevel);
+            // PlayLv 96x96 at x 19.2..115.2 (centre 67.2), vertically centred,
+            // sprite bg_base_circle_h96_wh, TMP 48.
+            const float lvCx = p0.x + 67.2f * k;
+            listDl->AddCircleFilled(ImVec2(lvCx, centerY), 48.0f * k, diffColor);
+            addTextCentered(listDl, title, 48.0f * k, ImVec2(lvCx, centerY - 2.0f * k), white, rowLevel);
+            // PlayLvTitle = txt_musicLv 102x38 at x 16.2, y_cell 10..48
+            // (= -62 .. -24 from the centre): the plate hangs over the disc's
+            // upper edge rather than sitting above it.
+            const float plateW = 102.0f * k;
+            const float plateH = 38.0f * k;
+            const ImVec2 plate0(p0.x + 16.2f * k, centerY - 62.0f * k);
             if (levelTex != 0) {
                 listDl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(levelTex)),
-                    ImVec2(badgeL, tagY), ImVec2(badgeL + tagW, tagY + tagH),
+                    plate0, ImVec2(plate0.x + plateW, plate0.y + plateH),
                     ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), IM_COL32(255, 255, 255, 255));
             } else {
                 // Fallback when the sprite is missing: the drawn plate.
-                listDl->AddRectFilled(ImVec2(badgeL, tagY), ImVec2(badgeL + tagW, tagY + 30.0f * k),
+                listDl->AddRectFilled(plate0, ImVec2(plate0.x + plateW, plate0.y + plateH),
                     diffColor, 6.0f * k);
-                addTextCentered(listDl, body, 18.0f * k, ImVec2(ccx, tagY + 15.0f * k), white, "歌曲等级");
+                addTextCentered(listDl, body, 20.0f * k,
+                    ImVec2(plate0.x + plateW * 0.5f, plate0.y + plateH * 0.5f), white,
+                    selectLangIsJa() ? "楽曲Lv." : "歌曲等级");
             }
 
-            // Text column: the prefab's TitleText sits at x=292.8 of the 895
-            // cell, the artist / vocal lines stack under it.
-            const float textL = p0.x + 292.8f * k;
+            // AudioSpectrumAnalyzer: this is what sits where the compact row
+            // puts its jacket. Prefab values (Highlight branch): six Bar_N
+            // 8x72 at x 133/147/161/175/189/203 (pitch 14), bottom edge at
+            // y_cell 107.7 (= +35.7 from the cell centre), pivot (0.5, 0) - so
+            // a bar grows UPWARD from that fixed base. No sprite, m_Color
+            // (0.2667, 0.2667, 0.4) = #444466 opaque.
+            // Height: UIPartsSpectrumAnalyzer.Update scales y by
+            // clamp(|20*log10(level)|/32, 0..1) and collapses the bar to
+            // zeroScale (0,0,1) below BASE_LEVEL_THRESHOLD 0.02, reading
+            // levels 0/3/6/9/12/14 of BGMPlayer's 16 bands.
+            // Without a measurement (headless, muted, no device) the slot would
+            // be empty again, so it sits at a neutral half height instead.
+            {
+                const float barBase = centerY + 35.7f * k;
+                const float barFull = 72.0f * k;
+                for (int b = 0; b < 6; ++b) {
+                    const float bx = p0.x + (133.0f + 14.0f * b) * k;
+                    const float lvl = previewBands != nullptr ? previewBands[b] : 0.5f;
+                    const float h = barFull * std::clamp(lvl, 0.0f, 1.0f);
+                    if (h <= 0.5f) {
+                        continue;
+                    }
+                    listDl->AddRectFilled(ImVec2(bx, barBase - h), ImVec2(bx + 8.0f * k, barBase),
+                        IM_COL32(68, 68, 102, 255));
+                }
+            }
+
+            // Text column: Title 617x56 at x 231.8 (TMP 40), Artist 617x50 at
+            // x 236.7 (TMP 28), Vocal 617x50 at x 237.7 (TMP 28); their y_cell
+            // centres are 0.3 / 48 / 88.2.
             const std::string vo = g.vocal.empty() ? std::string() : "Vo. " + g.vocal;
             if (title != nullptr) {
-                listDl->AddText(title, 34.0f * k, ImVec2(textL, p0.y + 34.0f * k), IM_COL32(60, 60, 80, 255),
-                    g.title.c_str());
+                addTextLeft(listDl, title, 40.0f * k, ImVec2(p0.x + 231.8f * k, centerY - 71.7f * k),
+                    IM_COL32(60, 60, 80, 255), g.title.c_str());
             }
-            listDl->AddText(body, 21.0f * k, ImVec2(textL, p0.y + 88.0f * k), IM_COL32(120, 120, 140, 255),
-                g.artist.c_str());
+            addTextLeft(listDl, body, 28.0f * k, ImVec2(p0.x + 236.7f * k, centerY - 24.0f * k),
+                IM_COL32(120, 120, 140, 255), g.artist.c_str());
             if (!vo.empty()) {
-                listDl->AddText(body, 19.0f * k, ImVec2(textL, p0.y + 118.0f * k), IM_COL32(140, 140, 160, 255),
-                    vo.c_str());
+                addTextLeft(listDl, body, 28.0f * k, ImVec2(p0.x + 237.7f * k, centerY + 16.2f * k),
+                    IM_COL32(140, 140, 160, 255), vo.c_str());
             }
-            float dx = textL + 6.0f * k;
-            const float dy = p1.y - 36.0f * k;
+            // Clear status: UIPartsGroupMusicDifficultyClear is 230x29.1 at
+            // x 233.8, y_cell 138.7..167.7, HorizontalLayoutGroup
+            // (ChildAlignment = 6 LowerLeft, spacing 1, padding 0, 38x38
+            // children) -> first diamond's left edge is the group's left.
+            const float diaS = 38.0f * k;
+            const float diaPitch = 39.0f * k; // 38 + spacing 1
+            float dx = p0.x + 233.8f * k + diaS * 0.5f;
+            const float dy = centerY + 81.2f * k;
             for (int d = 0; d < kDiffCount; ++d) {
-                addDiamondSlot(listDl, backTex, ImVec2(dx, dy), 26.0f * k, g.idx[d] >= 0, badgeFor(d));
-                dx += 30.0f * k;
+                addDiamondSlot(listDl, backTex, ImVec2(dx, dy), diaS, g.idx[d] >= 0, badgeFor(d));
+                dx += diaPitch;
             }
             drawMvBadges(p0, p1, true);
         } else {
-            // Compact row: no card fill - the entries are separated by a thin
-            // translucent rule, like the reference UI. The rule under the row
-            // above the card would land inside the card, so it is skipped.
+            // Compact row: no card fill - the entries are separated by the
+            // prefab's own UnderLine (see the bottom of this branch).
             // Hover tint eases in - and, keyed by the slot, eases out again on the
             // row the pointer just left instead of vanishing.
             const float rowHot = ui::anim(0x4a552000u + static_cast<ImGuiID>(slot + 0x100000),
@@ -4932,45 +5179,57 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
                 listDl->AddRectFilled(p0, p1, IM_COL32(255, 255, 255, static_cast<int>(20.0f * rowHot)),
                     8.0f * k);
             }
-            if (slot != cardSlot - 1) {
-                const float ruleY = centerY + pitch * 0.5f;
-                listDl->AddLine(ImVec2(p0.x, ruleY), ImVec2(p1.x, ruleY), IM_COL32(255, 255, 255, 48), 1.0f * k);
-            }
 
-            // Compact cell, prefab numbers on the 895x144 grid: PlayLv 96x96
-            // centred at x=48, Jacket 100x100 centred at x=213.6, the text
-            // column starting at x=292.8, the clear-status diamonds 230x29
-            // right under the artist line.
-            const float cy = centerY;
-            listDl->AddCircleFilled(ImVec2(p0.x + 48.0f * k, cy), 48.0f * k, diffColor);
-            addTextCentered(listDl, title, 44.0f * k, ImVec2(p0.x + 48.0f * k, cy - 2.0f * k), white, rowLevel);
+            // PlayLv 80x80 at x 26.3..106.3 (centre 66.3), vertically centred,
+            // sprite bg_base_circle_h96_wh, TMP 36.
+            listDl->AddCircleFilled(ImVec2(p0.x + 66.3f * k, centerY), 40.0f * k, diffColor);
+            addTextCentered(listDl, title, 36.0f * k, ImVec2(p0.x + 66.3f * k, centerY - 2.0f * k),
+                white, rowLevel);
 
-            const float js = 100.0f * k;
-            const float jx = p0.x + 213.6f * k - js * 0.5f;
-            addJacket(listDl, thumbFor(renderer, g.coverPath), ImVec2(jx, cy - js * 0.5f),
-                ImVec2(jx + js, cy + js * 0.5f), 8.0f * k);
+            // JacketThumbnail 96x96 at x 122.7..218.7 y_cell 23.3..119.3 ->
+            // centre (170.7, -0.7). SQUARE: the RawImage has no material (only
+            // the loading placeholder behind it is r10), so no rounding.
+            const float js = 96.0f * k;
+            const ImVec2 jc(p0.x + 170.7f * k, centerY - 0.7f * k);
+            addJacket(listDl, thumbFor(renderer, g.coverPath),
+                ImVec2(jc.x - js * 0.5f, jc.y - js * 0.5f),
+                ImVec2(jc.x + js * 0.5f, jc.y + js * 0.5f), 0.0f);
 
-            const float textL = p0.x + 292.8f * k;
-            listDl->AddText(body, 28.0f * k, ImVec2(textL, cy - 44.0f * k), white, g.title.c_str());
-            listDl->AddText(body, 19.0f * k, ImVec2(textL, cy - 6.0f * k), IM_COL32(255, 255, 255, 180),
-                g.artist.c_str());
-            float dx = textL + 6.0f * k;
+            // Title 617x56 (TMP 32), y_cell centre 47.5. The compact cell has
+            // NO artist line - Neutral's only text is Title.
+            //
+            // The left edge is 243.6, not the 293.4 the wrapper chain gives:
+            // `Title`(the RectMask2D show-area) sits at x 293.4 with its TMP
+            // child at 243.6, i.e. the mask is 49.8 px to the RIGHT of the text
+            // it is supposed to clip, and 293.4 + its 617 width = 910.4 pokes
+            // out of the 895 cell. Every sibling cell agrees with the text, not
+            // the mask: MusicSelectSingleListCell (1121) puts mask and TMP at
+            // the same x (238), the Highlight branch here does the same (231.8),
+            // and this row's own jacket slot ends at 218.7 - a 24.9 px gap to
+            // 243.6, matching Highlight's 13.1. With the mask's x you would get
+            // a 74.7 px hole between the jacket and the title.
+            addTextLeft(listDl, body, 32.0f * k, ImVec2(p0.x + 243.6f * k, centerY - 24.5f * k),
+                white, g.title.c_str());
+            // Clear status: 230x29.1 at x 236.4, y_cell 88.1..117.1,
+            // layout group with spacing 0 and padding L1/B1 -> diamonds 28x28
+            // back to back from x 237.4 (the 6th slot's 8px `Padding` spacer
+            // is for the Append difficulty, which we do not have).
+            const float diaS = 28.0f * k;
+            float dx = p0.x + 237.4f * k + diaS * 0.5f;
+            const float dy = centerY + 30.6f * k;
             for (int d = 0; d < kDiffCount; ++d) {
-                addDiamondSlot(listDl, backTex, ImVec2(dx, cy + 40.0f * k), 24.0f * k, g.idx[d] >= 0, badgeFor(d));
-                dx += 28.0f * k;
+                addDiamondSlot(listDl, backTex, ImVec2(dx, dy), diaS, g.idx[d] >= 0, badgeFor(d));
+                dx += diaS; // spacing 0
             }
 
-            // MV badges, right-aligned. Layout numbers from the
-            // MusicSelectListCell prefab (895x144, RE'd 2026-11-15): MVMode is
-            // a HorizontalLayoutGroup, ChildAlignment=MiddleRight, Spacing=8,
-            // ReverseArrangement=1 (fills right->left), children 78.98x48
-            // vertically centred, rightmost badge's right edge 29px from the
-            // cell edge. Scaled by row height (48/144 of the cell).
-            // WHICH badges show is decided by the mv/ folder, not the master
-            // categories: original <id4>.usm -> blue 原曲, <id4>_sekai.usm ->
-            // green 2D MV. No 3D badge - we do not render 3D MVs.
             // MV badges (see drawMvBadges above for the prefab numbers).
             drawMvBadges(p0, p1, false);
+
+            // UnderLine: base_wh 856.64x4, white 20%, x 19.2..875.8. It is a
+            // child of Neutral (not of Base), so it exists on compact rows only,
+            // and it straddles the cell's bottom edge: y_cell 142..146.
+            listDl->AddRectFilled(ImVec2(p0.x + 19.2f * k, centerY + 70.0f * k),
+                ImVec2(p0.x + 875.8f * k, centerY + 74.0f * k), IM_COL32(255, 255, 255, 51));
         }
     }
     // Drop the animated heights of slots that left the screen: a slot is a
@@ -5160,18 +5419,18 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             scrolling = false;
             lastInputTime = timeSec;
         };
-        if (!partyReadOnly
+        if (!partyReadOnly && !overlayUp
             && (ui::keyPressed(ImGuiKey_DownArrow)
                 || ui::keyPressed(ImGuiKey_GamepadDpadDown))) {
             ui::se(ui::SeSelect);
             moveTo(1);
         }
-        if (!partyReadOnly
+        if (!partyReadOnly && !overlayUp
             && (ui::keyPressed(ImGuiKey_UpArrow) || ui::keyPressed(ImGuiKey_GamepadDpadUp))) {
             ui::se(ui::SeSelect);
             moveTo(-1);
         }
-        if (ui::keyPressed(ImGuiKey_Enter) || ui::keyPressed(ImGuiKey_KeypadEnter)) {
+        if (!overlayUp && (ui::keyPressed(ImGuiKey_Enter) || ui::keyPressed(ImGuiKey_KeypadEnter))) {
             if (partyReadOnly) {
                 if (partyOut != nullptr) {
                     partyOut->confirm = true;
@@ -5201,24 +5460,47 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     // flat and then rotated about the phone's centre, like the reference UI.
     // ------------------------------------------------------------------
     // ScreenLayerFreeLiveCellPhone (prefab 704, RE'd 2026-11-15): 754.3 x
-    // 1416.7 with its centre at (1522, 742) on the 1920x1080 canvas. It is
-    // deliberately taller than the canvas - the handset's home bar runs off the
-    // bottom edge - so it is placed from its centre instead of being fitted to
-    // the window like the old 46%-of-width version was.
+    // 1416.7. 1920 画布上它的右缘在 1899.15（右留 20.8）、上缘在 33.65；容器
+    // 本身是中心锚点 + anchoredPosition (562, -202)，所以画布高度变化时它会
+    // 跟着中心走。我们这里改成**贴右上**：
+    //   * 右缘写 `w - 20.8k`，缩放调小（uiScale < 1）时手机跟着窗口右缘，
+    //     不会像以前那样留在 1522k 处、和右边空出几百像素（用户报的"手机面板
+    //     直接分离了"）；
+    //   * 上缘写 `33.6k` 而不是"窗口中心 +202k"：缩放调小以后画布会高于窗口，
+    //     中心锚点会把手机往下推，顶部反而空一大块；原作的静态上缘就是 33.6。
+    // 宽度大于画布时（窗口很矮/很窄）仍然按 33.6k 贴顶、底部被切，和原作
+    // "手机比屏幕高"的观感一致。
     const float phoneW = 754.3f * k;
     const float phoneH = 1416.7f * k;
-    const float phoneX = 1522.0f * k - phoneW * 0.5f;
-    const float phoneY = 742.0f * k - phoneH * 0.5f;
+    const float phoneX = w - 20.8f * k - phoneW;
+    // 垂直：原作是中心锚点（中心 = 画布中心 + 202），画布矮（21:9）时整台手机上移，
+    // 把"确定"留在屏内；但缩放调小以后画布比 1080 高，中心锚点会把手机往下推，
+    // 顶上反而空一大块。所以取"上缘 33.6k"和"原作中心锚点"里更靠上的那个：
+    //   16:9 100% → 两者都是 33.6；16:9 70% → 33.6*0.7 贴顶；
+    //   21:9 → 中心锚点更靠上，和原作一致（顶部被切、确定可见）。
+    const float phoneYTop = 33.6f * k;
+    const float phoneYCentered = h * 0.5f + 202.0f * k - phoneH * 0.5f;
+    const float phoneY = std::min(phoneYTop, phoneYCentered);
     // Tutorial anchor: the phone panel is the "pick a song here" surface, and a
     // spotlight around the whole panel reads far better than one around the
     // EASY circle (which also used to dim 确定).
     ui::setAnchor("phone", ImVec2(phoneX - 10.0f * k, phoneY - 10.0f * k),
         ImVec2(phoneX + phoneW + 10.0f * k, phoneY + phoneH + 10.0f * k));
 
-    // Tilt: the official handset is rotated -3 degrees (a counter-clockwise
-    // lean, the top edge dipping to the left; screen y grows down, so the sign
-    // flips against Unity's z-rotation).
-    constexpr float kTiltDeg = -3.0f;
+    // Tilt: the prefab's RectTransform stores z = -0.026176924, w = 0.99965733
+    // (rt 752), i.e. exactly -3.00 deg by 2*atan2(z, w). Unity's +z is
+    // counter-clockwise in a y-UP frame, so -3 deg drops the top edge's RIGHT
+    // end and lifts the left one: the handset leans RIGHT (top-left corner
+    // sticking out, top-right corner tucked in) - which is what the reference
+    // screenshots show, and what the row of difficulty pads measures
+    // (dy/dx = +0.054 => +3.1 deg with the right pad lower).
+    //
+    // ⚠ The sibling `m_LocalEulerAnglesHint: {z: +2.9999971}` is STALE - it
+    // contradicts the quaternion, and the quaternion is what Unity renders
+    // with. Quoting that hint is what once sent this constant the wrong way.
+    // Our rotation happens in a y-DOWN frame, so "right end lower" is a
+    // POSITIVE angle here - hence +3.0, not -3.0.
+    constexpr float kTiltDeg = 3.0f;
     const float tiltRad = kTiltDeg * 3.14159265358979f / 180.0f;
     const ImVec2 tiltPivot(phoneX + phoneW * 0.5f, phoneY + phoneH * 0.5f);
     const float tiltCos = std::cos(tiltRad);
@@ -5288,18 +5570,32 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
 
         // UIPartsBlurMusicJacket: the *same* jacket, blown up and smeared,
         // sitting immediately behind the art - it does NOT fill the phone.
-        // (It lives inside JacketMask > Jacket, i.e. it is part of the jacket
-        // block, and the sharp thumbnail covers its middle.) The official
-        // bleed rect is 700x574 anchored at the content top - wider than the
-        // screen is tall relative to the jacket, but NOT the whole handset.
-        // Three concentric copies with falling alpha are what turns the hard
-        // edge of an enlarged quad into a soft bleed, since a draw list cannot
-        // blur. blurredJacketTex multiplies the texture by mask_smartphone.png
-        // (normalised against the *screen* rect), so whatever falls outside
-        // the glass is clipped by the mask, not by this quad.
+        //
+        // Prefab 704, all measured (2026-11-22), phone-local px:
+        //   JacketContent
+        //     Positions / JacketMask(700x700 @24.5,42)      <- r20 sprite Mask
+        //       Jacket (anchors 0,1-1,1, sizeDelta 0x574)   <- 700x574 + RectMask2D
+        //         UIPartsBlurMusicJacket(231)
+        //           JacketThumbnail(190) = CustomRawImage   <- alpha 0.29803923
+        //     Jacket(299) 376x376 @186.55,92.45             <- sharp art
+        // So: ONE quad, 700x574, hung from the mask's top edge (y 42..616),
+        // and the widening comes from UIPartsBlurMusicJacket.Blur
+        // (RVA 0x4D1AB88): it renders the jacket into a RenderTexture of the
+        // *source* texture's size through Sekai/UI/UIGaussianBlur with
+        // _SamplingDistance 2.8 and assigns it to the RawImage - i.e. the art
+        // is stretched to fill 700x574 (aspect deliberately distorted), no
+        // extra layers, and the quad's own colour alpha is 0.29803923 = 76/255.
+        //
+        // The 700x574 node also carries RectMask2D with m_Softness (0, 389):
+        // the quad's TOP and BOTTOM edges fade over 389px each, and since
+        // 389 > 574/2 the two ramps overlap, so the alpha peaks where the two
+        // distances are equal - in the middle, at (287/389) * 76 = 56/255 - and
+        // is 0 at both edges. Left/right softness is 0, i.e. hard vertical
+        // edges. That is what the old "three concentric copies at falling
+        // alpha" was trying to fake; this draws the real profile instead, with
+        // the four vertices of each half recoloured (AddImage takes one colour
+        // for the whole quad).
         {
-            // JacketMask is 700x700 at (24.5, 42); the blurred copy inside it
-            // is 700x574 hanging from the mask's top edge.
             const float bleedW = 700.0f * ps;
             const float bleedH = 574.0f * ps;
             const float hw = bleedW * 0.5f;
@@ -5311,27 +5607,36 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             const float v1 = (jc.y + hh - scrY0) / (scrY1 - scrY0);
             const GLuint blurTex = blurredJacketTex(renderer, group.coverPath, u0, v0, u1, v1);
             if (blurTex != 0) {
-                // A draw list cannot blur, so the bleed is three concentric
-                // copies: the full rect at low alpha, then two smaller / denser
-                // ones. Stacked that way the outer edge fades out instead of
-                // showing the hard rectangle the single copy used to.
-                static const float kBleedScale[3] = {1.0f, 0.86f, 0.72f};
-                static const int kBleedAlpha[3] = {60, 100, 130};
-                for (int bi = 0; bi < 3; ++bi) {
-                    const float bw = hw * kBleedScale[bi];
-                    const float bh = hh * kBleedScale[bi];
-                    dl->AddImage(
-                        reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(blurTex)),
-                        ImVec2(jc.x - bw, jc.y - bh), ImVec2(jc.x + bw, jc.y + bh),
-                        ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f),
-                        IM_COL32(255, 255, 255, kBleedAlpha[bi]));
-                }
+                const float soft = 389.0f * ps;
+                const int peak = static_cast<int>(std::min(1.0f, hh / soft) * 76.0f + 0.5f);
+                const auto halfQuad = [&](float y0, float y1, float tv0, float tv1, int aTop, int aBot) {
+                    const int first = dl->VtxBuffer.Size;
+                    dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(blurTex)),
+                        ImVec2(jc.x - hw, y0), ImVec2(jc.x + hw, y1),
+                        ImVec2(0.0f, tv0), ImVec2(1.0f, tv1), IM_COL32(255, 255, 255, 255));
+                    // AddImage appends its four corners in TL, TR, BR, BL order.
+                    for (int v = 0; v < 4; ++v) {
+                        const bool isTop = (v == 0 || v == 1);
+                        const int a = isTop ? aTop : aBot;
+                        ImU32& col = dl->VtxBuffer[first + v].col;
+                        col = (col & ~IM_COL32_A_MASK) | (static_cast<ImU32>(a) << IM_COL32_A_SHIFT);
+                    }
+                };
+                const float mid = jc.y;
+                halfQuad(jc.y - hh, mid, 0.0f, 0.5f, 0, peak);
+                halfQuad(mid, jc.y + hh, 0.5f, 1.0f, peak, 0);
             }
         }
 
+        // The sharp art has SQUARE corners: prefab 704's Jacket(299) is a
+        // sibling of JacketMask(262), not a child of it, so the r20 mask never
+        // touches it. What the real JacketImage carries is the
+        // 'JacketEdgeTransparency' material (Sekai/UI/EdgeTransparency) with
+        // _EdgeWidth 0.005 / _EdgeAlpha 0.1 - a ~1.9px fade to 10% alpha, not
+        // a radius. The r20 claim in SELECT-CELLPHONE.md was wrong.
         addJacket(dl, renderer.cover() != nullptr ? renderer.cover()->id : thumbFor(renderer, group.coverPath),
-            j0, ImVec2(j0.x + jw, j0.y + jh), 12.0f * k);
-        dl->AddRect(j0, ImVec2(j0.x + jw, j0.y + jh), IM_COL32(255, 255, 255, 60), 12.0f * k, 0, 2.0f);
+            j0, ImVec2(j0.x + jw, j0.y + jh), 0.0f);
+        // No outline either: the old 2px white ring + r12 was hand-drawn.
 
         // Collaboration ribbon (歌曲出处, e.g. 「劇場版プロジェクトセカイ」).
         // Geometry from the phone-cell prefab (704): the Collaboration node is
@@ -5385,15 +5690,25 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         // 34 / 26 / 26 is what fills those boxes without clipping.
         const float contentL = PX(81.7f);
         const float textMaxW = 440.2f * ps;
-        const float titleSize = 34.0f * ps;
-        const float metaSize = 26.0f * ps;
+        // TMP fontSize straight off the prefab (2026-11-22): MusicTitle > Text is
+        // 36, ArtistName/VocalName > Text are 28 - not "34 / 26 guessed from the
+        // box height", which is what this used to be.
+        const float titleSize = 36.0f * ps;
+        const float metaSize = 28.0f * ps;
         const float badgeD = 112.0f * ps;
-        float ty = PY(488.9f);
+        // The three metadata lines are TMP boxes whose TEXT child is centred
+        // inside them (VerticalAlignment = 512 = Middle). addTextLeft takes the
+        // vertical CENTRE, so the box tops (488.9 / 543.9 / 580.9) must be
+        // offset by half the *text* box: MusicTitle > Text is 488.9+7 = 495.9
+        // tall 36 -> centre 513.9; ArtistName > Text 543.0 tall 28 -> 557.0;
+        // VocalName > Text 580.9 tall 28 -> 594.9. Passing the box top straight
+        // in (what this used to do) put every line 14-25px too high.
+        float ty = PY(513.9f);
         if (title != nullptr) {
             const std::string text = ellipsize(title, titleSize, group.title, textMaxW);
             addTextLeft(dl, title, titleSize, ImVec2(contentL, ty), white, text.c_str());
         }
-        ty = PY(543.9f);
+        ty = PY(557.0f);
         if (!item.artist.empty()) {
             const std::string text = ellipsize(body, metaSize, item.artist, textMaxW);
             addTextLeft(dl, body, metaSize, ImVec2(contentL, ty), grayText, text.c_str());
@@ -5466,7 +5781,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             // The "Vo." line shrinks first and is then ellipsized, so a
             // 5-singer セカイver line still fits next to the badge.
             if (!vocalText.empty()) {
-                ty = PY(580.9f);
+                ty = PY(594.9f);
                 std::string vo = "Vo. " + vocalText;
                 float voSize = metaSize;
                 ImVec2 ts = body->CalcTextSizeA(voSize, FLT_MAX, 0.0f, vo.c_str());
@@ -5487,24 +5802,26 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
                 PX(613.8f), PY(555.2f));
         }
 
-        // Difficulty buttons. 多人游玩: this row is the member's difficulty
+        // Difficulty row. 多人游玩: this row is the member's difficulty
         // picker - it *is* the room screen the panel replaces - so the filled
         // ring follows the player's own pick instead of the list cursor, and a
         // click is reported to the caller rather than moving the (read-only)
         // list. Only the five difficulties the list can name are offered.
-        // DifficultySelectContent prefab: 5x96 circles with 24 gaps (row 576),
-        // arrows 40x48 at +-318. Scale by the phone width (754.3 design px).
+        //
+        // Geometry is the prefab's, including the bit the static dump hides:
+        // `Difficulty` (576 x 133.38) carries a HorizontalLayoutGroup with
+        // m_Spacing = 24 and m_ChildAlignment = 0 (UpperLeft), so the five 96px
+        // pads sit at x = 0,120,240,360,480 and are TOP-aligned in the box -
+        // NOT centred. Container top is 662.17, so pad tops are 662.17 and the
+        // centres are 710.2 (the old 728.8 was the container's vertical centre,
+        // 18.6px too low).
         const float diffScale = ps;
         const bool partyPick = partyReadOnly;
         const float dcD = 96.0f * diffScale;
         const float dcGap = 24.0f * diffScale;
-        // First disc's centre: the row starts at x=89.1 and the discs are
-        // 96 wide, so the first centre is 89.1 + 48.
-        float dx = PX(137.1f);
-        // The row's centre is a fixed 728.8 from the phone's top edge: it does
-        // NOT flow off the metadata block. A long title now ellipsizes instead
-        // of shoving the discs down, which is what the prefab does too.
-        const float dcY = PY(728.8f);
+        // First disc's centre: container left 89.2 + 48.
+        float dx = PX(137.2f);
+        const float dcY = PY(710.2f);
 
         static const char* kDiffOffSprites[kDiffCount] = {
             "btn_difficulty_easy_off", "btn_difficulty_normal_off", "btn_difficulty_hard_off",
@@ -5514,6 +5831,10 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             "btn_difficulty_expert_on", "btn_difficulty_master_on"};
         const GLuint diffSelectedTex = selectTex(renderer, "eff_btn_difficulty_selected_wh");
         const GLuint diffLockTex = selectTex(renderer, "icon_lock_wh");
+        // FrontGlowCover: the official 104x104 halo each pad carries at alpha 0
+        // until it is the selected one (prefab: eff_btn_circle_h80_a70_wh tinted
+        // with that pad's colour).
+        const GLuint diffGlowTex = selectTex(renderer, "eff_btn_circle_h80_a70_wh");
         const float imgD = 112.0f * diffScale;
         const float selD = 136.0f * diffScale;
         for (int d = 0; d < kDiffCount; ++d) {
@@ -5523,7 +5844,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
 
             ImGui::SetCursorScreenPos(tiltedItemPos(c, ImVec2(dcD, dcD)));
             ImGui::PushID(d);
-            if (avail && (!partyPick || partyPickable) && !vocalPanelUp) {
+            if (avail && (!partyPick || partyPickable) && !overlayUp) {
                 ImGui::InvisibleButton("diff", ImVec2(dcD, dcD));
                 if (ImGui::IsItemClicked()) {
                     ui::se(ui::SeLevelChoose);
@@ -5550,6 +5871,15 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
                     ImVec2(c.x - selD * 0.5f, c.y - selD * 0.5f),
                     ImVec2(c.x + selD * 0.5f, c.y + selD * 0.5f), ImVec2(0.0f, 0.0f),
                     ImVec2(1.0f, 1.0f), IM_COL32(255, 255, 255, 255));
+            }
+            // Halo behind the disc, only on the active pad (FrontGlowCover).
+            if (active && diffGlowTex != 0) {
+                const float gw = 104.0f * diffScale;
+                const ImU32 glowCol = (kDiffColors[d] & ~IM_COL32_A_MASK) | (150u << IM_COL32_A_SHIFT);
+                dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(diffGlowTex)),
+                    ImVec2(c.x - gw * 0.5f, c.y - gw * 0.5f),
+                    ImVec2(c.x + gw * 0.5f, c.y + gw * 0.5f), ImVec2(0.0f, 0.0f),
+                    ImVec2(1.0f, 1.0f), glowCol);
             }
             const GLuint diffTex = selectTex(renderer, active ? kDiffOnSprites[d] : kDiffOffSprites[d]);
             if (diffTex != 0) {
@@ -5580,12 +5910,24 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             if (avail) {
                 lvText = levelText(entries[static_cast<size_t>(group.idx[d])], lvBuf, sizeof(lvBuf));
             }
-            addTextCentered(dl, body, 46.0f * diffScale, ImVec2(c.x, c.y - 4.0f * diffScale), white,
-                lvText);
-            addTextCentered(dl, body, 24.0f * diffScale,
-                ImVec2(c.x, c.y + 67.0f * diffScale),
-                active ? IM_COL32(68, 68, 102, 255)
-                       : (avail ? IM_COL32(235, 235, 245, 255) : IM_COL32(150, 150, 170, 255)),
+            // The level number goes INSIDE the pad: `DifficultyLevel` is a
+            // 200x50 box at anchoredPosition (0,0) with fontSize 46, centred.
+            addTextCentered(dl, body, 46.0f * diffScale, ImVec2(c.x, c.y), white, lvText);
+            // ...and the difficulty NAME goes OUTSIDE, below the circle:
+            // `DifficultyText` sits at anchoredPosition (-1.63, -66.77) inside the
+            // 96px pad, fontSize 24, a 182.3-wide centred box. 66.77 > 48, so the
+            // label is clear of the ring - that is exactly what the reference
+            // screenshot shows ("EASY" under the ring, wider than the circle).
+            // Colour is m_fontColor white in the prefab for every state.
+            float nameSize = 24.0f * diffScale;
+            const float nameMaxW = 182.3f * diffScale;
+            const ImVec2 nts = body->CalcTextSizeA(nameSize, FLT_MAX, 0.0f, kDiffNames[d]);
+            if (nts.x > nameMaxW) {
+                nameSize *= nameMaxW / nts.x;
+            }
+            addTextCentered(dl, body, nameSize,
+                ImVec2(c.x - 1.63f * diffScale, c.y + 66.77f * diffScale),
+                avail ? IM_COL32(255, 255, 255, 255) : IM_COL32(150, 150, 170, 255),
                 kDiffNames[d]);
             dx += dcD + dcGap;
         }
@@ -5606,33 +5948,57 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         const float okCx = (okA.x + okB.x) * 0.5f;
         ImGui::SetCursorScreenPos(tiltedItemPos(ImVec2(okCx, (okA.y + okB.y) * 0.5f), ImVec2(okW, okH)));
         ImGui::PushID("ok");
-        if (vocalPanelUp) {
-            // The 切换歌手 panel is over this button; a Dummy keeps the item
-            // stack busy without claiming the hover (see the note at dcY).
+        if (overlayUp) {
+            // 切换歌手 / 菜单 抽屉盖着这颗按钮；Dummy 只占位，不抢 hover。
             ImGui::Dummy(ImVec2(okW, okH));
         } else {
             ImGui::InvisibleButton("ok", ImVec2(okW, okH));
         }
-        const bool okHovered = !vocalPanelUp && ImGui::IsItemHovered();
+        const bool okHovered = !overlayUp && ImGui::IsItemHovered();
         ui::setAnchor("confirm", okA, okB);
-        const bool okPressed = !vocalPanelUp && ImGui::IsItemClicked();
+        const bool okPressed = !overlayUp && ImGui::IsItemClicked();
         ImGui::PopID();
-        // ScreenLayerFreeLiveCellPhone > MainButtonContent > PositiveButton is
-        // GlowCover + ButtonImage + Text + Cover: a *filled* capsule with a halo
-        // behind it, not an outline. ui::capsuleDraw() is this project's version
-        // of exactly that (halo + fill + hover growth + press inversion), so the
-        // 确定 button now reads like every other primary button in the app.
-        // The disabled state stays hand-drawn: a dim slate capsule, no halo, so
-        // "nothing to confirm yet" is visible rather than just rejected.
-        if (okReady) {
-            ui::capsuleDraw(dl, okA, okB, "确定", true, okHovered ? 1.0f : 0.0f,
-                okPressed ? 1.0f : 0.0f, 34.0f * ps);
-        } else {
-            dl->AddRectFilled(okA, okB, IM_COL32(70, 74, 104, 210), okH * 0.5f);
-            dl->AddRect(okA, okB, IM_COL32(126, 138, 156, 255), okH * 0.5f, 0, 2.0f * k);
-            addTextCentered(dl, body, 34.0f * ps, ImVec2(okCx, (okA.y + okB.y) * 0.5f),
-                IM_COL32(178, 184, 202, 255), "确定");
+        // ScreenLayerFreeLiveCellPhone > MainButtonContent > PositiveButton, read
+        // off the prefab (2026-11-22):
+        //   GlowCover  eff_btn_round_h80_a70_wh (112x104, soft white halo)
+        //   ButtonImage btn_round_line_h80_wh  (106x96, border X=52 -> capsule)
+        //               tinted (119,238,221) = #77EEDD
+        //   Text       white
+        //   Cover      bg_base_round_h80_wh tinted (0,0,34,128), -16 sizeDelta
+        //              = the pressed state, inset 8 on each side
+        // The old ui::capsuleDraw drew a *filled* mint capsule, which is not what
+        // this prefab has: ButtonImage is the `line` variant (a mint ring with a
+        // 10% mint wash inside, m_Color carries the mint). Both sprites are used
+        // as-is now, so the radius (48 caps) and the halo are the official ones.
+        const GLuint okGlowTex = selectTex(renderer, "eff_btn_round_h80_a70_wh");
+        const GLuint okLineTex = selectTex(renderer, "btn_round_line_h80_wh");
+        const GLuint okCoverTex = selectTex(renderer, "bg_base_round_h80_wh");
+        if (okReady && okGlowTex != 0) {
+            // GlowCover is a full-stretch child with sizeDelta (10,10), i.e. the
+            // 96-tall shape grown by 5px on every side. The sprite is 70% white
+            // by design, so it only ever gets a *low* alpha here - at 150 the
+            // mint halo flooded the button's inside and the outline vanished.
+            addNinePatch(dl, okGlowTex, 112, 104,
+                ImVec2(okA.x - 5.0f * ps, okA.y - 5.0f * ps),
+                ImVec2(okB.x + 5.0f * ps, okB.y + 5.0f * ps), 56.0f, 52.0f, ps,
+                IM_COL32(255, 255, 255, okHovered ? 80 : 22));
         }
+        if (okLineTex != 0) {
+            addNinePatch(dl, okLineTex, 106, 96, okA, okB, 52.0f, 0.0f, ps,
+                okReady ? IM_COL32(119, 238, 221, 255) : IM_COL32(150, 156, 178, 220));
+        } else if (okReady) {
+            dl->AddRect(okA, okB, IM_COL32(119, 238, 221, 255), okH * 0.5f, 0, 2.0f * ps);
+        }
+        if (okReady && okPressed && okCoverTex != 0) {
+            addNinePatch(dl, okCoverTex, 88, 80, ImVec2(okA.x + 8.0f * ps, okA.y + 8.0f * ps),
+                ImVec2(okB.x - 8.0f * ps, okB.y - 8.0f * ps), 44.0f, 0.0f, ps,
+                IM_COL32(0, 0, 34, 128));
+        }
+        // PositiveButton > Text: fontSize 32, m_fontColor (0.4667, 0.9333, 0.8667)
+        // = #77EEDD - the SAME mint as the ButtonImage ring, not white. (White
+        // here was a guess; the prefab paints the label mint.)
+        addTextCentered(dl, body, 32.0f * ps, ImVec2(okCx, (okA.y + okB.y) * 0.5f),
+            okReady ? IM_COL32(119, 238, 221, 255) : IM_COL32(150, 156, 178, 220), "确定");
         // Where the button actually lands on screen (it is tilted with the phone),
         // so main.cpp can start the confirm flash from it.
         if (confirmCenter != nullptr) {
@@ -5677,37 +6043,67 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         // header row with the other buttons (a per-window dialog, not a property
         // of the song), and the spot it left is exactly where a song-level
         // control belongs.
-        // CommonButtonContent: a 702x100 row at (24.4, 898.5) with 80x80
-        // buttons on a 231px pitch. The prefab has three (设置 / 随机 / 切换歌手);
-        // 设置 moved to the header, so the two that are left keep that row's
-        // vertical centre and pitch, centred on the row.
+        // CommonButtonContent: a 702x100 strip at (24.45, 898.55) holding three
+        // 80x80 buttons under a HorizontalLayoutGroup (m_Spacing = 108,
+        // m_ChildAlignment = 4 = MiddleCentre, m_ChildControlWidth/Height = 0,
+        // m_ChildForceExpand* = 0). Children in hierarchy order:
+        //   SettingButton(83) / ShuffleButton(104, localScale 1.2) /
+        //   ChangeVocalButton(298)
+        //
+        // **The setting button is NOT there on the select screen.** The prefab
+        // only gives it `enabled`, and CommonButtonContent.SetupButton
+        // (RVA 0x62459D4) is:
+        //   randomButton.SetActive(info.ShouldShowRandomButton);   // [0x13]
+        //   randomButton.enabled     = info.EnableRandomButton;    // [0x10]
+        //   changeVocalButton.enabled = info.EnableChangeVocalButton; // [0x11]
+        //   settingButton.SetActive(info.EnableSettingButton);     // [0x12]
+        // (0x50E1548 = CustomButton.SetActive -> gameObject.SetActive;
+        //  0xAD619F0 = Behaviour.set_enabled.) SetupCommonButtonContent
+        // (RVA 0x655574) forwards its own bool arg as EnableSettingButton, and
+        // BOTH select-screen entry points pass false - SetupMusicSelect
+        // (0x6555034) at 0x65551AC and SetMusicData (0x6555914) at 0x655559BC
+        // are `mov w2, wzr`. Only SetupFinalConfirm (0x6555620) passes 1.
+        // So settingButton's GameObject is inactive, and HorizontalLayoutGroup
+        // skips inactive children when it builds m_RectChildren - the two
+        // survivors are laid out as a PAIR, not left in slots 1 and 2:
+        //   3 children (final-confirm): total 456 -> left 123 -> 163/351/539
+        //     (= SettingButton's authored anchoredPosition.x 163, a free check)
+        //   2 children (this screen):   total 268 -> left 217 -> 257/445
+        // Strip-local 257/445 + strip left 24.45 = phone-local 281.45/469.45,
+        // pitch 188. Slot 1 must NOT stay empty.
         const float ibD = 80.0f * ps;
-        const float ibY = PY(948.5f);
-        const float ibGap = 231.0f * ps;
+        const float ibY = PY(948.55f);
+        // Glyph scale inside the 80x80 slot, straight off the prefab:
+        // ShuffleButton > Base is 60x52 and ShuffleButton carries
+        // m_LocalScale 1.2, so it renders 72x62.4;
+        // ChangeVocalButton > Base is 68x68 at scale 1.
+        static const float kIconW[2] = {72.0f, 68.0f};
+        static const float kIconH[2] = {62.4f, 68.0f};
+        static const float kIconX[2] = {281.45f, 469.45f};
         for (int i = 0; i < 2; ++i) {
             const bool lockedOut = partyReadOnly && i == 0;
-            const ImVec2 c(cx + (i == 0 ? -ibGap * 0.5f : ibGap * 0.5f), ibY);
+            const ImVec2 c(PX(kIconX[i]), ibY);
             ImGui::SetCursorScreenPos(tiltedItemPos(c, ImVec2(ibD, ibD)));
             ImGui::PushID(i);
-            if (vocalPanelUp) {
+            if (overlayUp) {
                 ImGui::Dummy(ImVec2(ibD, ibD));
             } else {
                 ImGui::InvisibleButton("iconbtn", ImVec2(ibD, ibD));
             }
-            const bool pressed = !lockedOut && !vocalPanelUp && ImGui::IsItemClicked();
-            const bool hovered = !lockedOut && !vocalPanelUp && ImGui::IsItemHovered();
+            const bool pressed = !lockedOut && !overlayUp && ImGui::IsItemClicked();
+            const bool hovered = !lockedOut && !overlayUp && ImGui::IsItemHovered();
             const float hot = ui::anim(ImGui::GetItemID() ^ 0x71u, hovered, 18.0f);
             ImGui::PopID();
-            const char* texName = i == 0 ? "shufflebutton" : "singer";
+            // Official glyphs: CommonButtonContent > ShuffleButton > Base is
+            // btn_random_lgr (60x52, drawn at the button's 1.2 scale = 72x62.4)
+            // and > ChangeVocalButton > Base is btn_vocalChange_lgr (68x68),
+            // both plain white with no disc behind them.
+            const char* texName = i == 0 ? "btn_random_lgr" : "btn_vocalChange_lgr";
             const GLuint tex = selectTex(renderer, texName);
             if (tex != 0) {
                 const float grow = 1.0f + 0.10f * hot;
-                float iw = ibD * (i == 0 ? 0.62f : 0.70f) * grow;
-                float ih = iw;
-                // keep each image's own aspect
-                if (i == 0) {
-                    ih = iw * (52.0f / 60.0f);
-                }
+                float iw = kIconW[i] * ps * grow;
+                float ih = kIconH[i] * ps * grow;
                 const int alpha = lockedOut ? 90 : static_cast<int>(226.0f + 29.0f * hot);
                 dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(tex)),
                     ImVec2(c.x - iw * 0.5f, c.y - ih * 0.5f), ImVec2(c.x + iw * 0.5f, c.y + ih * 0.5f),
@@ -5786,7 +6182,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         const char* kSortLabels[2] = {"按名称", "按难度"};
         // 原生菜单栏开着的时候（设置 > 系统）排序也在 视图 菜单里 —— 收起来，
         // 但值还是 settings.sortMode，两边读写的是同一个字段。
-        if (!nativeMenuBar) {
+        if (!nativeMenuBar && !overlayUp) {
             const std::string sortPreview = std::string("排序：") + kSortLabels[sortMode];
             // No colours here: ui::combo brings the pjsk look itself (white box,
             // translucent white list, faint shadow). Only the metrics are ours -
@@ -5813,8 +6209,13 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     // one line and the list under it can have the official 912px width.
     const GLuint filterIconTex = selectTex(renderer, "icon_refine_wh");
     const GLuint menuIconTex = selectTex(renderer, "icon_menu_wh");
+    // `iconW/iconH` are the official sprite sizes (筛选 29x28, 菜单 40x34) - they are
+    // NOT a fraction of the disc, which is exactly why the lambda takes them per call.
+    // `iconTint` carries only RGB: the alpha is driven by hover/on inside (220 -> 255),
+    // which is the old behaviour every caller already relied on.
     auto headerRoundButton = [&](const char* id, float x, float y, float d, GLuint icon,
-                                 bool on, bool dot = false) -> bool {
+                                 bool on, bool dot = false, float iconW = 29.0f, float iconH = 28.0f,
+                                 ImU32 iconTint = IM_COL32(96, 96, 120, 255)) -> bool {
         const ImVec2 c(x + d * 0.5f, y + d * 0.5f);
         ui::dropShadow(dl, ImVec2(x, y), ImVec2(x + d, y + d), d * 0.5f, k);
         ImGui::PushStyleColor(ImGuiCol_Button, on ? IM_COL32(255, 255, 255, 255) : IM_COL32(255, 255, 255, 236));
@@ -5838,17 +6239,20 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         // The shipped icons are white on transparent, so the navy comes from the
         // tint (same trick as the old capsule labels).
         if (icon != 0) {
-            // NotFilteredIcon / FilteredIcon are 29x28 - 1:1 at 1080p, not a
-            // fraction of the button.
-            const float iconSize = 29.0f * k;
+            // NotFilteredIcon / FilteredIcon are 29x28, the hamburger 40x34 - 1:1 at
+            // 1080p, not a fraction of the button.
+            const float iw = iconW * k;
+            const float ih = iconH * k;
+            const ImU32 tint = (iconTint & ~IM_COL32_A_MASK)
+                | ((hovered || on) ? (255u << IM_COL32_A_SHIFT) : (220u << IM_COL32_A_SHIFT));
             dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(icon)),
-                ImVec2(c.x - iconSize * 0.5f, c.y - iconSize * 0.5f),
-                ImVec2(c.x + iconSize * 0.5f, c.y + iconSize * 0.5f), ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f),
-                IM_COL32(96, 96, 120, (hovered || on) ? 255 : 220));
+                ImVec2(c.x - iw * 0.5f, c.y - ih * 0.5f),
+                ImVec2(c.x + iw * 0.5f, c.y + ih * 0.5f), ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f),
+                tint);
         }
         // The drawer paints over this row without being opaque, so the button
         // stays visible through it - swallow the click, the drawer is on top.
-        return clicked && !vocalPanelUp;
+        return clicked && !overlayUp;
     };
     // No SetTooltip on these: ImGui's default atlas has no CJK glyphs, so a
     // Chinese tooltip renders as a row of '?'.
@@ -5859,47 +6263,29 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         ui::se(ui::SeClick);
         gFilterOpen = true;
     }
-    if (headerRoundButton("##selectmenu", menuBtnX, menuBtnY, filterBtnD, menuIconTex, false)) {
+    // 菜单钮照原作：96 白圆、汉堡 40x34、染 #444466（= 68,68,102）。
+    // 按一下打开右侧抽屉（原作 MenuDialog，见函数末尾）；抽屉里有 刷新 / 音乐商店 /
+    // 猜歌 / 设置 / 个人资料 / 随机 / 筛选 / 排序，原来那颗小 Popup 退休了。
+    // 抽屉打开时这颗钮**收起来** —— 原作的 ScreenLayerHeader 就是这么做的
+    // （HideMenuButton / ShowMenuAndHideMenuButton），否则它会隔着 80% 的面板
+    // 透出来，看起来像没盖住。
+    if (!menuUp && headerRoundButton("##selectmenu", menuBtnX, menuBtnY, menuBtnD, menuIconTex,
+            false, false, 40.0f, 34.0f, IM_COL32(68, 68, 102, 255))) {
         ui::se(ui::SeClick);
-        ImGui::OpenPopup("##selectmenu");
+        gMenuOpen = true;
+        // 抽屉和这些浮层互斥，别叠两层。
+        gVocalPanelOpen = false;
+        gFilterOpen = false;
     }
     // Tutorial anchors: the four header buttons are gone, so their spotlights
     // point at the menu that now holds them (the story keeps working, and the
     // highlighted control is a real one you can open).
     const ImVec2 menuBtnMin(menuBtnX, menuBtnY);
-    const ImVec2 menuBtnMax(menuBtnX + filterBtnD, menuBtnY + filterBtnD);
+    const ImVec2 menuBtnMax(menuBtnX + menuBtnD, menuBtnY + menuBtnD);
     ui::setAnchor("rescan", menuBtnMin, menuBtnMax);
     ui::setAnchor("store", menuBtnMin, menuBtnMax);
     ui::setAnchor("guess", menuBtnMin, menuBtnMax);
     ui::setAnchor("abssettings", menuBtnMin, menuBtnMax);
-
-    // The menu. 刷新 / 音乐商店 / 设置 are window-level and are already in the
-    // native menu bar when it is on (设置 > 系统), so they hide here in that case;
-    // 猜歌 opens a card and stays either way.
-    if (ImGui::BeginPopup("##selectmenu")) {
-        const bool headerFileButtons = !nativeMenuBar;
-        ImGui::PushFont(body, 17.0f * k);
-        if (headerFileButtons && ImGui::MenuItem("刷新列表")) {
-            ui::se(ui::SeClick);
-            action = SelectRescan;
-        }
-        if (headerFileButtons && ImGui::MenuItem("音乐商店")) {
-            ui::se(ui::SeClick);
-            action = SelectDownload;
-        }
-        // 猜歌 does not touch the filesystem - it opens a card. Its pool is built
-        // across frames by openGuessDialog(), so the click never blocks.
-        if (ImGui::MenuItem("猜歌")) {
-            ui::se(ui::SeClick);
-            openGuessDialog();
-        }
-        if (headerFileButtons && ImGui::MenuItem("设置")) {
-            ui::se(ui::SeClick);
-            action = SelectSettings;
-        }
-        ImGui::PopFont();
-        ImGui::EndPopup();
-    }
 
     // F5 rescan is handled by main; Enter handled above. Left/right switch
     // difficulty when the phone panel is showing - and for a 多人游玩 member this
@@ -5920,7 +6306,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             }
         }
     };
-    if (!groups.empty() && selected >= 0 && (!partyReadOnly || partyPickable)) {
+    if (!overlayUp && !groups.empty() && selected >= 0 && (!partyReadOnly || partyPickable)) {
         if (ui::keyPressed(ImGuiKey_LeftArrow)) {
             nudgeDifficulty(-1);
         }
@@ -5936,10 +6322,9 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     // It lines up with the 排序 / 分组 combos: same height (33k) and same top
     // edge, which is what the official top bar does with its own widgets.
     bool& profileOpen = gProfileOpen; // module state, so --profile can force it
-    // 2026-11-21: the chip is off for now. The header row above now ends with
-    // 筛选 / 菜单 at the list column's right edge, and the level chip used to
-    // float at the window's top-right, right over the tilted handset. Kept
-    // compiled (and reachable via --profile) instead of deleted so the profile
+    // 2026-11-21: the chip is off for now. 2026-11-22 起菜单钮按原作挪到了窗口右缘
+    // （1808..1904），等级牌再打开会和它抢同一个角 —— 真要恢复就先决定谁让位。
+    // Kept compiled (and reachable via --profile) instead of deleted so the profile
     // card does not lose its only entry point.
     constexpr bool kShowLevelChip = false;
     if (kShowLevelChip && account != nullptr) {
@@ -5952,7 +6337,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         // "something is over me" test: the 切换歌手 drawer covers it. (It still
         // *shows through* the drawer - the drawer is a translucent mask - it just
         // does not react to the pointer.)
-        const bool hot = !profileOpen && !vocalPanelUp && mouse.x >= chip.x && mouse.x <= chip.x + chip.z
+        const bool hot = !profileOpen && !overlayUp && mouse.x >= chip.x && mouse.x <= chip.x + chip.z
             && mouse.y >= chip.y && mouse.y <= chip.y + chip.w;
         if (hot) {
             // Hover: a soft ring, so the chip reads as clickable.
@@ -6168,6 +6553,259 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
                 const ImU32 a = (col >> IM_COL32_A_SHIFT) & 0xFF;
                 col = (col & ~IM_COL32_A_MASK)
                     | (static_cast<ImU32>(a * static_cast<ImU32>(vpFade) / 255u) << IM_COL32_A_SHIFT);
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // 右上角菜单抽屉（原作 ScreenLayerHeader 的 menuButton -> MenuDialog）
+    //
+    // 原作实测（prefab 1775，见 SELECT-UI.md）：
+    //   Bg   x=56..960（1920 画布）→ 904 宽、满高、贴右缘，bg_base_wh 染
+    //        #444466 / 80%（和 切换歌手 的 Bg 同色，只是窄 52）；
+    //   内容 856 宽（面板内左右各 24）；
+    //   大格 392x184，两列（x 56 / 456），行距 8；小格 192x152（大格高 184 的
+    //        那一排也在用），四列（x 56 / 256 / 456 / 656）；
+    //   关闭钮 44x44，右缘 18.1、顶 18.5。
+    //
+    // 原作的格子里，标题是**烤进图里**的日文（btn_menu_shop 那一套），所以
+    // 我们用同一套几何自己画：白卡 + 左上角深蓝标题牌 + 右下角官方图标。
+    // 文字走字体，中文/日文切换时不用换图。图标全部是官方的白色单色图（
+    // assets/select/*.png 与解包 sprite），按 #444466 染。
+    //
+    // 我们放进去的是本作真正有的功能（用户的四颗顶栏按钮 + 筛选/排序/资料/
+    // 随机）：刷新列表、音乐商店、猜歌、设置、个人资料、随机选曲、筛选、排序。
+    // ------------------------------------------------------------------
+    if (menuUp) {
+        const float openX = w - menuW; // 完全展开后的左缘（"点外面"用）
+        // 点抽屉左边 = 关（原作 CloseArea）。只在基本展开后判定，否则打开它的
+        // 那一下点击会立刻把它关掉。
+        if (gMenuOpen && menuT > 0.9f && ui::mouseClicked(ImGuiMouseButton_Left)
+            && ImGui::GetIO().MousePos.x < openX) {
+            ui::se(ui::SeWindowClose);
+            gMenuOpen = false;
+        }
+        const int menuAlpha = static_cast<int>(246.0f * menuEase); // 原作 80%，见下
+        const int menuAlphaBottom = static_cast<int>(252.0f * menuEase);
+        // Bg：纯色 #444466，满高、贴右。左缘一条 2px 的淡白边把抽屉和
+        // 背景分开（原作贴图没有投影）。
+        //
+        // 原作是 80%（204）—— 它底下那张选曲背景是深色的，透 20% 刚好。
+        // 我们底下是整台**浅色手机**（难度圆盘、确定键都在这一带），而且
+        // 卡片自己也是 80% 白：两层半透明叠起来，手机的「EASY/NORMAL/…」
+        // 会透过白卡，像水印。所以面板收到 96.5%（卡片那一带），卡片以下
+        // 再收到 99%，只留 24k 过渡避免硬边。留住一点"半透明抽屉"的意思，
+        // 但不让底下的控件变成鬼影。
+        const float panelSolidY = 664.4f * k; // 第三行卡片的底边
+        if (panelSolidY < h) {
+            dl->AddRectFilled(ImVec2(menuX0, 0.0f), ImVec2(menuX0 + menuW, panelSolidY),
+                IM_COL32(68, 68, 102, menuAlpha));
+            const float ramp = std::min(24.0f * k, h - panelSolidY);
+            dl->AddRectFilledMultiColor(ImVec2(menuX0, panelSolidY),
+                ImVec2(menuX0 + menuW, panelSolidY + ramp),
+                IM_COL32(68, 68, 102, menuAlpha), IM_COL32(68, 68, 102, menuAlpha),
+                IM_COL32(68, 68, 102, menuAlphaBottom), IM_COL32(68, 68, 102, menuAlphaBottom));
+            if (panelSolidY + ramp < h) {
+                dl->AddRectFilled(ImVec2(menuX0, panelSolidY + ramp), ImVec2(menuX0 + menuW, h),
+                    IM_COL32(68, 68, 102, menuAlphaBottom));
+            }
+        } else {
+            dl->AddRectFilled(ImVec2(menuX0, 0.0f), ImVec2(menuX0 + menuW, h),
+                IM_COL32(68, 68, 102, menuAlpha));
+        }
+        dl->AddRectFilled(ImVec2(menuX0, 0.0f), ImVec2(menuX0 + 2.0f * k, h),
+            IM_COL32(255, 255, 255, static_cast<int>(26.0f * menuEase)));
+
+        // 关闭钮：44x44，距右缘 18.1、距顶 18.5（prefab 的 UIPartsCloseButton）。
+        {
+            const float closeD = 44.0f * k;
+            const ImVec2 closeC(menuX0 + menuW - 18.1f * k - closeD * 0.5f,
+                18.5f * k + closeD * 0.5f);
+            ImGui::SetCursorScreenPos(
+                ImVec2(closeC.x - closeD * 0.5f, closeC.y - closeD * 0.5f));
+            ImGui::PushID("menuclose");
+            ImGui::InvisibleButton("x", ImVec2(closeD, closeD));
+            const bool xHot = ImGui::IsItemHovered();
+            const bool xHit = ImGui::IsItemClicked();
+            ImGui::PopID();
+            const GLuint closeTex = selectTex(renderer, "btn_close_wh");
+            const int xA = static_cast<int>((xHot ? 255.0f : 230.0f) * menuEase);
+            if (closeTex != 0) {
+                dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(closeTex)),
+                    ImVec2(closeC.x - closeD * 0.5f, closeC.y - closeD * 0.5f),
+                    ImVec2(closeC.x + closeD * 0.5f, closeC.y + closeD * 0.5f),
+                    ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), IM_COL32(255, 255, 255, xA));
+            } else {
+                const float d = closeD * 0.25f;
+                dl->AddLine(ImVec2(closeC.x - d, closeC.y - d), ImVec2(closeC.x + d, closeC.y + d),
+                    IM_COL32(240, 240, 248, xA), 2.6f * k);
+                dl->AddLine(ImVec2(closeC.x + d, closeC.y - d), ImVec2(closeC.x - d, closeC.y + d),
+                    IM_COL32(240, 240, 248, xA), 2.6f * k);
+            }
+            if (xHit) {
+                ui::se(ui::SeWindowClose);
+                gMenuOpen = false;
+            }
+        }
+
+        struct MenuCellDef
+        {
+            const char* label;
+            const char* icon;
+            float iconW; // 官方 sprite 的原尺寸，按比例塞进右下角的方框
+            float iconH;
+            float x;
+            float y;
+            float w;
+            float h;
+            bool big;
+            int command;
+        };
+        enum MenuCommand
+        {
+            CmdRescan = 1,
+            CmdDownload,
+            CmdSettings,
+            CmdGuess,
+            CmdProfile,
+            CmdShuffle,
+            CmdFilter,
+            CmdSort,
+        };
+        // 坐标全部相对抽屉左缘，单位是 1920 画布（再乘 k）。y 用的是 1920x1080
+        // 屏上的绝对 y（= 1080 - prefab 的 y-up 值），和 rect_resolve 的输出对齐。
+        static const MenuCellDef kMenuCells[] = {
+            {"音乐商店", "store", 40.0f, 40.0f, 56.0f, 96.4f, 392.0f, 184.0f, true, CmdDownload},
+            {"猜歌", "guess", 40.0f, 40.0f, 456.0f, 96.4f, 392.0f, 184.0f, true, CmdGuess},
+            {"刷新列表", "refresh", 40.0f, 40.0f, 56.0f, 287.4f, 392.0f, 184.0f, true, CmdRescan},
+            {"设置", "musicsetting", 40.0f, 40.0f, 456.0f, 287.4f, 392.0f, 184.0f, true, CmdSettings},
+            {"个人资料", "icon_menu_profile", 70.0f, 48.0f, 56.0f, 480.4f, 192.0f, 184.0f, false, CmdProfile},
+            {"随机选曲", "btn_random_lgr", 60.0f, 52.0f, 256.0f, 480.4f, 192.0f, 184.0f, false, CmdShuffle},
+            {"筛选", "icon_refine_wh", 29.0f, 28.0f, 456.0f, 480.4f, 192.0f, 184.0f, false, CmdFilter},
+            {"排序", "icon_menu_text", 94.0f, 34.0f, 656.0f, 480.4f, 192.0f, 184.0f, false, CmdSort},
+        };
+        int menuCommand = 0;
+        const int kMenuCellCount = static_cast<int>(sizeof(kMenuCells) / sizeof(kMenuCells[0]));
+        for (int i = 0; i < kMenuCellCount; ++i) {
+            const MenuCellDef& def = kMenuCells[i];
+            const ImVec2 c0(menuX0 + def.x * k, def.y * k);
+            const ImVec2 c1(c0.x + def.w * k, c0.y + def.h * k);
+            ImGui::SetCursorScreenPos(c0);
+            ImGui::PushID(8100 + i);
+            ImGui::InvisibleButton("cell", ImVec2(c1.x - c0.x, c1.y - c0.y));
+            const bool hot = ImGui::IsItemHovered();
+            const bool hitCell = ImGui::IsItemClicked();
+            ImGui::PopID();
+            const float glow = ui::anim(0x4a57c000u + static_cast<ImGuiID>(i), hot, 18.0f);
+            if (hitCell && gMenuOpen) {
+                menuCommand = def.command;
+            }
+
+            // 卡片：白 80%（官方 btn_menu_* 的底），悬停提亮；圆角 20、无描边。
+            ui::dropShadow(dl, c0, c1, 20.0f * k, k, 0.8f);
+            dl->AddRectFilled(c0, c1,
+                ui::mix(IM_COL32(235, 235, 242, static_cast<int>(204.0f * menuEase)),
+                    IM_COL32(247, 247, 252, static_cast<int>(235.0f * menuEase)), glow),
+                20.0f * k);
+            // 悬停时的白色光晕（官方 Effect 是 eff_cell_r20_wh 的 0→可见）。
+            if (glow > 0.01f) {
+                dl->AddRect(c0, c1,
+                    IM_COL32(255, 255, 255, static_cast<int>(70.0f * glow * menuEase)),
+                    20.0f * k, 0, 2.0f * k);
+            }
+
+            // 左上角深蓝标题牌 + 白字（官方 btn_menu_* 的标题就是一块 #444466）。
+            // 用 title（粗体）而不是 body：官方的标题是粗圆体，细字压不住那块深蓝。
+            // 排序格子把当前模式写进标签（和顶栏下拉是同一个 sortMode），
+            // 否则点一下只看到列表顺序变了、不知道切到了哪种。
+            const std::string sortLabel = sortMode == 0 ? "排序：名称" : "排序：难度";
+            const char* cellLabel = def.command == CmdSort ? sortLabel.c_str() : def.label;
+            ImFont* plateFont = title != nullptr ? title : body;
+            const float textSize = (def.big ? 32.0f : 24.0f) * k;
+            const float plateH = (def.big ? 50.0f : 40.0f) * k;
+            const float platePadX = (def.big ? 16.0f : 12.0f) * k;
+            const float plateInset = 10.0f * k;
+            const ImVec2 labelSize = plateFont->CalcTextSizeA(textSize, FLT_MAX, 0.0f, cellLabel);
+            const float maxPlateW = (c1.x - c0.x) - plateInset * 2.0f;
+            const float plateW = std::min(maxPlateW, labelSize.x + platePadX * 2.0f);
+            const ImVec2 p0(c0.x + plateInset, c0.y + plateInset);
+            dl->AddRectFilled(p0, ImVec2(p0.x + plateW, p0.y + plateH),
+                IM_COL32(68, 68, 102, static_cast<int>(255.0f * menuEase)), 10.0f * k);
+            dl->AddText(plateFont, textSize,
+                ImVec2(p0.x + platePadX, p0.y + (plateH - labelSize.y) * 0.5f),
+                IM_COL32(255, 255, 255, static_cast<int>(255.0f * menuEase)), cellLabel);
+
+            // 右下角图标：官方白色单色图，染 #444466；大格 84（MenuCell 的 Icon
+            // 尺寸），小格 56。按原图长宽比塞进方框，别把 ABC / 资料卡压成正方形。
+            const float maxBox = (def.big ? 84.0f : 56.0f) * k;
+            const float iconAspect = def.iconW / def.iconH;
+            const float drawW = iconAspect >= 1.0f ? maxBox : maxBox * iconAspect;
+            const float drawH = iconAspect >= 1.0f ? maxBox / iconAspect : maxBox;
+            const float iconMargin = (def.big ? 22.0f : 16.0f) * k;
+            const GLuint iconTex = selectTex(renderer, def.icon);
+            const ImVec2 ic1(c1.x - iconMargin, c1.y - iconMargin);
+            const ImVec2 ic0(ic1.x - drawW, ic1.y - drawH);
+            if (iconTex != 0) {
+                dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(iconTex)),
+                    ic0, ic1, ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f),
+                    IM_COL32(68, 68, 102, static_cast<int>((190.0f + 50.0f * glow) * menuEase)));
+            }
+        }
+
+        // 底部页脚：抽屉是满高的，8 件之后的空白用一条分隔线 + 关闭提示收个尾
+        // （不是装饰：点左侧空白 / Esc 都能关，但玩家不一定知道）。
+        {
+            const float footY = h - 92.0f * k;
+            dl->AddRectFilled(ImVec2(menuX0 + 24.0f * k, footY),
+                ImVec2(menuX0 + menuW - 24.0f * k, footY + 2.0f * k),
+                IM_COL32(255, 255, 255, static_cast<int>(34.0f * menuEase)));
+            addTextLeft(dl, body, 18.0f * k, ImVec2(menuX0 + 24.0f * k, footY + 26.0f * k),
+                IM_COL32(214, 214, 232, static_cast<int>(170.0f * menuEase)),
+                "Esc 或点左侧空白关闭");
+            const char* mark = "CppSekai";
+            const ImVec2 markSize = body->CalcTextSizeA(18.0f * k, FLT_MAX, 0.0f, mark);
+            addTextLeft(dl, body, 18.0f * k,
+                ImVec2(menuX0 + menuW - 24.0f * k - markSize.x, footY + 26.0f * k),
+                IM_COL32(214, 214, 232, static_cast<int>(120.0f * menuEase)), mark);
+        }
+
+        if (menuCommand != 0) {
+            ui::se(ui::SeClick);
+            gMenuOpen = false;
+            switch (menuCommand) {
+            case CmdRescan:
+                action = SelectRescan;
+                break;
+            case CmdDownload:
+                action = SelectDownload;
+                break;
+            case CmdSettings:
+                action = SelectSettings;
+                break;
+            case CmdGuess:
+                // 题库分帧构建，点击不会卡（openGuessDialog 自己处理）。
+                openGuessDialog();
+                break;
+            case CmdProfile:
+                gProfileOpen = true;
+                break;
+            case CmdFilter:
+                gFilterOpen = true;
+                break;
+            case CmdSort:
+                sortMode = (sortMode == 0) ? 1 : 0;
+                break;
+            case CmdShuffle:
+                if (!groups.empty()) {
+                    int next = groupIndex;
+                    for (int tries = 0; tries < 8 && next == groupIndex; ++tries) {
+                        next = std::rand() % static_cast<int>(groups.size());
+                    }
+                    groupIndex = next;
+                }
+                break;
+            default:
+                break;
             }
         }
     }

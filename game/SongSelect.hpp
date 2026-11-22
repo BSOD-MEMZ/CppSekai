@@ -519,6 +519,23 @@ void applyFavorites(std::vector<ChartEntry>& entries, const std::vector<int>& fa
 // Call once at startup.
 void setSelectAssetDir(const std::string& dir);
 
+// UI language for the select screen's *baked-text* assets. There are two
+// folders: assets/select/zh-CN and assets/select/ja-JP. selectTex() tries
+// <lang>/ first, then ja-JP/, then the language-neutral select/ root - so only
+// the pictures that have words in them (the ALL / その他 tab logos, the
+// "歌曲等级" / "楽曲Lv." plate) need a copy per language.
+// "zh-CN" (the default, and what CPSEKAI_LANG picks when it is not "ja-JP") or
+// "ja-JP"; anything else falls back to zh-CN. Safe to call more than once - the
+// texture cache is keyed by language.
+void setSelectLanguage(const std::string& lang);
+
+// 右上角菜单抽屉（原作 ScreenLayerHeader 的 menuButton -> MenuDialog）是否
+// 打开。main 的 ESC 链要在它打开时让位，否则 ESC 会被当成"退出游戏"。
+bool menuDrawerOpen();
+void closeMenuDrawer();
+// `--select-menu` / CPSEKAI_SELECT_MENU=1 use this for a headless screenshot.
+void debugOpenMenuDrawer(bool open);
+
 // Absolute path of one card's art: <assets>\card\<bundle>.png. Empty when the
 // assets root was never set. The file may not exist - the art is downloaded by
 // .workbuddy/tools/fetch_card_art.py and only a starter set ships with the
@@ -659,7 +676,10 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     int deckPower = 250000, bool* autoLive = nullptr, int* mvMode = nullptr,
     const AccountData* account = nullptr,
     const SelectPartyInfo* party = nullptr, SelectPartyResult* partyOut = nullptr,
-    int* favoriteToggle = nullptr, bool nativeMenuBar = false, int* deleteRequest = nullptr);
+    int* favoriteToggle = nullptr, bool nativeMenuBar = false, int* deleteRequest = nullptr,
+    // 6 live band magnitudes 0..1 for the selected card's equalizer (see
+    // AudioEngine::previewSpectrum). Null = no measurement (headless / muted).
+    const float* previewBands = nullptr);
 
 // Debug (`--profile`): force the profile card open. It normally only appears
 // when the level chip is clicked, which a --screenshot run cannot do.

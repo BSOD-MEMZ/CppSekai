@@ -25,7 +25,31 @@ CppSekai：Project SEKAI 风格 SUS 谱面 Windows 原生游玩器。
 - `SELECT-UI.md` —— **选曲界面对齐规格（2026-11-01 大修）**：原作 prefab 的实测尺寸、
   **画布基准 1920×1080（CanvasScaler 实测，不用换算）**、我们的现状对照表、
   手机面板 `ScreenLayerFreeLiveCellPhone` 的完整几何、A0/A/B 方案与验收方法。
-  **动选曲布局前必读。**
+  **动选曲布局前必读。** 2026-11-22 第二轮补了**全局缩放（按宽度匹配 + 锁 100%）、
+  每块贴哪条边、右侧菜单抽屉（原作 `MenuDialog` 1775 的几何 + 我们放进去的 8 件）、
+  `assets/select/<lang>/` 语言目录**。
+- `SELECT-HEADER.md` —— **选曲界面顶栏到底是什么（2026-11-22 实测）**：原作顶栏是**全局层**
+  `ScreenLayerHeader`（prefab 694），单人选曲时 = **返回钮 96²@(16,16) + 「SOLO LIVE +
+  ▶楽曲選択」标题块 604×62@(107,61) + 菜单钮 96²@(1808,16)**（菜单钮带 32² 未读角标）；
+  `ScreenLayerData` 里 `DisplayHeader=Show / DisplayCategory=0x107 / DisplayPlayerInfo=Hide`
+  ——**等级/宝石/体力那一簇在这一屏是关的**；搜索 196 / 筛选 1380.3 / 排序 1476.5 是
+  **列表层**的零件，和顶栏同挤一条 96px 带，菜单钮 ↔ 排序右缘只差 51.5px。
+  多人选曲 `DisplayHeader=Hide`（整条顶栏不显示）。示意图
+  [`docs/select-topbar-1920.png`](docs/select-topbar-1920.png)。
+  **再有人说「原作没有菜单钮」就把这篇给他看。**
+- `SELECT-CELLPHONE.md` —— **手机面板（704）的贴图与配色实测（2026-11-22）**：
+  容器 **754.3×1416.7 / 中心 (1522,742) / +3°（右端上翘）**、曲绘 376²@(186.5,92.5)、
+  难度盘 96（步距 120）、确定 258×96@(245.1,807.4)、底部两图标 **281.45 / 469.45**
+  （设置钮在选曲屏被 `SetActive(false)`，剩下两颗居中成一对，步距 188）；
+  **每个零件的官方 sprite + 颜色**：确定 = `eff_btn_round_h80_a70_wh` 光晕 +
+  `btn_round_line_h80_wh` 染 **#77EEDD**（**描边**不是实心）+ 按压 `bg_base_round_h80_wh`；
+  评级 = `btn_circle_h96_a20_wh`（白 20% 烤进图）+ `icon_scoreRank_s_{x}` 68×76；
+  难度色是 prefab 真值 `#11DD77/#33CCFF/#FFCC00/#FF4477/#CC33FF`，高光是
+  `eff_btn_circle_h80_a70_wh`；**曲绘方角**（`Jacket` 是 `JacketMask` 的兄弟，只有
+  `JacketEdgeTransparency` 的 ~1.9px 边缘渐隐，r20 是裁虚化拖尾的）；
+  虚化拖尾 = **一张 700×574**、alpha **76/255**、竖直按 `RectMask2D softness (0,389)` 渐隐。
+  `phone_style.tsv` 有 260 条组件样式，`prefab_style.py` 可重跑。
+  **再动手机面板的观感先看这篇**（第三遍复验在 §7，四个几何问题的证据都在那）。
 - `GPU-GLITCH.md` —— **两条画面异常的排查（2026-10-31）**：「画面过曝」= 扩展帧
   该收回的时候没收回，整局都跑在 DWM 逐像素合成下（`splashStyle == 0 ||` 混进运行期
   判断，恒真 → 已改成只按 `bgStyle == 2`）；「演奏中白条 + 卡住 + 屏幕黑一下」= TDR，

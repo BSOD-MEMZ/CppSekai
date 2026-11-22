@@ -171,7 +171,7 @@
           "who": "初音未来",
           "text": "那就先下载谱面吧！",
           "highlight": "store",
-          "tip": "点这里打开下载器～",
+          "tip": "点右上角菜单，再选「音乐商店」～",
           "wait": "chartdlOpen",
           "timeout": 45,
           "onTimeout": "dl_offer",

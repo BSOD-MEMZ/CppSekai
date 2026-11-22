@@ -191,6 +191,19 @@ class AudioEngine
     void stopPreview();
     bool previewActive() const { return mPreviewActive; }
 
+    // ---- Preview spectrum (选曲卡片上的 6 根频谱柱) ----------------------
+    // The card's equalizer is prefab 1129's UIPartsSpectrumAnalyzer: six bars,
+    // each reading one band of BGMPlayer.GetSpectrumLevels' 16 levels
+    // (indices 0/3/6/9/12/14) and scaling its height by
+    // clamp(|20*log10(level)|/32, 0..1), hidden below 0.02 (Update, RVA
+    // 0x4D56398; zeroScale = (0,0,1) from .ctor 0x4D56940).
+    // miniaudio exposes no FFT tap on a live sound, so this decodes the same
+    // preview file with its own decoder kept in lockstep with the playhead and
+    // measures six log-spaced bands itself. outBands are linear 0..1
+    // magnitudes; false when there is nothing to measure (no preview, no
+    // device, or a file the extra decoder cannot open).
+    bool previewSpectrum(float outBands[6]);
+
     // ---- Result screen BGM ----------------------------------------------
     // The result screen loops the game's own result track (assets/ost). It is
     // independent of the chart music - that one has already been stopped - and
@@ -243,6 +256,15 @@ class AudioEngine
     double mPreviewEndSec = 0.0;
     bool mPreviewLoaded = false;
     ma_sound mPreviewSound{}; // streaming; separate from the pre-decoded gameplay music
+    // Spectrum tap for the select card: its own decoder on the same file, so
+    // it never touches mPreviewSound's stream. Re-synced when the clip loops.
+    ma_decoder mSpecDecoder{};
+    bool mSpecDecoderOpen = false;
+    bool mSpecDecoderFailed = false;
+    ma_uint64 mSpecDecodedFrame = 0;
+    std::array<float, 1024> mSpecWindow{};
+    int mSpecWindowCount = 0;
+    std::array<float, 6> mSpecBands{};
 
     bool mResultBgmActive = false;
     bool mResultBgmLoaded = false;

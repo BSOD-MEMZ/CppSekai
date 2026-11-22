@@ -120,6 +120,14 @@ CppSekai (AGPL-3.0-only)  ← 本仓库        加平台层、判定引擎、UI�
 > **源码里已经没有任何一处引用它们**（2026-09-24 grep 复核过），删得干净。
 > 另：`assets/select/` 里原先多出来的一批未使用贴图也在同批清理中删掉了。
 
+> **2026-11-22 更新**：`assets/select/` 现在是 **82 个文件**（上面那张表是 09-24 的 15 个快照）。
+> 之后按 prefab 补齐了选曲/手机/最终确认要用的官方 sprite（`btn_circle{56,80}_wh`、
+> `btn_difficulty_*`、`eff_*`、`icon_*`、`mask_smartphone*`、`icon_menu_{profile,text}` 等），
+> 并把「字烤进图里」的两类拆到语言目录：`assets/select/ja-JP/` 与 `zh-CN/`
+> 各一份 `icon_tab_{all,other}_{on,off}.png` + `songlevel.png`
+> （日文是官方 `txt_musicLv`/`icon_tab_*`，中文是同形状重绘，见 SELECT-UI.md）。
+> 来源仍是同一个日服 7.1.0 解包 / `tex_all_sprite`，没有新增外部许可。
+
 `assets/se/**`、`charts/**`、`toolchain/` 等确实不在库里（gitignore 生效）。
 
 **2026-10-18 新增（新手教学用）**

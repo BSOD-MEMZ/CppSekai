@@ -651,6 +651,10 @@ namespace
             "          given page (0 演奏 / 1 画面 / 2 外观 / 3 判定 / 4 系统 / 5 账户 /\n"
             "          6 关于).\n"
             "--select-filter: open the song-select 筛选 card (the header funnel).\n"
+            "--select-menu: open the song-select right-hand menu drawer (the header\n"
+            "          hamburger / MenuDialog) at boot.\n"
+            "--lang <zh-CN|ja-JP>: language of the select screen's baked-text\n"
+            "          assets (tab logos / 楽曲Lv. plate); default zh-CN.\n"
             "--unit <0-7>: preselect a 团体 tab (0 all / 1 VS / 2 L/N / 3 MMJ / 4 VBS /\n"
             "          5 WxS / 6 25ji / 7 other) for the song list.\n"
             "--profile: open the player profile card (the level chip's card) at boot.\n"
@@ -1289,6 +1293,8 @@ int main(int argc, char** argv)
     int settingsTabShot = -1;      // headless check: which settings tab to show
     bool profileShot = false;      // headless check: force the profile card open
     bool filterShot = false;       // headless check: force the 筛选 card open
+    bool selectMenuShot = false;   // headless check: force the menu drawer open
+    std::string selectLangArg;     // --lang <zh-CN|ja-JP>: baked-text asset language
     int unitShot = -1;             // headless check: --unit <n>, pick a 团体页签
     bool guessShot = false;        // headless check: force the 猜歌 card open
     bool singerPanelShot = false;  // headless check: force the 切换歌手 panel open
@@ -1538,6 +1544,15 @@ int main(int argc, char** argv)
             // Headless check: open the 筛选 card on the song select, so a
             // --screenshot run can look at it (normally the 筛选 button does).
             filterShot = true;
+        } else if (arg == "--select-menu") {
+            // Headless check: open the right-hand menu drawer on the song
+            // select (normally the header hamburger does).
+            selectMenuShot = true;
+        } else if (arg == "--lang" && i + 1 < utf8Argc) {
+            // Language of the *baked-text* select assets (assets/select/<lang>/):
+            // the ALL / その他 tab logos and the 楽曲Lv. plate. The UI text itself
+            // is Chinese for now; this only picks the picture set.
+            selectLangArg = utf8Argv[++i];
         } else if (arg == "--profile") {
             // Headless check: open the account's profile card on the song
             // select, so a --screenshot run can look at it (the card normally
@@ -2792,6 +2807,9 @@ int main(int argc, char** argv)
     // setSelectAssetDir expects the assets root; SongSelect appends "select\\".
     // `scores` was already loaded from userdata.json near the top of main().
     game::setSelectAssetDir(baseDir + "assets");
+    if (!selectLangArg.empty()) {
+        game::setSelectLanguage(selectLangArg);
+    }
 
     // Story layer: frames + tutorial script. A missing/malformed script is a
     // warning, not a failed launch - the game has to be playable without it.
@@ -3295,6 +3313,9 @@ int main(int argc, char** argv)
     }
     if (filterShot) {
         game::debugOpenFilterCard(true);
+    }
+    if (selectMenuShot) {
+        game::debugOpenMenuDrawer(true);
     }
     if (unitShot >= 0) {
         userSettings.unitTab = unitShot;
@@ -5079,6 +5100,13 @@ int main(int argc, char** argv)
                                 persistUserData();
                             }
                         }
+                        // 选曲页是固定两栏（列表 912 + 手机 754 + 边距 = 1920），
+                        // 放大超过 100% 两栏必然重叠，所以那一页 / 最终确认页把
+                        // 缩放上限锁在 100%（SongSelect.cpp 的 fit/scale）。结算页
+                        // 是单栏，不受这个上限影响 —— 写清楚，免得以为滑杆失灵。
+                        colSet(0);
+                        ui::caption("选曲页最高 100%（固定两栏版式）", 16.0f * ui::scale(),
+                            ui::kTitleText, w);
                         colSet(0);
                         ImGui::Text("渲染模式");
                         colSet(0);
@@ -9090,7 +9118,8 @@ int main(int argc, char** argv)
         }
 #endif
 
-        if (escapePressed && !game::guessDialogOpen() && !game::filterDialogOpen() && !story::blocksInput()) {
+        if (escapePressed && !game::guessDialogOpen() && !game::filterDialogOpen()
+            && !game::menuDrawerOpen() && !story::blocksInput()) {
             countdownActive = false; // leaving / continuing cancels any countdown
             if (keymapCardAlive) {
                 // 「按键映射」卡片（2026-10-11）：ESC = 关掉它。改键位等待中
@@ -9874,6 +9903,9 @@ int main(int argc, char** argv)
 
             const bool autoBeforeSelect = autoPlay;
             const int mvBeforeSelect = userSettings.mvMode;
+            // 选曲卡片的频谱：从预览曲的音频里量（自己的解码器，不碰播放流）。
+            float previewBands[6] = {};
+            const bool previewBandsOk = audio.previewSpectrum(previewBands);
             int action = game::drawSongSelect(renderer, entries, selected, windowW, windowH,
                 static_cast<float>(uiClock), userSettings.sortMode, userSettings.groupMode,
                 userSettings.unitTab,
@@ -9886,7 +9918,10 @@ int main(int argc, char** argv)
                 // 但顶栏按钮也不该在那时候又冒出来 —— 那样切个窗口模式按钮就跳来跳去。
                 userSettings.nativeMenuBar,
                 // 曲目右键 > 删除谱面文件…：这里只收一个"删哪一首"，动手的是下面。
-                &deleteRequest);
+                &deleteRequest,
+                // 选中卡片的 6 根频谱柱（原作 UIPartsSpectrumAnalyzer）：拿
+                // 当前预览曲量出来的 6 个频段，量不到就传 nullptr（卡片画静息高度）。
+                previewBandsOk ? previewBands : nullptr);
             if (autoPlay != autoBeforeSelect) {
                 userSettings.autoplay = autoPlay;
                 persistUserData();
