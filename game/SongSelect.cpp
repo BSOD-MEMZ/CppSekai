@@ -3812,10 +3812,10 @@ namespace
 
         int finalResult = SelectNone;
         if (phoneSettingsHit || autoGearSettingsHit) {
-            // 和抽屉里的「设置」同一条路：先淡出回列表页，再让 main 打开设置卡。
-            if (!pageSwitchBusy()) {
-                requestPageSwitch(false, static_cast<float>(timeSec));
-            }
+            // 直接开设置卡（main 收到 SelectSettings 就 showDebug = true），
+            // **不离开这一页**：卡片是另一个 ImGui 窗口，画在本页之后，
+            // 关掉卡片就回到最终确认页。别再顺手 requestPageSwitch(false)，
+            // 那样会先淡回列表再弹卡片，看着像被踢出页面。
             finalResult = SelectSettings;
         }
         if (phoneStartHit) {
