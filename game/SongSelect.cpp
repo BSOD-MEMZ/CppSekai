@@ -3525,6 +3525,31 @@ namespace
             }
         }
 
+        // ---- DeckView/TotalPower/OpenBondRankDialogButton ----------------------
+        // 530.6, 263.5  254x72  btn_round_h80_wh（106x96，border 51/0/51/0）白
+        //   Text 206x72 @ 554.6,263.5，28px #444466（国服写「角色牵绊等级」）
+        //   FrontGlowCover / Cover 都是 m_IsActive=0 → 悬停才亮
+        // 用户第一轮说"暂时忽略角色羁绊按钮"，但国服截图里它在，而且这一行
+        // 530..930 那一大段空着确实难看 —— 画回来，点开 = toast（没有羁绊系统）。
+        {
+            const Rect r = R(530.6f, 263.5f, 254.0f, 72.0f);
+            const bool hot = hover(r.x0, r.y0, r.x1 - r.x0, r.y1 - r.y0) && !finalMenuUp;
+            if (hot) {
+                slice(finalTex(renderer, "eff_btn_round_h80_a70_wh"), 112, 104, 56.0f, 52.0f,
+                    56.0f, 52.0f, r.x0 - 4.0f * k, r.y0 - 4.0f * k, r.x1 + 4.0f * k,
+                    r.y1 + 4.0f * k, IM_COL32(255, 255, 255, 90));
+            }
+            slice(finalTex(renderer, "btn_round_h80_wh"), 106, 96, 51.0f, 0.0f, 51.0f, 0.0f,
+                r.x0, r.y0, r.x1, r.y1, IM_COL32(255, 255, 255, 255));
+            addTextCentered(dl, body, 28.0f * k, ImVec2((r.x0 + r.x1) * 0.5f, (r.y0 + r.y1) * 0.5f),
+                rgba(0.26666668f, 0.26666668f, 0.4f, 1.0f), "角色牵绊等级");
+            if (hit(r.x0, r.y0, r.x1 - r.x0, r.y1 - r.y0)) {
+                gFinalToast = "角色羁绊等级尚未实现";
+                gFinalToastUntil = static_cast<double>(timeSec) + 2.2;
+                ui::se(ui::SeClick);
+            }
+        }
+
         // ---- DeckView/DeckBase/SwapMember（checkbox + 标签）---------------------
         // prefab：SwapMember 挂在 DeckBase 顶边右侧 (192.1,291.5)，子节点
         //   UIPartsCheckBox 55x55 → CheckBox 56x56 @ 931.6,271.6（bg_base_r16_wh，
