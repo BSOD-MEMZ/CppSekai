@@ -3504,6 +3504,8 @@ namespace
         }
 
         bool phoneStartHit = false;
+        bool phoneSettingsHit = false; // 手机底部左格（live settings）被点
+        bool autoGearSettingsHit = false; // AUTO 旁边那颗小齿轮被点
         // Right: ScreenLayerFreeLiveCellPhone (prefab 704) at the SAME geometry
         // as the select screen: 754.3x1416.7, right edge 1899.15, top 33.6,
         // tilted +3deg about its centre (TransformList/DefaultPosition = (562,-202)).
@@ -3648,23 +3650,60 @@ namespace
                 phoneStartHit = true;
             }
 
-            // Bottom utility row (same two icons as the select phone): gear at
-            // local x 281.45, singer at 469.45, 80x80 at y 898.5. Decorative on
-            // this page - the deck/confirm controls are the interactive ones.
+            // 底部那排 = prefab 704 的 `CommonButtonContent`：702x100 的条挂在
+            // phone-local (24.45, 898.55)，里面 80x80 的格子走 HorizontalLayoutGroup
+            // (m_Spacing=108、m_ChildAlignment=4 MiddleCenter)，**格子中心 y = 948.55**。
+            //
+            // `CommonButtonContent.SetupButton`(RVA 0x62459D4) 是
+            //   randomButton.SetActive(info.ShouldShowRandomButton);
+            //   settingButton.SetActive(info.EnableSettingButton);
+            //   changeVocalButton.enabled = info.EnableChangeVocalButton;   // ← 只是 enabled，
+            //                                                              //   格子还在布局里
+            // 选曲页：setting 关着 → 两格（随机 / 换歌手）→ 条内 257/445 → phone-local
+            //   **281.45 / 469.45**，步距 188。
+            // 最终确认页：`SetupFinalConfirm` 把 EnableSettingButton 传 1、随机那份传 0
+            //   → **还是两格**（设置 / 换歌手），位置一模一样 —— 所以换页时这排
+            //   几何完全不动，只是左边那颗从 `btn_random_lgr` 换成 `btn_settingLive_lgr`
+            //   （齿轮 + 音符，72x72）。若随机也留着就会变成三格（163/351/539），
+            //   整排会平移，那不是原作的样子。
+            // 左格点开设置卡（和抽屉里「设置」同一条路：关掉本页 → SelectSettings），
+            // 右格换音源版本（最终页没有切歌手面板，直接循环下一个版本 + toast）。
             {
-                const GLuint gearTex = finalTex(renderer, "icon_setting_wh");
-                const GLuint singerTex = selectTex(renderer, "singer");
-                const float iy = PY(898.5f);
-                const float iw = 80.0f * ps;
-                if (gearTex != 0) {
-                    dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(gearTex)),
-                        ImVec2(PX(281.45f) - iw * 0.5f, iy), ImVec2(PX(281.45f) + iw * 0.5f, iy + iw),
-                        ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), IM_COL32(235, 235, 245, 210));
+                const float cell = 80.0f * ps;
+                const float iy = PY(948.55f);
+                const ImVec2 lm(mouse.x - pivot.x, mouse.y - pivot.y);
+                const ImVec2 lp(pivot.x + lm.x * tc + lm.y * ts, pivot.y - lm.x * ts + lm.y * tc);
+                const auto cellHot = [&](float lx) {
+                    return !finalMenuUp && lp.x >= PX(lx) - cell * 0.5f
+                        && lp.x <= PX(lx) + cell * 0.5f && lp.y >= iy - cell * 0.5f
+                        && lp.y <= iy + cell * 0.5f;
+                };
+                const bool setHot = cellHot(281.45f);
+                const bool vocHot = cellHot(469.45f);
+                const float setD = 36.0f * ps; // btn_settingLive_lgr 72x72
+                const float vocD = 34.0f * ps; // btn_vocalChange_lgr 68x68
+                plain(selectTex(renderer, "btn_settingLive_lgr"), PX(281.45f) - setD, iy - setD,
+                    PX(281.45f) + setD, iy + setD, IM_COL32(255, 255, 255, setHot ? 255 : 235));
+                plain(selectTex(renderer, "btn_vocalChange_lgr"), PX(469.45f) - vocD, iy - vocD,
+                    PX(469.45f) + vocD, iy + vocD, IM_COL32(255, 255, 255, vocHot ? 255 : 235));
+                if (setHot && clicked) {
+                    ui::se(ui::SeClick);
+                    phoneSettingsHit = true;
                 }
-                if (singerTex != 0) {
-                    dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(singerTex)),
-                        ImVec2(PX(469.45f) - iw * 0.5f, iy), ImVec2(PX(469.45f) + iw * 0.5f, iy + iw),
-                        ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), IM_COL32(235, 235, 245, 210));
+                if (vocHot && clicked) {
+                    const std::vector<VocalVersion> vers = availableVocals(entry);
+                    if (vers.size() > 1) {
+                        gFinalVocal = (std::clamp(gFinalVocal, 0, static_cast<int>(vers.size()) - 1) + 1)
+                            % static_cast<int>(vers.size());
+                        const std::string& cap = vers[static_cast<size_t>(gFinalVocal)].caption;
+                        gFinalToast = cap.empty() ? "下一个音源" : ("Vo. " + cap);
+                        gFinalToastUntil = static_cast<double>(timeSec) + 2.0;
+                        ui::se(ui::SeClick);
+                    } else {
+                        gFinalToast = "这首歌只有一个音源";
+                        gFinalToastUntil = static_cast<double>(timeSec) + 2.0;
+                        ui::se(ui::SeClick);
+                    }
                 }
             }
 
@@ -3722,7 +3761,12 @@ namespace
         //           On 中心 (946.1,1042.4)、Off 中心 (850.6,1042.4)
         //   TextOn / TextOff 29px 白，框 772.6..972.6 / 888.8..958.8，垂直中心 1041.9
         {
-            const Rect card = R(808.6f, 932.4f, 180.0f, 110.0f);
+            // 卡片顶边的那条实测是 932.4，但那个节点的 sizeDelta.x 是 **0**
+            // （Image 根本画不出来，宽度/位置由代码给），所以 932.4 不能当真值：
+            // 按"卡片包住开关"的意图把底边对齐到轨道底边（1070.4），
+            // 180x110 → 960.4..1070.4，正好上 54px 放 "AUTO" 字、下 56px 放开关。
+            // 上一版照 932.4 画，卡片和开关叠成"两个互相错开的胶囊"，就是看着不对的原因。
+            const Rect card = R(808.6f, 960.4f, 180.0f, 110.0f);
             plain(finalTex(renderer, "bg_auto"), card.x0, card.y0, card.x1, card.y1,
                 IM_COL32(255, 255, 255, 255));
             const Rect track = R(822.6f, 1014.4f, 152.0f, 56.0f);
@@ -3743,9 +3787,37 @@ namespace
                 autoLive = !autoLive;
                 ui::se(ui::SeClick);
             }
+            // AUTO 旁边那颗小齿轮 = prefab 里 AutoLiveToggle/ConsecutiveAutoLiveRoot/
+            // ConsecutiveAutoLiveSetting（72x72 的 `btn_circle56_wh` + 32x32 的
+            // `icon_setting` 染 #444466）。**prefab 把它摆在 AUTO 的正中**（和开关同
+            // 一个点），两者不可能同时可见；按用户实测的样子放在卡片右侧 8px、
+            // 竖直对齐开关中心：x 996.6..1068.6 / y 1006.4..1078.4。
+            // 点它 = 直接打开设置卡（不走原作那个"连続オートライブ設定"）。
+            {
+                const Rect g = R(996.6f, 1006.4f, 72.0f, 72.0f);
+                const bool gHot = hover(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0) && !finalMenuUp;
+                plain(selectTex(renderer, "btn_circle56_wh"), g.x0, g.y0, g.x1, g.y1,
+                    IM_COL32(255, 255, 255, gHot ? 255 : 235));
+                const float gi = 16.0f * k;
+                const ImVec2 gc((g.x0 + g.x1) * 0.5f, (g.y0 + g.y1) * 0.5f);
+                plain(finalTex(renderer, "icon_setting_wh"), gc.x - gi, gc.y - gi, gc.x + gi,
+                    gc.y + gi, rgba(0.26666668f, 0.26666668f, 0.4f, 1.0f));
+                if (hit(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0)) {
+                    ui::se(ui::SeClick);
+                    requestPageSwitch(false, static_cast<float>(timeSec));
+                    autoGearSettingsHit = true;
+                }
+            }
         }
 
         int finalResult = SelectNone;
+        if (phoneSettingsHit || autoGearSettingsHit) {
+            // 和抽屉里的「设置」同一条路：先淡出回列表页，再让 main 打开设置卡。
+            if (!pageSwitchBusy()) {
+                requestPageSwitch(false, static_cast<float>(timeSec));
+            }
+            finalResult = SelectSettings;
+        }
         if (phoneStartHit) {
             // The phone's play button is the original start control; no extra
             // "开始" capsule outside the handset.

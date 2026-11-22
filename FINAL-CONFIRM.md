@@ -65,14 +65,39 @@ DeckSelector/DeckSelectList
 AutoEditButton        862.3, 119.7 296×72  btn_round_h80_wh，文字 28px #444466
 BottomLeft/UIPartsLiveModeButton  57, 962  176×72（同一张白胶囊），文字 28px
 BottomLeft/AutoLiveToggle
-  bg_auto             180×110（prefab 里 sizeDelta.x=0，宽度靠代码给）"AUTO" 烤在图上
-                      中心 x=898.6，**上边 932.4** → 808.6..988.6
+  bg_auto             180×110（prefab 的 sizeDelta.x 是 **0**，Image 根本画不出来 →
+                      位置/宽度由代码给，所以 932.4 那个 y 不能当真值），
+                      "AUTO" 烤在图上、70% 白烤在图里
   ToggleRoot          822.6, 1014.4  152×56
     Bg                bg_base_round_h56_wh：On #FF77AA / Off #444466
     Toggle            72×72 toggle_btn_wh（贴图缺失 → 用同尺寸 btn_circle_h56_wh）
                       On 中心 (946.1,1042.4)、Off 中心 (850.6,1042.4) —— 比轨道 ±47.5
     TextOn/TextOff    29px 白，框中心 872.6 / 923.8，垂直中心 1041.9（**在旋钮对面**）
+  ConsecutiveAutoLiveSetting  72×72 @ 862.6,1006.4（btn_circle56_wh + 32×32 icon_setting）
+                      这颗"小齿轮"prefab 摆在 AUTO 的**正中**（和开关同一个点），
+                      两者不可能同时可见 —— 我们的摆法见 §3.1
 ```
+
+### 3.1 AUTO 那一坨到底怎么摆（2026-11-22 第二轮）
+
+三个数字互相打架，得先把它们分开看：
+
+1. `AutoLiveToggle.sizeDelta.x = 0` —— 节点只有 110 高、宽度没有。Image 是
+   Sliced（border 119/0/51/0，**左 119 装 "AUTO" 三个字母、右 51 是右圆头**），
+   这种切法就是给"横向拉伸"用的，所以宽度一定是代码给的（`SetNativeSize` 之类）。
+   既然宽度是运行时给的，`y=932.4` 也不是能直接用的渲染位置。
+2. `ToggleRoot` 挂在节点的**左下角**（anchor 0,0 / pos 0,0），所以轨道永远在
+   节点的竖直中线下方、水平居中：822.6..974.6 / 1014.4..1070.4。
+3. 小齿轮 `ConsecutiveAutoLiveSetting` 72×72 的中心是 (898.6, 1042.4) —— **和轨道中心
+   是同一个点**。两者只能二选一（原作用 `consecutiveAutoLiveSettingRoot` 在
+   `SetConsecutiveAutoLiveView()` 里切）。
+
+所以我们的摆法：
+- 卡片 **180×110，底边对齐轨道底边** → 960.4..1070.4（上 54px 放 "AUTO"、下 56px 放开关）。
+  照 932.4 画的话卡片和开关会叠成"两个互相错开的胶囊"，这就是之前"明显不对"的来源。
+- 小齿轮放卡片右侧 8px、竖直对齐开关中心：**996.6..1068.6 / 1006.4..1078.4**，
+  点它 = 直接打开设置卡（不走原作那个"連続オートライブ設定"）。
+
 
 ## 3. 明确**不**画的东西（每条都有 `m_IsActive=0` 或代码开关的依据）
 
@@ -102,6 +127,28 @@ BottomLeft/AutoLiveToggle
 | 标题 / 歌手 / Vo. | 左边缘 81.7，垂直中心 513.9 / 557.0 / 594.9 |
 | 难度牌 | 144×40 @ 303.0, 637.3（圆角 = 半高） |
 | **开始钮** | `SoloLiveFinalConfirmButton/PlayButton` 160×160，中心 (377.1, 812.9)，贴图 `btn_play_gn` |
+| 底部两格 | `CommonButtonContent`：702×100 的条在 (24.45, 898.55)，格子 80×80，**中心 y = 948.55**；两格中心 **281.45 / 469.45**（步距 188） |
+
+### 4.1 换页时手机面板哪些东西是**不动**的
+
+标题 / 歌手 / Vo. 三行（左边缘 81.7、垂直中心 513.9 / 557.0 / 594.9）和底部那两格
+**完全不动**，只有左格那颗图标从 `btn_random_lgr`（随机）换成 `btn_settingLive_lgr`
+（齿轮 + 音符 = live settings）。**这一页不会多出第三颗按钮。**
+
+依据是 `CommonButtonContent.SetupButton`(RVA 0x62459D4)：
+
+```
+randomButton.SetActive(info.ShouldShowRandomButton);   // 最终确认页 = false
+settingButton.SetActive(info.EnableSettingButton);     // SetupFinalConfirm 传 1
+changeVocalButton.enabled = info.EnableChangeVocalButton;  // 只改 enabled，格子还在
+```
+
+布局是 `HorizontalLayoutGroup`（spacing 108、MiddleCenter、child-control 0）：
+2 格 → 总宽 268 → 左 217 → 条内 257/445 → phone-local **281.45/469.45**；
+3 格（随机也留着）→ 总宽 456 → 左 123 → 163/351/539，**整排会平移**，那不是原作的样子
+（`SettingButton` 自带的 anchoredPosition.x = 163 只是编辑器里的存档值，不代表这一页）。
+左格点开设置卡，右格换音源版本。
+
 
 ## 5. 页面转场：淡出 → 换页 → 淡入（不是闪白）
 
