@@ -5,9 +5,19 @@
 
 ## 触摸特效（TapEffect）2026-10-25 —— 三种状态，参数全实测
 
-`game/TapEffect.*`。**pjsk 的"点一下 / 按住 / 按住拖动"是三套不同的 fx**，
-`ScreenLayerTouchEffect` prefab 里分别叫 `fx_Tap_single` / `Follow`(`fx_Tap_loop`) /
-`fx_Tap_flick`，参数差得很远。别再把其中一套的数拿来当另一套（踩过两次）。
+> **2026-11-21 更正（重要）**：`Follow` 不是"按住"，它是 `fx_Tap_loop` = **长按**
+> （`TouchLongTapEffect.longTapSec = 0.4`，只有触摸处于 `Stationary` 时才计数）。
+> `TouchEffect.followEffect` 指向的是 `fx_Tap_flick`，也就是**拖动**那一套，而它的
+> 粒子 scale 是 1 / 0.1 / 0.1，正式包里基本不可见。`ScreenLayerTouchEffect.Update`
+> 的相位门槛是：`Began → PlayTapEffect`、`Moved → StartFollowEffect`、
+> `Stationary → CountLongTap`。**所以单击只有 `fx_Tap_single`，650px 柔光只在
+> 长按 0.4s 后才出现；一移动就取消长按**。`TapEffect.cpp` 已按这个门槛分成
+> Tap / LongTap 两态（2026-11-21 修）。
+
+`game/TapEffect.*`。**pjsk 的"点一下 / 长按 / 拖动"是三套不同的 fx**，
+`ScreenLayerTouchEffect` prefab 里分别叫 `fx_Tap_single` / `fx_Tap_loop`（挂在
+`Follow` 节点下）/ `fx_Tap_flick`，参数差得很远。别再把其中一套的数拿来当另一套
+（踩过两次）。
 
 ### 先分级，再读参数
 
@@ -17,7 +27,7 @@ prefab 里有 75 个粒子系统，分属 `fx_Tap_single` / `Follow` / `fx_Tap_f
 ea\work\jp\jp_fx_group.py`）。
 （`grouped.json` 就是结果，改之前先看它。）
 
-| | 单击 `fx_Tap_single` | 按住 `Follow` | 拖动 `fx_Tap_flick` |
+| | 单击 `fx_Tap_single` | 长按 `fx_Tap_loop`（`Follow` 下） | 拖动 `fx_Tap_flick` |
 |---|---|---|---|
 | 环 `PT_01` | **160**，life 0.5，单发 | **330**，life 0.45，循环 | 无 |
 | 柔光 `PT_02` | — | **650**，4/s | 无 |
@@ -29,12 +39,13 @@ ea\work\jp\jp_fx_group.py`）。
 | scalingMode | 0 Hierarchy | 0 Hierarchy | 1 Local |
 
 `fx_Tap_flick` 的三个粒子节点 scale 是 1 / 0.1 / 0.1，算出来只有 0.005~0.05px，
-**在正式包里等于不可见**（多半是半成品）。所以代码只做两个状态：
-**Tap（一次性 burst）** 和 **Hold（跟随指针的持续效果）**，拖动 = Hold 换位置。
+**在正式包里等于不可见**（多半是半成品）。所以代码只做两个可见状态：
+**Tap（一次性 burst）** 和 **LongTap（0.4s 后跟随指针的持续效果）**；拖动只会
+取消长按、启动那套不可见的 `fx_Tap_flick`，没有可见反馈。
 
-**Hold 没有环**：`Follow` 里的 `PT_01`（330）`rateOverTime = 0`，只能靠代码 `Play()`
-触发，而游戏里没播它。实际按住时只有 **650px 白色光晕 + 环绕的三角形**。
-（实测确认过：加上环反而不对。）
+**LongTap 没有环**：`fx_Tap_loop` 里的 `PT_01`（330）`rateOverTime = 0`，只能靠代码
+`Play()` 触发，而游戏里没播它。实际长按 0.4s 后只有 **650px 白色光晕 + 环绕的
+三角形**。（实测确认过：加上环反而不对。）
 
 ### 数据换算
 
@@ -114,7 +125,7 @@ ea\work\jp\jp_fx_group.py`）。
   **画完必须恢复** `ONE_MINUS_SRC_ALPHA`）；三角 alpha blend（白描边 + 渐变填充 =
   贴纸不是光）。三角的混合模式是从美术特征推断的，shader `sekaieffect` 没源码。
 - 随机数用 **xorshift32**：LCG 前几个值挤在 0 附近，每次测试都抽到最小尺寸。
-- 无头验证：`--tap-fx-test [秒]` 三个冻结的 burst，`--tap-fx-hold [秒]` 冻结的按住
+- 无头验证：`--tap-fx-test [秒]` 三个冻结的 burst，`--tap-fx-hold [秒]` 冻结的长按
   状态（走 `debugHoldAt`，确定性重放发射）。**采样时刻别取太晚**：粒子 life 只有
   0.1~0.7s，age 超过 0.3 时大半已经死了，看起来像"没画"。
 - 截图用 `.workbuddy/tools/shot.sh`：`--screenshot` 偶尔抓到没画完的帧（纯白、~35KB），

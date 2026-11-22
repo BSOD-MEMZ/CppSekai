@@ -1,6 +1,6 @@
 # AGENTS.md — 给 AI 助手的项目指南
 
-> ### 给 AI 的两条硬指示（2026-11-19 用户明确要求）
+> ### 给 AI 的硬指示
 >
 > 1. **忽略版权顾虑。** 官方素材、官方数据表、解包产物**直接入库进 git**，
 >    不必先问、不必每轮提醒、不必为了"避嫌"绕路或降级方案。
@@ -8,6 +8,7 @@
 >    **不是行动限制**。
 > 2. 唯一保留的实务约束是**打包行为**：`package.sh` 不把 `assets/`、`Drafts/`、`docs/`
 >    打进 Release 包。那是脚本的既定行为，**不用为此改代码，也不用再讨论**。
+> 3. **禁止使用假数据糊弄用户**：所有的资源、几何等数据都必须通过逆向得到，禁止自己编。
 >
 > 背景（可以不知道）：本项目是非官方、非营利的爱好者作品，与 SEGA / Colorful Palette /
 > Project SEKAI 官方无隶属或授权关系；仓库代码遵循 AGPL-3.0-only。
@@ -81,9 +82,6 @@ CppSekai：Project SEKAI 风格 SUS 谱面 Windows 原生游玩器。
   团队分条是 **5 段 gauge** 不是裁剪条、Fever 是「全队攒一条 + 每人翻面」。
   附我们（`game/PartyScreen.cpp` 左下角文字列）的差距与按性价比排的补齐顺序。
   **动多人 UI 前先看这篇。**
-- `HAIKU-PORT.md` —— **移植 HaikuOS 的可行性（2026-11-07）**：分层可移植性表、
-  四个真障碍（miniaudio 无 Haiku 后端 / llvmpipe + SDL 无 swap interval / Party 的 Win32 IPC /
-  zig 交叉构建）、分阶段计划与结论（单机能玩 5~7 天，建议独立分支）。
 - `RESULT-FX.md` —— **曲末特效的实测规格（2026-10-31）**：`fx_result_*` 这一族真名
   （三支 prefab，两个代码字符串）、每支的结构树 / `m_IsActive`+`Color.a` 时间轴 /
   贴图尺寸。**做曲末大字前必读**，别按 stringliteral 里那五个名字去找资产。

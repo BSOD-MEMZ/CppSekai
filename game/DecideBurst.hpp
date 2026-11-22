@@ -23,9 +23,10 @@
 // material, and the triangles are the ONLY nodes with a start speed - which is
 // why "光晕 + 射出去的三角形" is exactly what it looks like.
 //
-// This class models the readable part of that (the original runs for seconds,
-// this is a 0.9 s burst): one big additive glow that spreads over the handset,
-// a ring that expands off the button, and a dozen triangles thrown outward.
+// 2026-11-21: uses the original light/circle/triangle textures and the real
+// 0.4167 s tap + 2.0 s start envelope. `light` is drawn over the handset-screen
+// bounds, `flare` over the button and a dozen triangles fly outward; the
+// expanding circle node belongs to the start prefab, not to the tap.
 // Everything is drawn on the foreground draw list, like TapEffect.
 #pragma once
 
@@ -47,11 +48,13 @@ class DecideBurst
     // Loads assets/fx/tap_flare.png (glow) and assets/fx/tap_tri.png (triangles)
     // through the renderer's UI texture loader. Missing files just skip that layer.
     bool load(platform::Renderer& renderer, const std::string& fxDir, std::string& outError);
-    bool loaded() const { return mGlow != 0 || mTri != 0; }
+    bool loaded() const { return mGlow != 0 || mTri != 0 || mLight != 0; }
 
     // cx,cy = the 确定 button's centre in screen pixels (already tilted with the
     // handset); spreadRadius = how far the glow reaches, roughly the panel width.
-    void spawn(float cx, float cy, float spreadRadius);
+    // phoneScreen = axis-aligned bounds of the handset screen (x0,y0,x1,y1),
+    // used for the `light` wash that the original masks by `cellphone_mask`.
+    void spawn(float cx, float cy, float spreadRadius, const ImVec4& phoneScreen);
 
     void update(float dt);
     void draw();
@@ -84,12 +87,18 @@ class DecideBurst
         float cx = 0.0f;
         float cy = 0.0f;
         float radius = 400.0f;
+        float phoneX0 = 0.0f;
+        float phoneY0 = 0.0f;
+        float phoneX1 = 0.0f;
+        float phoneY1 = 0.0f;
         float age = 0.0f;
         std::vector<Shard> shards;
     };
 
-    ImTextureID mGlow = 0;
-    ImTextureID mTri = 0;
+    ImTextureID mGlow = 0;   // tap_flare (soft core)
+    ImTextureID mTri = 0;    // live_tri (2x2 triangle atlas)
+    ImTextureID mLight = 0;  // tex_transition_02 (the handset-wide light)
+    ImTextureID mCircle = 0; // tex_transition_03 (soft disc / circle node)
     std::vector<Burst> mActive;
 };
 

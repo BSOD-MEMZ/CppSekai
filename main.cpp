@@ -594,7 +594,7 @@ namespace
             "                [--show-pause-dialog] [--test-restart] [--restart-at <sec>]\n"
             "                [--result-preview] [--result-at <sec>] [--help]\n"
             "                [--confirm-flash [<sec>]] [--settings] [--settings-tab <n>]\n"
-            "                [--profile] [--guess] [--singer-panel] [--player <name[:org]>]\n"
+            "                [--profile] [--guess] [--singer-panel] [--select-filter] [--unit <0-7>] [--player <name[:org]>]\n"
             "                [--player-rank <n>] [--player-exp <0..1>]\n\n"
 
             "No --sus: opens the song select screen (scans --charts, then charts/ next\n"
@@ -650,6 +650,9 @@ namespace
             "--settings [--settings-tab <0-6>]: open the settings card at boot on the\n"
             "          given page (0 演奏 / 1 画面 / 2 外观 / 3 判定 / 4 系统 / 5 账户 /\n"
             "          6 关于).\n"
+            "--select-filter: open the song-select 筛选 card (the header funnel).\n"
+            "--unit <0-7>: preselect a 团体 tab (0 all / 1 VS / 2 L/N / 3 MMJ / 4 VBS /\n"
+            "          5 WxS / 6 25ji / 7 other) for the song list.\n"
             "--profile: open the player profile card (the level chip's card) at boot.\n"
             "--guess: open the 猜歌 alias quiz (the header button's card) at boot.\n"
             "--singer-panel: open the 切换歌手 vocal-version panel (the phone panel's\n"
@@ -1285,6 +1288,8 @@ int main(int argc, char** argv)
     bool showSettingsShot = false; // headless check: force the settings card open
     int settingsTabShot = -1;      // headless check: which settings tab to show
     bool profileShot = false;      // headless check: force the profile card open
+    bool filterShot = false;       // headless check: force the 筛选 card open
+    int unitShot = -1;             // headless check: --unit <n>, pick a 团体页签
     bool guessShot = false;        // headless check: force the 猜歌 card open
     bool singerPanelShot = false;  // headless check: force the 切换歌手 panel open
     std::string playerSpec;        // --player 昵称[:组织]
@@ -1525,6 +1530,14 @@ int main(int argc, char** argv)
             // Clamped to the seven pages (0..6): an out-of-range value would
             // match none of the tab branches and screenshot an empty card.
             settingsTabShot = std::clamp(std::atoi(utf8Argv[++i]), 0, 6);
+        } else if (arg == "--unit" && i + 1 < utf8Argc) {
+            // Headless check: preselect a 团体页签 (0 全部 .. 7 その他), so a
+            // --screenshot run can look at a filtered list without clicking.
+            unitShot = std::atoi(utf8Argv[++i]);
+        } else if (arg == "--select-filter") {
+            // Headless check: open the 筛选 card on the song select, so a
+            // --screenshot run can look at it (normally the 筛选 button does).
+            filterShot = true;
         } else if (arg == "--profile") {
             // Headless check: open the account's profile card on the song
             // select, so a --screenshot run can look at it (the card normally
@@ -3280,6 +3293,12 @@ int main(int argc, char** argv)
     if (profileShot) {
         game::debugOpenProfileCard(true);
     }
+    if (filterShot) {
+        game::debugOpenFilterCard(true);
+    }
+    if (unitShot >= 0) {
+        userSettings.unitTab = unitShot;
+    }
     if (guessShot) {
         game::debugOpenGuessDialog(true);
     }
@@ -4040,7 +4059,9 @@ int main(int argc, char** argv)
     // hides - the session is only started once the screen is fully white.
     // 按钮自己的爆闪先亮 0.22 s，白屏再盖上来（2026-11-01）。原来两个同时开始，
     // 白屏 0.28 s 就铺满，光效的三角还没飞出去就被糊掉了。
-    constexpr float kDecideLead = 0.22f;
+    // 2026-11-21: the original tap phase is 0.4167 s; the full-screen loading
+    // cover starts only after it, so the phone-local light is visible first.
+    constexpr float kDecideLead = 0.4167f;
     constexpr float kConfirmExpand = 0.28f; // burst grows from the button
     constexpr float kConfirmAttack = 0.09f; // soft onset - no hard "pop" on frame 0
     constexpr float kConfirmHold = 0.16f;   // brightest, session loads here
@@ -4064,6 +4085,7 @@ int main(int argc, char** argv)
     bool confirmFlashShotFired = false;
     game::ChartEntry confirmPendingEntry;
     ImVec2 selectConfirmCenter{0.0f, 0.0f}; // filled by drawSongSelect each frame
+    ImVec4 selectPhoneScreen{0.0f, 0.0f, 0.0f, 0.0f}; // tilted handset screen bounds
     // Transient line shown on top of whatever is on screen when a chart refuses
     // to load. It exists because the old behaviour was a print to stderr and
     // nothing else: the confirm burst faded, the song list came back, and from
@@ -9068,7 +9090,7 @@ int main(int argc, char** argv)
         }
 #endif
 
-        if (escapePressed && !game::guessDialogOpen() && !story::blocksInput()) {
+        if (escapePressed && !game::guessDialogOpen() && !game::filterDialogOpen() && !story::blocksInput()) {
             countdownActive = false; // leaving / continuing cancels any countdown
             if (keymapCardAlive) {
                 // 「按键映射」卡片（2026-10-11）：ESC = 关掉它。改键位等待中
@@ -9850,9 +9872,13 @@ int main(int argc, char** argv)
             }
 #endif
 
+            const bool autoBeforeSelect = autoPlay;
+            const int mvBeforeSelect = userSettings.mvMode;
             int action = game::drawSongSelect(renderer, entries, selected, windowW, windowH,
                 static_cast<float>(uiClock), userSettings.sortMode, userSettings.groupMode,
-                selectedVocal, userSettings.uiScale, &selectConfirmCenter, &account,
+                userSettings.unitTab,
+                selectedVocal, userSettings.uiScale, &selectConfirmCenter, &selectPhoneScreen,
+                userSettings.deckPower, &autoPlay, &userSettings.mvMode, &account,
                 party.active() ? &selParty : nullptr, party.active() ? &selPartyOut : nullptr,
                 &favoriteToggle,
                 // 原生菜单栏开着就把 刷新 / 音乐商店 / 设置 从顶栏收走（它们在菜单里）。
@@ -9861,6 +9887,13 @@ int main(int argc, char** argv)
                 userSettings.nativeMenuBar,
                 // 曲目右键 > 删除谱面文件…：这里只收一个"删哪一首"，动手的是下面。
                 &deleteRequest);
+            if (autoPlay != autoBeforeSelect) {
+                userSettings.autoplay = autoPlay;
+                persistUserData();
+            }
+            if (userSettings.mvMode != mvBeforeSelect) {
+                persistUserData();
+            }
             // 右键 / 长按曲目 → 收藏夹切换。按 musicId 记（同一首曲子的四个难度共享），
             // 存进 profile，再重贴一遍 flag 让列表（和「按收藏」分组）立刻跟着变。
             if (favoriteToggle >= 0 && favoriteToggle < static_cast<int>(entries.size())) {
@@ -9944,7 +9977,7 @@ int main(int argc, char** argv)
                     confirmFlashOrigin = selectConfirmCenter;
                     // 按钮自己的爆闪先走（0.9 s），白屏在它上面盖过来。
                     decideBurst.spawn(selectConfirmCenter.x, selectConfirmCenter.y,
-                        static_cast<float>(windowW) * 0.24f);
+                        static_cast<float>(windowW) * 0.24f, selectPhoneScreen);
                     confirmFlashTime = -kDecideLead; // 白屏让爆闪先亮
                     ui::se(ui::SeStart); // start.mp3, fires with the burst
                     // The white flash is also the moment the pad should kick:
@@ -10001,7 +10034,7 @@ int main(int argc, char** argv)
                 // 同一个调试口也拉一次按钮爆闪，`--confirm-flash --screenshot-time`
                 // 就能截到它（真人按确定时走的是上面那段）。
                 decideBurst.spawn(selectConfirmCenter.x, selectConfirmCenter.y,
-                    static_cast<float>(windowW) * 0.24f);
+                    static_cast<float>(windowW) * 0.24f, selectPhoneScreen);
                 confirmFlashTime = -kDecideLead;
                 platform::logf(platform::LogRender, "[ui] confirm flash at %.0f,%.0f (debug)\n", selectConfirmCenter.x,
                     selectConfirmCenter.y);

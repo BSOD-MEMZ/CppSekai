@@ -13,14 +13,15 @@ namespace game
 {
 namespace
 {
-// Timeline, seconds. The whole thing is over well before the white loading
-// burst (main.cpp's confirmFlash) covers the screen, so the two never fight.
-constexpr float kLife = 0.90f;          // burst lifetime
-constexpr float kGlowRise = 0.07f;      // glow reaches full brightness here
-constexpr float kGlowGone = 0.78f;      // ... and is gone by here
-constexpr float kRingDelay = 0.03f;
-constexpr float kRingLife = 0.52f;
-constexpr float kShardLife = 0.42f;
+// Timeline from SoloTransitionEffectContent (prefab 2279):
+//   tap effect  0.4167 s (anim_transition_v2_02: light alpha 0->1)
+//   start phase 2.000 s (PlayStartEffect waits exactly 2 s)
+// The full-screen loading cover in main.cpp starts after kDecideLead, so this
+// phone-local phase is visible before the cover arrives.
+constexpr float kLife = 2.00f;          // start-phase lifetime
+constexpr float kGlowRise = 0.4167f;    // tap light reaches full brightness
+constexpr float kGlowGone = 1.75f;      // ... and is gone by here
+constexpr float kShardLife = 0.90f;
 
 constexpr int kShardCount = 12;
 
@@ -86,12 +87,12 @@ bool DecideBurst::load(platform::Renderer& renderer, const std::string& fxDir, s
         const char* file;
         ImTextureID* out;
     };
-    // Both textures are already shipped for TapEffect (the game's own tex_tap_flare
-    // and its triangle atlas) - the confirm burst reuses them instead of adding
-    // two more files to the package.
+    // Original SoloTransitionEffectContent textures.
     const Entry entries[] = {
         {"tap_flare.png", &mGlow},
-        {"tap_tri.png", &mTri},
+        {"live_tri.png", &mTri},
+        {"live_circle.png", &mLight},
+        {"live_circle.png", &mCircle},
     };
     bool any = false;
     for (const Entry& entry : entries) {
@@ -107,12 +108,16 @@ bool DecideBurst::load(platform::Renderer& renderer, const std::string& fxDir, s
     return any;
 }
 
-void DecideBurst::spawn(float cx, float cy, float spreadRadius)
+void DecideBurst::spawn(float cx, float cy, float spreadRadius, const ImVec4& phoneScreen)
 {
     Burst burst;
     burst.cx = cx;
     burst.cy = cy;
     burst.radius = std::max(120.0f, spreadRadius);
+    burst.phoneX0 = phoneScreen.x;
+    burst.phoneY0 = phoneScreen.y;
+    burst.phoneX1 = phoneScreen.z;
+    burst.phoneY1 = phoneScreen.w;
     burst.age = 0.0f;
     burst.shards.reserve(kShardCount);
 
@@ -168,6 +173,37 @@ void DecideBurst::draw()
     for (const Burst& burst : mActive) {
         const float t = burst.age;
 
+        // ---- the handset-wide light (fx_live_transition_v2_02 > light) ----
+        // Prefab light is 1532x2357 inside a 1016x2221 mask; use that aspect
+        // around the button so the wash reads as the phone screen, not a
+        // full-screen white disc.
+        {
+            const float rise = span(t, 0.0f, kGlowRise);
+            const float fall = 1.0f - span(t, kGlowRise, kGlowGone - kGlowRise);
+            const float a = rise * fall;
+            if (a > 0.002f && mLight != 0) {
+                const bool havePhone = burst.phoneX1 > burst.phoneX0 + 1.0f
+                    && burst.phoneY1 > burst.phoneY0 + 1.0f;
+                if (havePhone) {
+                    dl->AddImage(mLight,
+                        ImVec2(burst.phoneX0, burst.phoneY0),
+                        ImVec2(burst.phoneX1, burst.phoneY1), ImVec2(0.0f, 0.0f),
+                        ImVec2(1.0f, 1.0f), white(a * 0.55f));
+                } else {
+                    const float w = burst.radius * 1.85f;
+                    dl->AddImage(mLight, ImVec2(burst.cx - w * 0.5f, burst.cy - w * 0.5f),
+                        ImVec2(burst.cx + w * 0.5f, burst.cy + w * 0.5f), ImVec2(0.0f, 0.0f),
+                        ImVec2(1.0f, 1.0f), white(a * 0.55f));
+                }
+            }
+            if (a > 0.002f && mCircle != 0) {
+                const float d = burst.radius * (0.55f + 0.55f * easeOut(span(t, 0.0f, 2.0f)));
+                dl->AddImage(mCircle, ImVec2(burst.cx - d * 0.5f, burst.cy - d * 0.5f),
+                    ImVec2(burst.cx + d * 0.5f, burst.cy + d * 0.5f), ImVec2(0.0f, 0.0f),
+                    ImVec2(1.0f, 1.0f), white(a * 0.22f));
+            }
+        }
+
         // ---- the big glow (fx_live_transition_v2_02 > light) -------------
         // It starts at button size and spreads over the whole handset. Two
         // layers: a wide soft one and a tight bright core, which is what turns
@@ -190,16 +226,10 @@ void DecideBurst::draw()
             }
         }
 
-        // ---- the ring that leaves the button (botton_light + line_circle) --
-        const float rt = span(t, kRingDelay, kRingLife);
-        if (rt > 0.0f && rt < 1.0f) {
-            const float r = burst.radius * (0.12f + 0.62f * easeOut(rt));
-            const float a = (1.0f - rt) * (1.0f - rt);
-            const float thick = 7.0f * (1.0f - rt) + 1.2f;
-            dl->AddCircle(ImVec2(burst.cx, burst.cy), r, white(a * 0.85f), 96, thick);
-            dl->AddCircle(ImVec2(burst.cx, burst.cy), r * 0.78f, white(a * 0.35f), 96,
-                thick * 0.6f);
-        }
+        // fx_live_transition_v2_02 has no expanding ring: the tap phase is
+        // light + back_light + flare/flare_white + tri_02. The `circle` /
+        // `line_circle` nodes belong to fx_live_transition_v2_01 (start), so
+        // do not draw an invented ring here.
 
         // ---- triangles thrown outward (tri_01 / tri_02) ------------------
         if (mTri != 0) {

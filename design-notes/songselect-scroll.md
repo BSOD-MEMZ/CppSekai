@@ -55,43 +55,24 @@
   `shufflebutton.png` / `singer.png` 直接画在手机面板上，悬停反馈只剩"图标放大 10% +
   白度从 226 提到 255"（多人成员那颗用 alpha 90 压暗）。别再往回加 `AddCircleFilled` 深色盘
   或薄荷描边环。
-- **切换歌手面板**（2026-09-22）：手机面板原来那排版本 chip **已删**，改成底部那颗圆形
-  「切换歌手」按钮（`assets/select/singer.png`，麦克风 + 环绕箭头）；点它从**右侧滑进**一块
-  半透明深色抽屉，里面每个版本一张带单选框的卡片（仿官方「选择歌手」页）。
+- **切换歌手面板**（2026-11-21 按 prefab 1960/1961 重做）：手机面板底部那颗圆形
+  「切换歌手」按钮（`assets/select/singer.png`）打开右侧 `ChangeVocalSubWindowDialog`。
   要点：
-  - 布局参数全是按用户给的参考截图量出来的（卡片 `#DEDFEC` 上下浮动、圆角 16k、
-    单选白盘半径 17k（下面垫一圈更淡的圆当阴影）+ 居中薄荷点、文字左缘 = 卡左 + 68k）；
-    标签走 `vocalVersionLabel()`（`sekai` → `「世界」ver.`、`virtual_singer`/`original_song`
-    → `虚拟歌手ver.`、`another_vocal` → `Another Vocal ver.`，其余回落到官方 `caption`）。
-  - **卡片没有描边**（2026-09-22 用户点名）：选中与否只靠单选盘里那颗薄荷点区分，
-    指针悬停也只是把卡片底色提亮一档。**不要**再加 `AddRect` 描边或暗色锁定卡 ——
-    用户明确要求"有几个版本就显示几个"，所以列表**直接就是 `availableVocals()`**，
-    行号即 `vocalIndex`，没有锁定态、没有挂锁、也不需要 `musicVocals()` 全量。
-  - **整窗口高度、贴右缘**：`vpY0 = 0 / vpY1 = h`，`vpX1 = w`，圆角只给左边
-    （`ImDrawFlags_RoundCornersLeft`）—— 它是从屏幕右侧滑进来的抽屉，右边就是窗口边。
-    宽度 `min(620k, w*0.46)`。
-  - **它是一层半透明遮罩，不是不透明面板**（`IM_COL32(38, 36, 58, 168)`）：
-    盖住的东西**照原样透出来**（底下的确定按钮、难度圆、封面、顶栏的白胶囊、等级牌），
-    这是**要的效果**（用户原话：「本来就可以透出来，就和之前一样，只是一个半透明遮罩而已」）。
-    ⚠ 不要再给"被盖住的东西"加淡出/变暗（2026-09-22 我加过一轮 `drawerCover` 按覆盖比例
-    淡出顶栏按钮 / 等级牌 / 手机内容，被用户明确否掉，已回滚）。唯一要拿掉的是**输入**：
-    · 顶栏 `headerButton()` 的 `return clicked && !vocalPanelUp`（ImGui 的 hover 给本帧
-      **先提交**的 item，而顶栏比抽屉先画，于是不吞的话点抽屉标题会打到下面的「设置」）；
-    · 等级牌是**手动**命中测试，`hot` 里要带 `!vocalPanelUp`；
-    · 手机面板所有按钮变 `Dummy`。
-  - 点**空白处**（`mouse.x < vocalPX0`）关闭：按下的那一帧就判，和 X 走同一条路
-    （`se(SeWindowClose)` + `gVocalPanelOpen = false`）。注意这只能在**帧末**判——
-    `vocalPanelUp` / `vocalPX0` 是在顶栏之前算好的，所以抽屉自己那些 item（卡片 / X）
-    先提交、先拿 hover，点它们不会同时被当成"外面"；反过来"开抽屉的那一次点击"
-    因为 `vocalPanelUp` 那帧还是 false 也不会立刻关掉自己。
-  - 抽屉几何（`vocalEase` / `vocalPW` / `vocalPX0` / `easeOutCubic`）全部**提前到顶栏之前**算；
-    `easeOutCubic` 原来是列表动画那边的局部 lambda，已经挪上去了。
-  - 滚轮滚动**没有用 ImGui item**（同样理由：整块列表上放一个 `InvisibleButton` 会先抢走 hover），
-    直接读 `io.MouseWheel`；裁剪用 `ImGui::PushClipRect`（它同时改 `window->ClipRect`，
-    所以滚出去的卡片连命中测试一起被剔除）。
-  - 选择**按曲存**（`gVocalChoiceBySong`，musicId → `availableVocals()` 下标），
-    手机面板的 `Vo.` 行和主循环取音源都读同一个 `vocalIndex`。
-  - 无头看它：`--singer-panel`（配 `--select-id <音乐 id>`）。
+  - 右侧子窗口 **956 宽、整窗高、贴右缘**（`vocalPW = min(956k, w*0.4979)`），
+    背景 `#444466` / 80%；全屏再压一层 `#000022` / 50% 的 `Cover`。
+  - **没有标题行**（prefab `header: null`），关闭 X 44×44，右上内缩 18.1/18.5。
+  - 列表 828 宽（左右各 64），行 **828×164**，间距 12；卡片
+    `bg_base_r20_wh` 色 **#DFDFEB**、圆角 **20**、**无描边**；
+    单选盘 72、居中薄荷圆 36（`icon_radio_gn`）；名字 36px、成员 32px，
+    文字左缘 = 卡左 + 102；锁定态才盖 `#000022` 50% + `icon_lock_wh`。
+  - 标签仍走 `vocalVersionLabel()`；列表直接就是 `availableVocals()`，没有锁定卡。
+  - 点空白处（`mouse.x < vocalPX0`）关闭；抽屉里的 item 先提交，所以点卡片/X
+    不会同时被当成“外面”。输入拦截规则不变：顶栏 `!vocalPanelUp`、等级牌
+    `hot` 带 `!vocalPanelUp`、手机面板按钮变 `Dummy`。
+  - `vocalEase` / `vocalPW` / `vocalPX0` 仍在顶栏之前算；滚轮直接读
+    `io.MouseWheel`，`PushClipRect` 裁剪。
+  - 选择**按曲存**（`gVocalChoiceBySong`），手机 `Vo.` 行和主循环取音源读同一个
+    `vocalIndex`。无头看它：`--singer-panel --select-id <id>`。
 - **刷新按钮**（2026-09-14）：列表头部、两个 combobox 右边那颗深色胶囊（环形箭头 + “刷新”，
   图标是 `dl` 手画的弧 + 三角箭头，不需要素材），点了返回 `SelectRescan`，和 F5 走同一条路。
   悬停有 tooltip 写着 F5。注意**重扫之后 main.cpp 会把选中项重置成第一首**（F5 一直是这行为），

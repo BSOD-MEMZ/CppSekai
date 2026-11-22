@@ -472,6 +472,16 @@ void setSelectAssetDir(const std::string& dir)
 // Profile card (the account) is open. Module state so --profile can force it
 // open in a headless run.
 bool gProfileOpen = false;
+
+// 最终确认页（ScreenLayerFreeLiveFinalConfirmation 的轻量版）。确定不再直接
+// 开始，而是先停在这里；Start 才把 action 交给 main。整个页面在
+// drawSongSelect 顶部单独绘制，底下的列表/手机不参与命中测试。
+bool gFinalConfirmOpen = false;
+int gFinalEntry = -1;
+int gFinalDifficulty = 3;
+int gFinalVocal = 0;
+std::string gFinalToast;
+double gFinalToastUntil = 0.0;
 void debugOpenProfileCard(bool open)
 {
     gProfileOpen = open;
@@ -496,6 +506,12 @@ void debugOpenProfileCard(bool open)
 // ---------------------------------------------------------------------------
 std::map<int, int> gVocalChoiceBySong;
 bool gVocalPanelOpen = false;
+// 筛选 card (the official screen's 絞り込み popup). It carries 分组依据 now that
+// the header row has no room for a second combo, and `alive` keeps it drawn for
+// the length of its close animation - gating on `open` alone hides a card in the
+// very frame it is dismissed (the bug the 猜歌 card hit).
+bool gFilterOpen = false;
+bool gFilterAlive = false;
 float gVocalPanelScroll = 0.0f; // card list offset, in screen pixels
 int gVocalPanelSong = -1;       // musicId the offset belongs to (a new song resets it)
 
@@ -869,6 +885,18 @@ void debugOpenGuessDialog(bool open)
 bool guessDialogOpen()
 {
     return gGuess.open;
+}
+
+// 筛选 card: main.cpp's ESC chain asks this so ESC closes the card instead of
+// dropping out of the song-select screen.
+bool filterDialogOpen()
+{
+    return gFilterOpen;
+}
+
+void debugOpenFilterCard(bool open)
+{
+    gFilterOpen = open;
 }
 
 // Blurred desktop wallpaper used as the screen backdrop (0 = draw the built-in
@@ -1302,6 +1330,7 @@ void loadUserData(const std::string& path, UserSettings& settings,
             settings.uiScale = s.value("uiScale", settings.uiScale);
             settings.sortMode = s.value("sortMode", settings.sortMode);
             settings.groupMode = s.value("groupMode", settings.groupMode);
+            settings.unitTab = s.value("unitTab", settings.unitTab);
             settings.liveBonus = s.value("liveBonus", settings.liveBonus);
             // Missing in an old profile: the ELUA shows once, which is exactly
             // what an existing install should see after this version lands.
@@ -1382,6 +1411,7 @@ void loadUserData(const std::string& path, UserSettings& settings,
     settings.uiScale = std::clamp(settings.uiScale, 0.7f, 1.5f);
     settings.sortMode = std::clamp(settings.sortMode, 0, 1);
     settings.groupMode = std::clamp(settings.groupMode, 0, kSelectGroupCount - 1);
+    settings.unitTab = std::clamp(settings.unitTab, 0, kSelectUnitTabCount - 1);
     // 演出能量：手改过的档案（负数 / 1000）不该让结算经验飞出去。
     settings.liveBonus = std::clamp(settings.liveBonus, 0, 100);
 
@@ -1474,6 +1504,7 @@ void saveUserData(const std::string& path, const UserSettings& settings,
         {"uiScale", settings.uiScale},
         {"sortMode", settings.sortMode},
         {"groupMode", settings.groupMode},
+        {"unitTab", settings.unitTab},
         {"liveBonus", settings.liveBonus},
         {"eulaAccepted", settings.eulaAccepted},
         {"tutorialDone", settings.tutorialDone},
@@ -1716,29 +1747,6 @@ namespace
         IM_COL32(181, 91, 255, 255),   // MASTER purple
     };
 
-    // A ring with a soft glow bleeding outwards. ImDrawList has no blur, so
-    // this is a short stack of concentric strokes whose radius grows and whose
-    // alpha falls with distance; overlapping widths keep the steps invisible.
-    // `col` sets the hue and the peak intensity, `spread` how far the halo
-    // reaches, `r` is the radius the glow starts at (the ring / disc edge).
-    void addGlowRing(ImDrawList* dl, const ImVec2& c, float r, ImU32 col, float spread)
-    {
-        const int r0 = static_cast<int>((col >> IM_COL32_R_SHIFT) & 0xFF);
-        const int g0 = static_cast<int>((col >> IM_COL32_G_SHIFT) & 0xFF);
-        const int b0 = static_cast<int>((col >> IM_COL32_B_SHIFT) & 0xFF);
-        const int a0 = static_cast<int>((col >> IM_COL32_A_SHIFT) & 0xFF);
-        constexpr int kLayers = 4;
-        const float step = spread / static_cast<float>(kLayers);
-        for (int i = kLayers; i >= 1; --i) {
-            const float t = static_cast<float>(i) / static_cast<float>(kLayers);
-            const int a = static_cast<int>(a0 * 0.26f * (1.0f - t));
-            if (a <= 0) {
-                continue;
-            }
-            dl->AddCircle(c, r + spread * t, IM_COL32(r0, g0, b0, a), 64, step * 2.0f + 1.0f);
-        }
-    }
-
     // One song (grouped by title) and which entry provides each difficulty.
     struct SongGroup
     {
@@ -1748,6 +1756,7 @@ namespace
         std::string coverPath;
         std::string kana; // official reading for sorting / grouping
         int musicId = 0; // song id, for the official level table
+        int unit = 0;    // 团体页签 (CategoryTabType), see unitForMusic()
         int idx[kDiffCount] = {-1, -1, -1, -1, -1};
     };
 
@@ -1762,6 +1771,99 @@ namespace
             }
         }
         return -1;
+    }
+
+    // -----------------------------------------------------------------
+    // 团体页签 (CategoryTabType). The left strip of the official screen is
+    // MusicSelectUnitTabList (prefab 1117: 136 wide, x=44, inset 84 top /
+    // bottom) filled with one MusicSelectUnitTab (prefab 1118: cell 112x100,
+    // logo 112x112) per tab. Which tab a song sits under is NOT a master
+    // field: the game derives it from the singers of the song's セカイ
+    // version (MasterMusicVocalCharacter.GetUnitType() -> gameCharacters.unit,
+    // RVA 0x614DB60 / 0x6174F90), so what follows is that same 26-row
+    // singer -> unit table plus the same fallback order:
+    //   1. use the セカイ ver, else the original-song ver, else the VS-only
+    //      ver (music-vocals.json, already loaded for the panel);
+    //   2. the first singer with a real unit decides (a "初音ミク + 星乃一歌"
+    //      duet is Leo/need, because the unit singer wins over the VS);
+    //   3. only virtual singers -> バーチャル・シンガー;
+    //   4. only outside characters (collab guests, "#35" in music-vocals) ->
+    //      その他.
+    // The numbers are CategoryTabType, i.e. the tab index itself.
+    // -----------------------------------------------------------------
+    constexpr int kUnitVocaloid = 1;
+    constexpr int kUnitLightSound = 2;
+    constexpr int kUnitIdol = 3;
+    constexpr int kUnitStreet = 4;
+    constexpr int kUnitThemePark = 5;
+    constexpr int kUnitSchoolRefusal = 6;
+    constexpr int kUnitOther = 7;
+
+    int singerUnit(const std::string& name)
+    {
+        static const std::map<std::string, int> table = {
+            {"初音ミク", kUnitVocaloid}, {"鏡音リン", kUnitVocaloid}, {"鏡音レン", kUnitVocaloid},
+            {"巡音ルカ", kUnitVocaloid}, {"MEIKO", kUnitVocaloid}, {"KAITO", kUnitVocaloid},
+            {"星乃一歌", kUnitLightSound}, {"天馬咲希", kUnitLightSound},
+            {"望月穂波", kUnitLightSound}, {"日野森志歩", kUnitLightSound},
+            {"花里みのり", kUnitIdol}, {"桐谷遥", kUnitIdol},
+            {"桃井愛莉", kUnitIdol}, {"日野森雫", kUnitIdol},
+            {"小豆沢こはね", kUnitStreet}, {"白石杏", kUnitStreet},
+            {"東雲彰人", kUnitStreet}, {"青柳冬弥", kUnitStreet},
+            {"天馬司", kUnitThemePark}, {"鳳えむ", kUnitThemePark},
+            {"草薙寧々", kUnitThemePark}, {"神代類", kUnitThemePark},
+            {"宵崎奏", kUnitSchoolRefusal}, {"朝比奈まふゆ", kUnitSchoolRefusal},
+            {"東雲絵名", kUnitSchoolRefusal}, {"暁山瑞希", kUnitSchoolRefusal},
+        };
+        const auto it = table.find(name);
+        return it == table.end() ? 0 : it->second;
+    }
+
+    int unitForMusic(int musicId)
+    {
+        static std::map<int, int> cache;
+        const auto hit = cache.find(musicId);
+        if (hit != cache.end()) {
+            return hit->second;
+        }
+        int unit = kUnitOther;
+        const auto voc = gMusicVocals.find(musicId);
+        if (voc != gMusicVocals.end()) {
+            // The three version kinds the game itself picks from, in its order.
+            static const char* const kPreferred[3] = {"sekai", "original_song", "virtual_singer"};
+            const VocalVersion* picked = nullptr;
+            for (const char* want : kPreferred) {
+                for (const VocalVersion& v : voc->second) {
+                    if (v.type == want) {
+                        picked = &v;
+                        break;
+                    }
+                }
+                if (picked != nullptr) {
+                    break;
+                }
+            }
+            if (picked == nullptr && !voc->second.empty()) {
+                picked = &voc->second.front();
+            }
+            if (picked != nullptr) {
+                bool vocaloid = false;
+                unit = 0;
+                for (const std::string& singer : picked->singers) {
+                    const int u = singerUnit(singer);
+                    if (u == kUnitVocaloid) {
+                        vocaloid = true;
+                    } else if (u != 0 && unit == 0) {
+                        unit = u;
+                    }
+                }
+                if (unit == 0) {
+                    unit = vocaloid ? kUnitVocaloid : kUnitOther;
+                }
+            }
+        }
+        cache.emplace(musicId, unit);
+        return unit;
     }
 
     // -----------------------------------------------------------------
@@ -2115,6 +2217,7 @@ namespace
                 group.vocal = item.vocal;
                 group.coverPath = item.coverPath;
                 group.musicId = item.musicId;
+                group.unit = unitForMusic(item.musicId);
                 group.kana = item.kana.empty() ? pronunciationFor(item.musicId) : item.kana;
                 groups.push_back(group);
                 titleIsReal.push_back(!item.title.empty());
@@ -2122,6 +2225,7 @@ namespace
             SongGroup& group = groups[static_cast<size_t>(it->second)];
             if (group.musicId <= 0) {
                 group.musicId = item.musicId;
+                group.unit = unitForMusic(item.musicId);
             }
             if (group.kana.empty()) {
                 group.kana = item.kana.empty() ? pronunciationFor(item.musicId) : item.kana;
@@ -2218,93 +2322,6 @@ namespace
             IM_COL32(25, 25, 40, 200), 1.5f);
     }
 
-    // ------------------------------------------------------------------
-    // Floating background decorations (2026-11-15 v2): rings (stroked
-    // circles - the atlas has no ring sprite, bg_base_circle_* are all
-    // solid soft-edged discs) plus the official img_triangle_wh sprite.
-    // Each shape floats on its own sine wave; no scroll parallax.
-    // ------------------------------------------------------------------
-    struct BgFloater
-    {
-        float leftPct = 0.0f;
-        float topPct = 0.0f;
-        float size = 0.0f;     // ring diameter / triangle width, px at k=1
-        float amp = 0.0f;      // float amplitude, px at k=1
-        float speed = 0.0f;    // float speed, rad/s
-        float phase = 0.0f;
-        float opacity = 1.0f;
-        unsigned char r = 255;
-        unsigned char g = 255;
-        unsigned char b = 255;
-        bool circle = false;
-    };
-
-    // mulberry32, the exact stream the web component seeds with 0x9e3779b9.
-    struct Mulberry32
-    {
-        std::uint32_t state = 0x9e3779b9u;
-
-        float next()
-        {
-            state += 0x6d2b79f5u;
-            std::uint32_t t = state;
-            t = (t ^ (t >> 15)) * (1u | t);
-            t = (t + (t ^ (t >> 7)) * (61u | t)) ^ t;
-            return static_cast<float>(t ^ (t >> 14)) / 4294967296.0f;
-        }
-
-        float range(float lo, float hi) { return lo + next() * (hi - lo); }
-    };
-
-    const std::vector<BgFloater>& bgFloaters()
-    {
-        static const std::vector<BgFloater> shapes = [] {
-            // BG_SelectFream pink (1, 0.467, 0.667) + the theme palette.
-            static const unsigned char kColors[5][3] = {
-                {255, 119, 170}, {51, 204, 187}, {119, 238, 227}, {255, 229, 138}, {255, 255, 255}};
-            const int kCount[2] = {14, 8};                       // rings / triangles
-            const float kSize[2][2] = {{18, 56}, {34, 72}};      // px at k=1
-            const float kOpacity[2][2] = {{.12f, .26f}, {.10f, .20f}};
-
-            std::vector<BgFloater> out;
-            Mulberry32 rng;
-            // Mirror every other leftPct around the centre so the field is not
-            // clustered on one side.
-            float pairLeft = -1.0f;
-            auto leftPct = [&]() {
-                if (pairLeft >= 0.0f) {
-                    const float v = pairLeft;
-                    pairLeft = -1.0f;
-                    return v;
-                }
-                const float r = 2.0f * rng.next() - 1.0f;
-                const float t = 50.0f + (r < 0.0f ? -1.0f : 1.0f) * std::pow(std::fabs(r), 0.6f) * 50.0f;
-                pairLeft = 100.0f - t;
-                return t;
-            };
-            for (int kind = 0; kind < 2; ++kind) {
-                for (int i = 0; i < kCount[kind]; ++i) {
-                    BgFloater s;
-                    const unsigned char* c = kColors[static_cast<int>(rng.next() * 5.0f) % 5];
-                    s.r = c[0];
-                    s.g = c[1];
-                    s.b = c[2];
-                    s.circle = kind == 0;
-                    s.leftPct = leftPct();
-                    s.topPct = rng.next() * 100.0f;
-                    s.size = rng.range(kSize[kind][0], kSize[kind][1]);
-                    s.amp = rng.range(8.0f, 20.0f);
-                    s.speed = rng.range(0.25f, 0.5f);
-                    s.phase = rng.next() * 6.2831853f;
-                    s.opacity = rng.range(kOpacity[kind][0], kOpacity[kind][1]);
-                    out.push_back(s);
-                }
-            }
-            return out;
-        }();
-        return shapes;
-    }
-
     // Select-background sprites (assets/mmw/overlay/select_bg, exported from
     // the UI atlas). Same caching scheme as badgeTex, different directory.
     GLuint selectBgTex(platform::Renderer& renderer, const char* name)
@@ -2319,32 +2336,6 @@ namespace
             it = cache.emplace(name, id).first;
         }
         return it->second;
-    }
-
-    void drawBgShapes(platform::Renderer& renderer, ImDrawList* dl, float w, float h, float k, double timeSec)
-    {
-        const GLuint triTex = selectBgTex(renderer, "img_triangle_wh");
-
-        for (const BgFloater& s : bgFloaters()) {
-            const float cx = s.leftPct * 0.01f * w;
-            const float cy = s.topPct * 0.01f * h
-                + std::sin(static_cast<float>(timeSec) * s.speed + s.phase) * s.amp * k;
-            const float size = s.size * k;
-            const int alpha = static_cast<int>(std::clamp(s.opacity, 0.0f, 1.0f) * 255.0f);
-            const ImU32 col = IM_COL32(s.r, s.g, s.b, alpha);
-            if (s.circle) {
-                // Ring: stroked circle (no ring sprite in the atlas).
-                dl->AddCircle(ImVec2(cx, cy), size * 0.5f, col, 40, std::max(1.5f, 2.2f * k));
-                continue;
-            }
-            if (triTex == 0) {
-                continue;
-            }
-            dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(triTex)),
-                ImVec2(cx - size * 0.5f, cy - size * 0.5f * 76.0f / 166.0f),
-                ImVec2(cx + size * 0.5f, cy + size * 0.5f * 76.0f / 166.0f),
-                ImVec2(0, 0), ImVec2(1, 1), col);
-        }
     }
 
     // Rounded jacket image, or a purple placeholder when there is none.
@@ -2683,6 +2674,21 @@ namespace
         return it->second;
     }
 
+    // Cached textures for the final-confirmation page (assets/final).
+    GLuint finalTex(platform::Renderer& renderer, const char* name)
+    {
+        static std::map<std::string, GLuint> cache;
+        auto it = cache.find(name);
+        if (it == cache.end()) {
+            std::string err;
+            const GLuint id = gSelectAssetDir.empty()
+                ? 0
+                : renderer.loadUiTexture(gSelectAssetDir + "\\final\\" + name + ".png", err);
+            it = cache.emplace(name, id).first;
+        }
+        return it->second;
+    }
+
     // Badge sprites for the song list rows (assets/mmw/overlay/select_badge,
     // exported from the UI atlas). Same caching scheme as selectTex but a
     // different directory.
@@ -2769,6 +2775,331 @@ namespace
             dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(badgeTex)),
                 p0, p1, ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), IM_COL32(255, 255, 255, 255));
         }
+    }
+
+    // 最终确认页的轻量版：ScreenLayerFreeLiveFinalConfirmation 的 5 空槽、
+    // 自动演出、MV、综合力和 Start。整个页面自绘，不创建 ImGui item，所以
+    // 底下的列表/手机不会抢到这一帧的输入。
+    int drawFinalConfirm(platform::Renderer& renderer, const std::vector<ChartEntry>& entries,
+        int entryIndex, int difficulty, int vocalIndex, float w, float h, float k, float timeSec,
+        ImFont* title, ImFont* body, int deckPower, bool& autoLive, int& mvMode)
+    {
+        if (entryIndex < 0 || entryIndex >= static_cast<int>(entries.size())) {
+            gFinalConfirmOpen = false;
+            return SelectNone;
+        }
+        const ChartEntry& entry = entries[static_cast<size_t>(entryIndex)];
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        const ImGuiIO& io = ImGui::GetIO();
+        const ImVec2 mouse = io.MousePos;
+        const bool clicked = ui::mouseClicked(ImGuiMouseButton_Left);
+        if (ui::keyPressed(ImGuiKey_Escape)) {
+            ui::se(ui::SeWindowClose);
+            gFinalConfirmOpen = false;
+            return SelectNone;
+        }
+        const auto hit = [&](float x, float y, float ww, float hh) {
+            return clicked && mouse.x >= x && mouse.x <= x + ww && mouse.y >= y && mouse.y <= y + hh;
+        };
+
+        // The final-confirmation prefab has no full-screen backdrop node; it
+        // sits over the select background. Use the official bg_common asset
+        // instead of an invented gradient.
+        const GLuint bgCommon = selectBgTex(renderer, "bg_common");
+        if (bgCommon != 0) {
+            dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(bgCommon)),
+                ImVec2(0.0f, 0.0f), ImVec2(w, h), ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f),
+                IM_COL32(255, 255, 255, 255));
+        } else {
+            dl->AddRectFilled(ImVec2(0.0f, 0.0f), ImVec2(w, h), IM_COL32(35, 32, 60, 255));
+        }
+
+        // Absolute rects from prefab 703 (1920x1080 reference, computed from
+        // RectTransform anchorMin/Max + anchoredPosition + pivot):
+        //   BG        x=56.0  y=303.8 w=1546.2 h=555.3
+        //   DeckBase  x=70.4  y=256.0 w=1080.0 h=624.0
+        //   card row  x=78.4  y=601.0 w=200 h=510, gap 16
+        const float cx = w * 0.5f;
+        const float bgW = 1546.1597f * k;
+        const float bgH = 555.27515f * k;
+        const float bgX = 56.0f * k;
+        const float bgY = 303.8f * k;
+        const float deckW = 1080.0f * k;
+        const float deckH = 623.97f * k;
+        const float deckX = 70.4f * k;
+        const float deckY = 256.0f * k;
+
+        const GLuint bgTex = finalTex(renderer, "bg_base_r20_wh");
+        if (bgTex != 0) {
+            // 9-slice, not a stretched 50x50 sprite: stretching turns the
+            // rounded corners into a giant ellipse.
+            addNinePatch(dl, bgTex, 50, 50, ImVec2(bgX, bgY), ImVec2(bgX + bgW, bgY + bgH),
+                24.0f, 24.0f, k, IM_COL32(255, 255, 255, 255));
+        } else {
+            dl->AddRectFilled(ImVec2(bgX, bgY), ImVec2(bgX + bgW, bgY + bgH),
+                IM_COL32(255, 255, 255, 255), 20.0f * k);
+        }
+        const GLuint deckTex = finalTex(renderer, "bg_base_three_r16_wh");
+        if (deckTex != 0) {
+            addNinePatch(dl, deckTex, 36, 36, ImVec2(deckX, deckY),
+                ImVec2(deckX + deckW, deckY + deckH), 16.0f, 16.0f, k,
+                IM_COL32(223, 223, 234, 204));
+        } else {
+            dl->AddRectFilled(ImVec2(deckX, deckY), ImVec2(deckX + deckW, deckY + deckH),
+                IM_COL32(223, 223, 234, 204), 16.0f * k);
+        }
+
+        // TotalPower / DeckTotalPowerView/WithoutEventLimit/Value:
+        // value rect x=150.2 y=285.0 w=280 h=32, icon 38x42 at x=330 y=251.
+        // The prefab has no title/artist node on this screen (music info lives
+        // on the phone screen), so do not invent a header here.
+        (void)title;
+        {
+            const GLuint icon = finalTex(renderer, "icon_deckPower_wh");
+            char pwr[64];
+            std::snprintf(pwr, sizeof(pwr), "%d", deckPower);
+            const float iconS = 38.0f * k;
+            const float iconX = 330.0f * k;
+            const float iconY = 251.0f * k;
+            if (icon != 0) {
+                dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(icon)),
+                    ImVec2(iconX, iconY), ImVec2(iconX + iconS, iconY + 42.0f * k),
+                    ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), IM_COL32(68, 68, 102, 255));
+            }
+            addTextLeft(dl, body, 30.0f * k, ImVec2(150.2f * k, 285.0f * k),
+                IM_COL32(85, 85, 119, 255), pwr);
+        }
+
+        // Five empty deck slots (DeckCard 200x510, gap 16).
+        const float cardW = 200.0f * k;
+        const float cardH = 510.0f * k;
+        const float gap = 16.0f * k;
+        const float cardsW = 5.0f * cardW + 4.0f * gap;
+        const float cardsX = deckX + 8.0f * k;
+        // 601 is the card centre (DeckCardList y=346 + 510/2), not the top.
+        const float cardsY = 601.0f * k - cardH * 0.5f;
+        (void)cardsW;
+        const GLuint plusTex = finalTex(renderer, "icon_plus_h36_wh");
+        const GLuint circleTex = finalTex(renderer, "bg_base_circle_h96_wh");
+        for (int i = 0; i < 5; ++i) {
+            const float x = cardsX + static_cast<float>(i) * (cardW + gap);
+            const ImVec2 p0(x, cardsY);
+            const ImVec2 p1(x + cardW, cardsY + cardH);
+            dl->AddRectFilled(p0, p1, IM_COL32(176, 189, 200, 255), 16.0f * k);
+            const ImVec2 c((p0.x + p1.x) * 0.5f, (p0.y + p1.y) * 0.5f);
+            const float d = 72.0f * k;
+            if (circleTex != 0) {
+                dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(circleTex)),
+                    ImVec2(c.x - d * 0.5f, c.y - d * 0.5f), ImVec2(c.x + d * 0.5f, c.y + d * 0.5f),
+                    ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), IM_COL32(145, 159, 176, 255));
+            } else {
+                dl->AddCircleFilled(c, d * 0.5f, IM_COL32(145, 159, 176, 255), 40);
+            }
+            const float ps = 36.0f * k;
+            if (plusTex != 0) {
+                dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(plusTex)),
+                    ImVec2(c.x - ps * 0.5f, c.y - ps * 0.5f), ImVec2(c.x + ps * 0.5f, c.y + ps * 0.5f),
+                    ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), IM_COL32(176, 189, 200, 255));
+            } else {
+                dl->AddLine(ImVec2(c.x - ps * 0.35f, c.y), ImVec2(c.x + ps * 0.35f, c.y),
+                    IM_COL32(176, 189, 200, 255), 3.0f * k);
+                dl->AddLine(ImVec2(c.x, c.y - ps * 0.35f), ImVec2(c.x, c.y + ps * 0.35f),
+                    IM_COL32(176, 189, 200, 255), 3.0f * k);
+            }
+            if (hit(p0.x, p0.y, cardW, cardH)) {
+                gFinalToast = "卡组编成功能尚未实现";
+                gFinalToastUntil = static_cast<double>(timeSec) + 2.2;
+                ui::se(ui::SeClick);
+            }
+        }
+
+        bool phoneStartHit = false;
+        // Right: ScreenLayerFreeLiveCellPhone (prefab 704), official container
+        // 754.3x1416.7 at centre (1522,742), local z=+3deg (right end up).
+        // It is added at runtime by forceAddCellPhoneScreen; the prefab itself
+        // only contains the left deck page.
+        {
+            // 用户 2026-11-21：第一屏和第二屏是同一台手机。复用选曲页
+            // ScreenLayerFreeLiveCellPhone 的现值（562 宽、中心 1609,618、
+            // +5°），不要在这里另造一套 754/1522 的几何。
+            const float pcx = 1609.0f * k;
+            const float pcy = 618.0f * k;
+            const float pw = 562.0f * k;
+            const float ph = pw * (1416.7f / 754.3f);
+            const float q = pw / 754.3f;
+            const float pTop = pcy - ph * 0.5f;
+            const int phoneVtx0 = dl->VtxBuffer.Size;
+            const GLuint phoneFrame = selectTex(renderer, "img_smartphone");
+            if (phoneFrame != 0) {
+                dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(phoneFrame)),
+                    ImVec2(pcx - pw * 0.5f, pTop), ImVec2(pcx + pw * 0.5f, pTop + ph),
+                    ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), IM_COL32(255, 255, 255, 255));
+            } else {
+                dl->AddRectFilled(ImVec2(pcx - pw * 0.5f, pTop), ImVec2(pcx + pw * 0.5f, pTop + ph),
+                    IM_COL32(62, 58, 88, 245), 48.0f * k);
+            }
+            // Jacket 376x376, top edge 229 below the handset top, centre x -2.6.
+            const float jd = 376.0f * q;
+            const float jx = pcx - 2.6f * q;
+            const float jy = pTop + 229.0f * q;
+            addJacket(dl, thumbFor(renderer, entry.coverPath),
+                ImVec2(jx - jd * 0.5f, jy), ImVec2(jx + jd * 0.5f, jy + jd), 8.0f * k);
+            // MusicInfoContent: title 440.2x50 at y=+52 (from its centre),
+            // artist 440.2x28 at y=+8, vocal 440.2x28 at y=-29.
+            // MusicInfoContent is a 440.2-wide block whose pivot is its centre;
+            // addTextLeft wants the left edge, hence -220.1, not -75.3.
+            const float infoLeft = pcx - (75.3f + 220.1f) * q;
+            const float infoTop = jy + jd + 40.0f * q;
+            const std::string t = ellipsize(body, 36.0f * q, entry.title, 440.0f * q);
+            addTextLeft(dl, body, 36.0f * q, ImVec2(infoLeft, infoTop),
+                IM_COL32(255, 255, 255, 255), t.c_str());
+            const std::string a = ellipsize(body, 28.0f * q,
+                entry.artist.empty() ? "-" : entry.artist, 440.0f * q);
+            addTextLeft(dl, body, 28.0f * q, ImVec2(infoLeft, infoTop + 50.0f * q),
+                IM_COL32(215, 212, 235, 255), a.c_str());
+            {
+                // Vo. line follows the selected vocal version, not the union of
+                // every version (the old code showed all five singers).
+                std::string vocalLine;
+                const std::vector<VocalVersion> versions = availableVocals(entry);
+                if (vocalIndex >= 0 && vocalIndex < static_cast<int>(versions.size())) {
+                    for (const std::string& singer : versions[static_cast<size_t>(vocalIndex)].singers) {
+                        if (!vocalLine.empty()) {
+                            vocalLine += "、";
+                        }
+                        vocalLine += singer;
+                    }
+                }
+                if (vocalLine.empty()) {
+                    vocalLine = entry.vocal;
+                }
+                if (!vocalLine.empty()) {
+                    const std::string v = ellipsize(body, 28.0f * q, "Vo. " + vocalLine, 440.0f * q);
+                    addTextLeft(dl, body, 28.0f * q, ImVec2(infoLeft, infoTop + 88.0f * q),
+                        IM_COL32(215, 212, 235, 255), v.c_str());
+                }
+            }
+            // Difficulty label (UIPartsMusicDifficultyLabelWithIcon 144x40).
+            const float dlW = 144.0f * q;
+            const float dlH = 40.0f * q;
+            const float dlX = pcx - dlW * 0.5f;
+            const float dlY = infoTop + 150.0f * q;
+            dl->AddRectFilled(ImVec2(dlX, dlY), ImVec2(dlX + dlW, dlY + dlH),
+                kDiffColors[std::clamp(difficulty, 0, kDiffCount - 1)], dlH * 0.5f);
+            addTextCentered(dl, body, 24.0f * q,
+                ImVec2(pcx, dlY + dlH * 0.5f), IM_COL32(255, 255, 255, 255),
+                kDiffNames[std::clamp(difficulty, 0, kDiffCount - 1)]);
+            // Play button (MainButtonContent/PositiveButton) — a mint disc with
+            // the official play triangle; the exact 258x96 capsule is behind it.
+            const float playD = 132.0f * q;
+            const ImVec2 playC(pcx, pTop + 900.0f * q);
+            dl->AddCircleFilled(playC, playD * 0.5f, IM_COL32(106, 232, 208, 255), 48);
+            const ImVec2 triA(playC.x - 16.0f * q, playC.y - 25.0f * q);
+            const ImVec2 triB(playC.x + 26.0f * q, playC.y);
+            const ImVec2 triC(playC.x - 16.0f * q, playC.y + 25.0f * q);
+            dl->AddTriangleFilled(triA, triB, triC, IM_COL32(62, 62, 95, 255));
+            if (hit(playC.x - playD * 0.5f, playC.y - playD * 0.5f, playD, playD)) {
+                phoneStartHit = true;
+            }
+            // Bottom utility row: gear + singer, 80x80.
+            const GLuint gearTex = finalTex(renderer, "icon_setting_wh");
+            const GLuint singerTex = selectTex(renderer, "singer");
+            const float utilY = pTop + 1010.0f * q;
+            if (gearTex != 0) {
+                dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(gearTex)),
+                    ImVec2(pcx - 92.0f * q, utilY), ImVec2(pcx - 12.0f * q, utilY + 80.0f * q),
+                    ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), IM_COL32(235, 235, 245, 220));
+            }
+            if (singerTex != 0) {
+                dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(singerTex)),
+                    ImVec2(pcx + 12.0f * q, utilY), ImVec2(pcx + 92.0f * q, utilY + 80.0f * q),
+                    ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), IM_COL32(235, 235, 245, 220));
+            }
+            // Same +5deg as the select-screen phone.
+            const float ang = 5.0f * 3.14159265f / 180.0f;
+            const float ca = std::cos(ang);
+            const float sa = std::sin(ang);
+            for (int v = phoneVtx0; v < dl->VtxBuffer.Size; ++v) {
+                ImVec2& p = dl->VtxBuffer[v].pos;
+                const float dx = p.x - pcx;
+                const float dy = p.y - pcy;
+                p = ImVec2(pcx + dx * ca - dy * sa, pcy + dx * sa + dy * ca);
+            }
+        }
+
+        // BottomLeft/UIPartsLiveModeButton: x=57 y=962 176x72.
+        // BottomLeft/AutoLiveToggle/ToggleRoot: x=822.6 y=1014.4 152x56.
+        // BottomRight/Decide, in the 2x BottomRight container:
+        //   raw x=2489.4 y=1407.0 354.5x116 -> screen x=1724.7 y=973.5 177.3x58.
+        const float mvX = 57.0f * k;
+        const float mvY = 962.0f * k;
+        const float mvW = 176.0f * k;
+        const float mvH = 72.0f * k;
+        const GLuint mvTex = finalTex(renderer, "btn_round_h80_wh");
+        if (mvTex != 0) {
+            dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(mvTex)),
+                ImVec2(mvX, mvY), ImVec2(mvX + mvW, mvY + mvH), ImVec2(0.0f, 0.0f),
+                ImVec2(1.0f, 1.0f), IM_COL32(255, 255, 255, 255));
+        } else {
+            dl->AddRectFilled(ImVec2(mvX, mvY), ImVec2(mvX + mvW, mvY + mvH),
+                IM_COL32(255, 255, 255, 235), 16.0f * k);
+        }
+        static const char* kMvNames[3] = {"无 MV", "原曲 MV", "2D MV"};
+        addTextCentered(dl, body, 28.0f * k, ImVec2(mvX + mvW * 0.5f, mvY + mvH * 0.5f),
+            IM_COL32(68, 68, 102, 255), kMvNames[std::clamp(mvMode, 0, 2)]);
+        if (hit(mvX, mvY, mvW, mvH)) {
+            mvMode = (std::clamp(mvMode, 0, 2) + 1) % 3;
+            ui::se(ui::SeClick);
+        }
+
+        const float autoX = 822.6f * k;
+        const float autoY = 1014.4f * k;
+        const float autoW = 152.0f * k;
+        const float autoH = 56.0f * k;
+        const GLuint autoBg = finalTex(renderer, "bg_auto");
+        if (autoBg != 0) {
+            dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(autoBg)),
+                ImVec2(autoX - 14.0f * k, autoY - 27.0f * k),
+                ImVec2(autoX - 14.0f * k + 180.0f * k, autoY - 27.0f * k + 110.0f * k),
+                ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), IM_COL32(255, 255, 255, 255));
+        }
+
+        // UIPartsToggle: Bg On #FF77AA, Off #444466, knob toggle_btn_wh, text
+        // ON/OFF 29px white.
+        dl->AddRectFilled(ImVec2(autoX, autoY), ImVec2(autoX + autoW, autoY + autoH),
+            autoLive ? IM_COL32(255, 119, 170, 255) : IM_COL32(68, 68, 102, 255),
+            autoH * 0.5f);
+        const float knob = autoH - 8.0f * k;
+        const float knobX = autoX + 4.0f * k + (autoLive ? autoW - knob - 8.0f * k : 0.0f);
+        dl->AddCircleFilled(ImVec2(knobX + knob * 0.5f, autoY + autoH * 0.5f), knob * 0.5f,
+            IM_COL32(255, 255, 255, 255), 32);
+        addTextLeft(dl, body, 22.0f * k,
+            ImVec2(autoX + (autoLive ? 24.0f * k : 58.0f * k), autoY + autoH * 0.5f),
+            IM_COL32(255, 255, 255, 255), autoLive ? "ON" : "OFF");
+        if (hit(autoX, autoY, autoW, autoH)) {
+            autoLive = !autoLive;
+            ui::se(ui::SeClick);
+        }
+
+        if (phoneStartHit) {
+            // The phone's play button is the original start control; no extra
+            // "开始" capsule outside the handset.
+            gFinalConfirmOpen = false;
+            return entryIndex;
+        }
+        if (timeSec < gFinalToastUntil && !gFinalToast.empty()) {
+            const ImVec2 ts = body->CalcTextSizeA(22.0f * k, FLT_MAX, 0.0f, gFinalToast.c_str());
+            const float tw = ts.x + 42.0f * k;
+            const float th = 48.0f * k;
+            const float tx = cx - tw * 0.5f;
+            const float ty = h - 156.0f * k;
+            dl->AddRectFilled(ImVec2(tx, ty), ImVec2(tx + tw, ty + th),
+                IM_COL32(20, 19, 40, 235), 12.0f * k);
+            addTextCentered(dl, body, 22.0f * k, ImVec2(cx, ty + th * 0.5f),
+                IM_COL32(255, 255, 255, 255), gFinalToast.c_str());
+        }
+        (void)vocalIndex;
+        return SelectNone;
     }
 } // namespace
 
@@ -3260,10 +3591,11 @@ bool guessOptionPill(const char* label, const ImVec2& size, ImU32 fill, float s,
 }
 
 int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& entries, int& selected,
-    int windowW, int windowH, float timeSec, int& sortMode, int& groupMode, int& vocalIndex,
-    float uiScale, ImVec2* confirmCenter, const AccountData* account, const SelectPartyInfo* party,
-    SelectPartyResult* partyOut, int* favoriteToggle, bool nativeMenuBar,
-    int* deleteRequest)
+    int windowW, int windowH, float timeSec, int& sortMode, int& groupMode, int& unitTab,
+    int& vocalIndex,
+    float uiScale, ImVec2* confirmCenter, ImVec4* confirmPhoneScreen, int deckPower, bool* autoLive,
+    int* mvMode, const AccountData* account, const SelectPartyInfo* party, SelectPartyResult* partyOut,
+    int* favoriteToggle, bool nativeMenuBar, int* deleteRequest)
 {
     int action = SelectNone;
     // 多人游玩: the room owns the song. The host keeps a normal, fully
@@ -3427,6 +3759,46 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     ImFont* title = titleFont();
     ImFont* body = bodyFont() != nullptr ? bodyFont() : ImGui::GetFont();
 
+    // Debug (`CPSEKAI_FINAL_CONFIRM=1`): open the final page for screenshots.
+    {
+        static bool debugOpened = false;
+        if (!debugOpened && !gFinalConfirmOpen && std::getenv("CPSEKAI_FINAL_CONFIRM") != nullptr
+            && selected >= 0 && selected < static_cast<int>(entries.size())) {
+            debugOpened = true;
+            gFinalConfirmOpen = true;
+            gFinalEntry = selected;
+            gFinalDifficulty = diffIndex;
+            gFinalVocal = vocalIndex;
+        }
+    }
+
+    // 最终确认页：确定之后停在这里，Start 才把 action 交回 main。整页自绘，
+    // 所以这一帧不会让底下的列表/手机拿到输入。
+    if (gFinalConfirmOpen) {
+        bool autoValue = autoLive != nullptr ? *autoLive : false;
+        int mvValue = mvMode != nullptr ? *mvMode : 0;
+        const int finalAction = drawFinalConfirm(renderer, entries, gFinalEntry, gFinalDifficulty,
+            gFinalVocal, w, h, k, static_cast<float>(timeSec), title, body, deckPower, autoValue,
+            mvValue);
+        if (autoLive != nullptr) {
+            *autoLive = autoValue;
+        }
+        if (mvMode != nullptr) {
+            *mvMode = mvValue;
+        }
+        if (finalAction >= 0) {
+            selected = gFinalEntry;
+            vocalIndex = gFinalVocal;
+            action = finalAction;
+        }
+        ImGui::End();
+        if (gSelectFillDisabled) {
+            ImGui::PopStyleColor();
+        }
+        ImGui::PopStyleVar(2);
+        return action;
+    }
+
     // Background: the blurred desktop wallpaper when the player picked it,
     // otherwise the built-in dark blue wash with a slow moving highlight.
     // In glass mode (gSelectFillDisabled) neither is drawn - the window is left
@@ -3541,20 +3913,40 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         return 1.0f - inv * inv * inv;
     };
     const float vocalEase = easeOutCubic(vocalPanelT);
-    const float vocalPW = std::min(620.0f * k, w * 0.46f);
+    // ChangeVocalSubWindowDialog prefab: Bg 956 wide on the 1920 canvas
+    // (956/1920 = 0.4979), full height, flush with the right edge.
+    const float vocalPW = std::min(956.0f * k, w * 0.4979f);
     const float vocalPX0 = w + (1.0f - vocalEase) * (vocalPW + 44.0f * k) - vocalPW;
 
     // ------------------------------------------------------------------
-    // Left: song list
+    // Left: 团体页签 + song list
+    //
+    // Official geometry (prefab 702 / 1117 / 1129, see SELECT-UI.md): the unit
+    // strip is MusicSelectUnitTabList at x=44, 136 wide, inset 84 top and
+    // bottom; the list column starts at x=212 and is 912 wide, its rows are
+    // 895x144 and grow to 895x230 when selected. Rows are 144 apart, so a grown
+    // card pushes its neighbours out by (230-144)/2 instead of overlapping
+    // them - see pushExtra() below.
     // ------------------------------------------------------------------
-    const float listX = 150.0f * k;
+    const float unitStripX = 44.0f * k;
+    const float unitStripW = 136.0f * k;
+    const float listX = 212.0f * k;
     const float listTop = 30.0f * k;
-    const float listW = 450.0f * k;
+    const float listW = 912.0f * k;
+    const float listRowInset = (listW - 895.0f * k) * 0.5f; // rows sit centred
 
     // Search bar (top of the list, like the reference UI). Filters by
     // title / artist substring.
     static char searchBuf[64] = "";
-    const float searchW = listW;
+    // Header row, right to left: 菜单(33) 筛选(33) 排序 combo(168); the search
+    // pill takes whatever is left. Everything is one 33k-tall line.
+    const float comboW = 168.0f * k;
+    const float headerBtnW = 33.0f * k;
+    const float headerGap = 8.0f * k;
+    const float menuBtnX = listX + listW - headerBtnW;
+    const float filterBtnX = menuBtnX - headerGap - headerBtnW;
+    const float comboX0 = filterBtnX - headerGap - comboW;
+    const float searchW = comboX0 - headerGap - listX;
     // One top edge for the whole header row (search box, combos, 刷新 / 音乐商店 /
     // 猜歌, level chip): equal heights only read as a row if they also start at
     // the same y, and the official top bar does exactly that.
@@ -3678,151 +4070,207 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         }
     }
 
-    // Sort / grouping selectors, to the right of the search box (the official
-    // screen has a sort FAB there - a combo is easier to hit on a touchscreen).
-    // Both live in the caller's settings, so the list comes back as it was.
+    // 排序 combo, in the same row as the search pill. The official screen puts a
+    // sort FAB there; a combo is easier to hit on a touchscreen and it is the one
+    // control in this row that has to show its current value.
     if (sortMode < 0 || sortMode > 1) {
         sortMode = 0;
     }
     if (groupMode < 0 || groupMode >= kGroupCount) {
         groupMode = 0;
     }
-    const float comboW = 168.0f * k;
-    const float comboX0 = listX + searchW + 18.0f * k;
-    const float comboGap = 12.0f * k;
-    // 原生菜单栏开着的时候（设置 > 系统），排序 / 分组也搬进 视图 菜单了 ——
-    // 两个下拉一起收起来，不然同一件事有两个入口，改一边看不出另一边动。
-    // 值本身还是 settings.sortMode / groupMode，菜单和这里读写的是同一个字段。
-    const bool headerSelectors = !nativeMenuBar;
-    if (headerSelectors) {
+    {
         const char* kSortLabels[2] = {"按名称", "按难度"};
-        const char* kGroupLabels[kGroupCount] = {"关闭", "按难度段", "按读音", "按首字", "按收藏"};
-        const std::string sortPreview = std::string("排序：") + kSortLabels[sortMode];
-        const std::string groupPreview = std::string("分组：") + kGroupLabels[groupMode];
-        // No colours here any more: ui::combo brings the pjsk look itself (white
-        // box, translucent white list, faint shadow). Only the metrics are the
-        // caller's - rounding is what the shadow follows, padding is the height.
-        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 12.0f * k);
-        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(14.0f * k, 8.0f * k));
-        ImGui::PushFont(body, 17.0f * k);
-        ImGui::SetCursorScreenPos(ImVec2(comboX0, headerRowY));
-        ImGui::SetNextItemWidth(comboW);
-        // ui::combo is the same popup plus a fade-in and a rotating chevron;
-        // `k` is handed over because this screen has its own px-per-unit scale.
-        const std::vector<std::string> sortItems{kSortLabels[0], kSortLabels[1]};
-        ui::combo("##sortby", sortPreview.c_str(), sortItems, &sortMode, comboW,
-            ImGuiComboFlags_HeightSmall, k);
-        ImGui::SetCursorScreenPos(ImVec2(comboX0 + comboW + comboGap, headerRowY));
-        const std::vector<std::string> groupItems(kGroupLabels, kGroupLabels + kGroupCount);
-        ui::combo("##groupby", groupPreview.c_str(), groupItems, &groupMode, comboW,
-            ImGuiComboFlags_HeightSmall, k);
-        ImGui::PopFont();
-        ImGui::PopStyleVar(2);
+        // 原生菜单栏开着的时候（设置 > 系统）排序也在 视图 菜单里 —— 收起来，
+        // 但值还是 settings.sortMode，两边读写的是同一个字段。
+        if (!nativeMenuBar) {
+            const std::string sortPreview = std::string("排序：") + kSortLabels[sortMode];
+            // No colours here: ui::combo brings the pjsk look itself (white box,
+            // translucent white list, faint shadow). Only the metrics are ours -
+            // rounding is what the shadow follows, padding is the height.
+            ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 12.0f * k);
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(14.0f * k, 8.0f * k));
+            ImGui::PushFont(body, 17.0f * k);
+            ImGui::SetCursorScreenPos(ImVec2(comboX0, headerRowY));
+            ImGui::SetNextItemWidth(comboW);
+            // `k` is handed over because this screen has its own px-per-unit scale.
+            const std::vector<std::string> sortItems{kSortLabels[0], kSortLabels[1]};
+            ui::combo("##sortby", sortPreview.c_str(), sortItems, &sortMode, comboW,
+                ImGuiComboFlags_HeightSmall, k);
+            ImGui::PopFont();
+            ImGui::PopStyleVar(2);
+        }
     }
 
-    // Rescan button, in the same row as the selectors. F5 has always done this
-    // but nothing on screen said so; a chart dropped into charts/ while the
-    // game is running is exactly what a player reaches for.
-    const float headerRowH = 33.0f * k; // same as the search box / combos / chip
-    // 原生菜单栏开着的时候（设置 > 系统），刷新 / 音乐商店 / 设置 三个窗口级操作已经
-    // 收进窗口顶部的菜单里了 —— 顶栏只留 猜歌，不然两处重复。位置从一个游标往后排，
-    // 省得为"哪几个按钮在"写两套坐标。
-    const bool headerFileButtons = !nativeMenuBar;
-    // 下拉收起来的时候按钮跟着往左站（不然中间空出两个下拉的宽度）。
-    float headerX = comboX0
-        + (headerSelectors ? (comboW + comboGap) * 2.0f + 4.0f * k : 0.0f);
-    // 下载谱面 sits right of 刷新: the downloader was reachable from the empty-list
-    // state and from the settings, but on a full list there was nothing.
-    const float rescanW = 104.0f * k;
-    const float rescanX = headerX;
-    if (headerFileButtons) {
-        headerX += rescanW + 10.0f * k;
-    }
-    const float storeW = 144.0f * k;
-    const float storeX = headerX;
-    if (headerFileButtons) {
-        headerX += storeW + 10.0f * k;
-    }
-    // 猜歌 sits right of 音乐商店. It is the one button here that does not touch
-    // the filesystem - it opens a card, so it does not queue an action for
-    // main.cpp to run (see the 猜歌 card at the end of this function).
-    const float guessW = 104.0f * k;
-    const float guessX = headerX;
-    headerX += guessW + 10.0f * k;
-    // 设置 的位置（只在顶栏还留着它的时候用）。
-    const float settingsW = 104.0f * k;
-    const float settingsX = headerX;
-    // 刷新 / 音乐商店 / 猜歌: one pjsk-style header button each - white capsule,
-    // faint shadow, dark label - i.e. the same chrome as the search box and the
-    // combos beside them. The shipped icons (assets/select/*.png) are white on
-    // transparent, so the navy comes from the tint (same trick as the intro
-    // card's skip key).
-    auto headerButton = [&](const char* id, float x, float w, const char* iconKey,
-                            const char* label) -> bool {
-        const float rowH = headerRowH;
-        ui::dropShadow(dl, ImVec2(x, headerRowY), ImVec2(x + w, headerRowY + rowH), rowH * 0.5f, k);
-        ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(255, 255, 255, 244));
+    // 筛选 / 菜单: two round header buttons instead of the old four capsules.
+    // Everything that used to sit in this row - 刷新 / 音乐商店 / 猜歌 / 设置 - is
+    // inside the menu now, and 分组依据 moved into the 筛选 card, so the row stays
+    // one line and the list under it can have the official 912px width.
+    const GLuint filterIconTex = selectTex(renderer, "icon_refine_wh");
+    const GLuint menuIconTex = selectTex(renderer, "icon_menu_wh");
+    auto headerRoundButton = [&](const char* id, float x, GLuint icon, bool on) -> bool {
+        const float d = headerBtnW;
+        const ImVec2 c(x + d * 0.5f, headerRowY + d * 0.5f);
+        ui::dropShadow(dl, ImVec2(x, headerRowY), ImVec2(x + d, headerRowY + d), d * 0.5f, k);
+        ImGui::PushStyleColor(ImGuiCol_Button, on ? IM_COL32(255, 255, 255, 255) : IM_COL32(255, 255, 255, 236));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(255, 255, 255, 255));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(232, 232, 242, 255));
-        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, rowH * 0.5f);
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, d * 0.5f);
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.0f, 0.0f));
         ImGui::SetCursorScreenPos(ImVec2(x, headerRowY));
-        const bool clicked = ImGui::Button(id, ImVec2(w, rowH));
+        const bool clicked = ImGui::Button(id, ImVec2(d, d));
         const bool hovered = ImGui::IsItemHovered();
-        // Tutorial anchor: "##rescan" -> "rescan" (the button's own id carries
-        // the ## so ImGui keeps the label out of the id stack).
-        if (id != nullptr && id[0] == '#' && id[1] == '#') {
-            ui::setAnchor(id + 2, ImVec2(x, headerRowY), ImVec2(x + w, headerRowY + rowH));
-        }
-        ImGui::PopStyleVar();
+        ImGui::PopStyleVar(2);
         ImGui::PopStyleColor(3);
-        const ImU32 labelCol = hovered ? IM_COL32(38, 38, 58, 255) : IM_COL32(60, 60, 82, 255);
-        const ImVec2 c(x + 26.0f * k, headerRowY + rowH * 0.5f);
-        const GLuint icon = selectTex(renderer, iconKey);
+        // The shipped icons are white on transparent, so the navy comes from the
+        // tint (same trick as the old capsule labels).
         if (icon != 0) {
-            const float iconSize = 20.0f * k;
+            const float iconSize = d * 0.62f;
             dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(icon)),
                 ImVec2(c.x - iconSize * 0.5f, c.y - iconSize * 0.5f),
                 ImVec2(c.x + iconSize * 0.5f, c.y + iconSize * 0.5f), ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f),
-                labelCol);
+                IM_COL32(96, 96, 120, (hovered || on) ? 255 : 220));
         }
-        addTextLeft(dl, body, 17.0f * k, ImVec2(c.x + 18.0f * k, c.y), labelCol, label);
-        // The drawer paints over this row but is not opaque, so the button stays
-        // *visible* through it - and ImGui would still hand a click to it, since
-        // it was submitted first. Swallow the click instead: the drawer is the
-        // thing under the pointer.
+        // The drawer paints over this row without being opaque, so the button
+        // stays visible through it - swallow the click, the drawer is on top.
         return clicked && !vocalPanelUp;
     };
-    // No SetTooltip on these on purpose. ImGui's default font atlas has no CJK
-    // glyphs, so a Chinese tooltip renders as a row of '?'; the label already
-    // says what the button does (刷新 also has F5 in the empty-state hint).
-    if (headerFileButtons) {
-        if (headerButton("##rescan", rescanX, rescanW, "refresh", "刷新")) {
+    // No SetTooltip on these: ImGui's default atlas has no CJK glyphs, so a
+    // Chinese tooltip renders as a row of '?'.
+    if (headerRoundButton("##unitfilter", filterBtnX, filterIconTex, gFilterOpen)) {
+        ui::se(ui::SeClick);
+        gFilterOpen = true;
+    }
+    if (headerRoundButton("##selectmenu", menuBtnX, menuIconTex, false)) {
+        ui::se(ui::SeClick);
+        ImGui::OpenPopup("##selectmenu");
+    }
+    // Tutorial anchors: the four header buttons are gone, so their spotlights
+    // point at the menu that now holds them (the story keeps working, and the
+    // highlighted control is a real one you can open).
+    const ImVec2 menuBtnMin(menuBtnX, headerRowY);
+    const ImVec2 menuBtnMax(menuBtnX + headerBtnW, headerRowY + headerBtnW);
+    ui::setAnchor("rescan", menuBtnMin, menuBtnMax);
+    ui::setAnchor("store", menuBtnMin, menuBtnMax);
+    ui::setAnchor("guess", menuBtnMin, menuBtnMax);
+    ui::setAnchor("abssettings", menuBtnMin, menuBtnMax);
+
+    // The menu. 刷新 / 音乐商店 / 设置 are window-level and are already in the
+    // native menu bar when it is on (设置 > 系统), so they hide here in that case;
+    // 猜歌 opens a card and stays either way.
+    if (ImGui::BeginPopup("##selectmenu")) {
+        const bool headerFileButtons = !nativeMenuBar;
+        ImGui::PushFont(body, 17.0f * k);
+        if (headerFileButtons && ImGui::MenuItem("刷新列表")) {
             ui::se(ui::SeClick);
             action = SelectRescan;
         }
-        if (headerButton("##store", storeX, storeW, "store", "音乐商店")) {
+        if (headerFileButtons && ImGui::MenuItem("音乐商店")) {
             ui::se(ui::SeClick);
             action = SelectDownload;
         }
-    }
-    if (headerButton("##guess", guessX, guessW, "guess", "猜歌")) {
-        ui::se(ui::SeClick);
-        // 不再直接 newGuessQuestion()：第一次点要现场建题库，同步做就是那一帧
-        // 卡住。openGuessDialog() 先把卡片放上来，题库在后面的帧里分批建。
-        openGuessDialog();
+        // 猜歌 does not touch the filesystem - it opens a card. Its pool is built
+        // across frames by openGuessDialog(), so the click never blocks.
+        if (ImGui::MenuItem("猜歌")) {
+            ui::se(ui::SeClick);
+            openGuessDialog();
+        }
+        if (headerFileButtons && ImGui::MenuItem("设置")) {
+            ui::se(ui::SeClick);
+            action = SelectSettings;
+        }
+        ImGui::PopFont();
+        ImGui::EndPopup();
     }
 
-    // 设置, in the same header row as the other buttons. It used to be the round
-    // gear at the bottom of the phone panel; that spot is 切换歌手 now, and a
-    // per-window dialog (volume, judgement windows) belongs with 刷新 / 音乐商店 /
-    // 猜歌 rather than inside a panel that is about the *song*.
-    //
-    // 原生菜单栏开着的时候它不在这儿 —— 菜单的 文件 > 设置… 就是它（位置照旧留给
-    // 猜歌右边，只是不画）。多人游玩成员的窗口也一样：菜单栏是每个窗口自己的。
-    if (headerFileButtons
-        && headerButton("##abssettings", settingsX, settingsW, "musicsetting", "设置")) {
-        ui::se(ui::SeClick);
-        action = SelectSettings;
+    // ------------------------------------------------------------------
+    // 团体页签: MusicSelectUnitTabList (prefab 1117) is 136 wide at x=44 with an
+    // 84px inset top and bottom, filled with one MusicSelectUnitTab (prefab 1118:
+    // cell 112x100, logo 112x112 centred) per CategoryTabType. The plate behind
+    // them is bg_tab_playlist (136x1024), drawn as a vertical 3-slice so the
+    // rounded caps keep their radius whatever the window height is.
+    // ------------------------------------------------------------------
+    if (unitTab < 0 || unitTab >= kSelectUnitTabCount) {
+        unitTab = 0;
+    }
+    const float stripTop = 84.0f * k;
+    const float stripBot = h - 84.0f * k;
+    {
+        const GLuint plate = selectTex(renderer, "bg_tab_playlist");
+        const ImVec2 p0(unitStripX, stripTop);
+        const ImVec2 p1(unitStripX + unitStripW, stripBot);
+        if (plate != 0) {
+            const ImTextureID tid = reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(plate));
+            const float cap = 68.0f * k;      // source cap radius (68 of 1024 rows)
+            const float vcap = 68.0f / 1024.0f;
+            dl->AddImage(tid, p0, ImVec2(p1.x, p0.y + cap), ImVec2(0.0f, 0.0f), ImVec2(1.0f, vcap));
+            dl->AddImage(tid, ImVec2(p0.x, p0.y + cap), ImVec2(p1.x, p1.y - cap),
+                ImVec2(0.0f, vcap), ImVec2(1.0f, 1.0f - vcap));
+            dl->AddImage(tid, ImVec2(p0.x, p1.y - cap), p1, ImVec2(0.0f, 1.0f - vcap), ImVec2(1.0f, 1.0f));
+        } else {
+            dl->AddRectFilled(p0, p1, IM_COL32(168, 176, 200, 235), unitStripW * 0.5f);
+        }
+    }
+    {
+        // Native sizes of the shipped logos: the ALL / その他 wordmarks are short
+        // and wide, the six unit logos are square. `_on` is the coloured, glowing
+        // version and is also the bigger one for the two wordmarks - that size
+        // jump is the official "this tab is selected" cue, so the numbers are
+        // taken as-is instead of being normalised.
+        struct UnitTabIcon
+        {
+            const char* off;
+            const char* on;
+            float w;
+            float h;
+            float wOn;
+            float hOn;
+        };
+        static const UnitTabIcon kIcons[kSelectUnitTabCount] = {
+            {"icon_tab_all_off", "icon_tab_all_on", 77.0f, 29.0f, 128.0f, 85.0f},
+            {"icon_tab_unit_vs_off", "icon_tab_unit_vs_on", 112.0f, 112.0f, 112.0f, 112.0f},
+            {"icon_tab_unit_ln_off", "icon_tab_unit_ln_on", 112.0f, 112.0f, 112.0f, 112.0f},
+            {"icon_tab_unit_mj_off", "icon_tab_unit_mj_on", 112.0f, 112.0f, 112.0f, 112.0f},
+            {"icon_tab_unit_vb_off", "icon_tab_unit_vb_on", 112.0f, 112.0f, 112.0f, 112.0f},
+            {"icon_tab_unit_ws_off", "icon_tab_unit_ws_on", 112.0f, 112.0f, 112.0f, 112.0f},
+            {"icon_tab_unit_25_off", "icon_tab_unit_25_on", 112.0f, 112.0f, 112.0f, 112.0f},
+            {"icon_tab_other_off", "icon_tab_other_on", 82.0f, 30.0f, 128.0f, 86.0f},
+        };
+        const float cellH = 100.0f * k;
+        const float stripCx = unitStripX + unitStripW * 0.5f;
+        const float cellsTop = (stripTop + stripBot) * 0.5f - cellH * kSelectUnitTabCount * 0.5f;
+        for (int i = 0; i < kSelectUnitTabCount; ++i) {
+            const float cellY = cellsTop + cellH * static_cast<float>(i);
+            const bool on = (i == unitTab);
+            // Hitbox first so the click is consumed before any row behind it.
+            ImGui::SetCursorScreenPos(ImVec2(unitStripX, cellY));
+            const bool clicked = ImGui::InvisibleButton(
+                (std::string("##unittab") + std::to_string(i)).c_str(), ImVec2(unitStripW, cellH));
+            const bool hovered = ImGui::IsItemHovered();
+            const UnitTabIcon& ic = kIcons[i];
+            const GLuint tex = selectTex(renderer, on ? ic.on : ic.off);
+            const float iw = (on ? ic.wOn : ic.w) * k;
+            const float ih = (on ? ic.hOn : ic.h) * k;
+            if (tex != 0) {
+                const ImVec2 c(stripCx, cellY + cellH * 0.5f);
+                // Off tabs are plain white; the hover lifts them a little so the
+                // strip still reads as clickable.
+                const int alpha = on ? 255 : (hovered ? 235 : 190);
+                dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(tex)),
+                    ImVec2(c.x - iw * 0.5f, c.y - ih * 0.5f), ImVec2(c.x + iw * 0.5f, c.y + ih * 0.5f),
+                    ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), IM_COL32(255, 255, 255, alpha));
+            } else {
+                addTextCentered(dl, body, 18.0f * k, ImVec2(stripCx, cellY + cellH * 0.5f),
+                    on ? IM_COL32(255, 255, 255, 255) : IM_COL32(255, 255, 255, 190),
+                    i == 0 ? "ALL" : "UNIT");
+            }
+            if (clicked && unitTab != i) {
+                ui::se(ui::SeClick);
+                unitTab = i;
+                platform::logf(platform::LogSelect, "[select] 团体页签 -> %d\n", unitTab);
+                std::fflush(stdout);
+            }
+        }
     }
 
     // Groups matching the search filter. The box is usable in 多人游玩 too (it is
@@ -3831,10 +4279,18 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     // panel is showing, and a filter typed for some other song would leave the
     // list and the panel telling different stories. So the locked group is
     // unioned back in below.
-    const bool filterOn = searchBuf[0] != '\0';
+    // Two filters now: the 团体页签 (unitTab, 0 = 全部) and the search box. Both
+    // are per-window tools - including in 多人游玩, where they must never hide
+    // the row the room is parked on (that row is what the phone panel shows), so
+    // the locked group is unioned back in below either way.
+    const bool searchOn = searchBuf[0] != 0;
+    const bool unitOn = unitTab > 0;
     std::vector<int> visible;
-    if (!filterOn) {
+    if (!searchOn) {
         for (int gi = 0; gi < static_cast<int>(groups.size()); ++gi) {
+            if (unitOn && groups[static_cast<size_t>(gi)].unit != unitTab) {
+                continue;
+            }
             visible.push_back(gi);
         }
     } else {
@@ -3847,6 +4303,9 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         const bool useKana = !kanaNeedle.empty() && kanaNeedle != needle;
         for (int gi = 0; gi < static_cast<int>(groups.size()); ++gi) {
             const SongGroup& g = groups[static_cast<size_t>(gi)];
+            if (unitOn && g.unit != unitTab) {
+                continue;
+            }
             if (toLower(g.title).find(needle) != std::string::npos
                 || toLower(g.artist).find(needle) != std::string::npos) {
                 visible.push_back(gi);
@@ -3870,14 +4329,14 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
                 visible.push_back(gi);
             }
         }
-        // The room's own row always survives the filter (see the note above).
-        if (partyReadOnly && lockedGroup >= 0
-            && std::find(visible.begin(), visible.end(), lockedGroup) == visible.end()) {
-            visible.push_back(lockedGroup);
-        }
-        if (std::find(visible.begin(), visible.end(), groupIndex) == visible.end() && !visible.empty()) {
-            groupIndex = visible.front();
-        }
+    }
+    // The room's own row always survives the filters (see the note above).
+    if (partyReadOnly && lockedGroup >= 0
+        && std::find(visible.begin(), visible.end(), lockedGroup) == visible.end()) {
+        visible.push_back(lockedGroup);
+    }
+    if (std::find(visible.begin(), visible.end(), groupIndex) == visible.end() && !visible.empty()) {
+        groupIndex = visible.front();
     }
 
     // ------------------------------------------------------------------
@@ -3889,9 +4348,17 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     // first one, so there is no bottom to hit. Wheel, mouse drag and touch
     // drag all feed the same momentum model.
     // ------------------------------------------------------------------
-    const float pitch = 104.0f * k;    // distance between two row centres
-    const float compactH = 84.0f * k;  // compact row height
-    const float cardH = 128.0f * k;    // expanded (selected) card height
+    // MusicSelectListCell (prefab 1129): 895x144, growing to 895x230 when
+    // selected, with the cells stacked 144 apart. The two numbers are the
+    // prefab's own sizeDelta / highlightSize, not a ratio of some older row.
+    const float compactH = 144.0f * k;
+    const float cardH = 230.0f * k;
+    const float cardRadius = 20.0f * k; // bg_base_r20_wh, radius 20
+    const float pitch = compactH;       // cell pitch == cell height
+    // MusicSelectListCell prefab: neutral row 895x144, selected 895x230
+    // (highlightSizeX/Y), highlight sprite bg_base_r20_wh (50x50, border 24,
+    // radius 20) at white 60% with NO border. Scale the two numbers by our
+    // compact row height so the selected/compact ratio stays 230/144.
     const float listY = listTop + searchH + 14.0f * k;
     const float listH = h - listY - 24.0f * k;
     ui::setAnchor("songlist", ImVec2(listX, listY), ImVec2(listX + listW, listY + listH));
@@ -3933,6 +4400,32 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     // are on screen, so the map stays tiny.
     static std::unordered_map<int, float> slotHeights;
 
+    // The grown card pushes the rows above / below it outwards instead of
+    // overlapping them: the official list re-flows (a cell going 144 -> 230
+    // moves each neighbour by 43). Reading the *animated* height out of
+    // slotHeights means the push rides the same 0.1s linear tween as the card,
+    // and it decays to zero by itself when the card shrinks back - no extra
+    // state, and nothing to desync when the list starts moving.
+    const auto pushRef = [&]() {
+        int slot = 1000000;
+        float extra = 0.0f;
+        for (const auto& kv : slotHeights) {
+            const float e = (kv.second - compactH) * 0.5f;
+            if (e > extra + 0.01f) {
+                extra = e;
+                slot = kv.first;
+            }
+        }
+        return std::pair<int, float>(slot, extra);
+    };
+    const auto pushFor = [&](int slot) {
+        const std::pair<int, float> ref = pushRef();
+        if (ref.second <= 0.01f || slot == ref.first) {
+            return 0.0f;
+        }
+        return slot > ref.first ? ref.second : -ref.second;
+    };
+
     // Sorting / grouping decides the row layout. Grouping wins over the sort
     // combo because a section's songs have to stay together.
     const int order = groupMode == kGroupDifficulty ? kOrderByDifficulty
@@ -3948,6 +4441,9 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         + "|lg" + std::to_string(lockedGroup);
     if (listSignature != lastSignature) {
         lastSignature = listSignature;
+        platform::logf(platform::LogSelect, "[select] list rebuilt: %d visible of %d (unit %d)\n",
+            static_cast<int>(visible.size()), static_cast<int>(groups.size()), unitTab);
+        std::fflush(stdout);
         cachedRows = buildRows(groups, visible, entries, diffIndex, order, groupMode);
         listInit = false; // the list changed shape: recentre without gliding
         slotHeights.clear();
@@ -3961,7 +4457,6 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
 
     // Floating shape field: drawn on the parent draw list here, i.e. above the
     // backdrop but below the list child window.
-    drawBgShapes(renderer, dl, w, h, k, timeSec);
     const std::vector<ListRow>& rows = cachedRows;
     const int rowCount = static_cast<int>(rows.size());
 
@@ -3985,7 +4480,13 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         return rowCount > 0 ? ((slot % rowCount) + rowCount) % rowCount : 0;
     };
     const auto slotAtY = [&](float y) {
-        return static_cast<int>(std::lround((y - viewCenterY + scroll) / pitch));
+        // Rows around the grown card sit 43px further out than their slot index
+        // says, so the naive round() would land one row off near it. The extra
+        // is symmetric about the centre - subtract it above, add it below.
+        const float extra = pushRef().second;
+        const float dy = y - viewCenterY;
+        const float eff = dy >= 0.0f ? dy - extra : dy + extra;
+        return static_cast<int>(std::lround((scroll + eff) / pitch));
     };
     const auto slotIsHeader = [&](int slot) {
         return rowCount <= 0 || rows[static_cast<size_t>(wrapSlot(slot))].header;
@@ -4275,26 +4776,48 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             ImGui::PopTextWrapPos();
             ImGui::PopStyleVar();
         };
+        // A filter that hides everything is not an empty library: saying "put a
+        // .sus in charts/" there would be a lie, and offering the downloader
+        // would send the player off to fetch a song they already have. So the
+        // two cases say different things and only the real one offers 下载谱面.
+        const bool filteredOut = !groups.empty();
         ImGui::PushFont(body, 19.0f * k);
         emptyText(rowX, rowY + 20.0f * k, ImVec4(0.75f, 0.75f, 0.82f, 1.0f),
-            "没有找到谱面。把 .sus 放到 charts/ 目录下，再按 F5 重新扫描");
+            filteredOut ? "这个筛选条件下没有谱面。换个团体，或者点「筛选」把条件放开"
+                        : "没有找到谱面。把 .sus 放到 charts/ 目录下，再按 F5 重新扫描");
         ImGui::PopFont();
+        if (filteredOut) {
+            ImGui::SetCursorScreenPos(ImVec2(rowX, rowY + 78.0f * k));
+            ImGui::PushFont(body, 19.0f * k);
+            if (ui::capsuleButton("全部团体", ImVec2(268.0f * k, 46.0f * k), true)) {
+                ui::se(ui::SeClick);
+                unitTab = 0;
+                searchBuf[0] = '\0';
+            }
+            ImGui::PopFont();
+            ImGui::PushFont(body, 17.0f * k);
+            emptyText(rowX, rowY + 138.0f * k, ImVec4(0.6f, 0.6f, 0.68f, 1.0f),
+                "这会清掉团体页签和搜索框。");
+            ImGui::PopFont();
+        }
         // A dead end otherwise: the player just installed the game and has no
         // charts at all, so offer the bundled downloader right here instead of
         // making them find chartdl.exe in the folder by hand. The host launches
         // it (main.cpp polls the process and re-scans when it exits).
-        ImGui::SetCursorScreenPos(ImVec2(rowX, rowY + 78.0f * k));
-        ImGui::PushFont(body, 19.0f * k);
-        if (ui::capsuleButton("下载谱面", ImVec2(268.0f * k, 46.0f * k), true)) {
-            emptyAction = SelectDownload;
-            platform::logf(platform::LogSelect, "[select] 下载谱面 pressed\n");
-            std::fflush(stdout);
+        if (!filteredOut) {
+            ImGui::SetCursorScreenPos(ImVec2(rowX, rowY + 78.0f * k));
+            ImGui::PushFont(body, 19.0f * k);
+            if (ui::capsuleButton("下载谱面", ImVec2(268.0f * k, 46.0f * k), true)) {
+                emptyAction = SelectDownload;
+                platform::logf(platform::LogSelect, "[select] 下载谱面 pressed\n");
+                std::fflush(stdout);
+            }
+            ImGui::PopFont();
+            ImGui::PushFont(body, 17.0f * k);
+            emptyText(rowX, rowY + 138.0f * k, ImVec4(0.6f, 0.6f, 0.68f, 1.0f),
+                "这会跳转到音乐商店。");
+            ImGui::PopFont();
         }
-        ImGui::PopFont();
-        ImGui::PushFont(body, 17.0f * k);
-        emptyText(rowX, rowY + 138.0f * k, ImVec4(0.6f, 0.6f, 0.68f, 1.0f),
-            "这会跳转到音乐商店。");
-        ImGui::PopFont();
     }
 
     const GLuint backTex = selectTex(renderer, "indicate_back_new");
@@ -4316,7 +4839,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     const int listVtxFirst = listDl->VtxBuffer.Size;
     for (int slot = firstSlot; slot <= lastSlot; ++slot) {
         const ListRow& view = rows[static_cast<size_t>(wrapSlot(slot))];
-        const float centerY = viewCenterY + (static_cast<float>(slot) * pitch - scroll);
+        const float centerY = viewCenterY + (static_cast<float>(slot) * pitch - scroll) + pushFor(slot);
         if (view.header) {
             // Section header: a caption with a rule running to the right, so a
             // grouped list reads like "あ ---" / "16-20 ---". It doubles as the
@@ -4360,10 +4883,20 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         // Animated height: a row grows into a card instead of snapping, and the
         // one the selection left shrinks back. Per slot - see the declaration.
         float& rowHAnim = slotHeights.try_emplace(slot, compactH).first->second;
-        rowHAnim += ((isSel ? cardH : compactH) - rowHAnim) * (1.0f - std::exp(-frameDt * 16.0f));
+        // Original MusicSelectListView tween: DOTween.To(sizeDelta, target,
+        // HIGHLIGHT_TWEEN_SEC = 0.1), SetDelay(0), SetEase(Ease.Linear).
+        // So the height moves at a constant rate, not exponentially. Both
+        // directions take the same 0.1s for a full compact<->card transition.
+        const float rowSpeed = (cardH - compactH) / 0.1f;
+        const float rowTarget = isSel ? cardH : compactH;
+        if (rowHAnim < rowTarget) {
+            rowHAnim = std::min(rowTarget, rowHAnim + rowSpeed * frameDt);
+        } else {
+            rowHAnim = std::max(rowTarget, rowHAnim - rowSpeed * frameDt);
+        }
         const float rowH = rowHAnim;
-        const ImVec2 p0(rowX, centerY - rowH * 0.5f);
-        const ImVec2 p1(rowX + listW, centerY + rowH * 0.5f);
+        const ImVec2 p0(rowX + listRowInset, centerY - rowH * 0.5f);
+        const ImVec2 p1(rowX + listRowInset + 895.0f * k, centerY + rowH * 0.5f);
         // Clear / full-combo mark of one diamond slot (0 = nothing to draw).
         const auto badgeFor = [&](int d) -> GLuint {
             if (d < 0 || d >= kDiffCount || g.idx[d] < 0) {
@@ -4399,15 +4932,15 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             if (!badges.original && !badges.mv2d) {
                 return;
             }
-            const float bh = r1.y - r0.y;
-            // Badge size stays at the compact-row scale even on the expanded
-            // card (the selected row must not blow the badges up); only the
-            // position follows the Highlight variant geometry.
             const float bs = compactH / 144.0f;
             const float bhh = 48.0f * bs;
             const float bww = 78.98f * bs;
             const float gap = 8.0f * bs;
-            const float bcy = r0.y + (highlight ? 0.7264f : 0.5390f) * bh;
+            // Absolute offsets from the row's bottom / right edge, exactly as
+            // the prefab has them: Neutral MVMode sits 66.4 above the bottom
+            // and 28.7 from the right edge, Highlight 39.4 and 17.5 (the card
+            // is 230 tall, so a *fraction* of the row height would drift).
+            const float bcy = r1.y - (highlight ? 39.4f : 66.4f) * bs;
             const float bx0 = r1.x - (highlight ? 17.5f : 28.7f) * bs;
             struct BadgeDef
             {
@@ -4440,50 +4973,54 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         };
 
         if (isSel) {
-            // Expanded card: a translucent white rounded rectangle over the
-            // list background, with the level badge, credits and diamonds.
-            listDl->AddRectFilled(p0, p1, IM_COL32(255, 255, 255, 190), 10.0f * k);
-            listDl->AddRect(p0, p1, IM_COL32(255, 255, 255, 120), 10.0f * k, 0, 2.0f);
+            // Expanded card: the original's Highlight is one bg_base_r20_wh
+            // sliced image at white 60% (a=0.6) - flat fill, no outline. The
+            // old white AddRect border here was wrong: the prefab has no
+            // border/Outline component at all.
+            listDl->AddRectFilled(p0, p1, IM_COL32(255, 255, 255, 153), cardRadius);
 
             // Level badge: the level number of the selected difficulty in a
             // filled circle, with the "歌曲等级" caption plate resting on the
-            // circle's upper edge (as in the official list).
-            const float badgeL = p0.x + 14.0f * k;
-            const float tagY = p0.y + 22.0f * k;
-            const float tagW = 62.0f * k;
+            // circle's upper edge (prefab PlayLv 96x96 at x=48; the card is 230
+            // tall so the plate gets room above it).
+            const float tagW = 104.0f * k;
             const float tagH = tagW * 48.0f / 128.0f;
+            const float badgeL = p0.x + 24.0f * k;
+            const float tagY = p0.y + 36.0f * k;
             const float ccx = badgeL + tagW * 0.5f;
-            const float ccy = tagY + tagH + 16.0f * k;
-            listDl->AddCircleFilled(ImVec2(ccx, ccy), 27.0f * k, diffColor);
-            addTextCentered(listDl, title, 28.0f * k, ImVec2(ccx, ccy - 1.0f * k), white, rowLevel);
+            const float ccy = tagY + tagH + 34.0f * k;
+            listDl->AddCircleFilled(ImVec2(ccx, ccy), 46.0f * k, diffColor);
+            addTextCentered(listDl, title, 46.0f * k, ImVec2(ccx, ccy - 2.0f * k), white, rowLevel);
             if (levelTex != 0) {
                 listDl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(levelTex)),
                     ImVec2(badgeL, tagY), ImVec2(badgeL + tagW, tagY + tagH),
                     ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), IM_COL32(255, 255, 255, 255));
             } else {
                 // Fallback when the sprite is missing: the drawn plate.
-                listDl->AddRectFilled(ImVec2(badgeL, tagY), ImVec2(badgeL + tagW, tagY + 22.0f * k),
-                    diffColor, 4.0f * k);
-                addTextCentered(listDl, body, 13.0f * k, ImVec2(ccx, tagY + 11.0f * k), white, "歌曲等级");
+                listDl->AddRectFilled(ImVec2(badgeL, tagY), ImVec2(badgeL + tagW, tagY + 30.0f * k),
+                    diffColor, 6.0f * k);
+                addTextCentered(listDl, body, 18.0f * k, ImVec2(ccx, tagY + 15.0f * k), white, "歌曲等级");
             }
 
-            const float textL = p0.x + 96.0f * k;
+            // Text column: the prefab's TitleText sits at x=292.8 of the 895
+            // cell, the artist / vocal lines stack under it.
+            const float textL = p0.x + 292.8f * k;
             const std::string vo = g.vocal.empty() ? std::string() : "Vo. " + g.vocal;
             if (title != nullptr) {
-                listDl->AddText(title, 26.0f * k, ImVec2(textL, p0.y + 14.0f * k), IM_COL32(60, 60, 80, 255),
+                listDl->AddText(title, 34.0f * k, ImVec2(textL, p0.y + 34.0f * k), IM_COL32(60, 60, 80, 255),
                     g.title.c_str());
             }
-            listDl->AddText(body, 16.0f * k, ImVec2(textL, p0.y + 48.0f * k), IM_COL32(120, 120, 140, 255),
+            listDl->AddText(body, 21.0f * k, ImVec2(textL, p0.y + 88.0f * k), IM_COL32(120, 120, 140, 255),
                 g.artist.c_str());
             if (!vo.empty()) {
-                listDl->AddText(body, 15.0f * k, ImVec2(textL, p0.y + 70.0f * k), IM_COL32(140, 140, 160, 255),
+                listDl->AddText(body, 19.0f * k, ImVec2(textL, p0.y + 118.0f * k), IM_COL32(140, 140, 160, 255),
                     vo.c_str());
             }
-            float dx = textL + 4.0f * k;
-            const float dy = p1.y - 18.0f * k;
+            float dx = textL + 6.0f * k;
+            const float dy = p1.y - 36.0f * k;
             for (int d = 0; d < kDiffCount; ++d) {
-                addDiamondSlot(listDl, backTex, ImVec2(dx, dy), 20.0f * k, g.idx[d] >= 0, badgeFor(d));
-                dx += 20.0f * k;
+                addDiamondSlot(listDl, backTex, ImVec2(dx, dy), 26.0f * k, g.idx[d] >= 0, badgeFor(d));
+                dx += 30.0f * k;
             }
             drawMvBadges(p0, p1, true);
         } else {
@@ -4503,21 +5040,27 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
                 listDl->AddLine(ImVec2(p0.x, ruleY), ImVec2(p1.x, ruleY), IM_COL32(255, 255, 255, 48), 1.0f * k);
             }
 
+            // Compact cell, prefab numbers on the 895x144 grid: PlayLv 96x96
+            // centred at x=48, Jacket 100x100 centred at x=213.6, the text
+            // column starting at x=292.8, the clear-status diamonds 230x29
+            // right under the artist line.
             const float cy = centerY;
-            listDl->AddCircleFilled(ImVec2(p0.x + 30.0f * k, cy), 24.0f * k, diffColor);
-            addTextCentered(listDl, body, 20.0f * k, ImVec2(p0.x + 30.0f * k, cy - 1.0f * k), white, rowLevel);
+            listDl->AddCircleFilled(ImVec2(p0.x + 48.0f * k, cy), 48.0f * k, diffColor);
+            addTextCentered(listDl, title, 44.0f * k, ImVec2(p0.x + 48.0f * k, cy - 2.0f * k), white, rowLevel);
 
-            const float jx = p0.x + 62.0f * k;
-            const float js = 60.0f * k;
+            const float js = 100.0f * k;
+            const float jx = p0.x + 213.6f * k - js * 0.5f;
             addJacket(listDl, thumbFor(renderer, g.coverPath), ImVec2(jx, cy - js * 0.5f),
-                ImVec2(jx + js, cy + js * 0.5f), 6.0f * k);
+                ImVec2(jx + js, cy + js * 0.5f), 8.0f * k);
 
-            const float textL = jx + js + 14.0f * k;
-            listDl->AddText(body, 20.0f * k, ImVec2(textL, cy - 26.0f * k), white, g.title.c_str());
-            float dx = textL + 4.0f * k;
+            const float textL = p0.x + 292.8f * k;
+            listDl->AddText(body, 28.0f * k, ImVec2(textL, cy - 44.0f * k), white, g.title.c_str());
+            listDl->AddText(body, 19.0f * k, ImVec2(textL, cy - 6.0f * k), IM_COL32(255, 255, 255, 180),
+                g.artist.c_str());
+            float dx = textL + 6.0f * k;
             for (int d = 0; d < kDiffCount; ++d) {
-                addDiamondSlot(listDl, backTex, ImVec2(dx, cy + 6.0f * k), 18.0f * k, g.idx[d] >= 0, badgeFor(d));
-                dx += 18.0f * k;
+                addDiamondSlot(listDl, backTex, ImVec2(dx, cy + 40.0f * k), 24.0f * k, g.idx[d] >= 0, badgeFor(d));
+                dx += 28.0f * k;
             }
 
             // MV badges, right-aligned. Layout numbers from the
@@ -4760,27 +5303,25 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     // difficulty buttons and 确定 / 随机 / 切换歌手. The whole block is laid out
     // flat and then rotated about the phone's centre, like the reference UI.
     // ------------------------------------------------------------------
-    const float phoneAspect = 1034.0f / 1942.0f;
-    float phoneH = (h - 24.0f * kBase) * scale;
-    float phoneW = phoneH * phoneAspect;
-    if (phoneW > w * 0.46f * scale) {
-        phoneW = w * 0.46f * scale;
-        phoneH = phoneW / phoneAspect;
-    }
-    const float phoneX = w - phoneW - 30.0f * k;
-    // Nudged down on purpose: in the reference UI the phone runs off the
-    // bottom of the screen (its home bar is never visible), which also buys
-    // the content room for the vocal chip row.
-    const float phoneY = (h - phoneH) * 0.5f + 78.0f * k;
+    // ScreenLayerFreeLiveCellPhone (prefab 704, RE'd 2026-11-15): 754.3 x
+    // 1416.7 with its centre at (1522, 742) on the 1920x1080 canvas. It is
+    // deliberately taller than the canvas - the handset's home bar runs off the
+    // bottom edge - so it is placed from its centre instead of being fitted to
+    // the window like the old 46%-of-width version was.
+    const float phoneW = 754.3f * k;
+    const float phoneH = 1416.7f * k;
+    const float phoneX = 1522.0f * k - phoneW * 0.5f;
+    const float phoneY = 742.0f * k - phoneH * 0.5f;
     // Tutorial anchor: the phone panel is the "pick a song here" surface, and a
     // spotlight around the whole panel reads far better than one around the
     // EASY circle (which also used to dim 确定).
     ui::setAnchor("phone", ImVec2(phoneX - 10.0f * k, phoneY - 10.0f * k),
         ImVec2(phoneX + phoneW + 10.0f * k, phoneY + phoneH + 10.0f * k));
 
-    // Tilt: +5 degrees, i.e. the left edge rides up and the phone leans right
-    // (screen y grows down).
-    constexpr float kTiltDeg = 5.0f;
+    // Tilt: the official handset is rotated -3 degrees (a counter-clockwise
+    // lean, the top edge dipping to the left; screen y grows down, so the sign
+    // flips against Unity's z-rotation).
+    constexpr float kTiltDeg = -3.0f;
     const float tiltRad = kTiltDeg * 3.14159265358979f / 180.0f;
     const ImVec2 tiltPivot(phoneX + phoneW * 0.5f, phoneY + phoneH * 0.5f);
     const float tiltCos = std::cos(tiltRad);
@@ -5027,14 +5568,28 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         // ring follows the player's own pick instead of the list cursor, and a
         // click is reported to the caller rather than moving the (read-only)
         // list. Only the five difficulties the list can name are offered.
+        // DifficultySelectContent prefab: 5x96 circles with 24 gaps (row 576),
+        // arrows 40x48 at +-318. Scale by the phone width (754.3 design px).
+        const float diffScale = phoneW / 754.3f;
         const bool partyPick = partyReadOnly;
-        const float dcD = 60.0f * k;
-        const float dcGap = 9.0f * k;
+        const float dcD = 96.0f * diffScale;
+        const float dcGap = 24.0f * diffScale;
         const float rowW = kDiffCount * dcD + (kDiffCount - 1) * dcGap;
         float dx = cx - rowW * 0.5f + dcD * 0.5f;
         // Anchored to the content flow (with the old fraction as the floor for a
         // song whose metadata block is short), so the two can never overlap.
         const float dcY = std::max(scrY0 + phoneH * 0.500f, ty + dcD * 0.5f + 34.0f * k);
+
+        static const char* kDiffOffSprites[kDiffCount] = {
+            "btn_difficulty_easy_off", "btn_difficulty_normal_off", "btn_difficulty_hard_off",
+            "btn_difficulty_expert_off", "btn_difficulty_master_off"};
+        static const char* kDiffOnSprites[kDiffCount] = {
+            "btn_difficulty_easy_on", "btn_difficulty_normal_on", "btn_difficulty_hard_on",
+            "btn_difficulty_expert_on", "btn_difficulty_master_on"};
+        const GLuint diffSelectedTex = selectTex(renderer, "eff_btn_difficulty_selected_wh");
+        const GLuint diffLockTex = selectTex(renderer, "icon_lock_wh");
+        const float imgD = 112.0f * diffScale;
+        const float selD = 136.0f * diffScale;
         for (int d = 0; d < kDiffCount; ++d) {
             const bool avail = group.idx[d] >= 0;
             const bool active = avail && (partyPick ? party->myDifficulty == d : d == diffIndex);
@@ -5059,32 +5614,53 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             {
                 char anchor[24];
                 std::snprintf(anchor, sizeof(anchor), "diff%d", d);
-                ui::setAnchor(anchor, ImVec2(dx - dcD * 0.5f, dcY - dcD * 0.5f),
-                    ImVec2(dx + dcD * 0.5f, dcY + dcD * 0.5f + 22.0f * k));
+                ui::setAnchor(anchor, ImVec2(dx - selD * 0.5f, dcY - selD * 0.5f),
+                    ImVec2(dx + selD * 0.5f, dcY + selD * 0.5f + 22.0f * k));
             }
 
-            if (active) {
-                // Glow first, so the solid disc and its white rim sit on top of
-                // it: the halo then reads as light coming off the edge.
-                addGlowRing(dl, c, dcD * 0.5f + 2.5f * k, kDiffColors[d], 10.0f * k);
-                dl->AddCircleFilled(c, dcD * 0.5f, kDiffColors[d]);
-                dl->AddCircle(c, dcD * 0.5f + 2.5f * k, white, 48, 3.0f * k);
-            } else {
-                // Unselected difficulties are hollow rings - no dark fill, just
-                // the difficulty colour (dimmed for the ones this song lacks)
-                // with the same edge glow.
-                const ImU32 ring = avail ? kDiffColors[d] : IM_COL32(150, 145, 175, 110);
-                addGlowRing(dl, c, dcD * 0.5f, ring, 9.0f * k);
-                dl->AddCircle(c, dcD * 0.5f, ring, 48, 3.0f * k);
+            // Selected: 136px white ring behind the 112px difficulty disc.
+            if (active && diffSelectedTex != 0) {
+                dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(diffSelectedTex)),
+                    ImVec2(c.x - selD * 0.5f, c.y - selD * 0.5f),
+                    ImVec2(c.x + selD * 0.5f, c.y + selD * 0.5f), ImVec2(0.0f, 0.0f),
+                    ImVec2(1.0f, 1.0f), IM_COL32(255, 255, 255, 255));
             }
+            const GLuint diffTex = selectTex(renderer, active ? kDiffOnSprites[d] : kDiffOffSprites[d]);
+            if (diffTex != 0) {
+                dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(diffTex)),
+                    ImVec2(c.x - imgD * 0.5f, c.y - imgD * 0.5f),
+                    ImVec2(c.x + imgD * 0.5f, c.y + imgD * 0.5f), ImVec2(0.0f, 0.0f),
+                    ImVec2(1.0f, 1.0f),
+                    avail ? IM_COL32(255, 255, 255, 255) : IM_COL32(120, 126, 145, 255));
+            } else {
+                dl->AddCircleFilled(c, dcD * 0.5f,
+                    avail ? kDiffColors[d] : IM_COL32(120, 126, 145, 255), 40);
+            }
+            if (!avail) {
+                dl->AddCircleFilled(c, imgD * 0.5f, IM_COL32(0, 0, 34, 128), 48);
+                if (diffLockTex != 0) {
+                    const float lw = 40.0f * diffScale;
+                    const float lh = 46.0f * diffScale;
+                    dl->AddImage(
+                        reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(diffLockTex)),
+                        ImVec2(c.x - lw * 0.5f, c.y - lh * 0.5f),
+                        ImVec2(c.x + lw * 0.5f, c.y + lh * 0.5f), ImVec2(0.0f, 0.0f),
+                        ImVec2(1.0f, 1.0f), IM_COL32(255, 255, 255, 255));
+                }
+            }
+
             char lvBuf[16];
             const char* lvText = "-";
             if (avail) {
                 lvText = levelText(entries[static_cast<size_t>(group.idx[d])], lvBuf, sizeof(lvBuf));
             }
-            addTextCentered(dl, body, 24.0f * k, c, white, lvText);
-            addTextCentered(dl, body, 15.0f * k, ImVec2(dx, dcY + dcD * 0.5f + 16.0f * k),
-                active ? white : (avail ? kDiffColors[d] : IM_COL32(130, 126, 156, 255)), kDiffNames[d]);
+            addTextCentered(dl, body, 46.0f * diffScale, ImVec2(c.x, c.y - 4.0f * diffScale), white,
+                lvText);
+            addTextCentered(dl, body, 24.0f * diffScale,
+                ImVec2(c.x, c.y + 67.0f * diffScale),
+                active ? IM_COL32(68, 68, 102, 255)
+                       : (avail ? IM_COL32(235, 235, 245, 255) : IM_COL32(150, 150, 170, 255)),
+                kDiffNames[d]);
             dx += dcD + dcGap;
         }
 
@@ -5134,14 +5710,31 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         if (confirmCenter != nullptr) {
             *confirmCenter = tiltPoint(ImVec2(cx, (okA.y + okB.y) * 0.5f));
         }
+        if (confirmPhoneScreen != nullptr) {
+            // Axis-aligned bounds of the tilted phone screen; the confirm light
+            // uses this so it washes the handset rather than the whole window.
+            const ImVec2 p0 = tiltPoint(ImVec2(scrX0, scrY0));
+            const ImVec2 p1 = tiltPoint(ImVec2(scrX1, scrY0));
+            const ImVec2 p2 = tiltPoint(ImVec2(scrX1, scrY1));
+            const ImVec2 p3 = tiltPoint(ImVec2(scrX0, scrY1));
+            *confirmPhoneScreen = ImVec4(
+                std::min({p0.x, p1.x, p2.x, p3.x}), std::min({p0.y, p1.y, p2.y, p3.y}),
+                std::max({p0.x, p1.x, p2.x, p3.x}), std::max({p0.y, p1.y, p2.y, p3.y}));
+        }
         if (okPressed) {
             ui::se(ui::SeClick);
             if (partyRoom) {
                 if (partyOut != nullptr) {
                     partyOut->confirm = true;
                 }
-            } else {
-                action = selected;
+            } else if (selected >= 0) {
+                // 原作：确定 → ScreenLayerFreeLiveFinalConfirmation（卡组 /
+                // 自动演出 / MV）→ Start 才进 live。不要把 selected 直接返回。
+                gFinalConfirmOpen = true;
+                gFinalEntry = selected;
+                gFinalDifficulty = diffIndex;
+                gFinalVocal = vocalIndex;
+                action = SelectNone;
             }
         }
 
@@ -5252,6 +5845,8 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     // difficulty when the phone panel is showing - and for a 多人游玩 member this
     // is the *only* meaning the arrows have, since the list does not move, so
     // the pick is reported to the caller as well.
+    // Keyboard arrows use the committed group, not the phone block's local
+    // `group` (the phone block is only drawn when a song is selected).
     const auto nudgeDifficulty = [&](int step) {
         for (int d = diffIndex + step; d >= 0 && d < kDiffCount; d += step) {
             if (groups[static_cast<size_t>(groupIndex)].idx[d] >= 0) {
@@ -5281,7 +5876,13 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     // It lines up with the 排序 / 分组 combos: same height (33k) and same top
     // edge, which is what the official top bar does with its own widgets.
     bool& profileOpen = gProfileOpen; // module state, so --profile can force it
-    if (account != nullptr) {
+    // 2026-11-21: the chip is off for now. The header row above now ends with
+    // 筛选 / 菜单 at the list column's right edge, and the level chip used to
+    // float at the window's top-right, right over the tilted handset. Kept
+    // compiled (and reachable via --profile) instead of deleted so the profile
+    // card does not lose its only entry point.
+    constexpr bool kShowLevelChip = false;
+    if (kShowLevelChip && account != nullptr) {
         const double need = game::expToNextRank(account->rank);
         const float expRatio = need > 0.0 ? static_cast<float>(account->exp / need) : 1.0f;
         const ImVec2 chipAnchor(w - 26.0f * k, headerRowY);
@@ -5319,10 +5920,14 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             gVocalPanelSong = vocalSong->musicId;
             gVocalPanelScroll = 0.0f;
         }
-        // A click on the blank area (anything left of the drawer) closes it, the
-        // way a translucent mask does. Press, not release: it is the same edge
-        // the X uses, and it means a press that lands on the drawer itself (a
-        // card, the X, the scrollbar strip) never also counts as "outside".
+        // 2026-11-21: rebuilt from prefab 1960/1961. The original is a
+        // right-side SubWindowDialog, not a narrow rounded drawer:
+        //   Bg 956xfull, bg_base_wh, #444466 at 80%;
+        //   full-screen Cover #000022 at 50%;
+        //   ListView 828 wide (956-128), rows 828x164;
+        //   row card bg_base_r20_wh #DFDFEB, radius 20, no border;
+        //   radio 72x72 at +16, text starts at +102 (name 36 / members 32).
+        // Its prefab has no header text (`header: null`), so no title row.
         {
             const ImVec2 vpMouse = ImGui::GetIO().MousePos;
             if (vpMouse.x < vocalPX0 && ui::mouseClicked(ImGuiMouseButton_Left)) {
@@ -5330,58 +5935,42 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
                 gVocalPanelOpen = false;
             }
         }
-        // Geometry comes from the hoisted block above (the header row and the
-        // level chip needed the same numbers to know they are covered).
         const float vpEase = vocalEase;
         const float vpW = vocalPW;
-        const float vpPad = 30.0f * k;
         const float vpX0 = vocalPX0;
         const float vpX1 = vpX0 + vpW;
-        // Full window height, flush with the right edge: only the two left
-        // corners are rounded (it is a drawer sliding in from off-screen right,
-        // so its right edge is the window's own).
         const float vpY0 = 0.0f;
         const float vpY1 = h;
         const int vpVtxFirst = dl->VtxBuffer.Size;
 
-        ui::dropShadow(dl, ImVec2(vpX0, vpY0), ImVec2(vpX1, vpY1), 22.0f * k, k);
-        dl->AddRectFilled(ImVec2(vpX0, vpY0), ImVec2(vpX1, vpY1), IM_COL32(38, 36, 58, 168), 22.0f * k,
-            ImDrawFlags_RoundCornersLeft);
+        // Full-screen dim (CloseArea/Cover) then the opaque 956-wide panel.
+        dl->AddRectFilled(ImVec2(0.0f, 0.0f), ImVec2(w, h),
+            IM_COL32(0, 0, 34, static_cast<int>(128.0f * vpEase)));
+        dl->AddRectFilled(ImVec2(vpX0, vpY0), ImVec2(vpX1, vpY1),
+            IM_COL32(68, 68, 102, static_cast<int>(204.0f * vpEase)));
 
-        // Header: what this panel is, and which song it is showing.
-        const float vpHeadCy = 40.0f * k;
-        addTextLeft(dl, body, 24.0f * k, ImVec2(vpX0 + vpPad, vpHeadCy), IM_COL32(242, 242, 252, 255),
-            "切换歌手");
-        if (groupIndex >= 0 && groupIndex < static_cast<int>(groups.size())) {
-            const std::string& songTitle = groups[static_cast<size_t>(groupIndex)].title;
-            const std::string line =
-                ellipsize(body, 15.0f * k, songTitle, vpW - vpPad * 2.0f - 52.0f * k);
-            addTextLeft(dl, body, 15.0f * k, ImVec2(vpX0 + vpPad, vpHeadCy + 26.0f * k),
-                IM_COL32(176, 176, 198, 255), line.c_str());
-        }
+        // Close button: 44x44, inset 18.1/18.5 from the top-right corner.
         {
-            // Close: assets/select/singerclose.png (a white X on transparent) with
-            // nothing behind it - the reference screen has a bare glyph there.
-            const float xr = 20.0f * k;
-            const ImVec2 xc(vpX1 - vpPad - xr * 0.6f, vpHeadCy);
-            ImGui::SetCursorScreenPos(ImVec2(xc.x - xr, xc.y - xr));
+            const float closeD = 44.0f * k;
+            const ImVec2 closeC(vpX1 - 18.1f * k - closeD * 0.5f, 18.5f * k + closeD * 0.5f);
+            ImGui::SetCursorScreenPos(
+                ImVec2(closeC.x - closeD * 0.5f, closeC.y - closeD * 0.5f));
             ImGui::PushID("vocalclose");
-            ImGui::InvisibleButton("x", ImVec2(xr * 2.0f, xr * 2.0f));
+            ImGui::InvisibleButton("x", ImVec2(closeD, closeD));
             const bool xHot = ImGui::IsItemHovered();
             const bool xHit = ImGui::IsItemClicked();
             ImGui::PopID();
-            const GLuint closeTex = selectTex(renderer, "singerclose");
+            const GLuint closeTex = selectTex(renderer, "btn_close_wh");
             if (closeTex != 0) {
-                const float icon = xr * (1.05f + 0.10f * (xHot ? 1.0f : 0.0f));
                 dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(closeTex)),
-                    ImVec2(xc.x - icon * 0.5f, xc.y - icon * 0.5f),
-                    ImVec2(xc.x + icon * 0.5f, xc.y + icon * 0.5f), ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f),
-                    IM_COL32(255, 255, 255, xHot ? 255 : 218));
+                    ImVec2(closeC.x - closeD * 0.5f, closeC.y - closeD * 0.5f),
+                    ImVec2(closeC.x + closeD * 0.5f, closeC.y + closeD * 0.5f), ImVec2(0.0f, 0.0f),
+                    ImVec2(1.0f, 1.0f), IM_COL32(255, 255, 255, xHot ? 255 : 230));
             } else {
-                const float d = xr * 0.40f;
-                dl->AddLine(ImVec2(xc.x - d, xc.y - d), ImVec2(xc.x + d, xc.y + d),
+                const float d = closeD * 0.25f;
+                dl->AddLine(ImVec2(closeC.x - d, closeC.y - d), ImVec2(closeC.x + d, closeC.y + d),
                     IM_COL32(240, 240, 248, 255), 2.6f * k);
-                dl->AddLine(ImVec2(xc.x + d, xc.y - d), ImVec2(xc.x - d, xc.y + d),
+                dl->AddLine(ImVec2(closeC.x + d, closeC.y - d), ImVec2(closeC.x - d, closeC.y + d),
                     IM_COL32(240, 240, 248, 255), 2.6f * k);
             }
             if (xHit) {
@@ -5390,124 +5979,101 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             }
         }
 
-        // ---- cards -------------------------------------------------------
-        const float vpListTop = vpHeadCy + 54.0f * k;
-        const float vpListBot = vpY1 - 26.0f * k;
-        const float vpCardL = vpX0 + vpPad;
-        const float vpCardR = vpX1 - vpPad;
-        const float vpCardW = vpCardR - vpCardL;
-        const float vpTitleSize = 22.0f * k;
-        const float vpLineSize = 17.0f * k;
-        const float vpTitleH = 33.0f * k;
-        const float vpLineH = 27.0f * k;
-        const float vpCardPadY = 15.0f * k;
-        const float vpRadioCol = 68.0f * k;
-        const float vpGapY = 13.0f * k;
-        // Right margin wide enough that the longest singer list we have (a
-        // five-person セカイver) fits without touching the card edge - the wrap
-        // below only kicks in past that.
-        const float vpTextMaxW = vpCardW - vpRadioCol - 24.0f * k;
-        const float vpMinCardH = 102.0f * k;
+        // ListView geometry: 828 wide, top 40, bottom inset 95 (the prefab's
+        // -128 / -135 sizeDelta and -27.5 offset resolve to those numbers at
+        // 1080p). Row height 164, 12 gap.
+        const float vpListL = vpX0 + 64.0f * k;
+        const float vpListR = vpX1 - 64.0f * k;
+        const float vpListTop = 40.0f * k;
+        const float vpListBot = vpY1 - 95.0f * k;
+        const float vpCardW = vpListR - vpListL;
+        const float vpCardH = 164.0f * k;
+        const float vpCardGap = 12.0f * k;
+        const float vpNameSize = 36.0f * k;
+        const float vpLineSize = 32.0f * k;
+        const float vpTextXOff = 102.0f * k;
+        const float vpTextMaxW = vpCardW - vpTextXOff - 24.0f * k;
 
-        // One card per version the song actually has audio for - a version with
-        // no mp3 next to the chart is simply not offered (that is what
-        // availableVocals() means), so the row index *is* the vocalIndex.
         std::vector<std::vector<std::string>> vpLines(vocalVersions.size());
-        std::vector<float> vpCardH(vocalVersions.size(), vpMinCardH);
-        float vpTotal = 0.0f;
         for (size_t i = 0; i < vocalVersions.size(); ++i) {
             vpLines[i] = vocalSingerLines(vocalVersions[i].singers, body, vpLineSize, vpTextMaxW);
-            const float content =
-                vpTitleH + static_cast<float>(vpLines[i].size()) * vpLineH + vpCardPadY * 2.0f;
-            vpCardH[i] = std::max(vpMinCardH, content);
-            vpTotal += vpCardH[i] + vpGapY;
+            if (vpLines[i].size() > 2) {
+                vpLines[i].resize(2);
+            }
         }
-        if (!vocalVersions.empty()) {
-            vpTotal -= vpGapY;
-        }
-
+        const float vpTotal = vocalVersions.empty()
+            ? 0.0f
+            : static_cast<float>(vocalVersions.size()) * vpCardH
+                + static_cast<float>(vocalVersions.size() - 1) * vpCardGap;
         const float vpViewH = vpListBot - vpListTop;
         const float vpMaxScroll = std::max(0.0f, vpTotal - vpViewH);
-        // Wheel over the panel scrolls the list. Deliberately not an ImGui item:
-        // one InvisibleButton over the whole list would claim the hover before
-        // the cards do (ImGui hands it to whichever item was submitted first) and
-        // no card could ever be pressed.
         {
             const ImVec2 mouse = ImGui::GetIO().MousePos;
-            if (mouse.x >= vpCardL && mouse.x <= vpCardR && mouse.y >= vpListTop
+            if (mouse.x >= vpListL && mouse.x <= vpListR && mouse.y >= vpListTop
                 && mouse.y <= vpListBot) {
                 gVocalPanelScroll -= ImGui::GetIO().MouseWheel * 62.0f * k;
             }
             gVocalPanelScroll = std::clamp(gVocalPanelScroll, 0.0f, vpMaxScroll);
         }
 
-        // Which version is picked right now (index into availableVocals()). The
-        // phone panel above already stamped gVocalChoiceBySong for this song, so
-        // the map is authoritative; the default is only for the first frame of a
-        // song nobody has touched yet.
         int vpCurrent = defaultVocalIndex(vocalSong->musicId, vocalVersions);
         if (const auto it = gVocalChoiceBySong.find(vocalSong->musicId);
             it != gVocalChoiceBySong.end()) {
             vpCurrent = it->second;
         }
 
-        // ClipRect (not just a draw-list clip): ImGui culls items against the
-        // window's ClipRect, so this is also what keeps a scrolled-out card from
-        // being clickable through the header.
-        ImGui::PushClipRect(ImVec2(vpCardL, vpListTop), ImVec2(vpCardR, vpListBot), true);
+        ImGui::PushClipRect(ImVec2(vpListL, vpListTop), ImVec2(vpListR, vpListBot), true);
         float vpY = vpListTop - gVocalPanelScroll;
         for (size_t i = 0; i < vocalVersions.size(); ++i) {
             const float vpTop = vpY;
-            const float vpBot = vpY + vpCardH[i];
-            vpY = vpBot + vpGapY;
+            const float vpBot = vpY + vpCardH;
+            vpY = vpBot + vpCardGap;
             if (vpBot <= vpListTop || vpTop >= vpListBot) {
-                continue; // scrolled out: no vertices and no hit box
+                continue;
             }
             const bool vpPicked = static_cast<int>(i) == vpCurrent;
-            const ImVec2 c0(vpCardL, vpTop);
-            const ImVec2 c1(vpCardR, vpBot);
+            const ImVec2 c0(vpListL, vpTop);
+            const ImVec2 c1(vpListR, vpBot);
 
             ImGui::SetCursorScreenPos(c0);
             ImGui::PushID(static_cast<int>(i) + 7100);
-            ImGui::InvisibleButton("vocalrow", ImVec2(vpCardW, vpCardH[i]));
+            ImGui::InvisibleButton("vocalrow", ImVec2(vpCardW, vpCardH));
             const bool vpHot = ImGui::IsItemHovered();
             const bool vpHit = ImGui::IsItemClicked();
             ImGui::PopID();
             const float vpGlow = ui::anim(0x4a577000u + static_cast<ImGuiID>(i), vpHot, 18.0f);
 
-            // Light card, no border either way: the reference tells the picked
-            // version apart with the radio dot alone (and the pointer only lifts
-            // the fill a shade).
+            // #DFDFEB fill, radius 20, no outline (bg_base_r20_wh).
             dl->AddRectFilled(c0, c1,
-                ui::mix(IM_COL32(215, 216, 230, 255), IM_COL32(234, 235, 246, 255), vpGlow),
-                16.0f * k);
+                ui::mix(IM_COL32(223, 223, 235, 255), IM_COL32(234, 235, 246, 255), vpGlow),
+                20.0f * k);
 
-            // Radio: a white disc with a soft shadow under it, and a mint disc
-            // inside when this is the chosen version.
-            const float vpCy = (c0.y + c1.y) * 0.5f;
-            const ImVec2 vpRc(c0.x + 34.0f * k, vpCy);
-            const float vpRr = 17.0f * k;
-            dl->AddCircleFilled(ImVec2(vpRc.x, vpRc.y + 2.0f * k), vpRr * 1.02f, IM_COL32(68, 68, 102, 70), 40);
-            dl->AddCircleFilled(vpRc, vpRr, IM_COL32(255, 255, 255, 255), 40);
+            // Radio: UIPartsRadioToggle 72x72 at left 16, vertically centred.
+            const float vpRadioD = 72.0f * k;
+            const ImVec2 vpRc(c0.x + 16.0f * k + vpRadioD * 0.5f, (c0.y + c1.y) * 0.5f);
+            dl->AddCircleFilled(vpRc, vpRadioD * 0.5f, IM_COL32(255, 255, 255, 255), 48);
             if (vpPicked) {
-                dl->AddCircleFilled(vpRc, vpRr * 0.72f, ui::kPrimary, 40);
+                const GLuint checkTex = selectTex(renderer, "icon_radio_gn");
+                if (checkTex != 0) {
+                    const float checkD = 36.0f * k;
+                    dl->AddImage(
+                        reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(checkTex)),
+                        ImVec2(vpRc.x - checkD * 0.5f, vpRc.y - checkD * 0.5f),
+                        ImVec2(vpRc.x + checkD * 0.5f, vpRc.y + checkD * 0.5f), ImVec2(0.0f, 0.0f),
+                        ImVec2(1.0f, 1.0f), IM_COL32(255, 255, 255, 255));
+                }
             }
 
-            // Caption + singer list, left-aligned right of the radio. The block
-            // is centred in the card, so a card that is only at its minimum
-            // height (one singer line) still has the text on the radio's centre
-            // line instead of hugging the top edge.
-            const float vpTextX = c0.x + vpRadioCol;
-            const float vpContentH = vpTitleH + static_cast<float>(vpLines[i].size()) * vpLineH;
-            float vpTy = c0.y + (vpCardH[i] - vpContentH) * 0.5f;
+            // Name centre at +40, member block at +107 with 40px lines.
+            const float vpTextX = c0.x + vpTextXOff;
             const std::string vpLabel = vocalVersionLabel(vocalVersions[i]);
-            addTextLeft(dl, body, vpTitleSize, ImVec2(vpTextX, vpTy + vpTitleH * 0.5f),
-                IM_COL32(44, 42, 64, 255), vpLabel.c_str());
-            vpTy += vpTitleH;
+            addTextLeft(dl, body, vpNameSize, ImVec2(vpTextX, c0.y + 40.0f * k),
+                IM_COL32(85, 85, 119, 255), vpLabel.c_str());
+            float vpLineY = c0.y + 87.0f * k;
             for (const std::string& vpLine : vpLines[i]) {
-                addTextLeft(dl, body, vpLineSize, ImVec2(vpTextX, vpTy + vpLineH * 0.5f),
-                    IM_COL32(74, 72, 98, 255), vpLine.c_str());
-                vpTy += vpLineH;
+                addTextLeft(dl, body, vpLineSize, ImVec2(vpTextX, vpLineY),
+                    IM_COL32(68, 68, 102, 255), vpLine.c_str());
+                vpLineY += 40.0f * k;
             }
 
             if (vpHit) {
@@ -5517,21 +6083,21 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             }
         }
         if (vocalVersions.empty()) {
-            addTextCentered(dl, body, 18.0f * k,
-                ImVec2((vpCardL + vpCardR) * 0.5f, (vpListTop + vpListBot) * 0.5f),
-                IM_COL32(178, 178, 198, 255), "暂无其他演唱版本");
+            addTextCentered(dl, body, 22.0f * k,
+                ImVec2((vpListL + vpListR) * 0.5f, (vpListTop + vpListBot) * 0.5f),
+                IM_COL32(220, 220, 235, 255), "暂无其他演唱版本");
         }
         ImGui::PopClipRect();
 
-        // Scroll hint, outside the clip so it can sit in the panel's margin.
+        // Scrollbar: 6 wide at the right inset, like the prefab.
         if (vpMaxScroll > 0.0f) {
-            const float sx = vpCardR + 10.0f * k;
+            const float sx = vpListR + 38.0f * k;
             const float thumbH = std::max(40.0f * k, vpViewH * (vpViewH / vpTotal));
             const float thumbY = vpListTop + (vpViewH - thumbH) * (gVocalPanelScroll / vpMaxScroll);
-            dl->AddRectFilled(ImVec2(sx, vpListTop), ImVec2(sx + 3.0f * k, vpListBot),
-                IM_COL32(255, 255, 255, 28), 2.0f * k);
-            dl->AddRectFilled(ImVec2(sx, thumbY), ImVec2(sx + 3.0f * k, thumbY + thumbH),
-                IM_COL32(255, 255, 255, 96), 2.0f * k);
+            dl->AddRectFilled(ImVec2(sx, vpListTop), ImVec2(sx + 6.0f * k, vpListBot),
+                IM_COL32(223, 223, 234, 51), 3.0f * k);
+            dl->AddRectFilled(ImVec2(sx, thumbY), ImVec2(sx + 6.0f * k, thumbY + thumbH),
+                IM_COL32(235, 235, 242, 255), 3.0f * k);
         }
 
         // Slide-in fade: drop the alpha of everything the panel just added.
@@ -5545,7 +6111,6 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             }
         }
     }
-
     ImGui::End();
     ImGui::PopStyleVar(2);
     if (gSelectFillDisabled) {
@@ -5834,6 +6399,64 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         } else {
             // 关闭动画播完了（或者从一开始就没开过）：next open 会重新走一遍入场。
             gGuessAlive = false;
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // 筛选 card. The official screen has a 絞り込み popup in that spot; ours
+    // carries the two list filters, because the header row is now just
+    // 排序 + 筛选 + 菜单:
+    //   * 团体  - the same value as the left strip (nice on a narrow window,
+    //             where the strip and the list fight for the width);
+    //   * 分组依据 - moved out of the header row.
+    // The card is `alive` for the length of its close animation; gating on
+    // `open` alone hides a card in the frame it was dismissed.
+    // ------------------------------------------------------------------
+    if (gFilterOpen) {
+        gFilterAlive = true;
+    }
+    if (gFilterAlive) {
+        const float s = ui::scale();
+        ImVec2 cardSize(560.0f * s, 470.0f * s);
+        ImVec2 cardCenter(w * 0.5f, h * 0.5f);
+        bool closeClicked = false;
+        if (ui::beginCard("##sselectfilter", &cardCenter, &cardSize, true, true, &closeClicked, gFilterOpen)) {
+            if (closeClicked) {
+                gFilterOpen = false;
+            }
+            const float padX = 30.0f * s;
+            const float interior = cardSize.x - padX * 2.0f;
+            const float leftX = cardCenter.x - cardSize.x * 0.5f + padX;
+            const float topY = cardCenter.y - cardSize.y * 0.5f;
+
+            ImGui::SetCursorScreenPos(ImVec2(leftX, topY + 16.0f * s));
+            ui::cardTitle("筛选", interior);
+
+            ImGui::SetCursorScreenPos(ImVec2(leftX, topY + 62.0f * s));
+            ui::caption("团体", 18.0f * s, ui::kTitleText, interior);
+            ImGui::SetCursorScreenPos(ImVec2(leftX, topY + 90.0f * s));
+            // Short labels on purpose: 8 options in one row, and the official
+            // tabs are logos rather than names anyway.
+            const std::vector<std::string> unitLabels = {
+                "全部", "VS", "L/N", "MMJ", "VBS", "W×S", "25時", "其他"};
+            ui::radioRow("##filterunit", unitLabels, &unitTab, interior);
+
+            ImGui::SetCursorScreenPos(ImVec2(leftX, topY + 196.0f * s));
+            ui::caption("分组依据", 18.0f * s, ui::kTitleText, interior);
+            ImGui::SetCursorScreenPos(ImVec2(leftX, topY + 224.0f * s));
+            const std::vector<std::string> groupLabels = {"关闭", "按难度段", "按读音", "按首字", "按收藏"};
+            if (ui::radioRow("##filtergroup", groupLabels, &groupMode, interior)) {
+                ui::se(ui::SeClick);
+            }
+
+            const float footY = topY + cardSize.y - 66.0f * s;
+            ImGui::SetCursorScreenPos(ImVec2(leftX, footY));
+            if (ui::capsuleButton("关闭", ImVec2(interior, 50.0f * s), false)) {
+                gFilterOpen = false;
+            }
+            ui::endCard();
+        } else {
+            gFilterAlive = false;
         }
     }
 

@@ -42,6 +42,13 @@ constexpr float kHoldGlow = 650.0f * kRingScale;
 constexpr float kHoldGlowAlpha = 0.22f;
 // All three shard systems run rateOverTime 6/s.
 constexpr float kHoldShardRate = 6.0f;
+// `TouchLongTapEffect.longTapSec` serialized in the prefab. `CountLongTap` is
+// only ticked while the touch phase is Stationary; a Moved phase ends the long
+// tap. This is the number that keeps a click from showing the 650px glow.
+constexpr float kLongTapSec = 0.40f;
+// Same slop as the right-click long press in main.cpp (design px): a little
+// jitter must not turn a still hold into a drag.
+constexpr float kLongTapSlop = 12.0f;
 
 constexpr int kTiles = 4;
 constexpr int kFrames = 16;
@@ -416,35 +423,60 @@ void TapEffect::spawnAt(float x, float y, float age)
 
 void TapEffect::press(float x, float y)
 {
-    // pjsk fires the tap burst and starts the follow effect on the same press.
+    // Began: only fx_Tap_single. `ScreenLayerTouchEffect.Update` starts the
+    // long-tap countdown in the Stationary branch, so the glow waits 0.4 s.
     spawn(x, y);
     mHold = HoldState{};
-    mHold.active = true;
-    mHold.x = x;
-    mHold.y = y;
-    unsigned rng = static_cast<unsigned>(mNextSeed++ * 2246822519u + 7u);
-    emitHoldShard(mHold, rng);
+    mPressActive = true;
+    mLongTapEligible = true;
+    mPressX = x;
+    mPressY = y;
+    mPressAge = 0.0f;
 }
 
 void TapEffect::moveHold(float x, float y)
 {
-    if (!mHold.active) {
+    if (!mPressActive) {
         return;
     }
-    mHold.x = x;
-    mHold.y = y;
+    const float dx = x - mPressX;
+    const float dy = y - mPressY;
+    const float slop = kLongTapSlop * ui::scale();
+    if (dx * dx + dy * dy > slop * slop) {
+        // Moved: the original ends the long tap and starts fx_Tap_flick, whose
+        // three particle systems are sub-pixel in the shipped prefab. There is
+        // nothing visible left to draw, so just stop emitting.
+        mLongTapEligible = false;
+        mHold.active = false;
+    }
+    if (mHold.active) {
+        // A still long press follows the pointer (TouchEffect.UpdatePosition).
+        mHold.x = x;
+        mHold.y = y;
+    }
 }
 
 void TapEffect::release()
 {
-    // Matches StopTapEffect / EndFollowEffect: the ripple and glow stop at once,
-    // the shards already in flight live out their own lifetimes.
+    // Matches EndLongTapEffect: the glow stops at once; shards already in
+    // flight live out their own lifetimes.
+    mPressActive = false;
+    mLongTapEligible = false;
     mHold.active = false;
 }
 
 void TapEffect::debugHoldAt(float x, float y, float age)
 {
     press(x, y);
+    // Force the post-threshold state (the normal path would wait 0.4 s of
+    // frame time, which a frozen screenshot does not have).
+    mPressActive = false;
+    mHold = HoldState{};
+    mHold.active = true;
+    mHold.x = x;
+    mHold.y = y;
+    unsigned seed = static_cast<unsigned>(mNextSeed++ * 2246822519u + 7u);
+    emitHoldShard(mHold, seed);
     // Replay the emission ticker at a fixed step so the result is deterministic.
     constexpr float kStep = 1.0f / 60.0f;
     const float interval = 1.0f / kHoldShardRate;
@@ -472,6 +504,9 @@ void TapEffect::clear()
 {
     mActive.clear();
     mHold = HoldState{};
+    mPressActive = false;
+    mLongTapEligible = true;
+    mPressAge = 0.0f;
 }
 
 void TapEffect::update(float dt)
@@ -489,6 +524,21 @@ void TapEffect::update(float dt)
     mActive.erase(std::remove_if(mActive.begin(), mActive.end(),
                       [maxLife](const Instance& instance) { return instance.age >= maxLife; }),
         mActive.end());
+
+    // Stationary branch of ScreenLayerTouchEffect.Update: count only while the
+    // pointer has not moved past the slop, and start fx_Tap_loop at 0.4 s.
+    if (mPressActive && mLongTapEligible && !mHold.active) {
+        mPressAge += dt;
+        if (mPressAge >= kLongTapSec) {
+            mHold = HoldState{};
+            mHold.active = true;
+            mHold.x = mPressX;
+            mHold.y = mPressY;
+            mHold.age = 0.0f;
+            unsigned rng = static_cast<unsigned>(mNextSeed++ * 2246822519u + 7u);
+            emitHoldShard(mHold, rng);
+        }
+    }
 
     if (mHold.active) {
         mHold.age += dt;
@@ -536,9 +586,9 @@ void TapEffect::draw()
             drawFlip(drawList, instance.x, instance.y, instance.age, tapLayer, scale);
         }
         if (mHold.active) {
-            // Only the glow: Follow's PT_01 has rateOverTime 0 and the game code
-            // never Play()s it, so a held press really does show no ring - just
-            // the white halo and the orbiting triangles.
+            // Only the glow: fx_Tap_loop's PT_01 has rateOverTime 0 and the game
+            // code never Play()s it, so a long press really does show no ring -
+            // just the white halo and the orbiting triangles.
             drawGlow(drawList, mHold.x, mHold.y, kHoldGlowAlpha, scale);
         }
         drawList->AddCallback(&endAdditive, nullptr);

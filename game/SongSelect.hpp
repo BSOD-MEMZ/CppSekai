@@ -337,6 +337,11 @@ struct UserSettings
     // latin letters one section each), 3 = by first character (one section per
     // kana).
     int groupMode = 0;
+    // 左侧团体页签（原作的 MusicSelectUnitTabList）。数值就是原作的
+    // CategoryTabType：0 全部 / 1 バーチャル・シンガー / 2 Leo/need /
+    // 3 MORE MORE JUMP! / 4 Vivid BAD SQUAD / 5 Wonderlands×Showtime /
+    // 6 25時、ナイトコードで。/ 7 その他。
+    int unitTab = 0;
     // 演出能量 (演出 > 演出能量): how much ライブボーナス to stake on a live.
     // It multiplies the exp a run grants (see liveBonusExpMultiplier) - the same
     // thing it does in the official game, where a live grants score-rank exp
@@ -578,6 +583,9 @@ void resolveSidecars(ChartEntry& entry);
 // 存档读回来时要按这个上限 clamp —— 以前那里写死 3，加了「按收藏」之后会把 4 咬掉。
 constexpr int kSelectGroupCount = 5;
 
+// 团体页签的数量：数值与 CategoryTabType 一一对应（0..7）。
+constexpr int kSelectUnitTabCount = 8;
+
 enum SelectAction
 {
     SelectNone = -1,
@@ -645,14 +653,19 @@ struct SelectPartyResult
 // actions themselves are unchanged: main.cpp maps the menu ids onto the very
 // same SelectRescan / SelectDownload / showDebug paths.
 int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& entries, int& selected,
-    int windowW, int windowH, float timeSec, int& sortMode, int& groupMode, int& vocalIndex,
-    float uiScale = 1.0f, ImVec2* confirmCenter = nullptr, const AccountData* account = nullptr,
+    int windowW, int windowH, float timeSec, int& sortMode, int& groupMode, int& unitTab,
+    int& vocalIndex,
+    float uiScale = 1.0f, ImVec2* confirmCenter = nullptr, ImVec4* confirmPhoneScreen = nullptr,
+    int deckPower = 250000, bool* autoLive = nullptr, int* mvMode = nullptr,
+    const AccountData* account = nullptr,
     const SelectPartyInfo* party = nullptr, SelectPartyResult* partyOut = nullptr,
     int* favoriteToggle = nullptr, bool nativeMenuBar = false, int* deleteRequest = nullptr);
 
 // Debug (`--profile`): force the profile card open. It normally only appears
 // when the level chip is clicked, which a --screenshot run cannot do.
 void debugOpenProfileCard(bool open);
+// Debug (`--select-filter`): open the 筛选 card for a --screenshot run.
+void debugOpenFilterCard(bool open);
 
 // 猜歌（header 那颗「猜歌」按钮 → 卡片）。打开是**异步**的：卡片立刻放上来显示
 // 「正在准备题库…」，别名表在随后的帧里按 ~3ms/帧 建好（第一次打开要过 12.9k 个别名，
@@ -669,6 +682,8 @@ void debugOpenGuessDialog(bool open);
 // drawSongSelect in a frame, so it reads the previous frame's state - which is
 // exactly what makes it work: the frame ESC is pressed, the card is still open.
 bool guessDialogOpen();
+// 筛选卡片是否开着（ESC 链要问它，否则按 ESC 会直接退出选曲页）。
+bool filterDialogOpen();
 
 // Debug (`--singer-panel`): open the 切换歌手 panel (the phone panel's singer
 // button) at boot, same reason. It only appears on a song that has a vocal

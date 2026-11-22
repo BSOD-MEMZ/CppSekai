@@ -3,26 +3,34 @@
 // Reverse engineered from pjsk 7.1.0's `ScreenLayerTouchEffect`. That prefab
 // holds THREE different effects, and they look nothing alike:
 //
-//   fx_Tap_single  a tap:        one 160px ripple + one big shard, then gone
-//   Follow         a held press: 330px ripple looping + 650px glow + shards at 6/s
+//   fx_Tap_single  a tap:        one 160px ripple + shards, then gone
+//   fx_Tap_loop    a long press: 330px ripple + 650px glow + shards at 6/s
+//                                (only after the pointer has been still for
+//                                0.4 s - `TouchLongTapEffect.longTapSec`)
 //   fx_Tap_flick   dragging:     no ripple at all (its particle scales are
 //                                1 / 0.1 / 0.1, i.e. sub-pixel - the group is
 //                                effectively invisible in the shipped build)
 //
-// So this class models two states, not three: Tap (a burst that dies on its own)
-// and Hold (a live effect that follows the finger). Dragging is Hold with a
-// moving position, which is what the original ends up looking like too.
+// `ScreenLayerTouchEffect.Update` only calls PlayTapEffect on Began, only
+// StartFollowEffect on Moved, and only CountLongTap on Stationary. A plain
+// click therefore gets ONLY fx_Tap_single: the 650px glow belongs to the long
+// press, not to the click. Moving the pointer cancels the long press and starts
+// the (invisible) follow effect.
+//
+// So this class models the two visible states: Tap (a burst that dies on its
+// own) and LongTap (a live glow + shards that starts after 0.4 s and follows the
+// finger). There is no visible drag state to model.
 //
 // Measured values (raw YAML in D:\Tools\rea\work\jp\fx_touch\, grouped into fx by
 // jp_fx_group.py; write-up in RE-report-jp.md section 11):
 //
 //   PT_01   single: startSize 160, life 0.5, uv 4x4 WholeSheet fps 30, rate 0
-//           hold  : startSize 330, life 0.45, same sheet, looping
-//   PT_02   hold only: startSize 650, life 0.5, rateOverTime 4/s
+//           loop  : startSize 330, life 0.45, same sheet, looping
+//   PT_02   long press only: startSize 650, life 0.5, rateOverTime 4/s
 //   particle3 single: size 2.5..235 (random between two curves), life 0.3..0.7,
 //                     startSpeed 35..100, one particle at t=0
-//           hold  : size 42..147, life 0.3..1.5, startSpeed 0..0.45, 6/s
-//   particle2 single: 15.7..18.2 ; hold: 10.5..21 at 6/s
+//           loop  : size 42..147, life 0.3..1.5, startSpeed 0..0.45, 6/s
+//   particle2 single: 15.7..18.2 ; loop: 10.5..21 at 6/s
 //   particle2_1 single only: 1.2..11.7
 //   particle1 life 30..35s in the original (clamped here): tiny specks
 //
@@ -63,16 +71,21 @@ class TapEffect
     void spawn(float x, float y);
     void spawnAt(float x, float y, float age);
 
-    // Pointer went down: fires the tap burst and enters the held state.
+    // Pointer went down: fires the tap burst and starts the 0.4 s long-press
+    // timer. The glow does NOT appear yet - see the class comment.
     void press(float x, float y);
-    // Pointer moved while held: drags the held effect along.
+    // Pointer moved: moves the long-press effect if it is already running.
+    // Movement past a small slop cancels it (the original switches to the
+    // invisible follow effect on TouchPhase.Moved).
     void moveHold(float x, float y);
-    // Pointer went up: drops the held state.
+    // Pointer went up: stops the long-press effect; shards already in flight
+    // live out their own lifetimes.
     void release();
     bool holding() const { return mHold.active; }
 
-    // Headless only: build a held-press state that has already been running for
-    // `age` seconds, so one screenshot can show what a long press looks like.
+    // Headless only: build a long-press state that has already crossed the
+    // 0.4 s threshold and has been running for `age` seconds, so one screenshot
+    // can show what a long press looks like.
     void debugHoldAt(float x, float y, float age);
 
     // Freezes ageing (headless verification only): keeps the hold effect alive
@@ -114,8 +127,9 @@ class TapEffect
         std::vector<Shard> shards;
     };
 
-    // The held-press effect: one ripple looping forever, a steady glow, and
-    // shards emitted at a fixed rate, all anchored to the pointer.
+    // The long-press effect (`fx_Tap_loop`): a steady 650px glow and shards
+    // emitted at a fixed rate, anchored to the pointer. It starts only after
+    // 0.4 s of stillness - a click never enters this state.
     struct HoldState
     {
         bool active = false;
@@ -153,6 +167,14 @@ class TapEffect
     ImTextureID mRing = 0;   // legacy fallback ring
     std::vector<Instance> mActive;
     HoldState mHold;
+    // Long-press arming: press position, how long the pointer has been still,
+    // and whether movement has disqualified this press. `mHold.active` is the
+    // separate "the 0.4 s glow has actually started" switch.
+    bool mPressActive = false;
+    bool mLongTapEligible = true;
+    float mPressX = 0.0f;
+    float mPressY = 0.0f;
+    float mPressAge = 0.0f;
     int mNextSeed = 0;
     bool mFrozen = false;
 };

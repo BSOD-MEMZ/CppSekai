@@ -392,8 +392,13 @@ A1 的判据：改完填进 §4，**每一项 / 原作都落在 0.72~0.78**，�
 - [x] ~~**CanvasScaler 参考分辨率**~~ → **2026-11-01 已确认：1920×1080**（§2，别再折算）。
 - [ ] **字号**：列表行 `TitleText` / `Creator` 的 TMP 组件没导出 `m_fontSize`，
       要换 AssetStudio 或直接读 TMP 组件的 YAML 才能拿到。
-- [ ] **选中行怎么放大**：原作 `MusicSelectSingleListCell` 只有一种行高，
-      选中态是另一套 prefab 还是一层高亮（`HighlightPanel` 1786 宽？）待查。
+- [x] ~~**选中行怎么放大**~~ → **2026-11-21 已确认**：自由演奏列表实际用的是
+      `MusicSelectListCell`（prefab **1129**，895×144），选中时 `RectTransform.sizeDelta`
+      从 144 补到 **230**（`highlightSizeX/Y = 895/230`），不是 `MusicSelectSingleListCell`
+      （1121，912×144 / 232，另一套未用于这条列表的 prefab）。背景是 `Highlight` 节点的一张
+      `bg_base_r20_wh` 九宫格图，白色 **60%**、圆角 **20px**、**没有描边**；`Neutral` 行没有
+      底色，只有 `UnderLine` 856.64×4 / 白 20%。展开是 **0.1s、Ease.Linear、无延迟** 的
+      DOTween，没有回弹。详见 §12。
 - [ ] 难度页签的**选中/未选中**底色（`XxxSelect` 的 sprite 与颜色）。
 - [ ] **手机面板的运行时位置**：§3.6 的位置来自 prefab 静态值（`CellPhone` 的 anchor/pivot
       都是中心、scale 1，看起来就是最终摆放）。但选曲界面有入场动画，
@@ -444,3 +449,266 @@ cd /d/Tools/rea/work/jp && python arip_search.py "MusicSelect" PrefabHierarchyOb
 
 触摸特效（`game/TapEffect.*`）同样是照原作粒子系统还原的，但**已经做完并提交**，
 参数与坑记在 [design-notes/touches-effect.md](design-notes/touches-effect.md)；原理和取数方法见 [RE.md](RE.md) §4.3。
+
+## 12. 2026-11-21 复核：选中卡 / 切换歌手 / 确认动画
+
+这一节是这轮逆向的实测结论，数据来自 prefab 1129 / 1960 / 1961 / 2279 的
+`arip_dump` 与 `AnimationClip`，不是截图目测。
+
+### 12.1 选中卡的 border / 圆角 / 展开曲线
+
+- **实际使用**：自由演奏列表的 `listViewItemPrefab` 是 `MusicSelectListCell`
+  （prefab **1129**，根 **895×144**）。`MusicSelectListView.highlightListViewItem`
+  的类型也是这个类；`MusicSelectSingleListCell`（1121）是另一套单列 prefab
+  （912×144，`highlightSizeX/Y = 912/232`），**不是这条列表的选中卡**。
+- **选中尺寸**：`highlightSizeX = 895`、`highlightSizeY = 230`。列表在选中时把
+  `RectTransform.sizeDelta` 从 `144` 补到 `230`，宽度不变。
+- **背景**：`MusicSelectListCell/Base/Highlight` 是一张 Image，sprite 为
+  **`bg_base_r20_wh`**（50×50，九宫格 border 24，圆角 **20px**），`m_Type: 1`
+  （Sliced），颜色 **白色 60%**（`m_Color.a = 0.6`）。**没有 Outline / 第二条
+  Image / 描边框**；`Neutral` 行没有底色，只有 `UnderLine` 856.64×4，
+  `base_wh`、白色 20%。
+- **展开曲线**：`MusicSelectListView.HIGHLIGHT_TWEEN_SEC = 0.1`、
+  `HIGHLIGHT_TWEEN_DELAY_SEC = 0`；代码用 `DOTween.To(..., duration = 0.1f)`，
+  `SetDelay(0)`、`SetEase(1)`，而 `DG.Tweening.Ease.Linear = 1`。也就是说
+  **0.1 s 线性、无回弹、无 Overshoot**；每一帧的 setter 调
+  `UpdateHighlightTween` 重排其余行，不是指数逼近。
+- 我们原来的 `AddRect` 白色描边、`radius 10`、`a=190`、`1-exp(-dt*16)` 都不对；
+  2026-11-21 已改成“无描边 / 半径按 20/144 缩放 / 白色 153 / 0.1s 线性”。
+
+### 12.2 切换歌手面板（`ChangeVocalSubWindowDialog`）
+
+- prefab **1960** `ChangeVocalSubWindowDialog`：`RightSubWindowComponent` 从右侧
+  滑入；`Bg` **956 宽、整窗高**，`bg_base_wh`，颜色 **#444466 / 80%**（深蓝）。
+- 全屏 `CloseArea` 下还有一层 `Cover`：**#000022 / 50%**，所以打开时背景整体压暗
+  一半；关闭按钮 44×44，位于右上 `(-18.1, -18.5)`，`btn_close_wh`。
+- `ListView` 左右各内缩 64（956 − 128 = **828**），行 prefab `ChangeVocalCell`
+  （1961）**828×164**。
+- 每行就是一张 **`bg_base_r20_wh` 卡片**：颜色 **#DFDFEB（223,223,235）不透明**，
+  圆角 **20px**，**没有描边**。左侧单选：
+  `UIPartsRadioToggle` 72×72（左边距 16），白色圆 `btn_circle_h56_wh`，选中时叠
+  `icon_radio_gn` 36×36 薄荷勾；未选中只有白盘。
+- 文本从卡片左缘 +102 起：`VocalName` 36px、颜色 #555577；`VocalMember` 32px、
+  颜色 #444466；两行 `Vo. …`（换行后第二行缩进）。`MusicShopDetailVersionInfoCell`
+  负责这块，行内 `VocalName` 700×36 @ (5,-40)、`VocalMember` 705×80 @ (7,-107)
+  （相对 `CellRoot` 990 宽）。
+- 锁定态：整卡盖 `#000022` 50%，锁图标 80×92（`icon_lock_wh`），上面还有
+  `UIPartsReleaseConditionsBalloon` 592×96、文字 28px 的解锁条件气泡。
+- **prefab 里没有标题文本**（`header: null`），也没有卡片描边；它是一块纯色
+  `Bg` + 828 宽的卡片列表。
+- **2026-11-21 已按上面 1:1 落地**：`SongSelect.cpp` 的切换歌手面板改成
+  956 宽、整窗高、#444466/80%，全屏 #000022/50% 压暗；列表 828 宽、行 164 高、
+  `#DFDFEB`/圆角 20/无描边；单选 72、勾 36、文字 36/32；去掉了原来的标题行。
+  资源 `icon_radio_gn.png` / `btn_close_wh.png` 已进 `assets/select/`。
+
+### 12.3 选取确认动画（`SoloLiveTransitionEffectContent`）
+
+- prefab **2279**，挂在 `ScreenLayerFreeLiveCellPhone` 的
+  `transitionEffectContent` 上；三套 Animator：
+  - `tapEffect` = `fx_live_transition_v2_02` / `anim_transition_v2_02`：
+    **0.4167 s**（25 帧 @60）。`light` 的 `m_Color.a` 从 0 升到 1；`flare`、
+    `back_light`、`tri_02` 在 0.0167 s 激活，`flare_white` 在 0.333 s 激活。
+  - `buttonEfect` = `fx_live_transition_botton_v2_01` /
+    `clip_transition_botton_v2_01`：**0.0167 s（1 帧）**，只把
+    `botton_light_01/02`、`line_circle` 打开。
+  - `startEffect` = `fx_live_transition_v2_01` / `anim_transition_v2_01`：
+    clip 长 **4 s**；`botton_light`、`tri_botton`、`line_circle` 在 0.0167 s 激活，
+    `circle` 在 0.25 s 激活。`PlayStartEffect` 在 `Animator.Play(0)` 之后
+    `UniTask.Delay(TimeSpan.FromSeconds(2.0))`，也就是代码只等 **2.0 s** 就继续。
+- 这些 RawImage 都挂在手机内部：`cellphone_mask` **1016.9×2221.7**、
+  `light` **1532.3×2357.2**；效果被 `cellphone_mask` 裁成手机屏幕形状，
+  **不是从按钮中心铺满全屏的白色圆**。`PlayButtonEffect()` 只负责把
+  `buttonEfect` 打开，`PlayTapEffect()` 先 `StopAllEffect()` 再播 `tapEffect`。
+- 我们的 `DecideBurst` 2026-11-21 已换成原贴图 + 真实 0.4167s tap / 2.0s start
+  包络，并把 `light` 画在手机屏幕矩形里（不再整张 `tex_transition_02` 铺屏）；
+  但最终 1:1 仍要等 §13 的最终确认页把手机遮罩层接上，当前是从 `确定` 直接起
+  加载遮罩，所以只能看到前 0.4167s。
+
+### 12.4 手机难度按钮 / 背景漂浮物
+
+- 原作的手机难度条是 `DifficultySelectContent`（prefab 2289），不是宽屏的
+  `MusicSelectDifficultyButton`（1126）：
+  - 5 个 96×96 的槽位，间距 24（整行 576）；
+  - 未选中圆盘 `btn_difficulty_<name>_off` 112×112；
+  - **选中圆盘是实心填充的 `btn_difficulty_<name>_on` 112×112**（不是只加一圈描边），
+    后面再叠 `eff_btn_difficulty_selected_wh` 136×136 白色光晕；
+  - 等级数字 46px，难度名 24px（选中时名字变深色 `#444466`）；
+  - 左右箭头 40×48，位置 ±318，图 `btn_arrow_triangle_gr`（hover 用
+    `eff_arrow_triangle_pk`）；未解锁/无谱面用 40×46 `icon_lock_wh` + 暗罩。
+    **2026-11-21 用户确认：左右箭头是给 APPEND 切换用的，我们没有 APPEND 支持，
+    已从手机面板删除，不做“点了换难度”的假按钮。**
+  - 2026-11-21 已把 `SongSelect.cpp` 的手机难度行改成这套（按手机宽度
+    `phoneW/754.3` 缩放；当前 1080p 下约 71px 圆盘 / 429px 行宽）。
+- 原作选曲背景只有 `ScreenLayerMusicSelectBackground`（prefab 651）：
+  `Background` + `Difficulty` 色带 + `UpperDot`（`ptn_dot_LL_wh`，138 高、白 50%）
+  + 虚化曲绘；**没有**在背景里随机漂浮的圆环/三角形。我们 2026-11-15 加的
+  `drawBgShapes()` 是自己造的（连 RNG 都照 web component 抄的），2026-11-21
+  已整段删除；现在背景回到 `bg_common` + 壁纸/虚化曲绘，不再有那些漂浮物。
+
+### 12.5 取数位置
+
+- prefab：`D:\Tools\rea\work\jp\list_cell_full.json`、`vocal_dialog_full.json`、
+  `vocal_cell_full.json`、`transition_full.json`、`final_full.json`。
+- 动画：`clip_anim_transition_v2_01.yml`、`clip_anim_transition_v2_02.yml`、
+  `clip_clip_transition_botton_v2_01.yml`。
+- 代码：`MusicSelectListView.cs`（`HIGHLIGHT_TWEEN_SEC`）、
+  `MusicSelectListCell.cs`、`ChangeVocalSubWindowDialog.cs`、`ChangeVocalCell.cs`、
+  `SoloLiveTransitionEffectContent.cs`（AssetRipper 导出的签名；逻辑以 so 反汇编为准）。
+
+## 13. 最终确认页（确定 → 卡组 / 自动演出 / MV → 开始）——已落地 v1
+
+原作的“确定”不是直接开始，而是进 `ScreenLayerFreeLiveFinalConfirmation`
+（prefab **703**）：`ScreenLayerDeckEditBase` + 5 张 `DeckCard` + 自动演出开关 +
+MV 模式按钮 + Live 设置 + 综合力 + `Decide`。我们的改造方案：
+
+### 13.1 状态（实际实现）
+
+没有新增 `AppState`：最终页放在 `SongSelect.cpp` 的模块状态
+`gFinalConfirmOpen` 里，底下的列表/手机变量一个都不用跨文件搬。
+
+- 选曲页 `确定`：保存 `gFinalEntry / gFinalDifficulty / gFinalVocal`，打开
+  `gFinalConfirmOpen`，`action = SelectNone`，**不调用 `startSession`**。
+- 最终页 `开始`：返回选中的 entry，main 才走现有 `startSession`。
+- `Esc` / `返回`：关闭最终页，回选曲，不丢选择。
+- 调试：`CPSEKAI_FINAL_CONFIRM=1` 可直接截图最终页（见
+  `shots/final_confirm2.png`）。
+
+### 13.2 版面（1920×1080 虚拟画布）
+
+> **2026-11-21 纠错**：上一版最终页是我按目标值拼的（居中、深色渐变、自画按钮），
+> 不是 prefab 绝对坐标，已废弃。现在按 prefab 703 的 RectTransform 绝对 rect 画：
+> `BG x=56 y=303.8 1546.2×555.3`、`DeckBase x=70.4 y=256 1080×624`、
+> 卡槽中心 y=601、`BGUnder y=707`、`TotalPower/Value x=150.2 y=285`、
+> `UIPartsLiveModeButton x=57 y=962 176×72`、`AutoLiveToggle/ToggleRoot
+> x=822.6 y=1014.4 152×56`、`Decide` 在 2× 的 BottomRight 容器里换算为
+> `x=1724.7 y=973.5 177.3×58`。右侧白区是 prefab 的 `BG` 预留区，原作运行时
+> 在这里挂 cellphone 层。2026-11-21 用户明确：**第一屏和第二屏是同一台手机**，
+> 不要另造 754/1522 的几何。现已直接复用选曲页现值：**562 宽、中心
+> (1609,618)、+5°**；`img_smartphone`、曲绘、标题/歌手、难度、播放键都走
+> 同一套。背景也明确是**选曲背景同一个**，最终页不再画 `bg_common` 之外的
+> 另一套背景。
+> 704 的 754.3×1416.7 只是 prefab 静态容器，不作为第二屏的新几何。
+
+- `BG`：1546×555，`bg_base_r20_wh` 白；`BGUnder` 152 高（`bg_base_r20u_yw`，
+  这个 sprite 当前导出集里没有，先画同形状或再补导）。
+- `DeckBase`：1080×624，`bg_base_three_r16_wh`，颜色 #DFDFEA / 80%。
+- 5 个槽位：每个 **200×510**，间距 16，总宽 1064，水平居中于 DeckBase；
+  每张用“空槽位”：
+  - 卡面 `base_wh`，颜色 **#B0BDC8**（0.690, 0.741, 0.784），圆角 16；
+  - 中间 `bg_base_circle_h96_wh` 72 圆、颜色 **#919FB0**
+    （0.569, 0.635, 0.686）；
+  - 上面 `icon_plus_h36_wh` 36。
+  - 点击任意空槽位只弹一句“卡组编成功能尚未实现”，不伪造卡牌、不改综合力。
+- 底部左：`OriginalMemberButton` 376.5×114（可先只画/禁用）、
+  `AutoLiveToggle` 180.8×100、`UIPartsLiveModeButton` 176×72、
+  `LiveSettingButton` 128×132。
+- 底部右：`Decide` 354.5×116（`btn_round_h80_wh` + `eff_btn_round_h80_a70_wh`）。
+- 综合力：`DeckTotalPowerView` 位置（相对 Deck 左下）显示
+  `userSettings.deckPower`（设置 → 判定 → 综合力），不参与卡组计算。
+
+### 13.3 交互
+
+- **自动演出**：`UIPartsToggle` 开关（`bg_auto` + `Toggle` 72），状态存到
+  `userSettings` 或局部；开启后 `startSession` 用 `autoPlay=true`。
+- **MV**：`LiveModeButton` 一个 176×72 按钮循环可用的
+  `LiveModeType`（3D/2D/原曲；按 `music-mv.json` / 本地 `mv/` 文件过滤），
+  文字显示当前模式；不另做弹窗，和原作 `LiveModeButton` 的“按一下换下一个”一致。
+- **Live 设置**：128×132 齿轮按钮，先映射到现有设置卡片（或只放一个“未实现”提示）。
+- **开始**：播放 13.4 的确认特效，然后 `startSession`。
+
+### 13.4 确认特效（1:1 的接法）
+
+- 保留 `SoloTransitionEffectContent` 的 2 段：
+  - `tap`：0.4167s，`light` α 0→1，`flare`/`back_light`/`tri_02` 在
+    0.0167s、`flare_white` 在 0.333s；
+  - `start`：clip 4s，但代码只等 **2.0s**；底部灯/三角/线环 0.0167s、
+    `circle` 0.25s。
+- 在最终确认页里把手机面板（或只它的屏幕矩形）作为遮罩层；`light`
+  1532×2357 画在 `cellphone_mask` 1016×2221 里，按下 `Start` 时先播
+  0.4167s tap，再进 2s start，最后切 live。**不要**再从 `确定` 直接铺全屏白。
+- 资源已落地：
+  - `assets/fx/live_circle.png`（tex_transition_03，`light`/`circle` 的软盘）
+  - `assets/fx/live_flare.png`（tex_transition_01，flare/三角/播放图标的图集）
+  - `assets/fx/live_glow_sheet.png`（tex_transition_02，4×4 三角光晕序列帧，不是
+    `light` 本身；别把它整张贴到屏幕上）
+  - `assets/fx/live_tri.png`（tex_sekai_v2_02，2×2 三角）
+  - `assets/final/` 里是 DeckBase / BG / 空槽位 / 按钮 / 综合力图标等
+    （`bg_base_three_r16_wh`、`bg_base_r20_wh`、`bg_base_circle_h96_wh`、
+    `icon_plus_h36_wh`、`btn_round_h80_wh`、`eff_btn_round_h80_a70_wh`、
+    `bg_auto`、`icon_setting_wh`、`icon_deckPower_*`、`frame_select_r0_wh` 等）。
+- 仍未导出、需要补的：`bg_base_r20u_yw`、`frame_unselected_L`、
+  `icon_setting`（先用 `icon_setting_wh` 代替）。
+
+---
+
+## 2026-11-21 落地：团体页签 + 顶栏收纳 + 1129/704 真实几何
+
+这一轮把 §1~§3 里量到的数字真正写进了 `game/SongSelect.cpp`，并且把顶部那一排
+按用户指定的交互重新分过工。**下面这一段是当前实现，不是计划。**
+
+### 团体页签（`MusicSelectUnitTabList` 1117 / `MusicSelectUnitTab` 1118）
+
+- 位置与尺寸照 prefab：**x=44、宽 136、上下各缩进 84**（所以 1080 高时是
+  y 84..996）；底板 `bg_tab_playlist`（136×1024，两端各 68 的圆角）按**纵向
+  三段**拉伸，别整张缩——整张缩会把上下两个圆角拉扁。
+- 单元格 **112×100**，logo 112×112 居中，所以相邻两个 logo 会**重叠 12px**，
+  这是 prefab 本来的样子，不是画错。
+- 图标尺寸按原件：`すべて`/`その他` 是横条字（off 77×29 / 82×30，on 128×85 /
+  128×86），六个团体是 112×112 的方 logo。**on 比 off 大**就是"选中"的官方提示，
+  不要统一尺寸。
+- 8 个页签的序号就是原作的 `CategoryTabType`：
+  `0 全部 / 1 VS / 2 L/N / 3 MMJ / 4 VBS / 5 W×S / 6 25時 / 7 その他`。
+
+### 团体怎么算出来的（原作没有这个 master 字段）
+
+原作是**从歌曲演唱版本反推**的，不是曲库里的字段：
+
+1. 取这首歌的 **セカイver**，没有就退到 original_song，再退到 virtual_singer
+   （数据在 `music-vocals.json`，本来就已经加载给手机面板了）；
+2. 在版本里找**第一个属于真实团体的歌手**，以它为准（"初音ミク + 星乃一歌"
+   这种二重唱算 Leo/need，因为团体成员优先于 VS）；
+3. 全是 VS → バーチャル・シンガー；
+4. 全是外部角色（合作曲，`music-vocals.json` 里写成 `#35` 那种）→ その他。
+
+`MasterMusicVocalCharacter.GetUnitType()`（RVA `0x6174F90` /
+`0x614DB60`）就是 `characterType != 0 → none`，否则回查
+`gameCharacters.unit`；上面那张 26 行歌手→团体表就是它的静态化。
+实测 736 首分布：**VS 261 / L/N 108 / W×S 84 / VBS 83 / MMJ 82 / 25時 80 /
+その他 38**。
+
+### 列表行（`MusicSelectListCell` 1129）
+
+- 列表列 **x=212、宽 912**，行 **895×144**（左右各留 8.5），选中 **895×230**。
+- **行距 = 行高 = 144**，所以长大的卡片会**把上下相邻行推开** 43px
+  (`(230-144)/2`)，不是压在上面。实现上 `pushRef()` 每帧从
+  `slotHeights` 里取当前最高的那一行，按它的动画高度算 `extra`，于是推开
+  跟卡片一起走同一条 0.1s 线性 tween，卡片缩回去时自动归零。
+- 行内数字全部按 prefab（895×144 的坐标系，1:1）：
+  `PlayLv` 96×96 圆心 x=48、`Jacket` 100×100 圆心 x=213.6、
+  文字列 x=292.8、MV 徽章 78.98×48。
+- MV 徽章的垂直位置改成**从底边量绝对值**：Neutral 距底 66.4 / 右 28.7，
+  Highlight 距底 39.4 / 右 17.5。以前用"占行高百分比"，卡长到 230 之后就会漂。
+
+### 手机面板（`ScreenLayerFreeLiveCellPhone` 704）
+
+- **754.3 × 1416.7，中心 (1522, 742)，倾斜 -3°**（逆时针，屏幕 y 向下所以取负）。
+  不再按窗口宽度塞成 46%，上下超出画布是故意的。
+
+### 顶栏（这一块是**我们自己的**交互，不是原作）
+
+- 一行 33k：`搜索`（占剩下的宽度）+ `排序` 下拉 + `筛选`(圆钮) + `菜单`(圆钮)。
+- `刷新 / 音乐商店 / 猜歌 / 设置` 全收进**菜单**；原生菜单栏开着时前三个不重复出现。
+- `分组依据` 收进 **筛选卡片**（`--select-filter` 可直接截图），卡片里另外放了
+  一份**团体**单选——窄窗口下左侧页签会挤，这里能替代。
+- 选曲页的**等级牌暂时隐藏**（`kShowLevelChip = false`，`--profile` 仍可打开资料卡）。
+- 旧的四颗胶囊按钮被移除，但教学用的锚点 `rescan / store / guess / abssettings`
+  全都改指**菜单按钮**，剧情不至于找不到东西。
+
+### 无头验收
+
+```
+./build/cppsekai.exe --no-party --screenshot shots/a.png --screenshot-time 2.0
+./build/cppsekai.exe --no-party --unit 3 --screenshot shots/b.png   # MMJ 过滤
+./build/cppsekai.exe --no-party --select-filter --screenshot shots/c.png
+```
+`[select] list rebuilt: N visible of M (unit k)` 是过滤器自己的日志，切页签看它最直接。

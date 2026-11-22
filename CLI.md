@@ -146,6 +146,8 @@ cppsekai [--sus <file.sus>] [--bgm <audio>] [--charts <dir>] [--cover <image>]
 | `--flick-log` | 开触摸 flick 调试日志（等同设置里「判定 > 触摸轨迹日志」，但不写档案）。写 `flick_debug.log`：`[traj]` 是**每一个 SDL 手指事件**（写在"这个触点算不算打击区"的过滤之前，所以"这块屏不发 motion"也能看见；up 行汇总 `samples`/`held`/总位移/峰值速度/最大间隔）+ `[touch]` 每个被判为打击的采样的坐标/位移/dt/vel/travel/分类方向 + `[flick]` 每次判定结果，**没打中时还会列出附近 flick 音符的 dt / 轨道偏差 / 需要的方向**——触摸 flick 老 MISS 就靠它定位 |
 | `--confirm-flash [<sec>]` | 在选曲界面单独放一次「确定」的白色爆发光效（默认 1.0s 处，**不加载歌曲**），配合 `--screenshot` 抓爆发过程 |
 | `--profile` | 启动即打开选曲界面的**个人资料卡**（平时要点右上角的等级牌才出来），配合 `--screenshot` 截它 |
+| `--unit <0-7>` | 启动即把左侧**团体页签**选到第 n 个（0 全部 / 1 VS / 2 L/N / 3 MMJ / 4 VBS / 5 W×S / 6 25時 / 7 その他），配合 `--screenshot` 截过滤后的列表 |
+| `--select-filter` | 启动即打开选曲界面的**筛选**卡片（平时点顶栏那颗筛选圆钮），配合 `--screenshot` 截它 |
 | `--guess` | 启动即打开**猜歌**卡片（平时要点选曲界面头排的「猜歌」按钮），配合 `--screenshot` 截它 |
 | `--singer-panel` | 启动即打开**切换歌手**面板（平时要点手机面板底部那颗麦克风按钮），配合 `--select-id <音乐 id>` + `--screenshot` 截它 |
 | `--story-test [<id>]` | 启动即播放新手教学（默认脚本 id `tutorial`），跳过首启/EULA 判定。配合 `--screenshot` 截教学页；脚本在 `assets/story/scripts/tutorial.json`，字段见 `STORY-UI.md` |
