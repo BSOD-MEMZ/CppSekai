@@ -9119,7 +9119,7 @@ int main(int argc, char** argv)
 #endif
 
         if (escapePressed && !game::guessDialogOpen() && !game::filterDialogOpen()
-            && !game::menuDrawerOpen() && !story::blocksInput()) {
+            && !game::menuDrawerOpen() && !game::finalConfirmOpen() && !story::blocksInput()) {
             countdownActive = false; // leaving / continuing cancels any countdown
             if (keymapCardAlive) {
                 // 「按键映射」卡片（2026-10-11）：ESC = 关掉它。改键位等待中
@@ -9921,7 +9921,8 @@ int main(int argc, char** argv)
                 &deleteRequest,
                 // 选中卡片的 6 根频谱柱（原作 UIPartsSpectrumAnalyzer）：拿
                 // 当前预览曲量出来的 6 个频段，量不到就传 nullptr（卡片画静息高度）。
-                previewBandsOk ? previewBands : nullptr);
+                previewBandsOk ? previewBands : nullptr,
+                &decideBurst);
             if (autoPlay != autoBeforeSelect) {
                 userSettings.autoplay = autoPlay;
                 persistUserData();
@@ -10010,11 +10011,20 @@ int main(int argc, char** argv)
                     confirmFlashActive = true;
                     confirmFlashTime = 0.0f;
                     confirmFlashOrigin = selectConfirmCenter;
-                    // 按钮自己的爆闪先走（0.9 s），白屏在它上面盖过来。
-                    decideBurst.spawn(selectConfirmCenter.x, selectConfirmCenter.y,
-                        static_cast<float>(windowW) * 0.24f, selectPhoneScreen);
-                    confirmFlashTime = -kDecideLead; // 白屏让爆闪先亮
-                    ui::se(ui::SeStart); // start.mp3, fires with the burst
+                    // 最终确认页已经在自己的开始钮上 spawn 过同一颗 decide
+                    // burst（并且停了 0.4167 s 让它播），这里不要再 spawn 第二
+                    // 颗，直接把白屏从 0 接上。
+                    const bool burstQueued = game::finalConfirmBurstQueued();
+                    if (burstQueued) {
+                        game::clearFinalConfirmBurstQueued();
+                        confirmFlashTime = 0.0f;
+                    } else {
+                        // 按钮自己的爆闪先走（0.9 s），白屏在它上面盖过来。
+                        decideBurst.spawn(selectConfirmCenter.x, selectConfirmCenter.y,
+                            static_cast<float>(windowW) * 0.24f, selectPhoneScreen);
+                        confirmFlashTime = -kDecideLead; // 白屏让爆闪先亮
+                        ui::se(ui::SeStart); // start.mp3, fires with the burst
+                    }
                     // The white flash is also the moment the pad should kick:
                     // it covers the chart load, so the buzz lands with it.
                     rumble(0.90f, 200, "confirm");

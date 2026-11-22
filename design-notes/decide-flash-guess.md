@@ -26,6 +26,15 @@
   然后逐像素断言**整屏纯白（含四角）**。2026-09-20 实测 1280x720 全采样点 `min(r,g,b) = 255`。
   别拿攻击段（前 0.09s）或淡出段去抓，那两段本来就不是全白。
 
+### 2026-11-22 最终确认页复用同一颗爆闪
+
+最终确认页的 `SoloLiveFinalConfirmButton` 不再"先回列表再爆闪"：点开始/Enter 时
+`drawFinalConfirm` 直接用 main 传进来的 `DecideBurst*` 在按钮位置 `spawn()`，然后
+在最终页停 `kDecideLead`（0.4167 s）让爆闪播完，才把 entry 返回给 main。main 的
+action 分支用 `game::finalConfirmBurstQueued()` 判断"最终页已经放过了"，跳过第二次
+`decideBurst.spawn()` 和 `-kDecideLead`，只把白屏从 0 接上；`se(SeStart)` 也只在
+最终页放一次。列表页的 `确定` / 回车路径不变（没有 queued 标记，照旧 spawn）。
+
 ### 猜歌（选曲界面头排「猜歌」按钮 / `--guess`）
 
 用社区别名表当题库：`assets/select/guess.png` 图标，按钮就排在「音乐商店」右边

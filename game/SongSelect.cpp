@@ -3,6 +3,7 @@
 #include "platform/Log.hpp"
 
 #include "Hud.hpp"
+#include "DecideBurst.hpp"
 #include "Intro.hpp"
 #include "Ui.hpp"
 
@@ -532,6 +533,10 @@ void debugOpenMenuDrawer(bool open)
 // 开始，而是先停在这里；Start 才把 action 交给 main。整个页面在
 // drawSongSelect 顶部单独绘制，底下的列表/手机不参与命中测试。
 bool gFinalConfirmOpen = false;
+bool gFinalBurstQueued = false;
+float gFinalStartAt = -1.0f;
+float gFinalTransAt = -1.0f;
+bool gFinalWasOpen = false;
 // 最终页开始钮（160x160）在窗口坐标里的中心；main 的白色爆闪从这起，
 // 不是选曲手机那颗 258x96 确定的位置。
 ImVec2 gFinalPlayCenter{0.0f, 0.0f};
@@ -952,6 +957,21 @@ bool guessDialogOpen()
 bool filterDialogOpen()
 {
     return gFilterOpen;
+}
+
+bool finalConfirmOpen()
+{
+    return gFinalConfirmOpen;
+}
+
+bool finalConfirmBurstQueued()
+{
+    return gFinalBurstQueued;
+}
+
+void clearFinalConfirmBurstQueued()
+{
+    gFinalBurstQueued = false;
 }
 
 void debugOpenFilterCard(bool open)
@@ -2971,19 +2991,207 @@ namespace
     }
 
 
+    void drawPageTransition(ImDrawList* dl, float w, float h, float now)
+    {
+        if (gFinalTransAt < 0.0f) {
+            return;
+        }
+        constexpr float kDur = 0.24f;
+        const float p = (now - gFinalTransAt) / kDur;
+        if (p >= 1.0f) {
+            return;
+        }
+        const float a = 210.0f * (1.0f - std::clamp(p, 0.0f, 1.0f));
+        dl->AddRectFilled(ImVec2(0.0f, 0.0f), ImVec2(w, h),
+            IM_COL32(255, 255, 255, static_cast<int>(a)));
+    }
+
+    // 右上角菜单抽屉（原作 ScreenLayerHeader 的 menuButton -> MenuDialog，
+    // prefab 1775）。抽成函数后选曲页和最终确认页共用同一份；返回被点的命令，
+    // 由调用方决定去哪个页面执行（最终页会先关掉自己）。
+    enum MenuCommand
+    {
+        CmdNone = 0,
+        CmdRescan,
+        CmdDownload,
+        CmdSettings,
+        CmdGuess,
+        CmdProfile,
+        CmdShuffle,
+        CmdFilter,
+        CmdSort,
+    };
+
+    int drawMenuDrawer(platform::Renderer& renderer, ImDrawList* dl, float w, float h, float k,
+        ImFont* title, ImFont* body, int sortMode)
+    {
+        const float menuT = ui::anim(0x4a57b000u, gMenuOpen, 20.0f);
+        if (!gMenuOpen && menuT <= 0.0005f) {
+            return CmdNone;
+        }
+        const auto easeOutCubic = [](float t) {
+            const float inv = 1.0f - std::clamp(t, 0.0f, 1.0f);
+            return 1.0f - inv * inv * inv;
+        };
+        const float menuEase = easeOutCubic(menuT);
+        const float menuW = 904.0f * k;
+        const float menuX0 = w - menuW * menuEase;
+        const float openX = w - menuW;
+
+        if (gMenuOpen && menuT > 0.9f && ui::mouseClicked(ImGuiMouseButton_Left)
+            && ImGui::GetIO().MousePos.x < openX) {
+            ui::se(ui::SeWindowClose);
+            gMenuOpen = false;
+        }
+        const int menuAlpha = static_cast<int>(204.0f * menuEase);
+        dl->AddRectFilled(ImVec2(menuX0, 0.0f), ImVec2(menuX0 + menuW, h),
+            IM_COL32(68, 68, 102, menuAlpha));
+        dl->AddRectFilled(ImVec2(menuX0, 0.0f), ImVec2(menuX0 + 2.0f * k, h),
+            IM_COL32(255, 255, 255, static_cast<int>(26.0f * menuEase)));
+
+        // 关闭钮 44x44 @ 右缘 18.1 / 顶 18.5
+        {
+            const float closeD = 44.0f * k;
+            const ImVec2 closeC(menuX0 + menuW - 18.1f * k - closeD * 0.5f,
+                18.5f * k + closeD * 0.5f);
+            ImGui::SetCursorScreenPos(
+                ImVec2(closeC.x - closeD * 0.5f, closeC.y - closeD * 0.5f));
+            ImGui::PushID("menuclose");
+            ImGui::InvisibleButton("x", ImVec2(closeD, closeD));
+            const bool xHot = ImGui::IsItemHovered();
+            const bool xHit = ImGui::IsItemClicked();
+            ImGui::PopID();
+            const GLuint closeTex = selectTex(renderer, "btn_close_wh");
+            const int xA = static_cast<int>((xHot ? 255.0f : 230.0f) * menuEase);
+            if (closeTex != 0) {
+                dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(closeTex)),
+                    ImVec2(closeC.x - closeD * 0.5f, closeC.y - closeD * 0.5f),
+                    ImVec2(closeC.x + closeD * 0.5f, closeC.y + closeD * 0.5f),
+                    ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), IM_COL32(255, 255, 255, xA));
+            } else {
+                const float d = closeD * 0.25f;
+                dl->AddLine(ImVec2(closeC.x - d, closeC.y - d), ImVec2(closeC.x + d, closeC.y + d),
+                    IM_COL32(240, 240, 248, xA), 2.6f * k);
+                dl->AddLine(ImVec2(closeC.x + d, closeC.y - d), ImVec2(closeC.x - d, closeC.y + d),
+                    IM_COL32(240, 240, 248, xA), 2.6f * k);
+            }
+            if (xHit) {
+                ui::se(ui::SeWindowClose);
+                gMenuOpen = false;
+            }
+        }
+
+        struct MenuCellDef
+        {
+            const char* label;
+            const char* icon;
+            float iconW;
+            float iconH;
+            float x;
+            float y;
+            float w;
+            float h;
+            bool big;
+            int command;
+        };
+        static const MenuCellDef kMenuCells[] = {
+            {"音乐商店", "store", 40.0f, 40.0f, 56.0f, 96.4f, 392.0f, 184.0f, true, CmdDownload},
+            {"猜歌", "guess", 40.0f, 40.0f, 456.0f, 96.4f, 392.0f, 184.0f, true, CmdGuess},
+            {"刷新列表", "refresh", 40.0f, 40.0f, 56.0f, 287.4f, 392.0f, 184.0f, true, CmdRescan},
+            {"设置", "musicsetting", 40.0f, 40.0f, 456.0f, 287.4f, 392.0f, 184.0f, true, CmdSettings},
+            {"个人资料", "icon_menu_profile", 70.0f, 48.0f, 56.0f, 480.4f, 192.0f, 184.0f, false, CmdProfile},
+            {"随机选曲", "btn_random_lgr", 60.0f, 52.0f, 256.0f, 480.4f, 192.0f, 184.0f, false, CmdShuffle},
+            {"筛选", "icon_refine_wh", 29.0f, 28.0f, 456.0f, 480.4f, 192.0f, 184.0f, false, CmdFilter},
+            {"排序", "icon_menu_text", 94.0f, 34.0f, 656.0f, 480.4f, 192.0f, 184.0f, false, CmdSort},
+        };
+        int menuCommand = CmdNone;
+        const int kMenuCellCount = static_cast<int>(sizeof(kMenuCells) / sizeof(kMenuCells[0]));
+        for (int i = 0; i < kMenuCellCount; ++i) {
+            const MenuCellDef& def = kMenuCells[i];
+            const ImVec2 c0(menuX0 + def.x * k, def.y * k);
+            const ImVec2 c1(c0.x + def.w * k, c0.y + def.h * k);
+            ImGui::SetCursorScreenPos(c0);
+            ImGui::PushID(8100 + i);
+            ImGui::InvisibleButton("cell", ImVec2(c1.x - c0.x, c1.y - c0.y));
+            const bool hot = ImGui::IsItemHovered();
+            const bool hitCell = ImGui::IsItemClicked();
+            ImGui::PopID();
+            const float glow = ui::anim(0x4a57c000u + static_cast<ImGuiID>(i), hot, 18.0f);
+            if (hitCell && gMenuOpen) {
+                menuCommand = def.command;
+            }
+
+            ui::dropShadow(dl, c0, c1, 20.0f * k, k, 0.8f);
+            dl->AddRectFilled(c0, c1,
+                ui::mix(IM_COL32(235, 235, 242, static_cast<int>(204.0f * menuEase)),
+                    IM_COL32(247, 247, 252, static_cast<int>(235.0f * menuEase)), glow),
+                20.0f * k);
+            if (glow > 0.01f) {
+                dl->AddRect(c0, c1,
+                    IM_COL32(255, 255, 255, static_cast<int>(70.0f * glow * menuEase)),
+                    20.0f * k, 0, 2.0f * k);
+            }
+
+            const std::string sortLabel = sortMode == 0 ? "排序：名称" : "排序：难度";
+            const char* cellLabel = def.command == CmdSort ? sortLabel.c_str() : def.label;
+            ImFont* plateFont = title != nullptr ? title : body;
+            const float textSize = (def.big ? 32.0f : 24.0f) * k;
+            const float plateH = (def.big ? 50.0f : 40.0f) * k;
+            const float platePadX = (def.big ? 16.0f : 12.0f) * k;
+            const float plateInset = 10.0f * k;
+            const ImVec2 labelSize = plateFont->CalcTextSizeA(textSize, FLT_MAX, 0.0f, cellLabel);
+            const float maxPlateW = (c1.x - c0.x) - plateInset * 2.0f;
+            const float plateW = std::min(maxPlateW, labelSize.x + platePadX * 2.0f);
+            const ImVec2 p0(c0.x + plateInset, c0.y + plateInset);
+            dl->AddRectFilled(p0, ImVec2(p0.x + plateW, p0.y + plateH),
+                IM_COL32(68, 68, 102, static_cast<int>(255.0f * menuEase)), 10.0f * k);
+            dl->AddText(plateFont, textSize,
+                ImVec2(p0.x + platePadX, p0.y + (plateH - labelSize.y) * 0.5f),
+                IM_COL32(255, 255, 255, static_cast<int>(255.0f * menuEase)), cellLabel);
+
+            const float maxBox = (def.big ? 84.0f : 56.0f) * k;
+            const float iconAspect = def.iconW / def.iconH;
+            const float drawW = iconAspect >= 1.0f ? maxBox : maxBox * iconAspect;
+            const float drawH = iconAspect >= 1.0f ? maxBox / iconAspect : maxBox;
+            const float iconMargin = (def.big ? 22.0f : 16.0f) * k;
+            const GLuint iconTex = selectTex(renderer, def.icon);
+            const ImVec2 ic1(c1.x - iconMargin, c1.y - iconMargin);
+            const ImVec2 ic0(ic1.x - drawW, ic1.y - drawH);
+            if (iconTex != 0) {
+                dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(iconTex)),
+                    ic0, ic1, ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f),
+                    IM_COL32(68, 68, 102, static_cast<int>((190.0f + 50.0f * glow) * menuEase)));
+            }
+        }
+        if (menuCommand != CmdNone) {
+            ui::se(ui::SeClick);
+            gMenuOpen = false;
+        }
+        return menuCommand;
+    }
+
+
     // 最终确认页：ScreenLayerFreeLiveFinalConfirmation（prefab 703，它继承
     // ScreenLayerDeckEditBase）+ 右侧同一台 ScreenLayerFreeLiveCellPhone（704）。
     // 左边是卡组确认（选卡组 / 综合力 / 5 个空槽），右边是选曲时那台手机
     // （曲绘 / 标题 / 难度 / 开始钮）。整页自绘，不创建 ImGui item。
     int drawFinalConfirm(platform::Renderer& renderer, const std::vector<ChartEntry>& entries,
         int entryIndex, int difficulty, int vocalIndex, float w, float h, float k, float timeSec,
-        ImFont* title, ImFont* body, int deckPower, bool& autoLive, int& mvMode)
+        ImFont* title, ImFont* body, int deckPower, bool& autoLive, int& mvMode,
+        DecideBurst* decideBurst, int* sortMode, int* groupIndex, int groupCount)
     {
         if (entryIndex < 0 || entryIndex >= static_cast<int>(entries.size())) {
             gFinalConfirmOpen = false;
             return SelectNone;
         }
         const ChartEntry& entry = entries[static_cast<size_t>(entryIndex)];
+        {
+            static bool dbgMenu = false;
+            if (!dbgMenu && std::getenv("CPSEKAI_FINAL_MENU") != nullptr) {
+                dbgMenu = true;
+                gMenuOpen = true;
+            }
+        }
         ImDrawList* dl = ImGui::GetWindowDrawList();
         const ImGuiIO& io = ImGui::GetIO();
         // Fit the 1920x1080 page into the window (min of width/height), then
@@ -2994,11 +3202,21 @@ namespace
         constexpr float ox = 0.0f;
         constexpr float oy = 0.0f;
         const ImVec2 mouse(io.MousePos.x, io.MousePos.y);
-        const bool clicked = ui::mouseClicked(ImGuiMouseButton_Left);
+        const float finalMenuT = ui::anim(0x4a57b000u, gMenuOpen, 20.0f);
+        const bool finalMenuUp = gMenuOpen || finalMenuT > 0.0005f;
+        const bool clicked = ui::mouseClicked(ImGuiMouseButton_Left) && !finalMenuUp;
         if (ui::keyPressed(ImGuiKey_Escape)) {
-            ui::se(ui::SeWindowClose);
-            gFinalConfirmOpen = false;
-            return SelectNone;
+            if (gMenuOpen) {
+                // ESC 先关抽屉；抽屉开着时不要顺手退出最终页。
+                gMenuOpen = false;
+                ui::se(ui::SeWindowClose);
+            } else {
+                ui::se(ui::SeWindowClose);
+                gFinalConfirmOpen = false;
+                gFinalStartAt = -1.0f;
+                gFinalBurstQueued = false;
+                return SelectNone;
+            }
         }
         const auto hit = [&](float x, float y, float ww, float hh) {
             return clicked && mouse.x >= x && mouse.x <= x + ww && mouse.y >= y && mouse.y <= y + hh;
@@ -3320,18 +3538,34 @@ namespace
                     dl->AddCircle(playC, rad, IM_COL32(119, 238, 221, a), 64, 3.0f * ps);
                 }
             }
-            // Click: hand the entry back immediately. main's confirmation burst
-            // + white flash is the SAME effect as the select 确定 (decideBurst /
-            // confirmFlashActive) and starts from this button (gFinalPlayCenter).
-            if (clicked) {
-                const ImVec2 lm(mouse.x - pivot.x, mouse.y - pivot.y);
-                const ImVec2 lp(pivot.x + lm.x * tc + lm.y * ts, pivot.y - lm.x * ts + lm.y * tc);
-                const float half = playD * 0.5f;
-                if (lp.x >= playC.x - half && lp.x <= playC.x + half
-                    && lp.y >= playC.y - half && lp.y <= playC.y + half) {
-                    phoneStartHit = true;
+            // Click or Enter: spawn the same decide burst main uses for the
+            // select 确定, RIGHT HERE on the final page, then hold the page for
+            // the 0.4167 s burst lead; main starts the white flash when we
+            // return (it sees finalConfirmBurstQueued() and skips its spawn).
+            if (gFinalStartAt < 0.0f) {
+                const bool enterPressed = !finalMenuUp
+                    && (ui::keyPressed(ImGuiKey_Enter) || ui::keyPressed(ImGuiKey_KeypadEnter));
+                bool onButton = false;
+                if (clicked) {
+                    const ImVec2 lm(mouse.x - pivot.x, mouse.y - pivot.y);
+                    const ImVec2 lp(pivot.x + lm.x * tc + lm.y * ts, pivot.y - lm.x * ts + lm.y * tc);
+                    const float half = playD * 0.5f;
+                    onButton = lp.x >= playC.x - half && lp.x <= playC.x + half
+                        && lp.y >= playC.y - half && lp.y <= playC.y + half;
+                }
+                if (enterPressed || onButton) {
+                    gFinalStartAt = static_cast<float>(timeSec);
+                    if (decideBurst != nullptr) {
+                        decideBurst->spawn(gFinalPlayCenter.x, gFinalPlayCenter.y,
+                            w * 0.24f, gFinalPhoneScreen);
+                    }
+                    gFinalBurstQueued = true;
                     ui::se(ui::SeStart);
                 }
+            }
+            if (gFinalStartAt >= 0.0f
+                && static_cast<float>(timeSec) - gFinalStartAt >= 0.4167f) {
+                phoneStartHit = true;
             }
 
             // Bottom utility row (same two icons as the select phone): gear at
@@ -3450,6 +3684,7 @@ namespace
         if (phoneStartHit) {
             // The phone's play button is the original start control; no extra
             // "开始" capsule outside the handset.
+            gMenuOpen = false;
             gFinalConfirmOpen = false;
             finalResult = entryIndex;
         }
@@ -3509,16 +3744,62 @@ namespace
             };
             const bool backHit = headerButton(leftX, "finalback", backTex, 42.0f * k, 42.0f * k);
             const bool menuHit = headerButton(rightX, "finalmenu", menuTex, 40.0f * k, 34.0f * k);
-            if (backHit || menuHit) {
+            if (backHit) {
                 gFinalConfirmOpen = false;
-                if (menuHit) {
-                    // The drawer lives on the select screen; go back there and
-                    // open it, so the final page does not need a second copy of
-                    // the whole MenuDialog.
-                    gMenuOpen = true;
-                }
+                gFinalStartAt = -1.0f;
+                gFinalBurstQueued = false;
                 ui::se(ui::SeClick);
                 finalResult = SelectNone;
+            } else if (menuHit) {
+                // Drawer is drawn right here, on top of the final page; it no
+                // longer kicks the player back to the list.
+                gMenuOpen = !gMenuOpen;
+                ui::se(ui::SeClick);
+            }
+            if (!backHit) {
+                const int cmd = drawMenuDrawer(renderer, dl, w, h, k, title, body,
+                    sortMode != nullptr ? *sortMode : 0);
+                if (cmd != CmdNone) {
+                    gFinalConfirmOpen = false;
+                    gFinalStartAt = -1.0f;
+                    gFinalBurstQueued = false;
+                    switch (cmd) {
+                    case CmdRescan:
+                        finalResult = SelectRescan;
+                        break;
+                    case CmdDownload:
+                        finalResult = SelectDownload;
+                        break;
+                    case CmdSettings:
+                        finalResult = SelectSettings;
+                        break;
+                    case CmdGuess:
+                        openGuessDialog();
+                        break;
+                    case CmdProfile:
+                        gProfileOpen = true;
+                        break;
+                    case CmdFilter:
+                        gFilterOpen = true;
+                        break;
+                    case CmdSort:
+                        if (sortMode != nullptr) {
+                            *sortMode = (*sortMode == 0) ? 1 : 0;
+                        }
+                        break;
+                    case CmdShuffle:
+                        if (groupIndex != nullptr && groupCount > 0) {
+                            int next = *groupIndex;
+                            for (int tries = 0; tries < 8 && next == *groupIndex; ++tries) {
+                                next = std::rand() % groupCount;
+                            }
+                            *groupIndex = next;
+                        }
+                        break;
+                    default:
+                        break;
+                    }
+                }
             }
         }
         return finalResult;
@@ -4017,9 +4298,14 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     int& vocalIndex,
     float uiScale, ImVec2* confirmCenter, ImVec4* confirmPhoneScreen, int deckPower, bool* autoLive,
     int* mvMode, const AccountData* account, const SelectPartyInfo* party, SelectPartyResult* partyOut,
-    int* favoriteToggle, bool nativeMenuBar, int* deleteRequest, const float* previewBands)
+    int* favoriteToggle, bool nativeMenuBar, int* deleteRequest, const float* previewBands,
+    DecideBurst* decideBurst)
 {
     int action = SelectNone;
+    if (gFinalConfirmOpen != gFinalWasOpen) {
+        gFinalWasOpen = gFinalConfirmOpen;
+        gFinalTransAt = timeSec;
+    }
     // 多人游玩: the room owns the song. The host keeps a normal, fully
     // interactive list (it is the one choosing); every other window gets a
     // greyed-out, read-only list whose phone panel shows whatever the host is
@@ -4201,6 +4487,8 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             gFinalEntry = selected;
             gFinalDifficulty = diffIndex;
             gFinalVocal = vocalIndex;
+            gFinalStartAt = -1.0f;
+            gFinalBurstQueued = false;
         }
     }
 
@@ -4220,7 +4508,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         int mvValue = mvMode != nullptr ? *mvMode : 0;
         const int finalAction = drawFinalConfirm(renderer, entries, gFinalEntry, gFinalDifficulty,
             gFinalVocal, w, h, k, static_cast<float>(timeSec), title, body, deckPower, autoValue,
-            mvValue);
+            mvValue, decideBurst, &sortMode, &groupIndex, static_cast<int>(groups.size()));
         if (autoLive != nullptr) {
             *autoLive = autoValue;
         }
@@ -4240,6 +4528,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
                 *confirmPhoneScreen = gFinalPhoneScreen;
             }
         }
+        drawPageTransition(dl, w, h, static_cast<float>(timeSec));
         ImGui::End();
         if (gSelectFillDisabled) {
             ImGui::PopStyleColor();
@@ -5766,7 +6055,16 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
                     partyOut->confirm = true;
                 }
             } else if (selected >= 0) {
-                action = selected;
+                // Enter on the list = 确定: go to the final-confirm page first;
+                // Enter *there* starts the live. Never start straight from the
+                // list (that skipped deck / auto / MV / start burst).
+                gFinalConfirmOpen = true;
+                gFinalEntry = selected;
+                gFinalDifficulty = diffIndex;
+                gFinalVocal = vocalIndex;
+                gFinalStartAt = -1.0f;
+                gFinalBurstQueued = false;
+                action = SelectNone;
             }
         }
     }
@@ -6358,6 +6656,8 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
                 gFinalEntry = selected;
                 gFinalDifficulty = diffIndex;
                 gFinalVocal = vocalIndex;
+                gFinalStartAt = -1.0f;
+                gFinalBurstQueued = false;
                 action = SelectNone;
             }
         }
@@ -7099,6 +7399,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             }
         }
     }
+    drawPageTransition(dl, w, h, static_cast<float>(timeSec));
     ImGui::End();
     ImGui::PopStyleVar(2);
     if (gSelectFillDisabled) {

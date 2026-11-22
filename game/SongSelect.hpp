@@ -14,6 +14,8 @@
 namespace game
 {
 
+class DecideBurst;
+
 struct ChartEntry
 {
     std::string susPath;
@@ -679,7 +681,11 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     int* favoriteToggle = nullptr, bool nativeMenuBar = false, int* deleteRequest = nullptr,
     // 6 live band magnitudes 0..1 for the selected card's equalizer (see
     // AudioEngine::previewSpectrum). Null = no measurement (headless / muted).
-    const float* previewBands = nullptr);
+    const float* previewBands = nullptr,
+    // The decide burst is owned by main (it also feeds the white flash). The
+    // final-confirm page spawns it from its own start button, so it can play
+    // on the final page instead of after switching back to the list.
+    DecideBurst* decideBurst = nullptr);
 
 // Debug (`--profile`): force the profile card open. It normally only appears
 // when the level chip is clicked, which a --screenshot run cannot do.
@@ -704,6 +710,12 @@ void debugOpenGuessDialog(bool open);
 bool guessDialogOpen();
 // 筛选卡片是否开着（ESC 链要问它，否则按 ESC 会直接退出选曲页）。
 bool filterDialogOpen();
+// 最终确认页是否开着（main 的 Enter / ESC 分支要区分列表页和确认页）。
+bool finalConfirmOpen();
+// 最终页按下开始钮时已经从按钮上 spawn 过 decide burst 了；main 拿到 action
+// 时不要再 spawn 第二份，直接把白闪接上。取走即清零。
+bool finalConfirmBurstQueued();
+void clearFinalConfirmBurstQueued();
 
 // Debug (`--singer-panel`): open the 切换歌手 panel (the phone panel's singer
 // button) at boot, same reason. It only appears on a song that has a vocal

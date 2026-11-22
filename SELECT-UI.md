@@ -1010,7 +1010,12 @@ const std::string candidates[] = {
   258×96 确定）；底部齿轮/歌手图标 80² @ local x 281.45/469.45；
 - 顶栏：`UIPartsBackButton` 96² @(16,16)（`btn_circle80_wh` + `icon_back_wh` 42²）
   与 `UIPartsMenuButton` 96² @(1808,16)（`icon_menu_wh` 40×34），图标染 #444466，
-  和选曲顶栏同一套；菜单钮回选曲并打开抽屉（抽屉只有选曲页那一份，不复制）。
+  和选曲顶栏同一套；**菜单抽屉直接盖在最终页上**（`drawMenuDrawer()` 抽出后两页
+  共用），点命令才决定要不要离开最终页，不再先退回列表。
+- **Enter**：列表页按 Enter/KeypadEnter = 进入最终确认页（不再直接开谱）；最终页再按
+  Enter = 开始。Esc 依次关抽屉 → 退最终页（main 的 ESC 链已加 `finalConfirmOpen()`）。
+- **转场**：两页切换有 0.24 s 的白幕淡出（`drawPageTransition()`，开关都走同一条），
+  不再是硬切。
 - 背景：**不再自己画 bg_common**，而是调用和选曲页同一个 `drawSelectBackground()`
   （壁纸分支 + 压暗 + bg_common 图案 cover-fit / 玻璃模式直接透明）。之前把
   bg_common 拉伸满窗口，和上一屏不是一个背景。
@@ -1018,11 +1023,12 @@ const std::string candidates[] = {
   `charts/mv/<id4>.usm` 或 `<id4>_sekai.usm` 存在才允许切到「2D MV」；一个都没有
   就只显示静态「无 MV」。没有 3D 渲染，所以「原曲 MV」档不出现。
 - AUTO：`bg_auto`（180×110 的 AUTO 底板）+ `bg_base_round_h56_wh` 九宫格轨道 +
-  72×72 圆钮（On 中心 +47.5、Off -47.5，钮比轨道大 8px，和 prefab 一样）；
+  72×72 圆钮（On 中心 +47.5、Off −47.5，钮比轨道大 8px，和 prefab 一样）；
   之前是自己画 48px 小圆 + 一条 152×56 的纯色胶囊，所以看着惨。
-- 开始钮：常驻两圈 1.8s 循环 ripple；点击**立即**返回 entry，不再自己放 0.36s
-  特效 —— main 的 `decideBurst` + `confirmFlashActive` 就是选曲「确定」那套华丽
-  爆闪，起点用 `gFinalPlayCenter`、遮罩用 `gFinalPhoneScreen`。
+- 开始钮：常驻两圈 1.8s 循环 ripple；点击/Enter 时**在最终页原地** spawn main 的
+  `decideBurst`（同一套选曲「确定」爆闪），停 0.4167 s（`kDecideLead`）让爆闪从
+  按钮上播完，再把 entry 交回 main；main 看到 `finalConfirmBurstQueued()` 就跳过
+  第二次 spawn，只把白闪从 0 接上。起点 `gFinalPlayCenter`、遮罩 `gFinalPhoneScreen`。
 - 卡组名条 / MV 按钮 / 轨道都用新的 **`addNinePatch4` 非对称九宫格**：
   `bg_base_half_r16_wh` 左21/下1/右21/上25、`btn_round_h80_wh` 左28/右12 ——
   之前用对称 helper 把两端的胶囊/阴影切坏了。
@@ -1031,8 +1037,8 @@ const std::string candidates[] = {
   #DFDFEA/80% 的面板，直接透出选曲背景即可（和参考截图一致）。
 - **切图**：面板 sprite 的 Border 全部按 AssetRipper 的 `m_Border` 取 —— `bg_base_r20_wh` 24、
   `bg_base_three_r16_wh` **17**（之前用 16）、`bg_base_round_h56_wh` 横 33 / 竖 28
-  （之前 28/28）、`bg_base_half_r16_wh` 是 **左21/下1/右21/上25 的非对称九宫格**，
-  我们的 `addNinePatch` 只吃对称值，所以名字条改用 `bg_base_r16_wh`（21 对称）。
+   （之前 28/28）、`bg_base_half_r16_wh` 是 **左21/下1/右21/上25 的非对称九宫格**；
+   名字条不再用对称 helper 近似，而是交给 `addNinePatch4` 按真实四边切（上圆角、下直角）。
   空卡槽 `Empty/Frame` 是 `base_wh`，**Border = 0，是纯平面矩形**，之前画 16px
   圆角变成"长药丸"是错的；圆角只存在于有卡面的 `cardFrame_M_4` 上。
 - 补了卡组选择器、卡组名条、综合力（标题 + icon + 右对齐数值 + info）；
@@ -1042,6 +1048,9 @@ const std::string candidates[] = {
 - 整页缩放 `k = min(w/1920, h/1080)`，卡组贴左、手机贴右（和选曲同一套边缘
   规则）；不再把整张 1920×1080 画布居中 —— 20:9 居中会把底部 MV/AUTO 裁掉。
   顶栏两个圆钮贴窗口角，不随 k 缩。
+
+**截图**：`CPSEKAI_FINAL_CONFIRM=1` 打开最终页；加 `CPSEKAI_FINAL_MENU=1` 让抽屉
+直接开在最终页上（和 `CPSEKAI_SELECT_MENU` 一样只用于 `--screenshot`）。
 
 **还没做**：卡组真实数据（5 张卡）、阵型行、羁绊按钮、背景底部黄条（资源未导出）、
 `BottomRight/Decide` 的可靠坐标。这几项都不该靠猜，等有数据/截图再补。
