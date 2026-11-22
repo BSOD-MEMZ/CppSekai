@@ -535,8 +535,6 @@ void debugOpenMenuDrawer(bool open)
 bool gFinalConfirmOpen = false;
 bool gFinalBurstQueued = false;
 float gFinalStartAt = -1.0f;
-float gFinalTransAt = -1.0f;
-bool gFinalWasOpen = false;
 // 最终页开始钮（160x160）在窗口坐标里的中心；main 的白色爆闪从这起，
 // 不是选曲手机那颗 258x96 确定的位置。
 ImVec2 gFinalPlayCenter{0.0f, 0.0f};
@@ -2991,19 +2989,91 @@ namespace
     }
 
 
+    // -------------------------------------------------------------------------
+    // 页面转场：选曲列表 <-> 最终确认页（2026-11-22）
+    //
+    // 原作换 ScreenLayer 走 `SekaiTransitionController`：一个全屏盖色
+    // （`coverFader`）+ `FadeOut(duration)` / `FadeIn(duration)` / `FadeOutSimple`
+    // —— 也就是**先淡出到盖色、换页、再从盖色淡入**。我们以前是在翻页那一帧
+    // 直接铺一层 210/255 的白再衰减 0.24s，于是进出最终页各闪一次白。
+    //
+    // 现在照原作拆成三段：淡出 `kPageFadeOut` → 真正换页（一帧）→ 淡入
+    // `kPageFadeIn`。**换页动作本身被推到淡出结束**（`tickPageSwitch`），
+    // 所以旧页在变白的过程里还在正常出帧（动画不冻），新页从纯白淡出来。
+    // 盖色用白：和 确定/开始 的爆闪同一个色，衔接时看不出第二条边界。
+    constexpr float kPageFadeOut = 0.15f;
+    constexpr float kPageFadeIn = 0.21f;
+
+    struct PageFadeState
+    {
+        float at = -1.0f;      // 转场起点（-1 = 没有转场）
+        bool switched = false; // 中间那一帧换过页没有
+        bool toFinal = false;  // 目标页
+        int entry = -1;
+        int difficulty = 3;
+        int vocal = 0;
+    };
+    PageFadeState gPageFade;
+
+    bool pageSwitchBusy()
+    {
+        return gPageFade.at >= 0.0f;
+    }
+
+    // 请求换页：只记状态，不立刻翻。`now` 是选曲页的 timeSec。
+    void requestPageSwitch(bool toFinal, float now, int entryIndex = -1,
+        int difficulty = 3, int vocalIndex = 0)
+    {
+        if (pageSwitchBusy()) {
+            return; // 一次一段，别叠
+        }
+        gPageFade.at = now;
+        gPageFade.switched = false;
+        gPageFade.toFinal = toFinal;
+        gPageFade.entry = entryIndex;
+        gPageFade.difficulty = difficulty;
+        gPageFade.vocal = vocalIndex;
+    }
+
+    // 淡出走完的那一帧真正换页（由 drawSongSelect 每帧调一次）。
+    void tickPageSwitch(float now)
+    {
+        if (!pageSwitchBusy() || gPageFade.switched) {
+            return;
+        }
+        if (now - gPageFade.at < kPageFadeOut) {
+            return;
+        }
+        gPageFade.switched = true;
+        gFinalConfirmOpen = gPageFade.toFinal;
+        if (gPageFade.toFinal) {
+            gFinalEntry = gPageFade.entry;
+            gFinalDifficulty = gPageFade.difficulty;
+            gFinalVocal = gPageFade.vocal;
+        }
+        gFinalStartAt = -1.0f;
+        gFinalBurstQueued = false;
+    }
+
     void drawPageTransition(ImDrawList* dl, float w, float h, float now)
     {
-        if (gFinalTransAt < 0.0f) {
+        if (!pageSwitchBusy()) {
             return;
         }
-        constexpr float kDur = 0.24f;
-        const float p = (now - gFinalTransAt) / kDur;
-        if (p >= 1.0f) {
+        const float t = now - gPageFade.at;
+        if (t >= kPageFadeOut + kPageFadeIn) {
+            gPageFade = PageFadeState{};
             return;
         }
-        const float a = 210.0f * (1.0f - std::clamp(p, 0.0f, 1.0f));
+        float a = 1.0f;
+        if (!gPageFade.switched) {
+            a = t / kPageFadeOut;
+        } else {
+            a = 1.0f - (t - kPageFadeOut) / kPageFadeIn;
+        }
+        a = std::clamp(a, 0.0f, 1.0f);
         dl->AddRectFilled(ImVec2(0.0f, 0.0f), ImVec2(w, h),
-            IM_COL32(255, 255, 255, static_cast<int>(a)));
+            IM_COL32(255, 255, 255, static_cast<int>(255.0f * a)));
     }
 
     // 右上角菜单抽屉（原作 ScreenLayerHeader 的 menuButton -> MenuDialog，
@@ -3171,10 +3241,39 @@ namespace
     }
 
 
-    // 最终确认页：ScreenLayerFreeLiveFinalConfirmation（prefab 703，它继承
+    // 最终确认页：ScreenLayerFreeLiveFinalConfirmation（prefab 703，继承
     // ScreenLayerDeckEditBase）+ 右侧同一台 ScreenLayerFreeLiveCellPhone（704）。
-    // 左边是卡组确认（选卡组 / 综合力 / 5 个空槽），右边是选曲时那台手机
-    // （曲绘 / 标题 / 难度 / 开始钮）。整页自绘，不创建 ImGui item。
+    //
+    // 2026-11-22 第二轮：**逐节点照 prefab 重画**。下面每一块的几何 / sprite /
+    // m_Type / m_Color / 字号都直接抄实测值（1920x1080 画布里的绝对矩形），来源：
+    //   D:\Tools\rea\work\jp\final703.txt      节点树 + sprite + m_Type + m_Color + 字号
+    //   D:\Tools\rea\work\jp\final_geo.txt     pos / size / anchor / pivot / scale
+    //   D:\Tools\rea\work\jp\final_full.json   同上，外加每个节点的 **m_IsActive**
+    //   D:\Tools\rea\work\jp\as_out\<sprite>.txt   sprite 的 m_Rect / m_Border
+    // 改这里之前先把这几份 dump 打开对一遍。
+    //
+    // ⚠ **m_Border 是九宫格切边、顺序是 左/下/右/上，不是圆角半径**。上一版把
+    // btn_round_h80_wh 的 (51,0,51,0) 当成 (28,12) 用，白色胶囊两端就被压扁成
+    // 椭圆；bg_base_half_r16_wh 的 (21,1,21,25) 也差点写成 21/21/21/21。
+    //
+    // **明确不画**（每条都有依据，不是漏掉）：
+    //   * BG / BGUnder                  m_IsActive=0。BG 是 1546x555 的**不透明纯白**，
+    //     而且是 DeckBase 的后一个兄弟（在 Unity 里会盖住面板），只会在面板左边
+    //     露 14px、上边露 48px 的一条白框 —— 这一页原作它是关的。
+    //   * BottomRight（決定 / 齿轮）      m_IsActive=0。开始键是手机上的
+    //     SoloLiveFinalConfirmButton，右下角那颗 354.5x116 的 決定 在这页不存在。
+    //   * DeckInfo（阵型缎带 / 5 个格 / 変更） m_IsActive=0。
+    //   * TotalPower/WithEventLimit     活动加成那条红牌；没活动时由代码关掉，
+    //     常显的是 WithoutEventLimit。
+    //   * DeckCard/Exist、Leader、Selected、Lock   真实卡组数据（暂时忽略）；
+    //     后三个本身也是 m_IsActive=0。
+    //   * OpenBondRankDialogButton       角色羁绊按钮（按用户要求先不画）。
+    //   * OriginalMemberButton           原始成员 MV（同上）。
+    //   * ConsecutiveAutoLiveRoot        连续自动演出，只有订阅状态才由代码打开。
+    //   * SwapMember「メンバー入替」勾选框：prefab 里 m_IsActive=1，但它挂在
+    //     DeckBase 顶边右侧（勾选框 931.6..986.6），标签 200x32 从 1001 排到 1201
+    //     —— **末端 51px 落在手机底下**（手机左缘 1144.9），原作不可能这么摆；
+    //     而且它属于卡组编成模式（IsMemberSwapMode），这一页不做编成。
     int drawFinalConfirm(platform::Renderer& renderer, const std::vector<ChartEntry>& entries,
         int entryIndex, int difficulty, int vocalIndex, float w, float h, float k, float timeSec,
         ImFont* title, ImFont* body, int deckPower, bool& autoLive, int& mvMode,
@@ -3204,7 +3303,10 @@ namespace
         const ImVec2 mouse(io.MousePos.x, io.MousePos.y);
         const float finalMenuT = ui::anim(0x4a57b000u, gMenuOpen, 20.0f);
         const bool finalMenuUp = gMenuOpen || finalMenuT > 0.0005f;
-        const bool clicked = ui::mouseClicked(ImGuiMouseButton_Left) && !finalMenuUp;
+        // 转场期间整页不接受点击：淡出那 0.15 s 里玩家还能点到开始钮的话，
+        // 白屏上会先爆一颗闪再换页。
+        const bool clicked = ui::mouseClicked(ImGuiMouseButton_Left) && !finalMenuUp
+            && !pageSwitchBusy();
         if (ui::keyPressed(ImGuiKey_Escape)) {
             if (gMenuOpen) {
                 // ESC 先关抽屉；抽屉开着时不要顺手退出最终页。
@@ -3212,195 +3314,199 @@ namespace
                 ui::se(ui::SeWindowClose);
             } else {
                 ui::se(ui::SeWindowClose);
-                gFinalConfirmOpen = false;
-                gFinalStartAt = -1.0f;
-                gFinalBurstQueued = false;
+                requestPageSwitch(false, static_cast<float>(timeSec));
                 return SelectNone;
             }
         }
         const auto hit = [&](float x, float y, float ww, float hh) {
             return clicked && mouse.x >= x && mouse.x <= x + ww && mouse.y >= y && mouse.y <= y + hh;
         };
+        const auto hover = [&](float x, float y, float ww, float hh) {
+            return mouse.x >= x && mouse.x <= x + ww && mouse.y >= y && mouse.y <= y + hh;
+        };
+        // prefab 的 m_Color 是 0..1 浮点，这里四舍五入回 0..255。
+        const auto rgba = [](float r, float g, float b, float a) {
+            return IM_COL32(static_cast<int>(r * 255.0f + 0.5f), static_cast<int>(g * 255.0f + 0.5f),
+                static_cast<int>(b * 255.0f + 0.5f), static_cast<int>(a * 255.0f + 0.5f));
+        };
+        // 九宫格（Unity m_Type=1 Sliced）：切边是源图像素，随 k 缩放。
+        const auto slice = [&](GLuint tex, int sw, int sh, float l, float b, float r, float t,
+                               float x0, float y0, float x1, float y1, ImU32 tint) {
+            if (tex == 0) {
+                return;
+            }
+            addNinePatch4(dl, tex, sw, sh, ImVec2(x0, y0), ImVec2(x1, y1), l, r, t, b, k, tint);
+        };
+        // Simple（m_Type=0）：整张拉到矩形里。
+        const auto plain = [&](GLuint tex, float x0, float y0, float x1, float y1, ImU32 tint) {
+            if (tex == 0) {
+                return;
+            }
+            dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(tex)),
+                ImVec2(x0, y0), ImVec2(x1, y1), ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), tint);
+        };
+        // 矩形小工具：`R(x, y, w, h)` 在 k 之后返回 (x0,y0,x1,y1)。
+        struct Rect
+        {
+            float x0, y0, x1, y1;
+        };
+        const auto R = [k](float x, float y, float rw, float rh) {
+            return Rect{ x * k, y * k, (x + rw) * k, (y + rh) * k };
+        };
 
         // The final-confirmation prefab has no full-screen backdrop node; it
-        // sits over the select background. Use the official bg_common asset
-        // instead of an invented gradient.
-        // Same backdrop as the select screen: wallpaper/dim/pattern, cover-fit.
-        // (Not a stretched bg_common - that made the two screens look different.)
+        // sits over the select background. Same backdrop as the select screen:
+        // wallpaper/dim/pattern, cover-fit.
         drawSelectBackground(renderer, dl, w, h, static_cast<float>(timeSec));
 
-        // Absolute rects from prefab 703 (1920x1080 reference, computed from
-        // RectTransform anchorMin/Max + anchoredPosition + pivot):
-        //   BG        x=56.0  y=303.8 w=1546.2 h=555.3
-        //   DeckBase  x=70.4  y=256.0 w=1080.0 h=624.0
-        //   card row  x=78.4  y=346.0 w=200 h=510, gap 16（DeckCardList 的顶边）
         const float cx = w * 0.5f; // toast 按窗口居中（内容已改成左右贴边）
-        const float deckW = 1080.0f * k;
-        const float deckH = 623.97f * k;
-        const float deckX = 70.4f * k;
-        const float deckY = 256.0f * k;
-
-        // 画布内容从这层底板开始；上面的背景是窗口背景，不跟着平移。
-        //
-        // prefab 703 在 DeckBase 下面还有一张 1546.2x555.3 的纯白 BG
-        // (`bg_base_r20_wh`)。它只会在 DeckBase 左边露出 14px 宽的两小条白边
-        // （其余部分被 DeckBase 和手机盖住），看起来像一张切坏的白框；而
-        // DeckBase 本身就是 #DFDFEA/80% 的同一块面板。这里不画那张隐藏 BG，
-        // 让面板直接透出选曲背景（和原作截图的面板一致）。
         const int contentVtx0 = dl->VtxBuffer.Size;
-        const GLuint deckTex = finalTex(renderer, "bg_base_three_r16_wh");
-        if (deckTex != 0) {
-            addNinePatch(dl, deckTex, 36, 36, ImVec2(deckX, deckY),
-                ImVec2(deckX + deckW, deckY + deckH), 17.0f, 17.0f, k,
-                IM_COL32(223, 223, 234, 204));
-        } else {
-            dl->AddRectFilled(ImVec2(deckX, deckY), ImVec2(deckX + deckW, deckY + deckH),
-                IM_COL32(223, 223, 234, 204), 16.0f * k);
+
+        // ---- DeckListView/DeckView/DeckBase -------------------------------------
+        // 70.4,256  1080x624  bg_base_three_r16_wh (36x36, border 17) #DFDFEA a80%
+        {
+            const Rect r = R(70.4f, 256.0f, 1080.0f, 624.0f);
+            slice(finalTex(renderer, "bg_base_three_r16_wh"), 36, 36, 17.0f, 17.0f, 17.0f, 17.0f,
+                r.x0, r.y0, r.x1, r.y1, rgba(0.8745098f, 0.8745098f, 0.91764706f, 0.8f));
         }
 
-        // DeckSelector（prefab 703 顶部）：左/右箭头 + 720x56 的 #BCBCD0/90%
-        // 胶囊。只有一套卡组，所以箭头画成禁用态，不假装能切。
+        // ---- DeckSelector：顶部那条 720 宽的选择条 ------------------------------
+        // DeckSelectList/Base      70.4,127.6  720.1x56  bg_base_round_h56_wh
+        //                          (66x56, border 33/28/33/28) #BCBCD0 a90%
+        // DeckSelectList/Cover     m_IsActive=0
+        // Arrow/UIPartsArrow{Left,Right}/ClickArea/Image
+        //   两个 Image 都是 80x108：左 (6.8,101.6)、右 (774.1,101.6)；右箭头 Image 的
+        //   rotation 是 (0,1,0,0) = 绕 Y 转 180°，**同一张图水平镜像**（prefab 里没有
+        //   第二张箭头贴图）。上一版把左边那张也镜像了，左箭头就朝右了。
         {
-            const GLuint arrowTex = finalTex(renderer, "btn_arrow_switching_wh");
-            // 左箭头 80x108 @ (0.8,104.6)，右箭头 @ (788.1,104.6)。
-            for (int side = 0; side < 2; ++side) {
-                const float ax = (side == 0 ? 0.8f : 788.1f) * k;
-                const float ay = 104.6f * k;
-                if (arrowTex != 0) {
-                    dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(arrowTex)),
-                        ImVec2(ax, ay), ImVec2(ax + 80.0f * k, ay + 108.0f * k),
-                        ImVec2(side == 0 ? 1.0f : 0.0f, 0.0f), ImVec2(side == 0 ? 0.0f : 1.0f, 1.0f),
-                        IM_COL32(255, 255, 255, 110));
-                } else {
-                    const ImVec2 c(ax + 40.0f * k, ay + 54.0f * k);
-                    const float d = 18.0f * k;
-                    if (side == 0) {
-                        dl->AddTriangleFilled(ImVec2(c.x + d, c.y - d), ImVec2(c.x + d, c.y + d),
-                            ImVec2(c.x - d, c.y), IM_COL32(255, 255, 255, 110));
-                    } else {
-                        dl->AddTriangleFilled(ImVec2(c.x - d, c.y - d), ImVec2(c.x - d, c.y + d),
-                            ImVec2(c.x + d, c.y), IM_COL32(255, 255, 255, 110));
-                    }
-                }
-            }
-            const ImVec2 sel0(70.4f * k, 127.6f * k);
-            const ImVec2 sel1(790.5f * k, 183.6f * k);
-            const GLuint selTex = finalTex(renderer, "bg_base_round_h56_wh");
-            if (selTex != 0) {
-                addNinePatch(dl, selTex, 66, 56, sel0, sel1, 33.0f, 28.0f, k,
-                    IM_COL32(188, 188, 208, 230));
-            } else {
-                dl->AddRectFilled(sel0, sel1, IM_COL32(188, 188, 208, 230), 28.0f * k);
-            }
+            const Rect pill = R(70.4f, 127.6f, 720.1f, 56.0f);
+            slice(finalTex(renderer, "bg_base_round_h56_wh"), 66, 56, 33.0f, 28.0f, 33.0f, 28.0f,
+                pill.x0, pill.y0, pill.x1, pill.y1, rgba(0.7372549f, 0.7372549f, 0.8156863f, 0.9019608f));
             addTextCentered(dl, body, 30.0f * k,
-                ImVec2((sel0.x + sel1.x) * 0.5f, (sel0.y + sel1.y) * 0.5f),
-                IM_COL32(68, 68, 102, 255), "默认队伍");
-        }
-
-        {
-            // DeckName 375.7x55.4 @ (70.4,200.7)：当前卡组的名字条。
-            // bg_base_half_r16_wh 的 Border 是 (左21/下1/右21/上25)，不是对称
-            // 九宫格；用 addNinePatch4 按真实边框切（上圆角、下直角）。
-            const ImVec2 n0(70.4f * k, 200.7f * k);
-            const ImVec2 n1(446.1f * k, 256.1f * k);
-            const GLuint nameTex = finalTex(renderer, "bg_base_half_r16_wh");
-            if (nameTex != 0) {
-                // Real sprite: 42x26, Border 左21/下1/右21/上25 (top corners
-                // rounded, bottom square). The asymmetric slicer preserves it.
-                addNinePatch4(dl, nameTex, 42, 26, n0, n1, 21.0f, 21.0f, 25.0f, 1.0f, k,
-                    IM_COL32(223, 223, 234, 204));
-            } else {
-                dl->AddRectFilled(n0, n1, IM_COL32(223, 223, 234, 204), 16.0f * k);
+                ImVec2((pill.x0 + pill.x1) * 0.5f, (pill.y0 + pill.y1) * 0.5f),
+                rgba(0.26666668f, 0.26666668f, 0.4f, 1.0f), "默认队伍");
+            // 只有一套卡组 → 两个箭头都是禁用态：用 Unity Button 的默认
+            // disabledColor (0.78,0.78,0.78,0.5) 当 tint。**不要**在箭头后面垫
+            // 一块深色矩形 —— 那是我们自己的发明，会看出两个突兀的方块。
+            const ImU32 arrowTint = IM_COL32(199, 199, 199, 128);
+            const GLuint arrowTex = finalTex(renderer, "btn_arrow_switching_wh");
+            const Rect al = R(6.8f, 101.6f, 80.0f, 108.0f);
+            plain(arrowTex, al.x0, al.y0, al.x1, al.y1, arrowTint);
+            const Rect ar = R(774.1f, 101.6f, 80.0f, 108.0f);
+            if (arrowTex != 0) {
+                // 镜像：uv 的 u 反过来（等价于 prefab 里绕 Y 转 180°）。
+                dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(arrowTex)),
+                    ImVec2(ar.x0, ar.y0), ImVec2(ar.x1, ar.y1), ImVec2(1.0f, 0.0f),
+                    ImVec2(0.0f, 1.0f), arrowTint);
             }
-            addTextLeft(dl, body, 28.0f * k, ImVec2(n0.x + 21.0f * k, (n0.y + n1.y) * 0.5f),
-                IM_COL32(85, 85, 119, 255), "当前队伍");
-            // 右侧的编辑铅笔（纯装饰，不假装能点）。
-            const ImVec2 pc(n1.x - 24.0f * k, (n0.y + n1.y) * 0.5f);
-            dl->AddLine(ImVec2(pc.x - 8.0f * k, pc.y + 8.0f * k),
-                ImVec2(pc.x + 8.0f * k, pc.y - 8.0f * k), IM_COL32(148, 148, 175, 255), 3.0f * k);
         }
 
-        // 综合力：Label 174x56 @ (51.1,272)（左对齐“综合力”）、icon 38x42、
-        // 数值 280x32 右对齐到 x=430.2。之前把数值左对齐到 150，和标题叠在一起。
+        // ---- DeckListView/AutoEditButton ---------------------------------------
+        // 862.3,119.7  296x72  btn_round_h80_wh (106x96, border 51/0/51/0) 白
+        //   Text 248x72 @ (886.3,119.7) 28px #444466 居中
+        //   FrontGlowCover（304x80 eff_btn_round_h80_a70_wh）m_IsActive=0 → 悬停才亮
         {
-            const GLuint icon = finalTex(renderer, "icon_deckPower_wh");
+            const Rect r = R(862.3f, 119.7f, 296.0f, 72.0f);
+            const bool hot = hover(r.x0, r.y0, r.x1 - r.x0, r.y1 - r.y0) && !finalMenuUp;
+            if (hot) {
+                slice(finalTex(renderer, "eff_btn_round_h80_a70_wh"), 112, 104, 56.0f, 52.0f,
+                    56.0f, 52.0f, r.x0 - 4.0f * k, r.y0 - 4.0f * k, r.x1 + 4.0f * k,
+                    r.y1 + 4.0f * k, IM_COL32(255, 255, 255, 90));
+            }
+            slice(finalTex(renderer, "btn_round_h80_wh"), 106, 96, 51.0f, 0.0f, 51.0f, 0.0f,
+                r.x0, r.y0, r.x1, r.y1, IM_COL32(255, 255, 255, 255));
+            addTextCentered(dl, body, 28.0f * k, ImVec2((r.x0 + r.x1) * 0.5f, (r.y0 + r.y1) * 0.5f),
+                rgba(0.26666668f, 0.26666668f, 0.4f, 1.0f), "自动编成");
+            if (hit(r.x0, r.y0, r.x1 - r.x0, r.y1 - r.y0)) {
+                gFinalToast = "自动编成尚未实现";
+                gFinalToastUntil = static_cast<double>(timeSec) + 2.2;
+                ui::se(ui::SeClick);
+            }
+        }
+
+        // ---- DeckView/DeckName -------------------------------------------------
+        // 70.4,200.7  375.7x55.4  bg_base_half_r16_wh (42x26, border 21/1/21/25)
+        //   → 上圆角、下直角的"页签"，底边正好压在 DeckBase 的顶边 (256) 上。
+        //   CustomText 333.7x32 @ (91.4,212.4) 32px #444466。
+        //   DeckName/icon（42x42 铅笔 icon_write_dbl）m_IsActive=0 → 不画。
+        {
+            const Rect r = R(70.4f, 200.7f, 375.7f, 55.4f);
+            slice(finalTex(renderer, "bg_base_half_r16_wh"), 42, 26, 21.0f, 1.0f, 21.0f, 25.0f,
+                r.x0, r.y0, r.x1, r.y1, rgba(0.8745098f, 0.8745098f, 0.91764706f, 0.8f));
+            addTextLeft(dl, body, 32.0f * k, ImVec2(91.4f * k, 228.4f * k),
+                rgba(0.26666668f, 0.26666668f, 0.4f, 1.0f), "当前队伍");
+        }
+
+        // ---- DeckView/TotalPower ----------------------------------------------
+        // Label/Tittle           "総合力" 32px #444466，矩形 73.3..207.5 / 272..328
+        // IconTotal              38x42 @ (221.4,278.8) icon_deckPower_dbl（Simple，已有烘焙色）
+        // WithoutEventLimit/Value 280x32 右对齐到 x=430.2，32px #555577
+        // info                   72x72 @ (441.8,263.5) btn_circle56_wh(Simple)
+        //                        + CustomImage icon_infomation 8x30 @ (473.8,284.6)
+        {
+            addTextLeft(dl, body, 32.0f * k, ImVec2(73.3f * k, 300.0f * k),
+                rgba(0.26666668f, 0.26666668f, 0.4f, 1.0f), "综合力");
+            const Rect iconR = R(221.4f, 278.8f, 38.0f, 42.0f);
+            plain(finalTex(renderer, "icon_deckPower_dbl"), iconR.x0, iconR.y0, iconR.x1, iconR.y1,
+                IM_COL32(255, 255, 255, 255));
             char pwr[64];
             std::snprintf(pwr, sizeof(pwr), "%d", deckPower);
-            addTextLeft(dl, body, 32.0f * k, ImVec2(73.3f * k, 300.0f * k),
-                IM_COL32(68, 68, 102, 255), "综合力");
-            const float iconS = 38.0f * k;
-            if (icon != 0) {
-                dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(icon)),
-                    ImVec2(221.4f * k, 278.8f * k), ImVec2(221.4f * k + iconS, 278.8f * k + 42.0f * k),
-                    ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), IM_COL32(68, 68, 102, 255));
-            }
             const ImVec2 vs = body->CalcTextSizeA(32.0f * k, FLT_MAX, 0.0f, pwr);
-            addTextLeft(dl, body, 32.0f * k, ImVec2(430.2f * k - vs.x, 300.0f * k),
-                IM_COL32(85, 85, 119, 255), pwr);
-            // info 按钮 72x72 @ (441.8,263.5)：点一下说明综合力怎么来的。
-            const ImVec2 ic(441.8f * k + 36.0f * k, 263.5f * k + 36.0f * k);
-            dl->AddCircleFilled(ic, 36.0f * k, IM_COL32(255, 255, 255, 255), 40);
-            addTextCentered(dl, body, 30.0f * k, ic, IM_COL32(68, 68, 102, 255), "i");
-            if (hit(ic.x - 36.0f * k, ic.y - 36.0f * k, 72.0f * k, 72.0f * k)) {
+            addTextLeft(dl, body, 32.0f * k, ImVec2(430.2f * k - vs.x, 301.0f * k),
+                rgba(0.33333334f, 0.33333334f, 0.46666667f, 1.0f), pwr);
+            const Rect infoR = R(441.8f, 263.5f, 72.0f, 72.0f);
+            plain(selectTex(renderer, "btn_circle56_wh"), infoR.x0, infoR.y0, infoR.x1, infoR.y1,
+                IM_COL32(255, 255, 255, 255));
+            const Rect infoIcon = R(473.8f, 284.6f, 8.0f, 30.0f);
+            plain(finalTex(renderer, "icon_infomation"), infoIcon.x0, infoIcon.y0, infoIcon.x1,
+                infoIcon.y1, IM_COL32(255, 255, 255, 255));
+            if (hit(infoR.x0, infoR.y0, infoR.x1 - infoR.x0, infoR.y1 - infoR.y0)) {
                 gFinalToast = "综合力 = 队伍里 5 张卡片的数值合计";
                 gFinalToastUntil = static_cast<double>(timeSec) + 2.6;
                 ui::se(ui::SeClick);
             }
         }
 
-        // Five empty deck slots (DeckCard 200x510, gap 16).
-        const float cardW = 200.0f * k;
-        const float cardH = 510.0f * k;
-        const float gap = 16.0f * k;
-        const float cardsW = 5.0f * cardW + 4.0f * gap;
-        const float cardsX = deckX + 8.0f * k;
-        // 601 is the card centre (DeckCardList y=346 + 510/2), not the top.
-        const float cardsY = 601.0f * k - cardH * 0.5f;
-        (void)cardsW;
-        const GLuint plusTex = finalTex(renderer, "icon_plus_h36_wh");
-        const GLuint circleTex = finalTex(renderer, "bg_base_circle_h96_wh");
-        for (int i = 0; i < 5; ++i) {
-            const float x = cardsX + static_cast<float>(i) * (cardW + gap);
-            const ImVec2 p0(x, cardsY);
-            const ImVec2 p1(x + cardW, cardsY + cardH);
-            // Empty slot: prefab 703's `Empty/Frame` is `base_wh` (Border 0) -
-            // a FLAT #B0BDC8 rectangle, not a 16px pill. The rounding people
-            // see on filled cards comes from `cardFrame_M_4` on top of the art;
-            // there is no frame on an empty slot.
-            dl->AddRectFilled(p0, p1, IM_COL32(176, 189, 200, 255));
-            const ImVec2 c((p0.x + p1.x) * 0.5f, (p0.y + p1.y) * 0.5f);
-            const float d = 72.0f * k;
-            if (circleTex != 0) {
-                dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(circleTex)),
-                    ImVec2(c.x - d * 0.5f, c.y - d * 0.5f), ImVec2(c.x + d * 0.5f, c.y + d * 0.5f),
-                    ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), IM_COL32(145, 159, 176, 255));
-            } else {
-                dl->AddCircleFilled(c, d * 0.5f, IM_COL32(145, 159, 176, 255), 40);
-            }
-            const float ps = 36.0f * k;
-            if (plusTex != 0) {
-                dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(plusTex)),
-                    ImVec2(c.x - ps * 0.5f, c.y - ps * 0.5f), ImVec2(c.x + ps * 0.5f, c.y + ps * 0.5f),
-                    ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), IM_COL32(176, 189, 200, 255));
-            } else {
-                dl->AddLine(ImVec2(c.x - ps * 0.35f, c.y), ImVec2(c.x + ps * 0.35f, c.y),
-                    IM_COL32(176, 189, 200, 255), 3.0f * k);
-                dl->AddLine(ImVec2(c.x, c.y - ps * 0.35f), ImVec2(c.x, c.y + ps * 0.35f),
-                    IM_COL32(176, 189, 200, 255), 3.0f * k);
-            }
-            if (hit(p0.x, p0.y, cardW, cardH)) {
-                gFinalToast = "卡组编成功能尚未实现";
-                gFinalToastUntil = static_cast<double>(timeSec) + 2.2;
-                ui::se(ui::SeClick);
+        // ---- DeckView/DeckCardList --------------------------------------------
+        // HorizontalLayoutGroup：m_ChildAlignment=4 (MiddleCenter)、**m_Spacing=7.66**
+        // （不是 16）。容器是 0 宽竖条：x 中心 609.6、y 346..856。
+        //   5 张 200x510 → 总宽 5*200 + 4*7.66 = 1030.64，x0 = 94.28，步距 207.66。
+        // Empty/Frame  200x510  base_wh (Sliced，但 **贴图在包里缺失** → Unity 退化成
+        //              纯白方角矩形) #B0BDC8；角上那圈圆角来自出卡后的 cardFrame_M_4，
+        //              空槽本来就没有。卡组数据暂时忽略，所以 5 格全是这个空槽。
+        // Empty/Icon   72x72 bg_base_circle_h96_wh (Simple) #919FAF，居中
+        // Empty/Plus   36x36 icon_plus_h36_wh (Simple) #B0BDC8，居中
+        {
+            constexpr float kCardW = 200.0f;
+            constexpr float kCardH = 510.0f;
+            constexpr float kStep = 207.66f;
+            constexpr float kX0 = 94.28f;
+            constexpr float kY0 = 346.0f;
+            const GLuint circleTex = finalTex(renderer, "bg_base_circle_h96_wh");
+            const GLuint plusTex = finalTex(renderer, "icon_plus_h36_wh");
+            for (int i = 0; i < 5; ++i) {
+                const Rect c = R(kX0 + static_cast<float>(i) * kStep, kY0, kCardW, kCardH);
+                dl->AddRectFilled(ImVec2(c.x0, c.y0), ImVec2(c.x1, c.y1),
+                    rgba(0.6901961f, 0.7411765f, 0.78431374f, 1.0f));
+                const ImVec2 mid((c.x0 + c.x1) * 0.5f, (c.y0 + c.y1) * 0.5f);
+                const float dh = 36.0f * k;
+                plain(circleTex, mid.x - dh, mid.y - dh, mid.x + dh, mid.y + dh,
+                    rgba(0.5686275f, 0.63529414f, 0.6862745f, 1.0f));
+                const float ph = 18.0f * k;
+                plain(plusTex, mid.x - ph, mid.y - ph, mid.x + ph, mid.y + ph,
+                    rgba(0.6901961f, 0.7411765f, 0.78431374f, 1.0f));
+                if (hit(c.x0, c.y0, c.x1 - c.x0, c.y1 - c.y0)) {
+                    gFinalToast = "卡组编成功能尚未实现";
+                    gFinalToastUntil = static_cast<double>(timeSec) + 2.2;
+                    ui::se(ui::SeClick);
+                }
             }
         }
 
         bool phoneStartHit = false;
         // Right: ScreenLayerFreeLiveCellPhone (prefab 704) at the SAME geometry
         // as the select screen: 754.3x1416.7, right edge 1899.15, top 33.6,
-        // tilted +3deg about its centre. The final page used to draw a 562-wide
-        // copy with hand-tuned offsets (jacket 229px low, a green disc instead of
-        // the 258x96 确定) - that is why it looked nothing like the real phone.
+        // tilted +3deg about its centre (TransformList/DefaultPosition = (562,-202)).
         {
             const float phoneW = 754.3f * k;
             const float phoneH = 1416.7f * k;
@@ -3460,7 +3566,6 @@ namespace
             }
             // 最终确认页没有难度选择：只留 144x40 的难度牌（UIPartsMusicDifficultyLabel），
             // 下面是手机自己的 SoloLiveFinalConfirmButton（160x160，btn_play_gn）。
-            // 这来自 prefab 704 的 `SoloLiveFinalConfirmButton` 节点，不是我们画的绿圆。
             {
                 const int d = std::clamp(difficulty, 0, kDiffCount - 1);
                 const float lw = 144.0f * ps;
@@ -3472,11 +3577,24 @@ namespace
                     IM_COL32(255, 255, 255, 255), kDiffNames[d]);
             }
             // Play button: prefab 704 `SoloLiveFinalConfirmButton` / `PlayButton`
-            // = 160x160 at phone-local (482..642, -386.5..-226.5) in the 1920
-            // overlay -> local top-left (297.1, 732.9), centre (377.1, 812.9).
-            // The 258x96 PositiveButton is the *select* mode and is hidden here.
+            // = 160x160 at phone-local (297.1..457.1, 732.9..892.9) -> centre
+            // (377.1, 812.9). The 258x96 PositiveButton is the *select* mode and
+            // is hidden here. No glow/ripple node of our own: the original's
+            // idle sparkle is the fx_live_transition_v2_* particle prefab, so we
+            // only scale the sprite on hover/press (a guessed ring would be
+            // exactly the kind of invention this pass is removing).
             const ImVec2 playC(PX(377.1f), PY(812.9f));
             const float playD = 160.0f * ps;
+            bool playHover = false;
+            bool playDown = false;
+            {
+                const ImVec2 lm(mouse.x - pivot.x, mouse.y - pivot.y);
+                const ImVec2 lp(pivot.x + lm.x * tc + lm.y * ts, pivot.y - lm.x * ts + lm.y * tc);
+                const float half = playD * 0.5f;
+                playHover = !finalMenuUp && lp.x >= playC.x - half && lp.x <= playC.x + half
+                    && lp.y >= playC.y - half && lp.y <= playC.y + half;
+                playDown = playHover && ImGui::IsMouseDown(ImGuiMouseButton_Left);
+            }
             {
                 const float pdx = playC.x - pivot.x;
                 const float pdy = playC.y - pivot.y;
@@ -3503,40 +3621,10 @@ namespace
                     std::max({c0.x, c1.x, c2.x, c3.x}), std::max({c0.y, c1.y, c2.y, c3.y}));
             }
             {
-                const GLuint glow = selectTex(renderer, "eff_btn_circle_h80_a70_wh");
-                if (glow != 0) {
-                    const float gd = 180.0f * ps;
-                    dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(glow)),
-                        ImVec2(playC.x - gd * 0.5f, playC.y - gd * 0.5f),
-                        ImVec2(playC.x + gd * 0.5f, playC.y + gd * 0.5f), ImVec2(0.0f, 0.0f),
-                        ImVec2(1.0f, 1.0f), IM_COL32(119, 238, 221, 40));
-                }
-                const GLuint playTex = finalTex(renderer, "btn_play_gn");
-                if (playTex != 0) {
-                    dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(playTex)),
-                        ImVec2(playC.x - playD * 0.5f, playC.y - playD * 0.5f),
-                        ImVec2(playC.x + playD * 0.5f, playC.y + playD * 0.5f));
-                } else {
-                    dl->AddCircleFilled(playC, playD * 0.5f, IM_COL32(119, 238, 221, 255), 48);
-                    dl->AddTriangleFilled(ImVec2(playC.x - 18.0f * ps, playC.y - 28.0f * ps),
-                        ImVec2(playC.x + 28.0f * ps, playC.y),
-                        ImVec2(playC.x - 18.0f * ps, playC.y + 28.0f * ps),
-                        IM_COL32(62, 62, 95, 255));
-                }
-            }
-            // Idle ripple: the button keeps breathing even when nobody clicks
-            // it (two staggered mint rings, 1.8s cycle), like the original's
-            // looping SoloLiveFinalConfirm effect.
-            {
-                constexpr float kCycle = 1.8f;
-                const float phase = std::fmod(static_cast<float>(timeSec), kCycle) / kCycle;
-                for (int r = 0; r < 2; ++r) {
-                    float p = phase + 0.5f * static_cast<float>(r);
-                    p -= std::floor(p);
-                    const float rad = playD * 0.5f + 58.0f * ps * p;
-                    const int a = static_cast<int>(85.0f * (1.0f - p));
-                    dl->AddCircle(playC, rad, IM_COL32(119, 238, 221, a), 64, 3.0f * ps);
-                }
+                const float scale = playDown ? 0.96f : (playHover ? 1.05f : 1.0f);
+                const float d = playD * scale;
+                plain(finalTex(renderer, "btn_play_gn"), playC.x - d * 0.5f, playC.y - d * 0.5f,
+                    playC.x + d * 0.5f, playC.y + d * 0.5f, IM_COL32(255, 255, 255, 255));
             }
             // Click or Enter: spawn the same decide burst main uses for the
             // select 确定, RIGHT HERE on the final page, then hold the page for
@@ -3545,15 +3633,7 @@ namespace
             if (gFinalStartAt < 0.0f) {
                 const bool enterPressed = !finalMenuUp
                     && (ui::keyPressed(ImGuiKey_Enter) || ui::keyPressed(ImGuiKey_KeypadEnter));
-                bool onButton = false;
-                if (clicked) {
-                    const ImVec2 lm(mouse.x - pivot.x, mouse.y - pivot.y);
-                    const ImVec2 lp(pivot.x + lm.x * tc + lm.y * ts, pivot.y - lm.x * ts + lm.y * tc);
-                    const float half = playD * 0.5f;
-                    onButton = lp.x >= playC.x - half && lp.x <= playC.x + half
-                        && lp.y >= playC.y - half && lp.y <= playC.y + half;
-                }
-                if (enterPressed || onButton) {
+                if (enterPressed || (playHover && clicked)) {
                     gFinalStartAt = static_cast<float>(timeSec);
                     if (decideBurst != nullptr) {
                         decideBurst->spawn(gFinalPlayCenter.x, gFinalPlayCenter.y,
@@ -3597,29 +3677,24 @@ namespace
             }
         }
 
-        // BottomLeft/UIPartsLiveModeButton: x=57 y=962 176x72.
-        // BottomLeft/AutoLiveToggle/ToggleRoot: x=822.6 y=1014.4 152x56.
-        // BottomRight/Decide, in the 2x BottomRight container:
-        //   raw x=2489.4 y=1407.0 354.5x116 -> screen x=1724.7 y=973.5 177.3x58.
-        const float mvX = 57.0f * k;
-        const float mvY = 962.0f * k;
-        const float mvW = 176.0f * k;
-        const float mvH = 72.0f * k;
-        const GLuint mvTex = finalTex(renderer, "btn_round_h80_wh");
-        if (mvTex != 0) {
-            // 106x96, Border 左28/右12 (Unity order 左/下/右/上). 之前直接
-            // AddImage 拉到 176x72，把两端的胶囊和阴影都压扁了。
-            addNinePatch4(dl, mvTex, 106, 96, ImVec2(mvX, mvY), ImVec2(mvX + mvW, mvY + mvH),
-                28.0f, 12.0f, 0.0f, 0.0f, k, IM_COL32(255, 255, 255, 255));
-        } else {
-            dl->AddRectFilled(ImVec2(mvX, mvY), ImVec2(mvX + mvW, mvY + mvH),
-                IM_COL32(255, 255, 255, 235), 16.0f * k);
-        }
-        // MV: only the modes this song actually has files for. `songBadges`
-        // checks charts/mv/<id4>.usm and <id4>_sekai.usm - both are 2D MVs, so
-        // mvMode 2 covers either; there is no 3D renderer, so mode 1 is never
-        // offered. No file at all -> the button is a static "无 MV".
+        // ---- BottomLeft/UIPartsLiveModeButton ---------------------------------
+        // 57,962  176x72  btn_round_h80_wh (106x96, border 51/0/51/0) 白
+        //   Text 128x72 @ (81,962) 28px #444466 居中
+        //   FrontGlowCover 184x80 eff_btn_round_h80_a70_wh，m_IsActive=0 → 悬停才亮
         {
+            const Rect r = R(57.0f, 962.0f, 176.0f, 72.0f);
+            const bool hot = hover(r.x0, r.y0, r.x1 - r.x0, r.y1 - r.y0) && !finalMenuUp;
+            if (hot) {
+                slice(finalTex(renderer, "eff_btn_round_h80_a70_wh"), 112, 104, 56.0f, 52.0f,
+                    56.0f, 52.0f, r.x0 - 4.0f * k, r.y0 - 4.0f * k, r.x1 + 4.0f * k,
+                    r.y1 + 4.0f * k, IM_COL32(255, 255, 255, 90));
+            }
+            slice(finalTex(renderer, "btn_round_h80_wh"), 106, 96, 51.0f, 0.0f, 51.0f, 0.0f,
+                r.x0, r.y0, r.x1, r.y1, IM_COL32(255, 255, 255, 255));
+            // MV: only the modes this song actually has files for. `songBadges`
+            // checks charts/mv/<id4>.usm and <id4>_sekai.usm - both are 2D MVs,
+            // so mvMode 2 covers either; there is no 3D renderer, so mode 1 is
+            // never offered.
             const SongBadges& mb = songBadges(entry.musicId);
             const bool has2d = mb.original || mb.mv2d;
             if (mvMode == 1) {
@@ -3628,56 +3703,46 @@ namespace
             if (mvMode == 2 && !has2d) {
                 mvMode = 0;
             }
-            static const char* kMvNames[3] = {"无 MV", "原曲 MV", "2D MV"};
-            addTextCentered(dl, body, 28.0f * k, ImVec2(mvX + mvW * 0.5f, mvY + mvH * 0.5f),
-                IM_COL32(68, 68, 102, 255), kMvNames[std::clamp(mvMode, 0, 2)]);
-            if (has2d && hit(mvX, mvY, mvW, mvH)) {
+            const char* mvLabel = (mvMode == 2) ? "2D MV" : "无 MV";
+            addTextCentered(dl, body, 28.0f * k, ImVec2((r.x0 + r.x1) * 0.5f, (r.y0 + r.y1) * 0.5f),
+                rgba(0.26666668f, 0.26666668f, 0.4f, 1.0f), mvLabel);
+            if (has2d && hit(r.x0, r.y0, r.x1 - r.x0, r.y1 - r.y0)) {
                 mvMode = (mvMode == 2) ? 0 : 2;
                 ui::se(ui::SeClick);
             }
         }
 
-        const float autoX = 822.6f * k;
-        const float autoY = 1014.4f * k;
-        const float autoW = 152.0f * k;
-        const float autoH = 56.0f * k;
-        const GLuint autoBg = finalTex(renderer, "bg_auto");
-        if (autoBg != 0) {
-            dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(autoBg)),
-                ImVec2(autoX - 14.0f * k, autoY - 27.0f * k),
-                ImVec2(autoX - 14.0f * k + 180.0f * k, autoY - 27.0f * k + 110.0f * k),
-                ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), IM_COL32(255, 255, 255, 255));
-        }
-
-        // UIPartsToggle: track bg_base_round_h56_wh (66x56, Border 33/28),
-        // knob 72x72 overhanging the 152x56 track by 8 on the active side
-        // (prefab On knob centre +47.5 from track centre, Off -47.5), text 29px.
-        const GLuint trackTex = finalTex(renderer, "bg_base_round_h56_wh");
-        const ImU32 trackCol = autoLive ? IM_COL32(255, 119, 170, 255) : IM_COL32(68, 68, 102, 255);
-        if (trackTex != 0) {
-            addNinePatch4(dl, trackTex, 66, 56, ImVec2(autoX, autoY),
-                ImVec2(autoX + autoW, autoY + autoH), 33.0f, 33.0f, 28.0f, 28.0f, k, trackCol);
-        } else {
-            dl->AddRectFilled(ImVec2(autoX, autoY), ImVec2(autoX + autoW, autoY + autoH),
-                trackCol, autoH * 0.5f);
-        }
-        const float knob = 72.0f * k;
-        const float knobCx = autoX + autoW * 0.5f + (autoLive ? 47.5f : -47.5f) * k;
-        const GLuint knobTex = selectTex(renderer, "btn_circle80_wh");
-        if (knobTex != 0) {
-            dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(knobTex)),
-                ImVec2(knobCx - knob * 0.5f, autoY + autoH * 0.5f - knob * 0.5f),
-                ImVec2(knobCx + knob * 0.5f, autoY + autoH * 0.5f + knob * 0.5f));
-        } else {
-            dl->AddCircleFilled(ImVec2(knobCx, autoY + autoH * 0.5f), knob * 0.5f,
-                IM_COL32(255, 255, 255, 255), 32);
-        }
-        addTextLeft(dl, body, 26.0f * k,
-            ImVec2(autoX + (autoLive ? 24.0f * k : 58.0f * k), autoY + autoH * 0.5f),
-            IM_COL32(255, 255, 255, 255), autoLive ? "ON" : "OFF");
-        if (hit(autoX, autoY, autoW, autoH)) {
-            autoLive = !autoLive;
-            ui::se(ui::SeClick);
+        // ---- BottomLeft/AutoLiveToggle ----------------------------------------
+        // 容器在 prefab 里是 0x110（代码里 SetNativeSize），bg_auto 是 180x110、
+        //   Sliced (border 119/0/51/0)、m_Color 白 —— 70% 的白色烤在贴图里，
+        //   "AUTO" 四个字母也烤在贴图上。中心 x=898.6、上边 932.4。
+        // ToggleRoot 822.6,1014.4  152x56：
+        //   Bg      bg_base_round_h56_wh (33/28/33/28)：On #FF77AA / Off #444466
+        //   Toggle  72x72 toggle_btn_wh（**贴图缺失**，用同尺寸的 btn_circle_h56_wh）
+        //           On 中心 (946.1,1042.4)、Off 中心 (850.6,1042.4)
+        //   TextOn / TextOff 29px 白，框 772.6..972.6 / 888.8..958.8，垂直中心 1041.9
+        {
+            const Rect card = R(808.6f, 932.4f, 180.0f, 110.0f);
+            plain(finalTex(renderer, "bg_auto"), card.x0, card.y0, card.x1, card.y1,
+                IM_COL32(255, 255, 255, 255));
+            const Rect track = R(822.6f, 1014.4f, 152.0f, 56.0f);
+            slice(finalTex(renderer, "bg_base_round_h56_wh"), 66, 56, 33.0f, 28.0f, 33.0f, 28.0f,
+                track.x0, track.y0, track.x1, track.y1,
+                autoLive ? rgba(1.0f, 0.46666667f, 0.6666667f, 1.0f)
+                         : rgba(0.26666668f, 0.26666668f, 0.4f, 1.0f));
+            const float knob = 72.0f * k;
+            const float knobCx = (autoLive ? 946.1f : 850.6f) * k;
+            const float knobCy = 1042.4f * k;
+            plain(finalTex(renderer, "btn_circle_h56_wh"), knobCx - knob * 0.5f,
+                knobCy - knob * 0.5f, knobCx + knob * 0.5f, knobCy + knob * 0.5f,
+                IM_COL32(255, 255, 255, 255));
+            addTextCentered(dl, body, 29.0f * k,
+                ImVec2((autoLive ? 872.6f : 923.8f) * k, 1041.9f * k), IM_COL32(255, 255, 255, 255),
+                autoLive ? "ON" : "OFF");
+            if (hit(track.x0, track.y0, track.x1 - track.x0, track.y1 - track.y0)) {
+                autoLive = !autoLive;
+                ui::se(ui::SeClick);
+            }
         }
 
         int finalResult = SelectNone;
@@ -3724,7 +3789,7 @@ namespace
                 ImGui::PushID(id);
                 ImGui::InvisibleButton("##hdr", ImVec2(btnD, btnD));
                 const bool hot = ImGui::IsItemHovered();
-                const bool hit = ImGui::IsItemClicked();
+                const bool h = ImGui::IsItemClicked();
                 ImGui::PopID();
                 const ImVec2 c(x + btnD * 0.5f, top + btnD * 0.5f);
                 if (circleTex != 0) {
@@ -3740,14 +3805,12 @@ namespace
                         ImVec2(c.x + iw * 0.5f, c.y + ih * 0.5f), ImVec2(0.0f, 0.0f),
                         ImVec2(1.0f, 1.0f), IM_COL32(68, 68, 102, 255));
                 }
-                return hit;
+                return h;
             };
             const bool backHit = headerButton(leftX, "finalback", backTex, 42.0f * k, 42.0f * k);
             const bool menuHit = headerButton(rightX, "finalmenu", menuTex, 40.0f * k, 34.0f * k);
             if (backHit) {
-                gFinalConfirmOpen = false;
-                gFinalStartAt = -1.0f;
-                gFinalBurstQueued = false;
+                requestPageSwitch(false, static_cast<float>(timeSec));
                 ui::se(ui::SeClick);
                 finalResult = SelectNone;
             } else if (menuHit) {
@@ -3760,9 +3823,7 @@ namespace
                 const int cmd = drawMenuDrawer(renderer, dl, w, h, k, title, body,
                     sortMode != nullptr ? *sortMode : 0);
                 if (cmd != CmdNone) {
-                    gFinalConfirmOpen = false;
-                    gFinalStartAt = -1.0f;
-                    gFinalBurstQueued = false;
+                    requestPageSwitch(false, static_cast<float>(timeSec));
                     switch (cmd) {
                     case CmdRescan:
                         finalResult = SelectRescan;
@@ -4302,10 +4363,8 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     DecideBurst* decideBurst)
 {
     int action = SelectNone;
-    if (gFinalConfirmOpen != gFinalWasOpen) {
-        gFinalWasOpen = gFinalConfirmOpen;
-        gFinalTransAt = timeSec;
-    }
+    // 转场：淡出走完就真正换页（换页动作在这里，不在点击那一帧）。
+    tickPageSwitch(timeSec);
     // 多人游玩: the room owns the song. The host keeps a normal, fully
     // interactive list (it is the one choosing); every other window gets a
     // greyed-out, read-only list whose phone panel shows whatever the host is
@@ -4489,6 +4548,27 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             gFinalVocal = vocalIndex;
             gFinalStartAt = -1.0f;
             gFinalBurstQueued = false;
+        }
+    }
+
+    // Debug (`CPSEKAI_FINAL_FADE=<sec>`): 在选曲页 t=<sec> 处自动走一次
+    // "列表 -> 最终确认" 的转场，配合 --screenshot-time 抓淡出/淡入的中间帧
+    // （例：`CPSEKAI_FINAL_FADE=1.0 --screenshot-time 1.08` 抓淡出，
+    //       `--screenshot-time 1.26` 抓淡入）。只是一次性的触发，不写存档。
+    {
+        static bool fadeInit = false;
+        static bool fadeArmed = true;
+        static float fadeAt = -1.0f;
+        if (!fadeInit) {
+            fadeInit = true;
+            if (const char* e = std::getenv("CPSEKAI_FINAL_FADE")) {
+                fadeAt = static_cast<float>(std::atof(e));
+            }
+        }
+        if (fadeArmed && fadeAt >= 0.0f && timeSec >= fadeAt && !gFinalConfirmOpen
+            && selected >= 0 && selected < static_cast<int>(entries.size())) {
+            fadeArmed = false;
+            requestPageSwitch(true, static_cast<float>(timeSec), selected, diffIndex, vocalIndex);
         }
     }
 
@@ -6058,12 +6138,8 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
                 // Enter on the list = 确定: go to the final-confirm page first;
                 // Enter *there* starts the live. Never start straight from the
                 // list (that skipped deck / auto / MV / start burst).
-                gFinalConfirmOpen = true;
-                gFinalEntry = selected;
-                gFinalDifficulty = diffIndex;
-                gFinalVocal = vocalIndex;
-                gFinalStartAt = -1.0f;
-                gFinalBurstQueued = false;
+                // 转场：先淡出，淡出走完再由 tickPageSwitch 翻页。
+                requestPageSwitch(true, static_cast<float>(timeSec), selected, diffIndex, vocalIndex);
                 action = SelectNone;
             }
         }
@@ -6652,12 +6728,8 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             } else if (selected >= 0) {
                 // 原作：确定 → ScreenLayerFreeLiveFinalConfirmation（卡组 /
                 // 自动演出 / MV）→ Start 才进 live。不要把 selected 直接返回。
-                gFinalConfirmOpen = true;
-                gFinalEntry = selected;
-                gFinalDifficulty = diffIndex;
-                gFinalVocal = vocalIndex;
-                gFinalStartAt = -1.0f;
-                gFinalBurstQueued = false;
+                // 转场：先淡出，淡出走完再由 tickPageSwitch 翻页。
+                requestPageSwitch(true, static_cast<float>(timeSec), selected, diffIndex, vocalIndex);
                 action = SelectNone;
             }
         }

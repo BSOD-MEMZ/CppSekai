@@ -50,6 +50,17 @@ CppSekai：Project SEKAI 风格 SUS 谱面 Windows 原生游玩器。
   虚化拖尾 = **一张 700×574**、alpha **76/255**、竖直按 `RectMask2D softness (0,389)` 渐隐。
   `phone_style.tsv` 有 260 条组件样式，`prefab_style.py` 可重跑。
   **再动手机面板的观感先看这篇**（第三遍复验在 §7，四个几何问题的证据都在那）。
+- `FINAL-CONFIRM.md` —— **最终确认页（703）的逐节点实测（2026-11-22）**：每个零件的
+  1920×1080 绝对矩形、sprite、`m_Type`、`m_Color`、字号，全部抄自 `final703.txt` +
+  `final_geo.txt` + `final_full.json`（含 **`m_IsActive`**）。三条要点：
+  ① **`m_Border` 是九宫格切边、顺序 左/下/右/上，不是圆角半径**（`btn_round_h80_wh` 是
+  51/0/51/0，写成 28/12 白色胶囊就被压扁）；② `bg_base_three_r16_wh` 面板 1080×624 @
+  (70.4,256)、空槽 5×200×510 **步距 207.66**（layout group `m_Spacing=7.66`，不是 16）；
+  ③ **`BG`/`BottomRight`/`DeckInfo` 的 `m_IsActive=0`** —— 那张 1546×555 的不透明白底、
+  右下角 354.5×116 的 決定、阵型缎带在这一页全是关的，别"补"回来。
+  另有 §5 **页面转场**：原作是 `coverFader` 的 **淡出→换页→淡入**（`0.15s` + `0.21s`
+  白盖色），不是闪白；`CPSEKAI_FINAL_FADE=<sec>` 可以无头抓中间帧。
+  **改最终确认页之前必读。**
 - `GPU-GLITCH.md` —— **两条画面异常的排查（2026-10-31）**：「画面过曝」= 扩展帧
   该收回的时候没收回，整局都跑在 DWM 逐像素合成下（`splashStyle == 0 ||` 混进运行期
   判断，恒真 → 已改成只按 `bgStyle == 2`）；「演奏中白条 + 卡住 + 屏幕黑一下」= TDR，

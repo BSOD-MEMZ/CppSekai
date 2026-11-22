@@ -243,6 +243,10 @@ cppsekai [--sus <file.sus>] [--bgm <audio>] [--charts <dir>] [--cover <image>]
 - **进度条悬停态**：`CPSEKAI_SEEK_HOVER=1` 假装指针停在进度条上（真鼠标在无头会话里
   动不了），用来截「加粗 + 白钮 + `1:24 / 3:07`」那一帧。文字用的是游戏的正文条
   （微软雅黑），不是 ImGui 默认点阵字。
+- **最终确认页 / 页面转场**：`CPSEKAI_FINAL_CONFIRM=1` 启动即停在最终确认页
+  （`CPSEKAI_FINAL_MENU=1` 连带把右侧抽屉拉开）；`CPSEKAI_FINAL_FADE=<秒>` 在选曲页
+  t=秒 处自动走一次「列表 → 最终确认」的转场，配 `--screenshot-time` 抓中间帧
+  （`+0.08` 淡出、`+0.26` 淡入）。几何与转场时序见 [FINAL-CONFIRM.md](FINAL-CONFIRM.md)。
 - **失血阴影**（掉血时四边变暗）：`CPSEKAI_VIGNETTE=0.85` 把阴影冻结在这个强度上，用来截无头对比图——
   掉血需要真人漏接，`--screenshot` 造不出来。`0` = 关（当对照图用）。
 - **曲末「LIVE CLEAR!」大字**：`CPSEKAI_BANNER_T=<秒>` 把那段 1.5167s 的动画**冻结**在指定时刻

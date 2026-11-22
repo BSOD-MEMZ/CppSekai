@@ -35,6 +35,11 @@ action 分支用 `game::finalConfirmBurstQueued()` 判断"最终页已经放过�
 `decideBurst.spawn()` 和 `-kDecideLead`，只把白屏从 0 接上；`se(SeStart)` 也只在
 最终页放一次。列表页的 `确定` / 回车路径不变（没有 queued 标记，照旧 spawn）。
 
+> **别和"页面转场"搞混**：选曲列表 ↔ 最终确认页之间**没有**爆闪，那是
+> `coverFader` 的淡出→换页→淡入（白盖色 0.15 s + 0.21 s），2026-11-22 之前我们
+> 错把它做成了"翻页那一帧白闪 210/255"，看着像闪屏。细节见
+> [`FINAL-CONFIRM.md`](../FINAL-CONFIRM.md) §5。爆闪只出现在**开始演出**那一步。
+
 ### 猜歌（选曲界面头排「猜歌」按钮 / `--guess`）
 
 用社区别名表当题库：`assets/select/guess.png` 图标，按钮就排在「音乐商店」右边
