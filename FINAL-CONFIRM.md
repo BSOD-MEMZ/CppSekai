@@ -53,15 +53,18 @@ DeckListView/DeckView
   DeckName            70.4, 200.7  375.7×55.4 bg_base_half_r16_wh  #DFDFEA a80%
     CustomText        32px #444466，左边缘 x=91.4，垂直中心 228.4
   TotalPower
-    Label/Tittle      「総合力」32px #444466，矩形 73.3..207.5
+    Label/Tittle      「総合力」32px #444466，**矩形 73.3..207.5、m_HorizontalAlignment=2（居中）**
+                      → 文字实际左缘 ≈92，左内边距 22px；左对齐到 73.3 会贴着面板边
     IconTotal         38×42 @ 221.4,278.8   icon_deckPower_dbl
     Value             280×32 右对齐到 x=430.2，32px #555577
     info              72×72 @ 441.8,263.5   btn_circle56_wh
       CustomImage     8×30  @ 473.8,284.6   icon_infomation（烘焙深色，别再自己画 "i"）
-DeckSelector/DeckSelectList
-  Base                70.4, 127.6  720.1×56 bg_base_round_h56_wh  #BCBCD0 a90%
-  Arrow 左/右          Image 80×108 @ 6.8,101.6 / 774.1,101.6
-                      **右箭头 Image 的 rotation 是 (0,1,0,0) = 绕 Y 180°，同一张图镜像**
+DeckSelector/DeckSelectList          ← 五格「01..05」页签，见 §2.1
+  Base                70.4, 127.6  720.13×56 bg_base_round_h56_wh  #BCBCD0 a90%
+  Base/CellRoot       同一矩形，HLG(align=3 MiddleLeft, spacing=0, childControl+ForceExpand)
+                      → 5 格**均分** 144.03×56（不是一条空胶囊）
+  Base/Arrow/…        两枚翻页箭头（72×102 @ ±33.6、**scale 0.38**）——
+                      5 格正好铺满 720，这一页不显示
 AutoEditButton        862.3, 119.7 296×72  btn_round_h80_wh，文字 28px #444466
 BottomLeft/UIPartsLiveModeButton  57, 962  176×72（同一张白胶囊），文字 28px
 BottomLeft/AutoLiveToggle
@@ -77,6 +80,65 @@ BottomLeft/AutoLiveToggle
                       这颗"小齿轮"prefab 摆在 AUTO 的**正中**（和开关同一个点），
                       两者不可能同时可见 —— 我们的摆法见 §3.1
 ```
+
+### 2.1 卡组那排「01..05」页签（2026-11-24 复察，推翻上一版）
+
+上一版把 `DeckSelectList` 画成一条**空胶囊 + 居中文字「默认队伍」**，还在胶囊两端摆了
+80×108 的大箭头 —— 两处都错。prefab 703 里那块是**五格页签控件**：
+
+| 证据 | 内容 |
+|---|---|
+| `DeckSelector`(go=258) 上的 `UIPartsSelector` | `cellRoot=247, leftArrow=1807, rightArrow=1478, coverObject=131` |
+| 同一 GO 上的 `UIPartsTabList` | `cellPrefab=DeckTabListCell`、**`cellCount = 5`** |
+| `DeckSelectList/Base` | 70.4,127.6 **720.13×56**，`bg_base_round_h56_wh`，`#BCBCD0` a90%（这条没错） |
+| `Base/CellRoot` | 与 Base 同矩形，`HorizontalLayoutGroup`：`m_ChildAlignment=3`(MiddleLeft)、`m_Spacing=0`、childControl+ForceExpand 全开 → **每格 720.13/5 = 144.03×56** |
+| `DeckTabListCell`（prefab 2018，同一 bundle） | 编辑器里 256×86；`CustomButton.image` = **`tab_nomal_lgn`**（整格底图）、`CustomText` = **32px `#444466`、MiddleCenter、零填充两位**（prefab 里 `m_Text: 02`）、`Pattern` = **`pattern_celectedTab_wh`**（锚顶、横向拉伸、**高 20**、Tiled、白）→ 选中的那格顶端一条 20px 花纹带；`MainSetting` / `Cover` 都 `m_IsActive=0` |
+
+也就是说原作卡组区从上到下是：**五格 01..05 页签条（720 宽）→「当前队伍」页签
+（375.7×55.4，底边压在面板顶边 256）→ 1080×624 卡组面板**。
+
+⚠ **`tab_nomal_lgn` / `pattern_celectedTab_wh` 两张贴图不在 APK 里。**
+日服 7.1.0 的 UI 图集是运行时下载的：AssetRipper 全量载入 7039 个 bundle
+（62.5 万资产）后按名字搜 `tab_no` / `pattern_` 都搜不到，`assets/` 里也没有。
+所以代码里这一版**只画编号**（几何/字号/颜色全部按实测），格底和选中花纹等拿到贴图再补。
+不要在没贴图的时候拿纯白矩形假装 —— 20px 白块正好压住 "01" 的上半截，比不画更糟。
+
+### 2.2 两对箭头：都不该出现在这一页
+
+| 位置 | 实测 | 为什么不是这一页可见的零件 |
+|---|---|---|
+| `DeckSelectList/Base/Arrow/UIPartsArrow{Left,Right}` | 父级 `Arrow` 撑满 56 高；子节点 72×102 @ x=∓33.6，**`m_LocalScale=0.38`** → 实显 **27.4×38.8**，中心 x=40.6 / 824.1、y=155.6 | 这是通用 `UIPartsSelector` 的**翻页**箭头：`Setup(..., isActiveArrow=false)` 默认关；5 格正好铺满 720，没有第二页 |
+| `DeckListView/UIPartsArrow{Left,Right}` | **72×102，scale=1**：左 21.4..93.4 / 右 1134..1206（y 518..620 / 493.8..595.8） | 右边那颗 **1134..1206 整个压在手机底下**（手机左缘 1144.85），不可能是这一页的设计；它们是 `DeckListView`（卡组编成页共用）的换卡组箭头，本页由页签直接选 |
+
+`DeckListView` 的脚本字段（`DeckSelector deckSelector / deckView / deckViewFrame /
+offsetStartTabPositionX / leftArrow / rightArrow / currentDeckIndex`，方法
+`InitializeDeckTabList` / `OnSelectDeckTabList` / `ChangeDeckNext` / `ChangeDeckBack`）
+说明换卡组**本来就是点页签**；`offsetStartTabPositionX` 是为"页签多于可见格"时平移用的，
+5 格场景用不到。
+
+示意图：[`docs/final-deck-1920.png`](docs/final-deck-1920.png)
+（`python .workbuddy/tools/gen_final_deck.py` 可重跑；红框是上面这两对箭头的位置）。
+
+### 2.3 2026-11-24 第二轮：圆头按钮 / AUTO 竖直居中 / 未实现改弹窗
+
+1. **圆头按钮被压成椭圆**：`btn_round_h80_wh` 是 106×96、`m_Border` 左/右 51、上下 0。
+   画进 72 高的矩形时，九宫格只把左右切边按 `k` 缩，圆头会变成 51 宽 × 72 高的竖椭圆
+   —— 这就是「自动编成 / 角色牵绊等级 / 无 MV」看着发尖的原因。
+   现在 `slice()` 里对「上下切边为 0」的胶囊按 **目标高/源高** 再缩一次
+   （72/96 → 38.25，半径 36 = 半高，正圆）。
+   **随后这四颗胶囊直接改成了矢量**（`capsule()` = `AddRectFilled` + 半径半高）：
+   `自动编成` / `角色牵绊等级` / `无 MV` / AUTO 轨道。官方贴图采样是纯平涂
+   （`btn_round_h80_wh`、`bg_base_round_h56_wh` 中心都是 255,255,255,255），
+   九宫格没带任何额外信息；矢量版和 `ui::capsuleDraw` 同几何、DPI 不糊。
+   实测两版截图差异 **0.66% 像素**，且全部落在圆头边缘 —— 除边缘 AA 外无差别。
+2. **AUTO 的开关/齿轮偏下**：`bg_auto` 是**标签片**（上半是 AUTO 小舌片、下半是胶囊），
+   而 prefab 里 `ToggleRoot` 的 y 是 1014.4、齿轮 1006.4，比卡片中心（1015.4）低 27px
+   —— 又是 `bg_auto.sizeDelta.x=0`（宽度运行时才给）留下的旧值，照它摆开关会贴卡片底边、
+   齿轮还会漏到卡片外。现在轨道 987.4..1043.4、旋钮/状态字/齿轮全部按卡片中心对齐。
+3. **未实现提示从 toast 改成弹窗**：「自动编成 / 角色羁绊等级 / 卡组页签 02..05 / 空槽位」
+   现在弹 `ui::messageDialog`（1168 卡片风格、缩放入场、遮罩、「确定」薄荷胶囊），
+   ESC 先关框、框开着时整页不吃点击。
+   无头抓图：`CPSEKAI_FINAL_DIALOG=1 CPSEKAI_FINAL_CONFIRM=1 ... --screenshot`。
 
 ### 3.1 AUTO 那张卡片（2026-11-22 第三轮，照国服截图重做）
 

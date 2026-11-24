@@ -50,6 +50,20 @@ CppSekai：Project SEKAI 风格 SUS 谱面 Windows 原生游玩器。
   虚化拖尾 = **一张 700×574**、alpha **76/255**、竖直按 `RectMask2D softness (0,389)` 渐隐。
   `phone_style.tsv` 有 260 条组件样式，`prefab_style.py` 可重跑。
   **再动手机面板的观感先看这篇**（第三遍复验在 §7，四个几何问题的证据都在那）。
+- `SELECT-FILTER.md` —— **选曲界面「絞り込み」弹窗 + 左侧团体页签（2026-11-23 实测）**：
+  筛选钮弹的是 `MusicSelectFilterDialog`（`DialogType 14`，prefab **1732**，**1168×1032** /
+  `DialogSize.Large`），内容只有三段：**クリア状況**（5 单选）/ **MV**（4 复选）/
+  **楽曲**（4 单选）+ 決定/キャンセル（336×96 各一颗）。单选组 **索引就是枚举值**
+  （`SelectedIndex = (int)MusicSelect*FilterType`），但**视觉顺序可以≠索引顺序**
+  （未AP=4 排在未スコアS=3 前面）；MV 存的是**未勾选集合** `UnCheckedFilterMVTypes[]`。
+  左侧竖排是 `MusicSelectUnitTabList`：`ALL/VOCALOID/LIGHT_MUSIC_CLUB/IDOL/STREET/
+  THEME_PARK/SCHOOL_REFUSAL/OTHER` +（可选）`LIMITED`(插在索引 1)/`TOURNAMENT`/`MY_LIST_1..5`；
+  只有前六个团是图标 tab（`icon_tab_unit_{vs|ln|mj|vb|ws|25}_{on|off}`），其余是文字、
+  字号按**字符串长度** 22/26/28。**"团体"不是算出来的，是 master `musicTags` 的 tag 行**
+  （`AssortUseCategoryMusic`：`GetMusicTagByCategoryType` → `GetMasterMusicTags(tag)` →
+  `IsPublished` + `ExistsDifficulty(当前难度)`），VOCALOID 页额外要 `IsForVirtualSinger`。
+  示意图 [`docs/select-filter-dialog.png`](docs/select-filter-dialog.png)，
+  生成脚本 `.workbuddy/tools/gen_select_filter_dialog.py`。**再动筛选弹窗或左侧页签先看这篇。**
 - `FINAL-CONFIRM.md` —— **最终确认页（703）的逐节点实测（2026-11-22）**：每个零件的
   1920×1080 绝对矩形、sprite、`m_Type`、`m_Color`、字号，全部抄自 `final703.txt` +
   `final_geo.txt` + `final_full.json`（含 **`m_IsActive`**）。三条要点：
@@ -111,6 +125,9 @@ CppSekai：Project SEKAI 风格 SUS 谱面 Windows 原生游玩器。
   358 首：只有原曲 158 / 只有セカイ 172 / 两版都有 28。两版在镜像上**同名**
   `<id4>.usm`，本地靠 `mv/<id4>.usm` 与 `mv/<id4>_sekai.usm` 区分，播放器优先前者。
   **别去试表外的歌**（404）。
+- `music-categories.json` / `.workbuddy/tools/gen_music_categories.py` —— **哪些歌有 3D / 2D /
+  原曲 MV**（master `musicCategories` 导出，479 首）。筛选弹窗的 MV 那一段就靠它；
+  表里没有的歌（日服 241/290、国服 17 首）按"没有任何 MV"处理。见 `SELECT-FILTER.md` §8。
 - `MULTI-LIVE-UI.md` —— **多人演出 UI 的原作结构（2026-11-15）**：`MultiLiveFrontView` 与
   单人 `LiveFrontView` 的逐字段差分（换 `MultiScoreView`/`MultiCutinManager`/`tapEffectArray`，
   加 `MultiThumbnailViewGroup`/`MultiFeverView`）、头像块内部**自带一整套 ComboView**、

@@ -2932,6 +2932,21 @@ int main(int argc, char** argv)
         }
     }
 
+    // 原作的 musicCategories（music-categories.json，master 表导出，见
+    // .workbuddy/tools/gen_music_categories.py）。选曲「絞り込み」的 MV 那一段
+    // 靠它：3DMVあり / 2DMVあり / 原曲MVあり / MVなし。缺文件就整段失效（全都不
+    // 过滤），和原作在表不可用时 BuildCategories 返回空表是同一个行为。
+    for (const std::string& candidate :
+        {baseDir + "music-categories.json", baseDir + "..\\music-categories.json",
+            std::string("music-categories.json")}) {
+        std::ifstream probe(candidate, std::ios::binary);
+        if (probe.good()) {
+            probe.close();
+            game::loadMusicCategories(candidate);
+            break;
+        }
+    }
+
     // Community song aliases (music-aliases.json, next to the two tables
     // above). Sourced from the public HarukiBot API - see
     // .workbuddy/tools/fetch_music_aliases.py. Also optional: it only widens
@@ -9903,12 +9918,18 @@ int main(int argc, char** argv)
 
             const bool autoBeforeSelect = autoPlay;
             const int mvBeforeSelect = userSettings.mvMode;
+            // 筛选弹窗点「决定」后这三个值会变（原作也是把 MusicSelectSortFilterData
+            // 落盘），所以和 mvMode 一样做一次"变没变"的比较，变了才写文件。
+            const int clearFilterBefore = userSettings.clearFilter;
+            const int mvUncheckedBefore = userSettings.mvUnchecked;
+            const int musicFilterBefore = userSettings.musicFilter;
             // 选曲卡片的频谱：从预览曲的音频里量（自己的解码器，不碰播放流）。
             float previewBands[6] = {};
             const bool previewBandsOk = audio.previewSpectrum(previewBands);
             int action = game::drawSongSelect(renderer, entries, selected, windowW, windowH,
                 static_cast<float>(uiClock), userSettings.sortMode, userSettings.groupMode,
                 userSettings.unitTab,
+                userSettings.clearFilter, userSettings.mvUnchecked, userSettings.musicFilter,
                 selectedVocal, userSettings.uiScale, &selectConfirmCenter, &selectPhoneScreen,
                 userSettings.deckPower, &autoPlay, &userSettings.mvMode, &account,
                 party.active() ? &selParty : nullptr, party.active() ? &selPartyOut : nullptr,
@@ -9928,6 +9949,11 @@ int main(int argc, char** argv)
                 persistUserData();
             }
             if (userSettings.mvMode != mvBeforeSelect) {
+                persistUserData();
+            }
+            if (userSettings.clearFilter != clearFilterBefore
+                || userSettings.mvUnchecked != mvUncheckedBefore
+                || userSettings.musicFilter != musicFilterBefore) {
                 persistUserData();
             }
             // 右键 / 长按曲目 → 收藏夹切换。按 musicId 记（同一首曲子的四个难度共享），
@@ -10810,6 +10836,10 @@ int main(int argc, char** argv)
                     session.scoreRecorded = true;
                     const bool cleared = st.life > 0.0f;
                     const bool fullCombo = cleared && st.miss == 0;
+                    // ALL PERFECT: 满 combo 且一个 GREAT/GOOD/BAD 都没有。同一套判据
+                    // 结算页用（下面 resultData / 多人 mine 都这么算），筛选弹窗的
+                    // 「未AP」也读这个位，三处必须一致。
+                    const bool allPerfect = fullCombo && st.great == 0 && st.good == 0 && st.bad == 0;
                     const std::string key = game::scoreKey(session.entry);
                     // Keep the old best for the result screen's 最高得分 /
                     // 新纪录! before the merge below overwrites it. Read with
@@ -10821,7 +10851,7 @@ int main(int argc, char** argv)
                         prevIt != scores.end() ? prevIt->second : game::ScoreRecord{};
                     resultPreviousBest = prevRecord.bestScore;
                     if (!autoRun) {
-                        scores[key] = game::mergeScore(prevRecord, cleared, fullCombo, st.score);
+                        scores[key] = game::mergeScore(prevRecord, cleared, fullCombo, allPerfect, st.score);
                     }
                     // Player rank: an official live grants the score-rank exp
                     // times the 演出能量 (ライブボーナス) multiplier. Same score-rank

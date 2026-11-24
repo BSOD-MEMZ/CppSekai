@@ -81,7 +81,11 @@ cp -f build/SDL2.dll "$OUT/"
 cp -f icon.png "$OUT/"
 
 # Documented data tables (see COPYRIGHT.md: factual data, rebuildable by setup.sh).
-cp -f musics.json music-vocals.json music-levels.json music-aliases.json "$OUT/"
+# music-categories.json is what makes the 筛选弹窗's MV section mean anything
+# (master musicCategories, 479 songs); without it every song reads as "no MV"
+# and an MV filter would empty the list.
+cp -f musics.json music-vocals.json music-levels.json music-aliases.json \
+      music-mv.json music-categories.json "$OUT/"
 
 # Sprites / UI sounds / splash art the game loads at startup. With
 # these in place the package runs as-is (assets are resolved relative to the

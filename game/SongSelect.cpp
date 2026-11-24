@@ -28,6 +28,7 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <set>
 #include <random>
 #include <sstream>
 #include <string>
@@ -42,6 +43,21 @@ namespace game
 namespace
 {
     namespace fs = std::filesystem;
+
+    // -----------------------------------------------------------------
+    // 筛选弹窗（原作 MusicSelectFilterDialog）的三个枚举。数字就是原作的枚举值
+    // —— 弹窗里的单选组索引直接写进这三个字段（SelectedIndex = (int)枚举），
+    // 所以这里的顺序不能改，改了就跟着原作一起错。
+    // -----------------------------------------------------------------
+    constexpr int kClearFilterCount = 5; // すべて/未クリア/未フルコンボ/未スコアS/未AP
+    constexpr int kMusicFilterCount = 4; // すべて/書き下ろし/APPENDあり/クリエイト譜面あり
+    constexpr int kMvTypeCount = 4;      // 3DMV/2DMV/原曲MV/MVなし
+    constexpr int kMvAllMask = (1 << kMvTypeCount) - 1;
+    // MusicSelectMVFilterType 的顺序，和 music-categories.json 的位一一对应。
+    constexpr unsigned kMvBit3D = 1u << 0;
+    constexpr unsigned kMvBit2D = 1u << 1;
+    constexpr unsigned kMvBitOriginal = 1u << 2;
+    constexpr int kMvNoneIndex = 3; // 三个 bit 全 0 = 「MVなし」
 
     // See path_utf8.hpp. Every std::string path in this file is UTF-8; these
     // are the only sanctioned ways across the fs::path boundary.
@@ -331,6 +347,10 @@ namespace
     // -----------------------------------------------------------------
     std::map<int, std::string> gMusicKana;
     std::map<int, std::string> gMusicTitles;
+    // musics.json 的 isNewlyWrittenMusic（「絞り込み > 楽曲 > 書き下ろし楽曲」）。
+    std::set<int> gMusicNewlyWritten;
+    // music-categories.json：song id -> MV 位掩码（见 kMvBit*）。
+    std::map<int, unsigned> gMusicMvMask;
 
     void storeKana(int musicId, const std::string& kana)
     {
@@ -545,6 +565,11 @@ int gFinalDifficulty = 3;
 int gFinalVocal = 0;
 std::string gFinalToast;
 double gFinalToastUntil = 0.0;
+// 未实现功能的提示走 pjsk 风格的 messageDialog（不是底部 toast）：
+//   点「自动编成 / 角色羁绊等级 / 卡组页签 02..05 / 空槽位」就把它立起来，
+//   `messageDialog` 自己的出入场动画、遮罩、确定键都现成。
+std::string gFinalDialogText;
+bool gFinalDialogOpen = false;
 void debugOpenProfileCard(bool open)
 {
     gProfileOpen = open;
@@ -575,6 +600,14 @@ bool gVocalPanelOpen = false;
 // very frame it is dismissed (the bug the 猜歌 card hit).
 bool gFilterOpen = false;
 bool gFilterAlive = false;
+// 弹窗里"尚未决定"的三个值。原作 MusicSelectFilterDialog 也是这个结构：
+// Setup() 把 sortFilterData 的三条抄进 dialog 自己的 SettingData，用户在里面随便
+// 点，只有 OnClickOK 才把结果写回 sortFilterData；点 キャンセル / 右上 X / 点外面
+// 一律丢弃。所以这些是**草稿**，不能直接改 settings —— 否则点取消也会生效。
+int gFilterDraftClear = 0;
+int gFilterDraftMvUnchecked = 0;
+int gFilterDraftMusic = 0;
+bool gFilterDraftReady = false; // 打开那一刻从 settings 抄过一次没有
 float gVocalPanelScroll = 0.0f; // card list offset, in screen pixels
 int gVocalPanelSong = -1;       // musicId the offset belongs to (a new song resets it)
 
@@ -998,11 +1031,13 @@ void setSelectTransparentBackground(bool enabled)
     gSelectFillDisabled = enabled;
 }
 
-ScoreRecord mergeScore(const ScoreRecord& old, bool cleared, bool fullCombo, double score)
+ScoreRecord mergeScore(const ScoreRecord& old, bool cleared, bool fullCombo, bool allPerfect,
+    double score)
 {
     ScoreRecord out = old;
     out.cleared = out.cleared || cleared;
     out.fullCombo = out.fullCombo || fullCombo;
+    out.allPerfect = out.allPerfect || allPerfect;
     out.bestScore = std::max(out.bestScore, score);
     return out;
 }
@@ -1018,6 +1053,7 @@ void applyScores(std::vector<ChartEntry>& entries, const std::map<std::string, S
         const auto it = scores.find(scoreKey(e));
         e.cleared = it != scores.end() && it->second.cleared;
         e.fullCombo = it != scores.end() && it->second.fullCombo;
+        e.allPerfect = it != scores.end() && it->second.allPerfect;
         e.bestScore = it != scores.end() ? it->second.bestScore : 0.0;
     }
 }
@@ -1323,12 +1359,14 @@ void loadUserData(const std::string& path, UserSettings& settings,
             for (auto it = scoreDoc.begin(); it != scoreDoc.end(); ++it) {
                 if (!it.value().is_object()
                     || (!it.value().contains("cleared") && !it.value().contains("fullCombo")
+                        && !it.value().contains("allPerfect")
                         && !it.value().contains("bestScore"))) {
                     continue; // not a score record (e.g. the "settings" object)
                 }
                 ScoreRecord rec;
                 rec.cleared = it.value().value("cleared", false);
                 rec.fullCombo = it.value().value("fullCombo", false);
+                rec.allPerfect = it.value().value("allPerfect", false);
                 rec.bestScore = it.value().value("bestScore", 0.0);
                 scores[it.key()] = rec;
             }
@@ -1409,6 +1447,12 @@ void loadUserData(const std::string& path, UserSettings& settings,
             settings.sortMode = s.value("sortMode", settings.sortMode);
             settings.groupMode = s.value("groupMode", settings.groupMode);
             settings.unitTab = s.value("unitTab", settings.unitTab);
+            // 筛选弹窗的三条（原作 MusicSelectSortFilterSettingData 的同名字段）。
+            settings.clearFilter = std::clamp(
+                s.value("clearFilter", settings.clearFilter), 0, kClearFilterCount - 1);
+            settings.mvUnchecked = s.value("mvUnchecked", settings.mvUnchecked) & kMvAllMask;
+            settings.musicFilter = std::clamp(
+                s.value("musicFilter", settings.musicFilter), 0, kMusicFilterCount - 1);
             settings.liveBonus = s.value("liveBonus", settings.liveBonus);
             // Missing in an old profile: the ELUA shows once, which is exactly
             // what an existing install should see after this version lands.
@@ -1521,7 +1565,7 @@ void saveUserData(const std::string& path, const UserSettings& settings,
     nlohmann::json scoreDoc = nlohmann::json::object();
     for (const auto& [name, rec] : scores) {
         scoreDoc[name] = {{"cleared", rec.cleared}, {"fullCombo", rec.fullCombo},
-            {"bestScore", rec.bestScore}};
+            {"allPerfect", rec.allPerfect}, {"bestScore", rec.bestScore}};
     }
     nlohmann::json doc;
     doc["settings"] = {
@@ -1583,6 +1627,10 @@ void saveUserData(const std::string& path, const UserSettings& settings,
         {"sortMode", settings.sortMode},
         {"groupMode", settings.groupMode},
         {"unitTab", settings.unitTab},
+        // 筛选弹窗（原作 MusicSelectSortFilterSettingData 的同名字段）。
+        {"clearFilter", settings.clearFilter},
+        {"mvUnchecked", settings.mvUnchecked},
+        {"musicFilter", settings.musicFilter},
         {"liveBonus", settings.liveBonus},
         {"eulaAccepted", settings.eulaAccepted},
         {"tutorialDone", settings.tutorialDone},
@@ -1781,6 +1829,9 @@ std::vector<ChartEntry> scanChartFolder(const std::string& dir)
             item.level = sideField("level");
         }
         item.mv = sideField("mv");
+        // 筛选用的两个曲目属性（见 music-categories.json / musics.json）。
+        item.mvMask = musicMvMask(item.musicId);
+        item.newlyWritten = musicIsNewlyWritten(item.musicId);
         item.displayName = item.title.empty() ? prettyFileName(stem) : item.title;
 
         item.coverPath = findSidecar(path, imageExt, {"jacket", "cover"});
@@ -1839,6 +1890,10 @@ namespace
         std::string kana; // official reading for sorting / grouping
         int musicId = 0; // song id, for the official level table
         int unit = 0;    // 团体页签 (CategoryTabType), see unitForMusic()
+        // 筛选弹窗用到的两个曲目属性（都是整组的，与难度无关）。
+        unsigned mvMask = 0;         // 3D/2D/原曲 MV 位掩码，0 = MVなし
+        bool newlyWritten = false;   // 書き下ろし楽曲
+        bool hasAppend = false;      // 这一组里有 APPEND 谱面
         int idx[kDiffCount] = {-1, -1, -1, -1, -1};
     };
 
@@ -2301,6 +2356,8 @@ namespace
                 group.musicId = item.musicId;
                 group.unit = unitForMusic(item.musicId);
                 group.kana = item.kana.empty() ? pronunciationFor(item.musicId) : item.kana;
+                group.mvMask = item.mvMask;
+                group.newlyWritten = item.newlyWritten;
                 groups.push_back(group);
                 titleIsReal.push_back(!item.title.empty());
             }
@@ -2320,6 +2377,15 @@ namespace
             if (group.artist.empty()) group.artist = item.artist;
             if (group.vocal.empty()) group.vocal = item.vocal;
             if (group.coverPath.empty()) group.coverPath = item.coverPath;
+            // 第一张谱面可能还没解析出 musicId（文件名没有 id、sidecar 也没有），
+            // 后面补上 id 时这两个曲目属性要跟着补。
+            if (group.mvMask == 0) {
+                group.mvMask = item.mvMask;
+            }
+            group.newlyWritten = group.newlyWritten || item.newlyWritten;
+            if (item.difficulty == "APPEND") {
+                group.hasAppend = true;
+            }
             const int d = diffIndexOf(item.difficulty);
             if (d >= 0 && group.idx[d] < 0) {
                 group.idx[d] = i;
@@ -3347,6 +3413,13 @@ namespace
                 dbgMenu = true;
                 gMenuOpen = true;
             }
+            // 无头看提示框用：CPSEKAI_FINAL_DIALOG=1 直接把「未实现」弹窗立起来。
+            static bool dbgDialog = false;
+            if (!dbgDialog && std::getenv("CPSEKAI_FINAL_DIALOG") != nullptr) {
+                dbgDialog = true;
+                gFinalDialogText = "自动编成尚未实现。";
+                gFinalDialogOpen = true;
+            }
         }
         ImDrawList* dl = ImGui::GetWindowDrawList();
         const ImGuiIO& io = ImGui::GetIO();
@@ -3362,11 +3435,15 @@ namespace
         const float finalMenuT = ui::anim(0x4a57b000u, gMenuOpen, 20.0f);
         const bool finalMenuUp = gMenuOpen || finalMenuT > 0.0005f;
         // 转场期间整页不接受点击：淡出那 0.15 s 里玩家还能点到开始钮的话，
-        // 白屏上会先爆一颗闪再换页。
+        // 白屏上会先爆一颗闪再换页。提示框开着时同理（先把框关掉再说）。
         const bool clicked = ui::mouseClicked(ImGuiMouseButton_Left) && !finalMenuUp
-            && !pageSwitchBusy();
+            && !pageSwitchBusy() && !gFinalDialogOpen;
         if (ui::keyPressed(ImGuiKey_Escape)) {
-            if (gMenuOpen) {
+            if (gFinalDialogOpen) {
+                // 先关提示框：它开着的时候 ESC 不该把人踢回选曲页。
+                gFinalDialogOpen = false;
+                ui::se(ui::SeWindowClose);
+            } else if (gMenuOpen) {
                 // ESC 先关抽屉；抽屉开着时不要顺手退出最终页。
                 gMenuOpen = false;
                 ui::se(ui::SeWindowClose);
@@ -3388,12 +3465,38 @@ namespace
                 static_cast<int>(b * 255.0f + 0.5f), static_cast<int>(a * 255.0f + 0.5f));
         };
         // 九宫格（Unity m_Type=1 Sliced）：切边是源图像素，随 k 缩放。
+        // ⚠ 圆头按钮（上下切边 = 0，比如 btn_round_h80_wh 106x96 / border 51/0/51/0）
+        //   画进 72 高的矩形时，51px 的圆头会被**竖向压扁成椭圆**，看起来又尖又硬；
+        //   这里按目标高度 / 源高度把左右切边一起缩，圆头就回到正圆
+        //   （72 高 → 51*0.75 = 38.25，半径 36，正好是半高）。
         const auto slice = [&](GLuint tex, int sw, int sh, float l, float b, float r, float t,
                                float x0, float y0, float x1, float y1, ImU32 tint) {
             if (tex == 0) {
                 return;
             }
+            if (k > 0.0f) {
+                const float wpx = (x1 - x0) / k;
+                const float hpx = (y1 - y0) / k;
+                if (t <= 0.0f && b <= 0.0f && sh > 0) {
+                    const float sy = hpx / static_cast<float>(sh);
+                    l *= sy;
+                    r *= sy;
+                }
+                if (l <= 0.0f && r <= 0.0f && sw > 0) {
+                    const float sx = wpx / static_cast<float>(sw);
+                    t *= sx;
+                    b *= sx;
+                }
+            }
             addNinePatch4(dl, tex, sw, sh, ImVec2(x0, y0), ImVec2(x1, y1), l, r, t, b, k, tint);
+        };
+        // 纯白/纯色胶囊一律走矢量：官方贴图本身就是平涂 + 1px 软边
+        // （btn_round_h80_wh / bg_base_round_h56_wh 采样中心都是 255,255,255,255），
+        // 九宫格没有多带任何信息，反而在 72 高时把圆头压成椭圆、在 1.25/1.5 倍
+        // DPI 下发糊。半径 = 半高，和 ui::capsuleDraw 的几何一致（那边是给
+        // 弹窗用的带投影/按压反色版本，这里是页面里的静态按钮，只借形状）。
+        const auto capsule = [&](float x0, float y0, float x1, float y1, ImU32 fill) {
+            dl->AddRectFilled(ImVec2(x0, y0), ImVec2(x1, y1), fill, (y1 - y0) * 0.5f);
         };
         // Simple（m_Type=0）：整张拉到矩形里。
         const auto plain = [&](GLuint tex, float x0, float y0, float x1, float y1, ImU32 tint) {
@@ -3428,34 +3531,64 @@ namespace
                 r.x0, r.y0, r.x1, r.y1, rgba(0.8745098f, 0.8745098f, 0.91764706f, 0.8f));
         }
 
-        // ---- DeckSelector：顶部那条 720 宽的选择条 ------------------------------
-        // DeckSelectList/Base      70.4,127.6  720.1x56  bg_base_round_h56_wh
-        //                          (66x56, border 33/28/33/28) #BCBCD0 a90%
-        // DeckSelectList/Cover     m_IsActive=0
-        // Arrow/UIPartsArrow{Left,Right}/ClickArea/Image
-        //   两个 Image 都是 80x108：左 (6.8,101.6)、右 (774.1,101.6)；右箭头 Image 的
-        //   rotation 是 (0,1,0,0) = 绕 Y 转 180°，**同一张图水平镜像**（prefab 里没有
-        //   第二张箭头贴图）。上一版把左边那张也镜像了，左箭头就朝右了。
+        // ---- DeckSelector：五格「01..05」队伍页签 -------------------------------
+        // 全部来自 prefab 703（`{"C":{"B":{"P":[0]},"I":0},"D":703}`）：
+        //   DeckSelector(go=258) 上挂着两个脚本——
+        //     UIPartsSelector   { cellRoot=247, leftArrow=1807, rightArrow=1478,
+        //                         coverObject=131 }
+        //     UIPartsTabList    { selector=2080, cellPrefab=DeckTabListCell,
+        //                         **cellCount = 5** }
+        //   DeckSelectList/Base    70.4,127.6  720.13x56  bg_base_round_h56_wh
+        //                          (66x56, border 33/28/33/28) #BCBCD0 a90%  m_Type=1
+        //   Base/Cover             m_IsActive=0（黑色 50% 的遮罩，别画）
+        //   Base/CellRoot          HLG: align=3(MiddleLeft) spacing=0
+        //                          childControl+ForceExpand 全开 → 5 格**均分**
+        //                          → 每格 720.13/5 = 144.03 x 56
+        //   每格 = DeckTabListCell（prefab 2018，编辑器里 256x86）：
+        //     CustomButton.image  = tab_nomal_lgn（整格底图，Sliced）
+        //     CustomText          = 32px #444466，对齐 4（MiddleCenter），m_Text "02"
+        //                           → 编号是 **零填充两位**，01..05
+        //     Pattern             = pattern_celectedTab_wh，锚顶、横向拉伸、高 20，
+        //                           Tiled、白 → **选中的那一格顶端一条 20px 白带**
+        //     MainSetting / Cover 都 m_IsActive=0
+        // ⚠ tab_nomal_lgn / pattern_celectedTab_wh 这两张贴图**不在 APK 里**
+        //   （UI 图集是运行时下载的，AssetRipper 全量搜过：没有），assets/ 也没有。
+        //   所以这一版**不画格底、也不画选中那条白带**（白带是 Tiled 的花纹，
+        //   用纯白矩形假装会正好压住 "01" 的上半截，比不画更糟）；
+        //   只画编号。拿到贴图后补两行即可，几何不用改：
+        //     格底   slice(tab_nomal_lgn, …) 撑满 cell
+        //     选中   顶端 20px：plain(pattern_celectedTab_wh) / Tiled
+        // ⚠ **不要在这条上面加左右箭头**。Base/Arrow 下的那对
+        //   UIPartsArrow{Left,Right} 是通用 UIPartsSelector 的翻页箭头
+        //   （72x102 @ ±33.6、scale 0.38，Setup(..., isActiveArrow=false) 默认关；
+        //   5 格正好铺满 720，没有"下一页"），而 DeckListView 自己那对 72x102
+        //   大箭头（左 21.4..93.4 / 右 1134..1206）右边那颗整个压在手机底下
+        //   （手机左缘 1144.85）—— 两对都不是这一页可见的零件。上一版把
+        //   Base/Image 的 80x108 原尺寸摆在条子两端，就是"箭头放错地方"的来源。
         {
-            const Rect pill = R(70.4f, 127.6f, 720.1f, 56.0f);
+            const Rect bar = R(70.4f, 127.6f, 720.13f, 56.0f);
             slice(finalTex(renderer, "bg_base_round_h56_wh"), 66, 56, 33.0f, 28.0f, 33.0f, 28.0f,
-                pill.x0, pill.y0, pill.x1, pill.y1, rgba(0.7372549f, 0.7372549f, 0.8156863f, 0.9019608f));
-            addTextCentered(dl, body, 30.0f * k,
-                ImVec2((pill.x0 + pill.x1) * 0.5f, (pill.y0 + pill.y1) * 0.5f),
-                rgba(0.26666668f, 0.26666668f, 0.4f, 1.0f), "默认队伍");
-            // 只有一套卡组 → 两个箭头都是禁用态：用 Unity Button 的默认
-            // disabledColor (0.78,0.78,0.78,0.5) 当 tint。**不要**在箭头后面垫
-            // 一块深色矩形 —— 那是我们自己的发明，会看出两个突兀的方块。
-            const ImU32 arrowTint = IM_COL32(199, 199, 199, 128);
-            const GLuint arrowTex = finalTex(renderer, "btn_arrow_switching_wh");
-            const Rect al = R(6.8f, 101.6f, 80.0f, 108.0f);
-            plain(arrowTex, al.x0, al.y0, al.x1, al.y1, arrowTint);
-            const Rect ar = R(774.1f, 101.6f, 80.0f, 108.0f);
-            if (arrowTex != 0) {
-                // 镜像：uv 的 u 反过来（等价于 prefab 里绕 Y 转 180°）。
-                dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(arrowTex)),
-                    ImVec2(ar.x0, ar.y0), ImVec2(ar.x1, ar.y1), ImVec2(1.0f, 0.0f),
-                    ImVec2(0.0f, 1.0f), arrowTint);
+                bar.x0, bar.y0, bar.x1, bar.y1, rgba(0.7372549f, 0.7372549f, 0.8156863f, 0.9019608f));
+            constexpr int kDeckTabs = 5; // DeckSelector.cellCount
+            const float cellW = 720.13f / kDeckTabs;
+            for (int i = 0; i < kDeckTabs; ++i) {
+                const float cx0 = 70.4f + cellW * static_cast<float>(i);
+                const Rect cell = R(cx0, 127.6f, cellW, 56.0f);
+                const bool selected = i == 0; // 本作只有一套队伍（settings.deckPower）
+                char label[8];
+                std::snprintf(label, sizeof(label), "%02d", i + 1);
+                addTextCentered(dl, body, 32.0f * k,
+                    ImVec2((cell.x0 + cell.x1) * 0.5f, (cell.y0 + cell.y1) * 0.5f),
+                    rgba(0.26666668f, 0.26666668f, 0.4f, 1.0f), label);
+                if (hit(cell.x0, cell.y0, cell.x1 - cell.x0, cell.y1 - cell.y0)) {
+                    if (selected) {
+                        ui::se(ui::SeClick);
+                    } else {
+                        gFinalDialogText = "卡组系统尚未实现，现在只有一套队伍。";
+                        gFinalDialogOpen = true;
+                        ui::se(ui::SeClick);
+                    }
+                }
             }
         }
 
@@ -3471,13 +3604,12 @@ namespace
                     56.0f, 52.0f, r.x0 - 4.0f * k, r.y0 - 4.0f * k, r.x1 + 4.0f * k,
                     r.y1 + 4.0f * k, IM_COL32(255, 255, 255, 90));
             }
-            slice(finalTex(renderer, "btn_round_h80_wh"), 106, 96, 51.0f, 0.0f, 51.0f, 0.0f,
-                r.x0, r.y0, r.x1, r.y1, IM_COL32(255, 255, 255, 255));
+            capsule(r.x0, r.y0, r.x1, r.y1, IM_COL32(255, 255, 255, 255));
             addTextCentered(dl, body, 28.0f * k, ImVec2((r.x0 + r.x1) * 0.5f, (r.y0 + r.y1) * 0.5f),
                 rgba(0.26666668f, 0.26666668f, 0.4f, 1.0f), "自动编成");
             if (hit(r.x0, r.y0, r.x1 - r.x0, r.y1 - r.y0)) {
-                gFinalToast = "自动编成尚未实现";
-                gFinalToastUntil = static_cast<double>(timeSec) + 2.2;
+                gFinalDialogText = "自动编成尚未实现。";
+                gFinalDialogOpen = true;
                 ui::se(ui::SeClick);
             }
         }
@@ -3502,7 +3634,10 @@ namespace
         // info                   72x72 @ (441.8,263.5) btn_circle56_wh(Simple)
         //                        + CustomImage icon_infomation 8x30 @ (473.8,284.6)
         {
-            addTextLeft(dl, body, 32.0f * k, ImVec2(73.3f * k, 300.0f * k),
+            // prefab: Tittle 的 RectTransform 是 73.3..207.5（宽 134），
+            // **m_HorizontalAlignment = 2（居中）**、字号 32、#444466。
+            // 上一版是左对齐到 73.3，离面板左缘只有 2.9px —— 看着"padding 没了"。
+            addTextCentered(dl, body, 32.0f * k, ImVec2(140.4f * k, 300.0f * k),
                 rgba(0.26666668f, 0.26666668f, 0.4f, 1.0f), "综合力");
             const Rect iconR = R(221.4f, 278.8f, 38.0f, 42.0f);
             plain(finalTex(renderer, "icon_deckPower_dbl"), iconR.x0, iconR.y0, iconR.x1, iconR.y1,
@@ -3539,13 +3674,12 @@ namespace
                     56.0f, 52.0f, r.x0 - 4.0f * k, r.y0 - 4.0f * k, r.x1 + 4.0f * k,
                     r.y1 + 4.0f * k, IM_COL32(255, 255, 255, 90));
             }
-            slice(finalTex(renderer, "btn_round_h80_wh"), 106, 96, 51.0f, 0.0f, 51.0f, 0.0f,
-                r.x0, r.y0, r.x1, r.y1, IM_COL32(255, 255, 255, 255));
+            capsule(r.x0, r.y0, r.x1, r.y1, IM_COL32(255, 255, 255, 255));
             addTextCentered(dl, body, 28.0f * k, ImVec2((r.x0 + r.x1) * 0.5f, (r.y0 + r.y1) * 0.5f),
                 rgba(0.26666668f, 0.26666668f, 0.4f, 1.0f), "角色牵绊等级");
             if (hit(r.x0, r.y0, r.x1 - r.x0, r.y1 - r.y0)) {
-                gFinalToast = "角色羁绊等级尚未实现";
-                gFinalToastUntil = static_cast<double>(timeSec) + 2.2;
+                gFinalDialogText = "角色羁绊等级尚未实现。";
+                gFinalDialogOpen = true;
                 ui::se(ui::SeClick);
             }
         }
@@ -3614,8 +3748,8 @@ namespace
                 plain(plusTex, mid.x - ph, mid.y - ph, mid.x + ph, mid.y + ph,
                     rgba(0.6901961f, 0.7411765f, 0.78431374f, 1.0f));
                 if (hit(c.x0, c.y0, c.x1 - c.x0, c.y1 - c.y0)) {
-                    gFinalToast = "卡组编成功能尚未实现";
-                    gFinalToastUntil = static_cast<double>(timeSec) + 2.2;
+                    gFinalDialogText = "卡组编成功能尚未实现。";
+                    gFinalDialogOpen = true;
                     ui::se(ui::SeClick);
                 }
             }
@@ -3847,8 +3981,7 @@ namespace
                     56.0f, 52.0f, r.x0 - 4.0f * k, r.y0 - 4.0f * k, r.x1 + 4.0f * k,
                     r.y1 + 4.0f * k, IM_COL32(255, 255, 255, 90));
             }
-            slice(finalTex(renderer, "btn_round_h80_wh"), 106, 96, 51.0f, 0.0f, 51.0f, 0.0f,
-                r.x0, r.y0, r.x1, r.y1, IM_COL32(255, 255, 255, 255));
+            capsule(r.x0, r.y0, r.x1, r.y1, IM_COL32(255, 255, 255, 255));
             // MV: only the modes this song actually has files for. `songBadges`
             // checks charts/mv/<id4>.usm and <id4>_sekai.usm - both are 2D MVs,
             // so mvMode 2 covers either; there is no 3D renderer, so mode 1 is
@@ -3882,37 +4015,40 @@ namespace
         //           Off #444466 / On #FF77AA；旋钮 72x72，可见圆 56）
         //   ConsecutiveAutoLiveSetting 72x72（btn_circle56_wh + 32x32 icon_setting）
         // ⚠ prefab 把齿轮摆在 AUTO 的**正中**（和开关同一个点）—— 那是"开关/齿轮
-        // 互斥"的摆法，两者不可能同时可见；国服版是**并排**放在一张更宽的卡片里，
-        // 所以卡片按内容撑到 272 宽，齿轮放在开关右边：
-        //   卡片 802.6..1074.6 x 960.4..1070.4（高 110，底边对齐轨道底边）
-        //   轨道 822.6..974.6 x 1014.4..1070.4（prefab 原值，不动）
-        //   齿轮 982.6..1054.6 x 1006.4..1078.4（可见圆 1014.4..1070.4，和轨道齐）
+        // 互斥"的摆法，两者不可能同时可见；国服版是**并排**放在一张更宽的卡片里。
+        // 卡片按内容撑到 272 宽（802.6..1074.6），底边贴 1070.4（离屏幕底 9.6）。
+        // 卡片高 110、中心 1015.4，**轨道/旋钮/状态字/齿轮都按卡片中心竖直居中**：
+        //   prefab 里 ToggleRoot 的 y 是 1014.4、齿轮 1006.4，比卡片中心低 27px，
+        //   那是 bg_auto 的 sizeDelta.x=0（宽度运行时才给）留下的老位置 ——
+        //   照它摆，开关会贴着卡片底边、齿轮还会漏到卡片外，看着就是"偏下"。
+        //   实测预制体里 UIPartsToggle 这层是 982.4..1082.4（100 高、中心 1032.4），
+        //   同样说明这几个 y 不是最终的排版值。
         {
             const Rect card = R(802.6f, 960.4f, 272.0f, 110.0f);
+            const float cardCy = 1015.4f;
             slice(finalTex(renderer, "bg_auto"), 180, 110, 119.0f, 0.0f, 51.0f, 0.0f,
                 card.x0, card.y0, card.x1, card.y1, IM_COL32(255, 255, 255, 255));
-            const Rect track = R(822.6f, 1014.4f, 152.0f, 56.0f);
-            slice(finalTex(renderer, "bg_base_round_h56_wh"), 66, 56, 33.0f, 28.0f, 33.0f, 28.0f,
-                track.x0, track.y0, track.x1, track.y1,
+            const Rect track = R(822.6f, cardCy - 28.0f, 152.0f, 56.0f);
+            capsule(track.x0, track.y0, track.x1, track.y1,
                 autoLive ? rgba(1.0f, 0.46666667f, 0.6666667f, 1.0f)
                          : rgba(0.26666668f, 0.26666668f, 0.4f, 1.0f));
             const float knob = 72.0f * k;
             const float knobCx = (autoLive ? 946.1f : 850.6f) * k;
-            const float knobCy = 1042.4f * k;
+            const float knobCy = cardCy * k;
             plain(finalTex(renderer, "btn_circle_h56_wh"), knobCx - knob * 0.5f,
                 knobCy - knob * 0.5f, knobCx + knob * 0.5f, knobCy + knob * 0.5f,
                 IM_COL32(255, 255, 255, 255));
             // 状态字在旋钮对面（prefab 的 TextOn/TextOff 就是这么摆的）。
             addTextCentered(dl, body, 29.0f * k,
-                ImVec2((autoLive ? 872.6f : 923.8f) * k, 1041.9f * k), IM_COL32(255, 255, 255, 255),
-                autoLive ? "开启" : "关闭");
+                ImVec2((autoLive ? 872.6f : 923.8f) * k, (cardCy - 0.5f) * k),
+                IM_COL32(255, 255, 255, 255), autoLive ? "开启" : "关闭");
             if (hit(track.x0, track.y0, track.x1 - track.x0, track.y1 - track.y0)) {
                 autoLive = !autoLive;
                 ui::se(ui::SeClick);
             }
             // 卡片右侧那颗小齿轮（**在卡片里**，不是外面）
             {
-                const Rect g = R(982.6f, 1006.4f, 72.0f, 72.0f);
+                const Rect g = R(982.6f, cardCy - 36.0f, 72.0f, 72.0f);
                 const bool gHot = hover(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0) && !finalMenuUp;
                 plain(selectTex(renderer, "btn_circle56_wh"), g.x0, g.y0, g.x1, g.y1,
                     IM_COL32(255, 255, 255, gHot ? 255 : 245));
@@ -4054,6 +4190,17 @@ namespace
         }
         // 转场：把背景之后的顶点整体乘 alpha（背景不淡）。header / 抽屉也在这之后
         // 画的，所以一起淡 —— 换页那 0.36 s 里它们跟着内容走。
+        // ---- 未实现功能的提示框（pjsk 风格 messageDialog）---------------------
+        // 以前是底部一条 toast，用户反馈"看着不像 pjsk 的界面"。
+        // 换成游戏里的弹窗：1168 宽卡片 + 遮罩 + 缩放入场 + 「确定」胶囊，
+        // 出入场动画/音效都在 ui::messageDialog 里；返回 -2 = 关完、>=0 = 点了确定。
+        if (gFinalDialogOpen) {
+            const int action = ui::messageDialog(renderer, "##finalTodoDialog",
+                gFinalDialogText.c_str(), {"确定"}, {true});
+            if (action >= 0 || action == -2) {
+                gFinalDialogOpen = false;
+            }
+        }
         fadeContentVertices(dl, contentVtx0, nullptr,
             pageFadeContentAlpha(static_cast<float>(timeSec)));
         return finalResult;
@@ -4170,6 +4317,9 @@ void loadMusicMaster(const std::string& path)
             const int musicId = row.value("id", 0);
             storeKana(musicId, row.value("pronunciation", std::string{}));
             storeTitle(musicId, row.value("title", std::string{}));
+            if (musicId > 0 && row.value("isNewlyWrittenMusic", false)) {
+                gMusicNewlyWritten.insert(musicId);
+            }
         }
         return;
     }
@@ -4188,13 +4338,74 @@ void loadMusicMaster(const std::string& path)
     }
 }
 
+void loadMusicCategories(const std::string& path)
+{
+    std::error_code ec;
+    if (path.empty() || !fs::exists(toFsPath(path), ec)) {
+        return;
+    }
+    std::ifstream file(toFsPath(path), std::ios::binary);
+    if (!file) {
+        return;
+    }
+    nlohmann::json doc;
+    try {
+        doc = nlohmann::json::parse(file);
+    } catch (...) {
+        return;
+    }
+    if (!doc.is_object()) {
+        return;
+    }
+    for (auto it = doc.begin(); it != doc.end(); ++it) {
+        const int musicId = std::atoi(it.key().c_str());
+        if (musicId <= 0 || !it.value().is_array()) {
+            continue;
+        }
+        unsigned mask = 0;
+        for (const auto& name : it.value()) {
+            if (!name.is_string()) {
+                continue;
+            }
+            const std::string value = name.get<std::string>();
+            if (value == "mv") {
+                mask |= kMvBit3D;
+            } else if (value == "mv_2d") {
+                mask |= kMvBit2D;
+            } else if (value == "original") {
+                mask |= kMvBitOriginal;
+            }
+        }
+        gMusicMvMask[musicId] = mask;
+    }
+    int with3d = 0;
+    for (const auto& [id, mask] : gMusicMvMask) {
+        (void)id;
+        if ((mask & kMvBit3D) != 0) {
+            ++with3d;
+        }
+    }
+    platform::logf(platform::LogSelect, "[select] music-categories: %d songs, %d with a 3D MV\n",
+        static_cast<int>(gMusicMvMask.size()), with3d);
+}
+
+unsigned musicMvMask(int musicId)
+{
+    const auto it = gMusicMvMask.find(musicId);
+    return it == gMusicMvMask.end() ? 0u : it->second;
+}
+
+bool musicIsNewlyWritten(int musicId)
+{
+    return gMusicNewlyWritten.find(musicId) != gMusicNewlyWritten.end();
+}
+
 const std::vector<VocalVersion>& musicVocals(int musicId)
 {
     static const std::vector<VocalVersion> empty;
     const auto it = gMusicVocals.find(musicId);
     return it == gMusicVocals.end() ? empty : it->second;
 }
-
 std::vector<VocalVersion> availableVocals(const ChartEntry& entry)
 {
     std::vector<VocalVersion> out;
@@ -4549,6 +4760,7 @@ bool guessOptionPill(const char* label, const ImVec2& size, ImU32 fill, float s,
 
 int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& entries, int& selected,
     int windowW, int windowH, float timeSec, int& sortMode, int& groupMode, int& unitTab,
+    int& clearFilter, int& mvUnchecked, int& musicFilter,
     int& vocalIndex,
     float uiScale, ImVec2* confirmCenter, ImVec4* confirmPhoneScreen, int deckPower, bool* autoLive,
     int* mvMode, const AccountData* account, const SelectPartyInfo* party, SelectPartyResult* partyOut,
@@ -5266,10 +5478,87 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     // the locked group is unioned back in below either way.
     const bool searchOn = searchBuf[0] != 0;
     const bool unitOn = unitTab > 0;
+
+    // ------------------------------------------------------------------
+    // 筛选弹窗（原作 MusicSelectFilterDialog）的三条条件。和原作同构：
+    //   * クリア状況 / 楽曲 按**当前难度**的那个谱面判（原作也是 ExistsDifficulty
+    //     之后拿那一个难度的 MusicViewDataBase）；
+    //   * MV 是曲目属性（master musicCategories），与难度无关；
+    //   * 三个条件都满足才留下。
+    // 原作的「クリエイト譜面あり」我们没有自制谱面功能，弹窗里那一项是灰的
+    // （原作也用 SetupExistCustomScoreToggle 把不支持的场合关掉），所以
+    // musicFilter == 3 是选不出来的，这里只留一条防御。
+    // ------------------------------------------------------------------
+    const auto groupChartAt = [&](int gi) -> const ChartEntry* {
+        const int idx = groups[static_cast<size_t>(gi)].idx[std::clamp(diffIndex, 0, kDiffCount - 1)];
+        if (idx < 0 || idx >= static_cast<int>(entries.size())) {
+            return nullptr;
+        }
+        return &entries[static_cast<size_t>(idx)];
+    };
+    const auto passesDialogFilters = [&](int gi) {
+        const SongGroup& g = groups[static_cast<size_t>(gi)];
+        const ChartEntry* chart = groupChartAt(gi);
+        switch (clearFilter) {
+        case 1: // 未クリア
+            if (chart != nullptr && chart->cleared) {
+                return false;
+            }
+            break;
+        case 2: // 未フルコンボ
+            if (chart != nullptr && chart->fullCombo) {
+                return false;
+            }
+            break;
+        case 3: // 未スコアS（.rank 是 'd'/'c'/'b'/'a'/'s'）
+            if (chart != nullptr && chart->bestScore > 0.0
+                && scoreRankAndBar(chart->bestScore, chartRatingFor(*chart)).rank == 's') {
+                return false;
+            }
+            break;
+        case 4: // 未AP
+            if (chart != nullptr && chart->allPerfect) {
+                return false;
+            }
+            break;
+        default:
+            break;
+        }
+        if (mvUnchecked != 0) {
+            // 这首歌"有"的类型集合 = mvMask 的三个 bit + （全 0 时）MVなし。
+            // 只要还有**一个**没被取消勾选的类型，就留下来；一个都不剩就排除。
+            bool keep = false;
+            for (int type = 0; type < kMvTypeCount && !keep; ++type) {
+                if (((mvUnchecked >> type) & 1) != 0) {
+                    continue;
+                }
+                const bool has = type == kMvNoneIndex ? (g.mvMask == 0)
+                                                     : ((g.mvMask >> type) & 1u) != 0;
+                keep = has;
+            }
+            if (!keep) {
+                return false;
+            }
+        }
+        switch (musicFilter) {
+        case 1:
+            return g.newlyWritten;
+        case 2:
+            return g.hasAppend;
+        case 3:
+            return false;
+        default:
+            return true;
+        }
+    };
+
     std::vector<int> visible;
     if (!searchOn) {
         for (int gi = 0; gi < static_cast<int>(groups.size()); ++gi) {
             if (unitOn && groups[static_cast<size_t>(gi)].unit != unitTab) {
+                continue;
+            }
+            if (!passesDialogFilters(gi)) {
                 continue;
             }
             visible.push_back(gi);
@@ -5285,6 +5574,9 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         for (int gi = 0; gi < static_cast<int>(groups.size()); ++gi) {
             const SongGroup& g = groups[static_cast<size_t>(gi)];
             if (unitOn && g.unit != unitTab) {
+                continue;
+            }
+            if (!passesDialogFilters(gi)) {
                 continue;
             }
             if (toLower(g.title).find(needle) != std::string::npos
@@ -5772,15 +6064,23 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         if (filteredOut) {
             ImGui::SetCursorScreenPos(ImVec2(rowX, rowY + 78.0f * k));
             ImGui::PushFont(body, 19.0f * k);
-            if (ui::capsuleButton("全部团体", ImVec2(268.0f * k, 46.0f * k), true)) {
+            if (ui::capsuleButton("清除全部筛选", ImVec2(268.0f * k, 46.0f * k), true)) {
                 ui::se(ui::SeClick);
+                // Clears **all four** conditions, not just the tab: a list emptied
+                // by the 筛选弹窗 looks exactly as dead as one emptied by the tab,
+                // and the player has no way to tell which one did it. Leaving the
+                // dialog's three conditions set would make this button appear
+                // broken ("我点了还是什么都没有").
                 unitTab = 0;
                 searchBuf[0] = '\0';
+                clearFilter = 0;
+                mvUnchecked = 0;
+                musicFilter = 0;
             }
             ImGui::PopFont();
             ImGui::PushFont(body, 17.0f * k);
             emptyText(rowX, rowY + 138.0f * k, ImVec4(0.6f, 0.6f, 0.68f, 1.0f),
-                "这会清掉团体页签和搜索框。");
+                "这会清掉团体页签、搜索框和「筛选」里的全部条件。");
             ImGui::PopFont();
         }
         // A dead end otherwise: the player just installed the game and has no
@@ -7151,9 +7451,15 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     // No SetTooltip on these: ImGui's default atlas has no CJK glyphs, so a
     // Chinese tooltip renders as a row of '?'.
     // "Dot" badge (48x36) behind the funnel: the official mark for "a filter is
-    // on". Ours is on when the unit tab is not 全部 or the search box has text.
+    // on". Ours lights up for **every** condition that can hide a song: the
+    // 团体页签 anything but 全部, a search query, and the three conditions the
+    // 筛选弹窗 writes (クリア状況 / MV / 楽曲). Leaving the last three out would
+    // let the list sit there short with no visible reason — the badge is the
+    // only affordance telling the player something is filtered.
     if (headerRoundButton("##unitfilter", filterBtnX, filterBtnY, filterBtnD, filterIconTex,
-            gFilterOpen, unitTab != 0 || searchBuf[0] != 0)) {
+            gFilterOpen,
+            unitTab != 0 || searchBuf[0] != 0 || clearFilter != 0 || mvUnchecked != 0
+                || musicFilter != 0)) {
         ui::se(ui::SeClick);
         gFilterOpen = true;
     }
@@ -7957,57 +8263,382 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     }
 
     // ------------------------------------------------------------------
-    // 筛选 card. The official screen has a 絞り込み popup in that spot; ours
-    // carries the two list filters, because the header row is now just
-    // 排序 + 筛选 + 菜单:
-    //   * 团体  - the same value as the left strip (nice on a narrow window,
-    //             where the strip and the list fight for the width);
-    //   * 分组依据 - moved out of the header row.
-    // The card is `alive` for the length of its close animation; gating on
-    // `open` alone hides a card in the frame it was dismissed.
+    // 絞り込み弹窗 —— 照 prefab MusicSelectFilterDialog（PathID 1732）1:1 重画。
+    //
+    // 实测规格全在 SELECT-FILTER.md，关键的几条：
+    //   * 窗口 1168x1032（DialogSize.Large），bg_base_r30_wh + shadow_r30，
+    //     右上 44x44 关闭 X，偏移 (-15,-15)；
+    //   * 内容区 bg_base_r20_wh 白 29.8%，RectMask2D 上下 50px 软边，右侧 6px 滚动条；
+    //   * 竖向列表 padding L64 R64 T3 B0 / spacing 32；
+    //   * 三段：クリア状況（单选 5）、MV（复选 4）、楽曲（单选 4）；
+    //     单选网格 cell 288x72 spacing (56,24)，复选 spacing (56,16)，都是 3 列；
+    //   * 单选 72 圆盘 + 36 勾 + 256x50 标签（+78）；复选 56 方框 + 44x34 勾 + 200x50；
+    //   * 底部 キャンセル / 決定 各 336x96，间距 24，居中。
+    //
+    // 和原作的唯一结构差别：原作是 Common2ButtonDialog + 内部竖向滚动列表，我们把
+    // 内容一次画完（1032 高够放三段，不需要滚），底部按钮直接钉在窗口底。
+    //
+    // 草稿语义：弹窗里点的是 gFilterDraft*，只有「決定」才写回调用方的三个参数
+    // （原作 OnClickOK -> SettingData -> sortFilterData）。取消 / X / 点外面都丢弃。
     // ------------------------------------------------------------------
     if (gFilterOpen) {
         gFilterAlive = true;
+        if (!gFilterDraftReady) {
+            gFilterDraftClear = clearFilter;
+            gFilterDraftMvUnchecked = mvUnchecked & kMvAllMask;
+            gFilterDraftMusic = musicFilter;
+            gFilterDraftReady = true;
+        }
+    } else {
+        gFilterDraftReady = false;
     }
     if (gFilterAlive) {
-        const float s = ui::scale();
-        ImVec2 cardSize(560.0f * s, 470.0f * s);
+        const bool ja = selectLangIsJa();
+        // 窗口几何：1168x1032 画在设计坐标（和画布同一个 k），屏幕放不下时整体缩。
+        const float winW = 1168.0f;
+        const float winH = 1032.0f;
+        const float fitWin = std::min(w / (winW * k), h / (winH * k));
+        const float wk = k * std::min(1.0f, fitWin);
+        ImVec2 cardSize(winW * wk, winH * wk);
         ImVec2 cardCenter(w * 0.5f, h * 0.5f);
         bool closeClicked = false;
-        if (ui::beginCard("##sselectfilter", &cardCenter, &cardSize, true, true, &closeClicked, gFilterOpen)) {
+        // 卡片本体仍走 ui::beginCard（缩放进场 + 拖动 + 关闭 X 的命中测试都是它），
+        // 但底板 / 内容区 / 按钮全部自己画 —— 原作的九宫格和这套卡片的圆角不是一回事。
+        if (ui::beginCard("##sselectfilter", &cardCenter, &cardSize, false, true, &closeClicked,
+                gFilterOpen)) {
             if (closeClicked) {
                 gFilterOpen = false;
             }
-            const float padX = 30.0f * s;
-            const float interior = cardSize.x - padX * 2.0f;
-            const float leftX = cardCenter.x - cardSize.x * 0.5f + padX;
-            const float topY = cardCenter.y - cardSize.y * 0.5f;
+            // 卡片是**另一个 ImGui 窗口**，所有内容必须画在它的 draw list 上：
+            // 画到外面那个 dl 会被卡片窗口盖住，而且 endCard() 只对卡片自己的
+            // list 做缩放/淡出（这就是第一版"只有一块灰板"的原因）。
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            const ImVec2 lo(cardCenter.x - cardSize.x * 0.5f, cardCenter.y - cardSize.y * 0.5f);
+            const ImVec2 hi(cardCenter.x + cardSize.x * 0.5f, cardCenter.y + cardSize.y * 0.5f);
 
-            ImGui::SetCursorScreenPos(ImVec2(leftX, topY + 16.0f * s));
-            ui::cardTitle("筛选", interior);
-
-            ImGui::SetCursorScreenPos(ImVec2(leftX, topY + 62.0f * s));
-            ui::caption("团体", 18.0f * s, ui::kTitleText, interior);
-            ImGui::SetCursorScreenPos(ImVec2(leftX, topY + 90.0f * s));
-            // Short labels on purpose: 8 options in one row, and the official
-            // tabs are logos rather than names anyway.
-            const std::vector<std::string> unitLabels = {
-                "全部", "VS", "L/N", "MMJ", "VBS", "W×S", "25時", "其他"};
-            ui::radioRow("##filterunit", unitLabels, &unitTab, interior);
-
-            ImGui::SetCursorScreenPos(ImVec2(leftX, topY + 196.0f * s));
-            ui::caption("分组依据", 18.0f * s, ui::kTitleText, interior);
-            ImGui::SetCursorScreenPos(ImVec2(leftX, topY + 224.0f * s));
-            const std::vector<std::string> groupLabels = {"关闭", "按难度段", "按读音", "按首字", "按收藏"};
-            if (ui::radioRow("##filtergroup", groupLabels, &groupMode, interior)) {
-                ui::se(ui::SeClick);
+            // 底板：bg_base_r30_wh（九宫格 r30 = 源码 34px slice）+ 阴影 r30。
+            const GLuint plateTex = selectTex(renderer, "bg_base_r30_wh");
+            const GLuint plateShadow = selectTex(renderer, "bg_base_shadow_r30");
+            if (plateShadow != 0) {
+                // Shadow 在原件里外扩 8（1184x16 的那条就是这么来的），这里按
+                // "四周各 8 设计 px" 摊开；sprite 自己带 42px 的软边。
+                addNinePatch(dl, plateShadow, 86, 86,
+                    ImVec2(lo.x - 8.0f * wk, lo.y - 8.0f * wk),
+                    ImVec2(hi.x + 8.0f * wk, hi.y + 8.0f * wk), 42.0f, 42.0f, wk,
+                    IM_COL32(0, 0, 0, 46));
+            }
+            if (plateTex != 0) {
+                addNinePatch(dl, plateTex, 70, 70, lo, hi, 34.0f, 34.0f, wk,
+                    IM_COL32(235, 235, 242, 255));
+            } else {
+                dl->AddRectFilled(lo, hi, IM_COL32(235, 235, 242, 255), 30.0f * wk);
             }
 
-            const float footY = topY + cardSize.y - 66.0f * s;
-            ImGui::SetCursorScreenPos(ImVec2(leftX, footY));
-            if (ui::capsuleButton("关闭", ImVec2(interior, 50.0f * s), false)) {
+            // 关闭 X：原件 44x44，锚右上、偏移 (-15,-15)。ui::beginCard 自己那颗
+            // 是 38x38 的手绘 X，位置也不同（8,8），所以这里盖一颗官方的。
+            const GLuint closeTex = selectTex(renderer, "btn_close_dbl");
+            {
+                const float d = 44.0f * wk;
+                const ImVec2 c0(hi.x - 15.0f * wk - d, lo.y + 15.0f * wk);
+                ImGui::SetCursorScreenPos(c0);
+                ImGui::PushID("filterclose");
+                ImGui::InvisibleButton("##x", ImVec2(d, d));
+                const bool hot = ImGui::IsItemHovered();
+                const bool hit = ImGui::IsItemClicked();
+                ImGui::PopID();
+                if (closeTex != 0) {
+                    dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(closeTex)),
+                        c0, ImVec2(c0.x + d, c0.y + d), ImVec2(0, 0), ImVec2(1, 1),
+                        hot ? IM_COL32(255, 255, 255, 210) : IM_COL32(255, 255, 255, 255));
+                }
+                if (hit) {
+                    ui::se(ui::SeClick);
+                    gFilterOpen = false;
+                }
+            }
+
+            // 内容区：bg_base_r20_wh 白 29.8%（原件 m_Color a=0.298）。
+            const float padX = 64.0f * wk; // 内容列表 padding L64 R64
+            const float contentW = 1032.0f * wk;
+            const float contentX = cardCenter.x - contentW * 0.5f;
+            const float contentTop = lo.y + 92.0f * wk;
+            const float contentBottom = hi.y - 24.0f * wk - 96.0f * wk - 26.0f * wk;
+            {
+                const GLuint box = selectTex(renderer, "bg_base_r20_wh");
+                if (box != 0) {
+                    addNinePatch(dl, box, 50, 50, ImVec2(contentX, contentTop),
+                        ImVec2(contentX + contentW, contentBottom), 24.0f, 24.0f, wk,
+                        IM_COL32(255, 255, 255, 76));
+                } else {
+                    dl->AddRectFilled(ImVec2(contentX, contentTop),
+                        ImVec2(contentX + contentW, contentBottom),
+                        IM_COL32(255, 255, 255, 76), 20.0f * wk);
+                }
+            }
+            (void)padX;
+
+            ImFont* sfont = body != nullptr ? body : ImGui::GetFont();
+            const ImU32 titleInk = IM_COL32(68, 68, 102, 255);  // 0.2667/0.2667/0.4
+            const ImU32 labelInk = IM_COL32(85, 85, 119, 255);  // 0.3333/0.3333/0.4667
+            const ImU32 lineInk = IM_COL32(167, 167, 188, 255); // 0.6549/0.6549/0.7373
+            const ImU32 dimInk = IM_COL32(150, 150, 175, 255);
+
+            const auto drawSection = [&](float y, const char* title) {
+                // UIPartsDialogMainTitle: 1032x44 = 文字 40 + 下划线 4。
+                dl->AddText(sfont, 32.0f * wk, ImVec2(contentX + 6.0f * wk, y + 2.0f * wk),
+                    titleInk, title);
+                const GLuint lineTex = selectTex(renderer, "bg_base_wh");
+                const ImVec2 l0(contentX, y + 40.0f * wk);
+                const ImVec2 l1(contentX + contentW, y + 44.0f * wk);
+                if (lineTex != 0) {
+                    dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(lineTex)),
+                        l0, l1, ImVec2(0, 0), ImVec2(1, 1), lineInk);
+                } else {
+                    dl->AddRectFilled(l0, l1, lineInk);
+                }
+            };
+
+            // 单选一行：72 圆盘 + 36 勾 + 标签（原件 256x50 @ +78）。
+            const GLuint radioTex = selectTex(renderer, "btn_circle56_wh");
+            const GLuint tickTex = selectTex(renderer, "icon_radio_gn");
+            const auto drawRadio = [&](int slot, float x, float y, const char* label, bool on,
+                                       bool enabled = true) {
+                ImGui::SetCursorScreenPos(ImVec2(x, y));
+                ImGui::PushID(slot);
+                if (!enabled) {
+                    ImGui::BeginDisabled();
+                }
+                ImGui::InvisibleButton("##r", ImVec2(288.0f * wk, 72.0f * wk));
+                const bool hot = enabled && ImGui::IsItemHovered();
+                const bool hit = enabled && ImGui::IsItemClicked();
+                if (!enabled) {
+                    ImGui::EndDisabled();
+                }
+                ImGui::PopID();
+                if (hit) {
+                    ui::se(ui::SeClick);
+                }
+                const ImVec2 c0(x, y);
+                const ImVec2 c1(x + 72.0f * wk, y + 72.0f * wk);
+                const ImU32 discTint = enabled ? (hot && !on ? IM_COL32(255, 255, 255, 255)
+                                                             : IM_COL32(255, 255, 255, 245))
+                                               : IM_COL32(230, 230, 238, 255);
+                if (radioTex != 0) {
+                    dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(radioTex)),
+                        c0, c1, ImVec2(0, 0), ImVec2(1, 1), discTint);
+                } else {
+                    dl->AddCircleFilled(ImVec2((c0.x + c1.x) * 0.5f, (c0.y + c1.y) * 0.5f),
+                        36.0f * wk, discTint, 32);
+                }
+                if (on) {
+                    // 勾 36x36，在 72 盘里居中（原件 Checkmark 与 Radio 同尺寸、
+                    // 内缩 18）—— icon_radio_gn 本身就是一颗薄荷圆点。
+                    const ImVec2 t0(x + 18.0f * wk, y + 18.0f * wk);
+                    const ImVec2 t1(x + 54.0f * wk, y + 54.0f * wk);
+                    if (tickTex != 0) {
+                        dl->AddImage(
+                            reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(tickTex)),
+                            t0, t1, ImVec2(0, 0), ImVec2(1, 1),
+                            enabled ? IM_COL32(255, 255, 255, 255) : IM_COL32(200, 200, 210, 255));
+                    } else {
+                        dl->AddCircleFilled(ImVec2(x + 36.0f * wk, y + 36.0f * wk),
+                            18.0f * wk, IM_COL32(119, 238, 221, 255), 28);
+                    }
+                }
+                dl->AddText(sfont, 32.0f * wk, ImVec2(x + 78.0f * wk, y + 20.0f * wk),
+                    !enabled ? dimInk : (on ? labelInk : IM_COL32(85, 85, 119, 200)), label);
+                return hit;
+            };
+
+            // 复选一行：56 方框（bg_base_r16_wh）+ 44x34 勾 + 标签（200x50 @ +78）。
+            const GLuint boxTex = selectTex(renderer, "bg_base_r16_wh");
+            const GLuint boxShadow = selectTex(renderer, "bg_base_shadow_r16");
+            const GLuint checkTex = selectTex(renderer, "icon_check_pk");
+            const auto drawCheck = [&](int slot, float x, float y, const char* label, bool on,
+                                       bool enabled) {
+                const float hitW = 288.0f * wk;
+                ImGui::SetCursorScreenPos(ImVec2(x, y));
+                ImGui::PushID(slot);
+                if (!enabled) {
+                    ImGui::BeginDisabled();
+                }
+                ImGui::InvisibleButton("##c", ImVec2(hitW, 72.0f * wk));
+                const bool hit = enabled && ImGui::IsItemClicked();
+                if (!enabled) {
+                    ImGui::EndDisabled();
+                }
+                ImGui::PopID();
+                if (hit) {
+                    ui::se(ui::SeClick);
+                }
+                const ImVec2 b0(x + 8.0f * wk, y + 8.0f * wk);
+                const ImVec2 b1(x + 64.0f * wk, y + 64.0f * wk);
+                if (boxShadow != 0) {
+                    addNinePatch(dl, boxShadow, 60, 60, ImVec2(b0.x - 2.0f * wk, b0.y - 2.0f * wk),
+                        ImVec2(b1.x + 2.0f * wk, b1.y + 2.0f * wk), 30.0f, 30.0f, wk,
+                        IM_COL32(0, 0, 0, 30));
+                }
+                const ImU32 fill = enabled ? IM_COL32(255, 255, 255, 255)
+                                           : IM_COL32(230, 230, 238, 255);
+                if (boxTex != 0) {
+                    addNinePatch(dl, boxTex, 44, 44, b0, b1, 21.0f, 21.0f, wk, fill);
+                } else {
+                    dl->AddRectFilled(b0, b1, fill, 16.0f * wk);
+                }
+                if (on) {
+                    const ImVec2 t0((b0.x + b1.x) * 0.5f - 22.0f * wk,
+                        (b0.y + b1.y) * 0.5f - 17.0f * wk);
+                    const ImVec2 t1(t0.x + 44.0f * wk, t0.y + 34.0f * wk);
+                    if (checkTex != 0) {
+                        dl->AddImage(
+                            reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(checkTex)),
+                            t0, t1, ImVec2(0, 0), ImVec2(1, 1),
+                            enabled ? IM_COL32(255, 255, 255, 255) : IM_COL32(200, 200, 210, 255));
+                    } else {
+                        const ImVec2 p0(t0.x + 6.0f * wk, t0.y + 16.0f * wk);
+                        const ImVec2 p1(t0.x + 17.0f * wk, t0.y + 27.0f * wk);
+                        const ImVec2 p2(t0.x + 38.0f * wk, t0.y + 7.0f * wk);
+                        dl->AddLine(p0, p1, IM_COL32(255, 119, 172, 255), 4.0f * wk);
+                        dl->AddLine(p1, p2, IM_COL32(255, 119, 172, 255), 4.0f * wk);
+                    }
+                }
+                dl->AddText(sfont, 32.0f * wk, ImVec2(x + 78.0f * wk, y + 20.0f * wk),
+                    enabled ? labelInk : dimInk, label);
+                return hit;
+            };
+
+            // ---- 三段内容。坐标照 prefab：标题 44 高，网格紧跟 spacing 32。
+            // クリア状況：网格在标题下 32，行距 24，cell 72 高。
+            float y = contentTop + 6.0f * wk;
+            drawSection(y, ja ? "クリア状況" : "通关状况");
+            y += 44.0f * wk + 32.0f * wk;
+            // 原件兄弟顺序：すべて / 未クリア / 未フルコンボ → 未AP / 未スコアS。
+            // 但组索引是 0/1/2 与 4/3 —— 索引 = 枚举值，见 SELECT-FILTER.md §2.1。
+            struct ClearOpt
+            {
+                int index;
+                const char* ja;
+                const char* zh;
+            };
+            static const ClearOpt kClearOpts[kClearFilterCount] = {
+                {0, "すべて", "全部"},
+                {1, "未クリア", "未通关"},
+                {2, "未フルコンボ", "未全连"},
+                {4, "未AP", "未AP"},
+                {3, "未スコアS", "未S评级"},
+            };
+            for (int i = 0; i < kClearFilterCount; ++i) {
+                const int col = i % 3;
+                const int row = i / 3;
+                const float cx = contentX + 8.0f * wk + col * (288.0f + 56.0f) * wk;
+                const float cy = y + row * (72.0f + 24.0f) * wk;
+                const ClearOpt& opt = kClearOpts[i];
+                if (drawRadio(1000 + i, cx, cy, ja ? opt.ja : opt.zh,
+                        gFilterDraftClear == opt.index)) {
+                    gFilterDraftClear = opt.index;
+                }
+            }
+            y += 2.0f * (72.0f + 24.0f) * wk;
+
+            // MV：网格在标题下 32，行距 16（复选网格和单选网格不一样！）。
+            drawSection(y + 4.0f * wk, "MV");
+            y += 44.0f * wk + 36.0f * wk;
+            static const char* const kMvJa[kMvTypeCount] = {
+                "3DMVあり", "2DMVあり", "原曲MVあり", "MVなし"};
+            static const char* const kMvZh[kMvTypeCount] = {
+                "有3DMV", "有2DMV", "有原曲MV", "无MV"};
+            for (int i = 0; i < kMvTypeCount; ++i) {
+                const int col = i % 3;
+                const int row = i / 3;
+                const float cx = contentX + 8.0f * wk + col * (288.0f + 56.0f) * wk;
+                const float cy = y + row * (72.0f + 16.0f) * wk;
+                // 复选是"未勾选集合"：bit 置位 = 没勾。
+                const bool on = ((gFilterDraftMvUnchecked >> i) & 1) == 0;
+                if (drawCheck(2000 + i, cx, cy, ja ? kMvJa[i] : kMvZh[i], on, true)) {
+                    gFilterDraftMvUnchecked ^= (1 << i);
+                }
+            }
+            y += 2.0f * (72.0f + 16.0f) * wk;
+
+            // 楽曲：同クリア状況。
+            drawSection(y + 4.0f * wk, ja ? "楽曲" : "曲目");
+            y += 44.0f * wk + 36.0f * wk;
+            static const char* const kMusicJa[kMusicFilterCount] = {
+                "すべて", "書き下ろし楽曲", "APPENDあり", "クリエイト譜面あり"};
+            static const char* const kMusicZh[kMusicFilterCount] = {
+                "全部", "新创作曲", "有APPEND", "有自制谱面"};
+            for (int i = 0; i < kMusicFilterCount; ++i) {
+                const int col = i % 3;
+                const int row = i / 3;
+                const float cx = contentX + 8.0f * wk + col * (288.0f + 56.0f) * wk;
+                const float cy = y + row * (72.0f + 24.0f) * wk;
+                // 「クリエイト譜面あり」我们没有自制谱功能 —— 原作也用
+                // SetupExistCustomScoreToggle 在不支持的场合把它关掉。
+                // 单选组里它仍然是一个圆钮（原作那格就是 UIPartsRadioToggle），
+                // 只是画灰、点不动：用 drawRadio 的禁用版更贴原件。
+                const bool enabled = i != 3;
+                if (drawRadio(3000 + i, cx, cy, ja ? kMusicJa[i] : kMusicZh[i],
+                        gFilterDraftMusic == i, enabled)) {
+                    gFilterDraftMusic = i;
+                }
+            }
+
+            // ---- 底部按钮：キャンセル / 決定，各 336x96、间距 24、居中。
+            const float bw = 336.0f * wk;
+            const float bh = 96.0f * wk;
+            const float gap = 24.0f * wk;
+            const float btnX0 = cardCenter.x - (bw * 2.0f + gap) * 0.5f;
+            const float btnY = hi.y - 24.0f * wk - bh;
+            const GLuint btnTex = selectTex(renderer, "btn_round_h80_wh");
+            const GLuint glowTex = selectTex(renderer, "eff_btn_round_h80_a70_wh");
+            const auto drawOkCancel = [&](int slot, float x, const char* label, bool primary) {
+                const ImVec2 b0(x, btnY);
+                const ImVec2 b1(x + bw, btnY + bh);
+                ImGui::SetCursorScreenPos(b0);
+                ImGui::PushID(4000 + slot);
+                ImGui::InvisibleButton("##btn", ImVec2(bw, bh));
+                const bool hot = ImGui::IsItemHovered();
+                const bool held = ImGui::IsItemActive();
+                const bool hit = ImGui::IsItemClicked();
+                ImGui::PopID();
+                if (hit) {
+                    ui::se(ui::SeClick);
+                }
+                if (primary && glowTex != 0) {
+                    // FrontGlowCover：344x104 的加法光晕，原件在按下时点亮。
+                    addNinePatch(dl, glowTex, 112, 104,
+                        ImVec2(b0.x - 4.0f * wk, b0.y - 4.0f * wk),
+                        ImVec2(b1.x + 4.0f * wk, b1.y + 4.0f * wk), 56.0f, 52.0f, wk,
+                        IM_COL32(255, 255, 255, held ? 200 : (hot ? 150 : 110)));
+                }
+                // ButtonImage = btn_round_h80_wh（白胶囊，51/0/51/0 的九宫格）。
+                const ImU32 fill = primary ? (held ? IM_COL32(227, 252, 248, 255)
+                                                   : IM_COL32(255, 255, 255, 255))
+                                           : (held ? IM_COL32(238, 238, 246, 255)
+                                                   : IM_COL32(255, 255, 255, 255));
+                if (btnTex != 0) {
+                    addNinePatch4(dl, btnTex, 106, 96, b0, b1, 51.0f, 51.0f, 0.0f, 0.0f, wk, fill);
+                } else {
+                    dl->AddRectFilled(b0, b1, fill, bh * 0.5f);
+                }
+                const ImVec2 ts = sfont->CalcTextSizeA(32.0f * wk, FLT_MAX, 0.0f, label);
+                dl->AddText(sfont, 32.0f * wk,
+                    ImVec2(b0.x + (bw - ts.x) * 0.5f, b0.y + (bh - ts.y) * 0.5f), titleInk, label);
+                return hit;
+            };
+            if (drawOkCancel(0, btnX0, ja ? "キャンセル" : "取消", false)) {
                 gFilterOpen = false;
             }
+            if (drawOkCancel(1, btnX0 + bw + gap, ja ? "決定" : "决定", true)) {
+                // 原作 OnClickOK：把结果写回 sortFilterData（我们这边是调用方的引用）。
+                clearFilter = std::clamp(gFilterDraftClear, 0, kClearFilterCount - 1);
+                mvUnchecked = gFilterDraftMvUnchecked & kMvAllMask;
+                musicFilter = std::clamp(gFilterDraftMusic, 0, kMusicFilterCount - 1);
+                gFilterOpen = false;
+            }
+
+            // 原作的滚动条：内容装得下时不出现，这里三段加按钮刚好放完，
+            // 所以只画不交互的那两根（轨道 + 把手）会变成假 UI —— 干脆不画。
             ui::endCard();
         } else {
             gFilterAlive = false;

@@ -45,12 +45,20 @@ struct ChartEntry
     // Best result for this chart, loaded from userdata.json next to the exe.
     bool cleared = false;
     bool fullCombo = false;
+    // 全部 PERFECT（FullCombo 且没有 GREAT/GOOD/BAD）。选曲的「絞り込み」用它判
+    // 「未AP」；老存档没有这个字段，一律当 false（见 ScoreRecord）。
+    bool allPerfect = false;
     // 在收藏夹里（settings.favoriteMusicIds，按 musicId 记；见 applyFavorites）。
     // 列表右键 / 长按可以切换，分组可以按它分「收藏 / 其他」。
     bool favorite = false;
     // Highest score reached on this chart, 0 when it was never cleared. The
     // song select turns it into the score-rank badge next to the song info.
     double bestScore = 0.0;
+    // 原作的 musicCategories（music-categories.json）：bit0 = 3DMV、bit1 = 2DMV、
+    // bit2 = 原曲MV。0 = 三种都没有 = 「MVなし」。老存档/曲表缺项时也是 0。
+    unsigned mvMask = 0;
+    // musics.json 的 isNewlyWrittenMusic（「書き下ろし楽曲」）。
+    bool newlyWritten = false;
 };
 
 // Persisted play results, keyed by the chart's file name (e.g.
@@ -60,6 +68,9 @@ struct ScoreRecord
 {
     bool cleared = false;
     bool fullCombo = false;
+    // 全部 PERFECT。2026-11-23 加：选曲的「絞り込み > クリア状況 > 未AP」需要它。
+    // 老存档没有这个键 -> false，也就是那些歌的 AP 记录会被当成"没 AP 过"。
+    bool allPerfect = false;
     // Highest score reached, used by the result screen for 最高得分 / 新纪录!.
     // Kept alongside the flags in the same file, so old saves stay valid.
     double bestScore = 0.0;
@@ -344,6 +355,17 @@ struct UserSettings
     // 3 MORE MORE JUMP! / 4 Vivid BAD SQUAD / 5 Wonderlands×Showtime /
     // 6 25時、ナイトコードで。/ 7 その他。
     int unitTab = 0;
+    // 筛选弹窗（原作的 MusicSelectFilterDialog）。三个值就是原作的枚举，索引 = 枚举值：
+    //   clearFilter = MusicSelectClearFilterType
+    //       0 すべて / 1 未クリア / 2 未フルコンボ / 3 未スコアS / 4 未AP
+    //   mvUnchecked = 4 个 MusicSelectMVFilterType 的「未勾选」位掩码
+    //       bit0 3DMVあり / bit1 2DMVあり / bit2 原曲MVあり / bit3 MVなし
+    //       （原作的 UnCheckedFilterMVTypes[] 就是这个意思：存"被排除"的类型）
+    //   musicFilter = MusicSelectMusicFilterType
+    //       0 すべて / 1 書き下ろし楽曲 / 2 APPENDあり / 3 クリエイト譜面あり
+    int clearFilter = 0;
+    int mvUnchecked = 0;
+    int musicFilter = 0;
     // 演出能量 (演出 > 演出能量): how much ライブボーナス to stake on a live.
     // It multiplies the exp a run grants (see liveBonusExpMultiplier) - the same
     // thing it does in the official game, where a live grants score-rank exp
@@ -418,7 +440,9 @@ bool isUserDataFile(const std::string& path);
 
 // Records the result of one chart (merges with the existing record) and
 // returns the merged record. `score` only ever raises the stored best.
-ScoreRecord mergeScore(const ScoreRecord& old, bool cleared, bool fullCombo, double score = 0.0);
+// `allPerfect` is sticky like the other two flags (one AP run marks the chart).
+ScoreRecord mergeScore(const ScoreRecord& old, bool cleared, bool fullCombo, bool allPerfect,
+    double score = 0.0);
 
 // One vocal version of a song (the official musicVocals table). `asset` is the
 // game's assetbundleName, which is also the audio file stem next to the chart:
@@ -586,6 +610,20 @@ ImU32 difficultyColor(const std::string& difficulty, int alpha = 255);
 // entries win.
 void loadMusicMaster(const std::string& path);
 
+// 原作的 musicCategories（master 表，导出成 music-categories.json，见
+// .workbuddy/tools/gen_music_categories.py）。决定「絞り込み > MV」那一段：
+//   {"75": ["mv", "mv_2d"], "400": ["mv_2d"], ...}
+// `mv` = 3D MV、`mv_2d` = 2D MV、`original` = 原曲 MV；没有这三种的（master 里
+// 只有 `image` 的）我们干脆不写进文件，等于「MVなし」。缺文件时整段 MV 过滤失效
+// —— 原作在 musicCategories 表不可用时 `BuildCategories` 也返回空表。
+void loadMusicCategories(const std::string& path);
+
+// 一个 song id 的 MV 位掩码（bit0 3D / bit1 2D / bit2 原曲，0 = MVなし）。
+unsigned musicMvMask(int musicId);
+
+// 这首歌是不是「書き下ろし楽曲」（musics.json 的 isNewlyWrittenMusic）。
+bool musicIsNewlyWritten(int musicId);
+
 // Recursively collects *.sus under dir (bounded depth). Entries are sorted
 // by title then file name.
 std::vector<ChartEntry> scanChartFolder(const std::string& dir);
@@ -654,7 +692,10 @@ struct SelectPartyResult
 // the chart to start, SelectNone, or SelectQuit.
 // `sortMode` / `groupMode` are in/out: the list's sort and grouping live in the
 // settings, so they survive a restart (the caller persists them when they
-// change). `vocalIndex` is out-only: the index (into availableVocals()) of the
+// change). 筛选弹窗的三条条件（`clearFilter` / `mvUnchecked` / `musicFilter`，
+// 数值就是原作的枚举，见 UserSettings）同样是 in/out：弹窗点「决定」时只改这三个
+// 值，调用方照旧在变化后落盘。`vocalIndex` is out-only: the index (into
+// availableVocals()) of the
 // version currently picked for the selected song, so the caller can point the
 // entry at that audio before starting. -1 = the song has no chooser at all.
 // `uiScale` scales the whole 1080p canvas this screen is laid out on (1.0 =
@@ -673,7 +714,7 @@ struct SelectPartyResult
 // same SelectRescan / SelectDownload / showDebug paths.
 int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& entries, int& selected,
     int windowW, int windowH, float timeSec, int& sortMode, int& groupMode, int& unitTab,
-    int& vocalIndex,
+    int& clearFilter, int& mvUnchecked, int& musicFilter, int& vocalIndex,
     float uiScale = 1.0f, ImVec2* confirmCenter = nullptr, ImVec4* confirmPhoneScreen = nullptr,
     int deckPower = 250000, bool* autoLive = nullptr, int* mvMode = nullptr,
     const AccountData* account = nullptr,
