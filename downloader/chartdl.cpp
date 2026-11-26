@@ -2319,14 +2319,14 @@ namespace
                 create(L"BUTTON", L"关闭窗口时", BS_GROUPBOX, -1, left, group1Y, width, group1H);
                 gSetCloseExit = create(L"BUTTON", L"退出程序", BS_AUTORADIOBUTTON | WS_GROUP,
                     kIdSetCloseExit, left + dp(14), group1Y + dp(22), width - dp(28), dp(22));
-                gSetCloseTray = create(L"BUTTON", L"隐藏到托盘（后台继续下载）", BS_AUTORADIOBUTTON,
+                gSetCloseTray = create(L"BUTTON", L"隐藏到托盘", BS_AUTORADIOBUTTON,
                     kIdSetCloseTray, left + dp(14), group1Y + dp(46), width - dp(28), dp(22));
                 create(L"BUTTON", L"下载与提醒", BS_GROUPBOX, -1, left, group2Y, width, group2H);
                 gSetNotify = create(L"BUTTON", L"下载完成后弹出气泡提醒", BS_AUTOCHECKBOX, kIdSetNotify,
                     left + dp(14), group2Y + dp(22), width - dp(28), dp(22));
                 gSetMinTray = create(L"BUTTON", L"最小化时收进托盘", BS_AUTOCHECKBOX, kIdSetMinTray,
                     left + dp(14), group2Y + dp(46), width - dp(28), dp(22));
-                gSetAllVocals = create(L"BUTTON", L"批量下载全部演唱版本（流量大、速度慢）",
+                gSetAllVocals = create(L"BUTTON", L"批量下载全部演唱版本（速度较慢）",
                     BS_AUTOCHECKBOX, kIdSetAllVocals, left + dp(14), group2Y + dp(70),
                     width - dp(28), dp(22));
                 create(L"STATIC", L"并发连接数", SS_LEFT, -1, left + dp(14),
@@ -2534,10 +2534,10 @@ namespace
                 // 很多歌只有其中一套、也有 358 首之外根本没 MV —— 所以这里是个下拉，
                 // 只有真的勾了对应版本才入队（queueSong 里按 Song::mvOriginal/mvSekai 判）。
                 gMvCombo = create(L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL, kIdMv);
-                ComboBox_AddString(gMvCombo, L"不含 MV");
-                ComboBox_AddString(gMvCombo, L"原曲 MV");
-                ComboBox_AddString(gMvCombo, L"セカイ MV");
-                ComboBox_AddString(gMvCombo, L"两个都要");
+                ComboBox_AddString(gMvCombo, L"无MV");
+                ComboBox_AddString(gMvCombo, L"原曲MV");
+                ComboBox_AddString(gMvCombo, L"2DMV");
+                ComboBox_AddString(gMvCombo, L"全部MV");
                 ComboBox_SetCurSel(gMvCombo, 0);
                 gSettingsButton = create(L"BUTTON", L"设置…", BS_PUSHBUTTON, kIdSettings);
 

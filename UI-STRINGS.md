@@ -184,7 +184,7 @@
 | `main.cpp:6271` | 选择图片… |
 | `main.cpp:6278` | 清除头像 |
 | `main.cpp:6283` | PNG / JPG / BMP，建议使用正方形图片。多人演出时会显示。 |
-| `main.cpp:6299` | 版本 1.0.0.7 · 许可 AGPL-3.0-only |
+| `main.cpp:6299` | 版本 1.0.0.8 · 许可 AGPL-3.0-only |
 | `main.cpp:6305` | 策划 / 开发　xxt8582753（BSOD-MEMZ） |
 | `main.cpp:6307` | 测试　Shitakara4banme |
 | `main.cpp:6309` | 株洲市南方中学 · 2026 年 9 月 |
