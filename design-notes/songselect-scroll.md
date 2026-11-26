@@ -66,9 +66,12 @@
     单选盘 72、居中薄荷圆 36（`icon_radio_gn`）；名字 36px、成员 32px，
     文字左缘 = 卡左 + 102；锁定态才盖 `#000022` 50% + `icon_lock_wh`。
   - 标签仍走 `vocalVersionLabel()`；列表直接就是 `availableVocals()`，没有锁定卡。
-  - 点空白处（`mouse.x < vocalPX0`）关闭；抽屉里的 item 先提交，所以点卡片/X
-    不会同时被当成“外面”。输入拦截规则不变：顶栏 `!vocalPanelUp`、等级牌
-    `hot` 带 `!vocalPanelUp`、手机面板按钮变 `Dummy`。
+  - 点空白处（`mouse.x < vocalPX0`）关闭。**2026-11-25 起它是独立的顶层窗口**
+    （`drawSingerPanel`，在选曲窗口 `End()` 之后才开）：列表是 ImGui 子窗口，子窗口
+    在父窗口之后合成，所以以前画在父窗口末尾的面板会被列表右缘的 2D/原曲徽章、
+    选中行高亮盖住；独立窗口同时解决输入——ImGui 把 hover 给"先提交的那个 item"，
+    以前顶栏菜单钮压着关闭 X，点 X 会同时选中第一张卡。现在 `HoveredWindow` 是面板
+    自己。外面那一层的 `overlayUp` 拦截规则不变。
   - `vocalEase` / `vocalPW` / `vocalPX0` 仍在顶栏之前算；滚轮直接读
     `io.MouseWheel`，`PushClipRect` 裁剪。
   - 选择**按曲存**（`gVocalChoiceBySong`），手机 `Vo.` 行和主循环取音源读同一个

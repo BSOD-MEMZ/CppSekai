@@ -27,6 +27,11 @@ namespace platform
 
 constexpr int kPartyMaxSlots = 8;
 constexpr int kPartyNameBytes = 40;
+// Longest avatar path a seat publishes (UTF-8 bytes). The path is absolute and
+// lives on this machine (all windows share the same file system). MAX_PATH is
+// 260 *characters*, and a CJK character is 3 UTF-8 bytes, so 780 is the honest
+// bound; the seat struct is still only a few KB.
+constexpr int kPartyAvatarBytes = 780;
 
 // Where the room as a whole is. Owned by the host.
 enum PartyPhase
@@ -56,6 +61,9 @@ struct PartyPlayer
 {
     int slot = -1;
     std::string name;
+    // Absolute path of this player's uploaded avatar (empty = none). Every
+    // window is on the same machine, so another window can load the same file.
+    std::string avatar;
     bool ready = false;
     int difficulty = -1; // canonical index (0..4 EASY..MASTER), -1 = not picked
     int seat = PartySeatLobby;
@@ -99,9 +107,6 @@ struct PartyResult
     bool cleared = false;
     bool fullCombo = false;
     bool allPerfect = false;
-    // The card bundle the player picked in 设置 > 账户 ("res001_no056"), so the
-    // other windows can draw this seat's 卡面 too. Empty = no card.
-    std::string card;
 };
 
 // One row of the "everybody's final numbers" list, as read back by any window.
@@ -110,6 +115,9 @@ struct PartyResultRow : PartyResult
     int slot = -1;
     bool host = false;
     std::string name;
+    // Absolute path of this player's avatar (same value as PartyPlayer::avatar,
+    // read from the seat, not from the result block). Empty = none.
+    std::string avatar;
 };
 
 // Debug trace (CPSEKAI_MP_TRACE=1): one [sync] line per second per instance,
@@ -156,6 +164,9 @@ class PartyLink
     bool readHostClock(double& songTimeSec, std::uint64_t& counter) const;
 
     void setName(const std::string& name);
+    // Absolute path of this profile's avatar (empty clears it). Published on
+    // this seat so every window can draw the same face during a live / result.
+    void setAvatar(const std::string& path);
     void setSeat(int seat);
     void setReady(bool ready);
     void setDifficulty(int difficulty);

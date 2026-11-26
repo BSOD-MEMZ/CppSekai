@@ -863,9 +863,9 @@ Canvas makeCanvas(ImDrawList* dl, int windowW, int windowH, float uiScale)
 //
 //   ExistPlayerBase  336x592  c(0,+20)    bg_base_r48_wh  sliced  #EBEBF2
 //   Empty            340x484  c(0,+74)    base_wh                #444466
-//     - the deck-card art area. The real cell fills it with the player's card
-//       image; when there is none the prefab shows this flat #444466 block, so
-//       that is what we draw (our party protocol carries no card art).
+//     - the deck-card art area. We no longer ship card faces; the player's
+//       uploaded avatar is drawn here as a circle, and with no avatar the
+//       panel's own #EBEBF2 stays (see drawMemberCard).
 //   Score            336x56   c(0,-8.1)   base_wh  #EBEBF2 @0.8
 //   ScoreNumber      338x56   c(-3,-8.1)  Text 48px  #444466
 //     - its m_text is '<color=#91A2AFFF>0000000</color><color=#444...', i.e.
@@ -880,9 +880,10 @@ Canvas makeCanvas(ImDrawList* dl, int windowW, int windowH, float uiScale)
 //   fx_result_SuperStar 100x100 c(0,+317.2) -> SuperStar ribbon 278x52 c(0,+317.2)
 //
 // Deliberately NOT drawn, because our party protocol has no data for them and a
-// stand-in would be an invention: the deck-card art itself, the card's Lv band
-// (that is the *card's* level), the three honor slots, and the PlayerFrameCell
-// frame (a `useSharedSprite` resolved at run time).
+// stand-in would be an invention: the card's Lv band (that is the *card's*
+// level), the three honor slots, and the PlayerFrameCell frame (a
+// `useSharedSprite` resolved at run time). The deck-card art itself is replaced
+// by the player's uploaded avatar (v6 protocol).
 
 constexpr float kMemberCardW = 252.0f;  // 336 * 0.75 (2520 -> 1920 canvas)
 constexpr float kMemberGap = 18.0f;
@@ -945,38 +946,36 @@ void drawMemberCard(platform::Renderer& renderer, const Canvas& c, const platfor
         dl->AddRectFilled(lo, hi, tint(kCardPanel, 1.0f), round);
     }
 
-    // --- deck-card art: the player's 卡面 ----------------------------------
+    // --- avatar: the player's uploaded image --------------------------------
     //
-    // 340x484 at c(0,+74), clipped by the panel's top rounding (the prefab wraps
-    // it in a Mask). The source is the card sheet: 2338x1440 landscape, so it is
-    // cover-fitted and centre-cropped - the character sits near the middle of
-    // those sheets, which is what makes a plain centre crop read correctly.
-    //
-    // No card picked (or the art was never downloaded) -> nothing is painted and
-    // the panel's own #EBEBF2 stays, which is the honest "no art" look. The
-    // prefab's alternative is `Empty`, a flat #444466 block, but that is the
-    // *empty slot* state and it buries the name and the honours.
+    // The prefab's 340x484 slot is the deck-card art area. We no longer have a
+    // card-face picker (2026-11-25), so the player's own avatar takes that
+    // space: a centred circle, cover-cropped. No avatar -> nothing is painted
+    // and the panel's own #EBEBF2 stays, which is the honest "no art" look.
     {
-        const std::string cardPath = cardArtPath(row.card);
-        const platform::Renderer::HudSprite* art =
-            cardPath.empty() ? nullptr : renderer.cardArt(cardPath);
-        if (art != nullptr && art->width > 0 && art->height > 0) {
-            const float aw = 340.0f * u;
-            const float ah = 484.0f * u;
-            const ImVec2 lo(c.x(cx - aw * 0.5f), c.y(cy - 74.0f * u - ah * 0.5f));
-            const ImVec2 hi(c.x(cx + aw * 0.5f), c.y(cy - 74.0f * u + ah * 0.5f));
-            const float srcW = static_cast<float>(art->width);
-            const float srcH = static_cast<float>(art->height);
-            const float boxW = aw * c.scale;
-            const float boxH = ah * c.scale;
+        const platform::Renderer::HudSprite* face =
+            row.avatar.empty() ? nullptr : renderer.avatarArt(row.avatar);
+        if (face != nullptr && face->width > 0 && face->height > 0) {
+            const float d = 200.0f * u;
+            const float cx0 = cx;
+            // Sits above the score plate and the FULL COMBO / AP line (both at
+            // c(0,+44) in prefab units), so nothing covers them.
+            const float cy0 = cy - 150.0f * u;
+            const ImVec2 lo(c.x(cx0 - d * 0.5f), c.y(cy0 - d * 0.5f));
+            const ImVec2 hi(c.x(cx0 + d * 0.5f), c.y(cy0 + d * 0.5f));
+            const float srcW = static_cast<float>(face->width);
+            const float srcH = static_cast<float>(face->height);
+            const float boxW = d * c.scale;
+            const float boxH = d * c.scale;
             const float fit = std::max(boxW / srcW, boxH / srcH);
             const float visibleW = std::clamp(boxW / (srcW * fit), 0.0f, 1.0f);
             const float visibleH = std::clamp(boxH / (srcH * fit), 0.0f, 1.0f);
             const float u0 = (1.0f - visibleW) * 0.5f;
             const float v0 = (1.0f - visibleH) * 0.5f;
-            dl->AddImageRounded(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(art->id)),
+            dl->AddImageRounded(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(face->id)),
                 lo, hi, ImVec2(u0, v0), ImVec2(u0 + visibleW, v0 + visibleH),
-                IM_COL32(255, 255, 255, alpha), 48.0f * u * c.scale, ImDrawFlags_RoundCornersTop);
+                IM_COL32(255, 255, 255, alpha), d * 0.5f * c.scale,
+                ImDrawFlags_RoundCornersAll);
         }
     }
 

@@ -56,6 +56,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
@@ -595,7 +596,7 @@ namespace
             "                [--result-preview] [--result-at <sec>] [--help]\n"
             "                [--confirm-flash [<sec>]] [--settings] [--settings-tab <n>]\n"
             "                [--profile] [--guess] [--singer-panel] [--select-filter] [--unit <0-7>] [--player <name[:org]>]\n"
-            "                [--player-rank <n>] [--player-exp <0..1>]\n\n"
+            "                [--player-rank <n>] [--player-exp <0..1>] [--avatar <image>]\n\n"
 
             "No --sus: opens the song select screen (scans --charts, then charts/ next\n"
             "to the exe, then the charts/ of the parent folder).\n"
@@ -669,6 +670,8 @@ namespace
             "          local account for headless checks (--player-exp = how far into the\n"
             "          current rank, i.e. the level chip's green progress bar); memory\n"
             "          only, userdata.json is not touched.\n"
+            "--avatar <image>: show this local image as the account's avatar for this\n"
+            "          run (headless check; the file is not copied into the profile).\n"
             "Mouse   : left/right button = tap a lane (hold = long note),\n"
             "          drag up/left/right = flick (direction must match the\n"
             "          note arrow; see the strict-Flick setting). Right button\n"
@@ -1300,8 +1303,8 @@ int main(int argc, char** argv)
     bool singerPanelShot = false;  // headless check: force the 切换歌手 panel open
     std::string playerSpec;        // --player 昵称[:组织]
     bool playerSpecGiven = false;
-    std::string cliCard;           // --card <bundle>：卡面，只塞内存不写盘
-    bool cliCardGiven = false;
+    std::string cliAvatar;         // --avatar <path>：头像，只塞内存不写盘
+    bool cliAvatarGiven = false;
     int playerRankGiven = -1;      // --player-rank
     double playerExpGiven = -1.0;  // --player-exp: fraction towards the next rank
     int liveBonusGiven = -1;       // --live-bonus: 覆盖本次运行的演出能量（不落盘）
@@ -1595,12 +1598,11 @@ int main(int argc, char** argv)
             testRestart = true;
         } else if (arg == "--restart-at" && i + 1 < utf8Argc) {
             restartAtSec = std::atof(utf8Argv[++i]);
-        } else if (arg == "--card" && i + 1 < utf8Argc) {
-            // Headless check aid: pick the account's 卡面 without touching
-            // userdata.json, same contract as --player. The bundle name is what
-            // fetch_card_art.py writes, e.g. res001_no056.
-            cliCard = utf8Argv[++i];
-            cliCardGiven = true;
+        } else if (arg == "--avatar" && i + 1 < utf8Argc) {
+            // Headless check aid: show an avatar without touching userdata.json,
+            // same contract as --player. The path may be absolute.
+            cliAvatar = utf8Argv[++i];
+            cliAvatarGiven = true;
         } else if (arg == "--result-preview") {
             // Debug: show the result screen right away. Without --result-at
             // the sample numbers of the reference screenshot are used, which
@@ -1991,8 +1993,13 @@ int main(int argc, char** argv)
     }
     // --player / --player-rank override what the file just loaded (headless
     // checks: they must never write a fixture into the player's own save).
-    if (cliCardGiven) {
-        account.card = cliCard;
+    if (cliAvatarGiven) {
+        // Relative paths come from the shell's cwd; resolve once so the
+        // settings preview / party seats all look at the same file.
+        const std::filesystem::path given = path_utf8::toPath(cliAvatar);
+        account.avatar = given.is_absolute()
+            ? cliAvatar
+            : path_utf8::fromPath(std::filesystem::absolute(given));
     }
     if (playerSpecGiven) {
         const size_t sep = playerSpec.find(':');
@@ -3551,6 +3558,7 @@ int main(int argc, char** argv)
     bool mpHostFreezeValid = false;
     double mpHostFreezeTime = 0.0;
     std::string mpStatus;       // room status line (banner + phone panel)
+    std::string mpAvatarPublished; // last avatar path written to this seat
     double frameSongTime = 0.0; // this frame's chart clock, resolved once
     // --party-auto bookkeeping: the host's 确定 fires 1.8s in (the song list has
     // settled by then), a member picks its difficulty one second after the
@@ -3558,6 +3566,8 @@ int main(int argc, char** argv)
     bool partyAutoConfirmed = false;
     double partyAutoAtSec = 1.8;
     double partyAutoMemberAt = 0.0;
+    // --party-auto: when the final page is up, press 开始 once it has settled.
+    double partyAutoStartAt = -1.0;
     bool partyAutoContinued = false; // --party-auto: 继续 on the result screen
     bool chartDlTestFired = false;   // --chartdl-test: the auto-press ran once
     bool dropTestFired = false;      // --drop-test: the synthetic drop ran once
@@ -4473,6 +4483,109 @@ int main(int argc, char** argv)
         (void)suggestedPath;
         return {};
 #endif
+    };
+    // ---- avatar (2026-11-25) --------------------------------------------
+    // 账户 > 头像: the player picks a local image, it is copied into
+    // <data>/profiles/<id>_avatar.<ext> and the account stores that relative
+    // path. All party windows run on this machine, so publishing the absolute
+    // path lets the other windows load the same file.
+    const auto avatarFullPath = [&]() -> std::string {
+        if (account.avatar.empty()) {
+            return {};
+        }
+        const std::filesystem::path stored = path_utf8::toPath(account.avatar);
+        if (stored.is_absolute()) {
+            return path_utf8::fromPath(stored);
+        }
+        return path_utf8::fromPath(path_utf8::toPath(userDataDir) / stored);
+    };
+    const auto pickAvatarFile = [&]() -> std::string {
+#ifdef _WIN32
+        static const wchar_t kFilter[] =
+            L"图片 (*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tga)\0*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tga\0"
+            L"所有文件 (*.*)\0*.*\0";
+        wchar_t buffer[MAX_PATH * 4] = {};
+        OPENFILENAMEW ofn{};
+        ofn.lStructSize = sizeof(ofn);
+        SDL_SysWMinfo info{};
+        SDL_VERSION(&info.version);
+        if (SDL_GetWindowWMInfo(window, &info) && info.subsystem == SDL_SYSWM_WINDOWS) {
+            ofn.hwndOwner = info.info.win.window;
+        }
+        ofn.lpstrFilter = kFilter;
+        ofn.lpstrFile = buffer;
+        ofn.nMaxFile = static_cast<DWORD>(std::size(buffer));
+        ofn.lpstrTitle = L"选择头像图片";
+        ofn.Flags = OFN_EXPLORER | OFN_NOCHANGEDIR | OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+        if (GetOpenFileNameW(&ofn) == FALSE) {
+            return {};
+        }
+        return path_utf8::narrow(buffer);
+#else
+        return {};
+#endif
+    };
+    // Copies `source` next to the profile files and remembers it. Old avatar
+    // files are removed only after the new one is in place, so a failed copy
+    // leaves the previous picture intact.
+    const auto installAvatar = [&](const std::string& source) -> bool {
+        if (source.empty()) {
+            return false;
+        }
+        std::error_code ec;
+        std::string ext = path_utf8::fromPath(path_utf8::toPath(source).extension());
+        for (char& ch : ext) {
+            ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        }
+        if (ext.empty()) {
+            ext = ".png";
+        }
+        const std::filesystem::path dir = path_utf8::toPath(userDataDir) / "profiles";
+        std::filesystem::create_directories(dir, ec);
+        const std::filesystem::path dst = dir / (activeProfileId + "_avatar" + ext);
+        std::filesystem::copy_file(path_utf8::toPath(source), dst,
+            std::filesystem::copy_options::overwrite_existing, ec);
+        if (ec) {
+            platform::logf(platform::LogSystem, "[account] avatar copy failed: %s -> %s (%s)\n",
+                source.c_str(), path_utf8::fromPath(dst).c_str(), ec.message().c_str());
+            std::fflush(stdout);
+            MessageBoxW(nullptr, L"头像保存失败，请选择另一张图片。", L"CppSekai",
+                MB_OK | MB_ICONWARNING);
+            return false;
+        }
+        // Drop the previous file (different extension -> different name). A
+        // path set through --avatar is absolute and belongs to the caller: never
+        // delete that.
+        if (!account.avatar.empty() && !path_utf8::toPath(account.avatar).is_absolute()) {
+            const std::filesystem::path old = path_utf8::toPath(avatarFullPath());
+            if (!old.empty() && old != dst) {
+                std::error_code removeEc;
+                std::filesystem::remove(old, removeEc);
+            }
+        }
+        account.avatar = "profiles\\" + path_utf8::fromPath(dst.filename());
+        renderer.clearAvatarArt();
+        persistUserData();
+        party.setAvatar(avatarFullPath());
+        platform::logf(platform::LogSystem, "[account] avatar -> %s\n", account.avatar.c_str());
+        std::fflush(stdout);
+        return true;
+    };
+    const auto clearAvatar = [&]() {
+        if (account.avatar.empty()) {
+            return;
+        }
+        const std::filesystem::path old = path_utf8::toPath(avatarFullPath());
+        std::error_code ec;
+        if (!path_utf8::toPath(account.avatar).is_absolute()) {
+            std::filesystem::remove(old, ec);
+        }
+        account.avatar.clear();
+        renderer.clearAvatarArt();
+        persistUserData();
+        party.setAvatar({});
+        platform::logf(platform::LogSystem, "[account] avatar cleared\n");
+        std::fflush(stdout);
     };
     // 账户 > 导入 asks before it replaces anything: the card gets the file it is
     // about to read and, for the "确定覆盖" branch, the parsed result.
@@ -6109,138 +6222,66 @@ int main(int argc, char** argv)
                         }
                     });
 
-                // --- 卡面 (2026-11-21) ---------------------------------------
-                // The cards under assets/card/ are what fetch_card_art.py has
-                // downloaded; card-index.tsv is written by the same tool and is
-                // plain TSV on purpose (this file has no json parser). Picking
-                // one only stores the bundle name - the art is looked up by
-                // bundle at draw time, so a missing file degrades to "no card"
-                // instead of breaking the save.
+                // --- 头像 (2026-11-25) ---------------------------------------
+                // The old 卡面 picker is gone: users upload their own picture
+                // instead. It is copied into profiles/<id>_avatar.<ext> so it
+                // survives a rebuild and travels with the profile folder, and
+                // shows up on the multiplayer scoreboard / result cards.
                 {
-                    struct CardEntry
-                    {
-                        std::string bundle;
-                        std::string character;
-                        std::string attr;
-                        std::string rarity;
-                    };
-                    static std::vector<CardEntry> cards;
-                    static bool cardsLoaded = false;
-                    if (!cardsLoaded) {
-                        cardsLoaded = true;
-                        const std::string indexPath = baseDir + "assets\\card\\card-index.tsv";
-                        const std::string text = readFile(indexPath);
-                        std::size_t cursor = 0;
-                        while (cursor < text.size()) {
-                            const std::size_t eol = text.find('\n', cursor);
-                            const std::string line = text.substr(cursor,
-                                eol == std::string::npos ? std::string::npos : eol - cursor);
-                            cursor = eol == std::string::npos ? text.size() : eol + 1;
-                            if (line.empty() || line[0] == '#') {
-                                continue;
-                            }
-                            std::vector<std::string> fields;
-                            std::size_t start = 0;
-                            while (true) {
-                                const std::size_t tab = line.find('\t', start);
-                                fields.push_back(line.substr(start,
-                                    tab == std::string::npos ? std::string::npos : tab - start));
-                                if (tab == std::string::npos) {
-                                    break;
-                                }
-                                start = tab + 1;
-                            }
-                            if (fields.size() >= 4) {
-                                cards.push_back(CardEntry{fields[0], fields[1], fields[2], fields[3]});
-                            }
-                        }
-                    }
-
                     contentLeft();
-                    colSet(1);
-                    ui::sectionLabel("卡面", interior);
+                    colSet(0);
+                    ui::sectionLabel("头像", interior);
                     contentLeft();
-                    if (cards.empty()) {
+                    const float faceD = 112.0f * s;
+                    const std::string facePath = avatarFullPath();
+                    const platform::Renderer::HudSprite* face =
+                        facePath.empty() ? nullptr : renderer.avatarArt(facePath);
+                    const ImVec2 p0 = ImGui::GetCursorScreenPos();
+                    ImDrawList* adl = ImGui::GetWindowDrawList();
+                    const ImVec2 fc(p0.x + faceD * 0.5f, p0.y + faceD * 0.5f);
+                    adl->AddCircleFilled(fc, faceD * 0.5f, IM_COL32(232, 234, 244, 255), 48);
+                    if (face != nullptr && face->id != 0 && face->width > 0 && face->height > 0) {
+                        const float srcW = static_cast<float>(face->width);
+                        const float srcH = static_cast<float>(face->height);
+                        const float fit = std::max(faceD / srcW, faceD / srcH);
+                        const float visW = std::clamp(faceD / (srcW * fit), 0.0f, 1.0f);
+                        const float visH = std::clamp(faceD / (srcH * fit), 0.0f, 1.0f);
+                        const float u0 = (1.0f - visW) * 0.5f;
+                        const float v0 = (1.0f - visH) * 0.5f;
+                        adl->AddImageRounded(
+                            reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(face->id)),
+                            ImVec2(fc.x - faceD * 0.5f, fc.y - faceD * 0.5f),
+                            ImVec2(fc.x + faceD * 0.5f, fc.y + faceD * 0.5f), ImVec2(u0, v0),
+                            ImVec2(u0 + visW, v0 + visH), IM_COL32(255, 255, 255, 255),
+                            faceD * 0.5f, ImDrawFlags_RoundCornersAll);
+                    } else {
                         ImGui::PushFont(game::bodyFont(), 20.0f * s);
-                        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(122, 122, 148, 255));
-                        ImGui::TextUnformatted("还没有卡面。用 fetch_card_art.py 下载后重开即可。");
+                        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(140, 142, 164, 255));
+                        const char* hint = "无";
+                        const ImVec2 ts = ImGui::CalcTextSize(hint);
+                        adl->AddText(ImGui::GetFont(), 20.0f * s,
+                            ImVec2(fc.x - ts.x * 0.5f, fc.y - ts.y * 0.5f),
+                            IM_COL32(140, 142, 164, 255), hint);
                         ImGui::PopStyleColor();
                         ImGui::PopFont();
-                    } else {
-                        // A grid of thumbnails. 5 per row at the settings card's
-                        // inner width, which keeps each tile ~3:2 like the art.
-                        const float gap = 10.0f * s;
-                        const int perRow = 5;
-                        const float tileW = (interior - gap * (perRow - 1)) / perRow;
-                        const float tileH = tileW * 457.0f / 800.0f;
-                        const float labelH = 20.0f * s;
-                        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(gap, gap));
-                        for (std::size_t i = 0; i < cards.size(); ++i) {
-                            if (i % perRow != 0) {
-                                ImGui::SameLine();
-                            }
-                            const CardEntry& card = cards[i];
-                            ImGui::PushID(0x6000 + static_cast<int>(i));
-                            const std::string path = game::cardArtPath(card.bundle);
-                            const platform::Renderer::HudSprite* art =
-                                path.empty() ? nullptr : renderer.cardArt(path);
-                            const ImVec2 p0 = ImGui::GetCursorScreenPos();
-                            const bool hit = ImGui::InvisibleButton("##card", ImVec2(tileW, tileH + labelH));
-                            const bool hovered = ImGui::IsItemHovered();
-                            const bool chosen = account.card == card.bundle;
-                            ImDrawList* cdl = ImGui::GetWindowDrawList();
-                            // Cover-fit the 800x457 sheet into the tile.
-                            if (art != nullptr && art->id != 0) {
-                                const float fit = std::max(tileW / static_cast<float>(art->width),
-                                    tileH / static_cast<float>(art->height));
-                                const float visW = std::clamp(tileW / (art->width * fit), 0.0f, 1.0f);
-                                const float visH = std::clamp(tileH / (art->height * fit), 0.0f, 1.0f);
-                                const float u0 = (1.0f - visW) * 0.5f;
-                                const float v0 = (1.0f - visH) * 0.5f;
-                                cdl->AddImageRounded(
-                                    reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(art->id)),
-                                    p0, ImVec2(p0.x + tileW, p0.y + tileH), ImVec2(u0, v0),
-                                    ImVec2(u0 + visW, v0 + visH),
-                                    IM_COL32(255, 255, 255, hovered || chosen ? 255 : 205),
-                                    10.0f * s, ImDrawFlags_RoundCornersTop);
-                            } else {
-                                cdl->AddRectFilled(p0, ImVec2(p0.x + tileW, p0.y + tileH),
-                                    IM_COL32(226, 226, 236, 255), 10.0f * s, ImDrawFlags_RoundCornersTop);
-                            }
-                            cdl->AddRect(p0, ImVec2(p0.x + tileW, p0.y + tileH),
-                                chosen ? IM_COL32(119, 237, 221, 255)
-                                       : (hovered ? IM_COL32(160, 160, 190, 255)
-                                                  : IM_COL32(210, 210, 224, 255)),
-                                10.0f * s, ImDrawFlags_RoundCornersTop, chosen ? 3.0f * s : 1.5f * s);
-                            // Label under the tile: romaji name + 属性 + 稀有度.
-                            char label[96];
-                            std::snprintf(label, sizeof(label), "%s  %s★%s", card.character.c_str(),
-                                card.rarity.c_str(), card.attr.c_str());
-                            cdl->AddText(game::bodyFont(), 13.0f * s,
-                                ImVec2(p0.x + 2.0f * s, p0.y + tileH + 3.0f * s),
-                                chosen ? IM_COL32(68, 68, 102, 255) : IM_COL32(120, 120, 148, 255),
-                                label);
-                            if (hit) {
-                                account.card = card.bundle;
-                                persistUserData();
-                                platform::logf(platform::LogPlay, "[account] card -> %s\n",
-                                    card.bundle.c_str());
-                                std::fflush(stdout);
-                            }
-                            ImGui::PopID();
-                        }
-                        ImGui::PopStyleVar();
-                        contentLeft();
-                        // Clearing the card is a real choice (the official cell
-                        // has a no-card state), so it gets its own button rather
-                        // than being reachable only by deleting userdata.json.
-                        if (!account.card.empty()) {
-                            if (ui::capsuleButton("不用卡面", ImVec2(interior * 0.35f, 44.0f * s), false)) {
-                                account.card.clear();
-                                persistUserData();
-                            }
+                    }
+                    ImGui::Dummy(ImVec2(faceD, faceD));
+                    ImGui::SameLine(0.0f, 18.0f * s);
+                    ImGui::BeginGroup();
+                    if (ui::capsuleButton("选择图片…", ImVec2(210.0f * s, 44.0f * s), false)) {
+                        const std::string picked = pickAvatarFile();
+                        if (!picked.empty()) {
+                            installAvatar(picked);
                         }
                     }
+                    ImGui::Dummy(ImVec2(1.0f, 6.0f * s));
+                    if (ui::capsuleButton("清除头像", ImVec2(210.0f * s, 44.0f * s), false)) {
+                        clearAvatar();
+                    }
+                    ImGui::EndGroup();
+                    contentLeft();
+                    ui::caption("PNG / JPG / BMP，建议使用正方形图片。多人演出时会显示。", 16.0f * s,
+                        IM_COL32(122, 122, 148, 255), interior);
                 }
             } else if (tab == 6) {
                 // 关于: 一页流水信息，不分组（2026-11-01 用户要求）。
@@ -7554,10 +7595,10 @@ int main(int argc, char** argv)
                 row.cleared = true;
                 row.fullCombo = row.miss == 0;
                 row.allPerfect = row.fullCombo && row.great == 0 && row.good == 0 && row.bad == 0;
-                // Every preview seat borrows the local account's card art: the
+                // Every preview seat borrows the local account's avatar: the
                 // point of the preview is to check the cell's crop and chrome,
-                // and a real room would have one bundle per seat.
-                row.card = account.card;
+                // and a real room would have one image per seat.
+                row.avatar = avatarFullPath();
                 resultData.members.push_back(row);
             }
             // Same rule as PartyLink::decideAwards: best cleared by score, and
@@ -8327,7 +8368,7 @@ int main(int argc, char** argv)
                         // so focus means nothing here.
                         if (event.window.event == SDL_WINDOWEVENT_FOCUS_LOST && state == AppState::Play
                             && !paused && !pauseDialogOpen && screenshotPath.empty()
-                            && userSettings.autoPauseOnBlur && !party.active() && !roomOpen) {
+                            && userSettings.autoPauseOnBlur && !partyUsable()) {
                             const double currentSongTime =
                                 songClock();
                             if (currentSongTime < 0.0) {
@@ -8484,6 +8525,14 @@ int main(int argc, char** argv)
                             SDL_SetWindowResizable(window, SDL_TRUE);
                         }
                     } else if (!typingText && event.key.keysym.sym == SDLK_h && !story::blocksInput()) {
+                        if (!showDebug) {
+                            // The settings card is a top-level window too; a
+                            // singer drawer left open would sit above it and
+                            // swallow every click. Close the right-hand
+                            // drawers first.
+                            game::debugOpenSingerPanel(false);
+                            game::closeMenuDrawer();
+                        }
                         showDebug = !showDebug;
                     } else if (event.key.keysym.sym == SDLK_o
                         && (event.key.keysym.mod & KMOD_CTRL) != 0) {
@@ -9134,7 +9183,8 @@ int main(int argc, char** argv)
 #endif
 
         if (escapePressed && !game::guessDialogOpen() && !game::filterDialogOpen()
-            && !game::menuDrawerOpen() && !game::finalConfirmOpen() && !story::blocksInput()) {
+            && !game::menuDrawerOpen() && !game::finalConfirmOpen() && !game::singerPanelOpen()
+            && !story::blocksInput()) {
             countdownActive = false; // leaving / continuing cancels any countdown
             if (keymapCardAlive) {
                 // 「按键映射」卡片（2026-10-11）：ESC = 关掉它。改键位等待中
@@ -9618,6 +9668,13 @@ int main(int argc, char** argv)
             platform::PartyState mpSnap = party.read();
             int mpLocked = -1;
             if (party.active()) {
+                // Keep this seat's avatar in the room in step with the profile
+                // (a switch or a fresh upload changes it while we run).
+                const std::string seatAvatar = avatarFullPath();
+                if (seatAvatar != mpAvatarPublished) {
+                    mpAvatarPublished = seatAvatar;
+                    party.setAvatar(seatAvatar);
+                }
                 mpLocked = partyLockedEntry(mpSnap);
                 // The host moved to another song: this window's answer belonged
                 // to the old one, so it goes back to "nothing picked". The epoch
@@ -9762,30 +9819,24 @@ int main(int argc, char** argv)
                 publishHostSong();
             }
 
-            // The room line under the phone panel's 确定 button: what this
-            // window is waiting for right now.
-            if (party.active()) {
-                // Alone in the room (one window on this machine): 多人游玩 has
-                // nothing to coordinate, so its whole vocabulary - the badge, the
-                // "other players pick their difficulty on their phone" line -
-                // would be noise describing people who are not there. The room
-                // itself stays live (the next window that opens joins it); only
-                // the UI goes quiet.
-                const bool partySolo = party.playerCount() <= 1;
+            // The room line shown on the final-confirm page: what this window is
+            // waiting for. The phone panel no longer draws it (user request).
+            if (partyUsable()) {
                 if (party.isHost()) {
                     if (selected < 0 || selected >= static_cast<int>(entries.size())) {
-                        mpStatus = partySolo ? std::string() : "请选择歌曲";
+                        mpStatus = "请选择歌曲";
                     } else if (!mpConfirmed) {
-                        mpStatus = partySolo ? std::string() : "准备好的话就开始吧";
+                        mpStatus = "准备好的话就开始吧";
                     } else if (party.allReady()) {
-                        mpStatus = partySolo ? std::string() : "即将开始";
+                        mpStatus = "即将开始";
                     } else {
-                        mpStatus = partySolo ? std::string() : "等待其他玩家";
+                        mpStatus = "等待其他玩家";
                     }
                 } else if (mpSnap.phase == platform::PartyLobby) {
                     mpStatus = "等待房主选曲";
                 } else if (mpLocked < 0) {
-                    // Named out loud, because "房主选了一首这台机器上没有的\n                    // 曲子" is otherwise invisible: this window would just sit
+                    // Named out loud, because "房主选了一首这台机器上没有的
+                    // 曲子" is otherwise invisible: this window would just sit
                     // there while the others ready up.
                     mpStatus = "本窗口没有" + (mpSnap.songTitle.empty() ? mpSnap.songKey : mpSnap.songTitle)
                         + "，无法参加本曲";
@@ -9801,16 +9852,14 @@ int main(int argc, char** argv)
                 // second), and the armed phase is one fuse long (0.8s), so a
                 // counter would be a flicker rather than information.
                 if (mpConfirmed && mpSnap.phase == platform::PartyCharging) {
-                    // 单人房间里别用多人话术：「即将开始」听着像在等别人，实际只是
-                    // 加载 ~0.5s + 0.8s 引信，反而让人以为卡住了。
-                    const bool armed = mpSnap.startCounter != 0;
-                    mpStatus = partySolo ? (armed ? "准备中…" : "谱面加载中…")
-                                         : (armed ? "即将开始" : "谱面加载中…");
+                    mpStatus = mpSnap.startCounter != 0 ? "即将开始" : "谱面加载中…";
                 }
+            } else {
+                mpStatus.clear();
             }
 
             game::SelectPartyInfo selParty;
-            if (party.active()) {
+            if (partyUsable()) {
                 selParty.active = true;
                 // ... and the status stays as-is even when alone: the charge
                 // lines ("谱面加载中…" / "即将开始") and the error lines
@@ -9932,7 +9981,7 @@ int main(int argc, char** argv)
                 userSettings.clearFilter, userSettings.mvUnchecked, userSettings.musicFilter,
                 selectedVocal, userSettings.uiScale, &selectConfirmCenter, &selectPhoneScreen,
                 userSettings.deckPower, &autoPlay, &userSettings.mvMode, &account,
-                party.active() ? &selParty : nullptr, party.active() ? &selPartyOut : nullptr,
+                partyUsable() ? &selParty : nullptr, partyUsable() ? &selPartyOut : nullptr,
                 &favoriteToggle,
                 // 原生菜单栏开着就把 刷新 / 音乐商店 / 设置 从顶栏收走（它们在菜单里）。
                 // 传的是**设置值**而不是"菜单现在真的挂着"：全屏/无框时菜单暂时挂不上，
@@ -9987,14 +10036,32 @@ int main(int argc, char** argv)
             // a few seconds, which is the "solo in a room" run), and with no
             // room at all it is simply a "press 确定" for a solo regression run.
             if (partyAutoGiven && !partyAutoConfirmed && selected >= 0 && uiClock >= partyAutoAtSec
+                && (party.isHost() || !partyUsable())
                 && (!party.active() || partyUsable() || uiClock >= partyAutoAtSec + 6.0)) {
                 partyAutoConfirmed = true;
-                if (party.active()) {
-                    selPartyOut.confirm = true;
+                if (partyUsable()) {
+                    // Open the real final page, then press its 开始 a moment
+                    // later (the generic block below does that). This is what
+                    // keeps the headless round on the user-facing path.
+                    game::debugRequestFinalConfirm(selected,
+                        game::difficultyIndex(entries[static_cast<size_t>(selected)].difficulty),
+                        selectedVocal, static_cast<float>(uiClock));
+                    partyAutoStartAt = uiClock + 1.2;
                 } else {
+                    // Alone (or no room at all): this is the solo flow, exactly
+                    // like a player pressing 确定 and then 开始 on the final page.
                     action = selected;
                 }
                 platform::logf(platform::LogParty, "[party] auto-confirm chart #%d (debug)\n", selected);
+                std::fflush(stdout);
+            }
+            // --party-auto, second half: the final page is up and settled ->
+            // press 开始, which is the only way a round starts now.
+            if (partyAutoGiven && partyAutoStartAt > 0.0 && uiClock >= partyAutoStartAt
+                && partyUsable() && game::finalConfirmOpen() && !mpConfirmed) {
+                partyAutoStartAt = -1.0;
+                selPartyOut.confirm = true;
+                platform::logf(platform::LogParty, "[party] auto-start on the final page (debug)\n");
                 std::fflush(stdout);
             }
             // Diagnostic (CPSEKAI_UI_TRACE=1): where the 确定 button landed, in
@@ -10016,14 +10083,30 @@ int main(int argc, char** argv)
                 rescanRequested || action == game::SelectRescan || chartDlFinished;
             rescanRequested = false;
             if (action >= 0 && action < static_cast<int>(entries.size())) {
-                if (party.active()) {
-                    // 多人游玩: 确定 never starts a local live - it is the room's
-                    // button (see the block right below), so it only confirms
-                    // this window. No white burst either: nothing is loaded
-                    // here, the load happens when the shared charge is armed
-                    // and *that* is what the flash covers.
-                    selPartyOut.confirm = true;
+                if (partyUsable()) {
+                    // The list never hands back a chart index in a room any
+                    // more: 确定 / Enter / double-click all open the final page,
+                    // and only its 开始 reports a confirm (selPartyOut.confirm).
+                    // This is a defensive fallback, not a start. A player who
+                    // pressed start a frame before somebody joined goes back to
+                    // the final page (it stays open in the party flow).
+                    platform::logf(platform::LogParty,
+                        "[party] list action ignored (start only from the final page)\n");
+                    std::fflush(stdout);
+                    game::clearFinalConfirmBurstQueued();
+                    game::dismissFinalConfirm();
                 } else {
+                    // Alone in a live room: behave exactly like solo. Drop the
+                    // room to the lobby so a window that joins now waits for the
+                    // next round instead of seeing a stale locked song.
+                    if (party.active() && party.playerCount() <= 1) {
+                        party.releaseSong();
+                        party.setSeat(platform::PartySeatLobby);
+                        party.setReady(false);
+                        mpConfirmed = false;
+                        mpPublished = false;
+                        mpPublishedKey.clear();
+                    }
                     // Point the entry at the chosen vocal version's audio before
                     // it goes in (the entries themselves are const here).
                     game::ChartEntry playEntry = entries[static_cast<size_t>(action)];
@@ -10116,7 +10199,7 @@ int main(int argc, char** argv)
             // The host locks the song with it, a member marks itself ready with
             // it, and the live starts the moment *every* player in the round has
             // pressed it (see the charge block below). There is no "press again\n            // to force it": a straggler is waited for, on purpose.
-            if (party.active()) {
+            if (partyUsable()) {
                 const bool host = party.isHost();
                 if (!host && selPartyOut.difficulty >= 0) {
                     mpMyDifficulty = selPartyOut.difficulty;
@@ -10125,19 +10208,34 @@ int main(int argc, char** argv)
                         mpMyDifficulty);
                     std::fflush(stdout);
                 }
+                // 返回 from the final page withdraws this seat: the host must not
+                // wait for a player who has walked back to the list.
+                if (selPartyOut.cancel && mpConfirmed) {
+                    mpConfirmed = false;
+                    mpConfirmedEpoch = -1;
+                    party.setReady(false);
+                    party.setSeat(platform::PartySeatLobby);
+                    party.setDifficulty(mpMyDifficulty);
+                    platform::logf(platform::LogParty, "[party] start cancelled from the final page\n");
+                    std::fflush(stdout);
+                }
                 if (selPartyOut.confirm) {
                     const bool roundOn = mpSnap.phase == platform::PartyCharging
                         || mpSnap.phase == platform::PartyRunning;
-                    if (roundOn) {
-                        // A round is already loading or running: 确定 cannot
-                        // start a second one (that is what the phase is for).
-                        platform::logf(platform::LogParty, "[party] confirm ignored (the round is already on)\n");
+                    if (mpConfirmed && mpConfirmedEpoch == party.read().epoch) {
+                        // Already waiting (or the round is on): a second press is
+                        // not a force-start, on purpose.
+                        platform::logf(platform::LogParty, "[party] start ignored (already waiting)\n");
+                        std::fflush(stdout);
+                    } else if (roundOn) {
+                        platform::logf(platform::LogParty, "[party] start ignored (the round is already on)\n");
                         std::fflush(stdout);
                     } else if (host) {
                         if (selected >= 0 && selected < static_cast<int>(entries.size())) {
                             publishHostSong();
                             // The host's own difficulty is whatever chart it is
-                            // sitting on; it can change it right up to 确定.
+                            // sitting on; it can change it right up to the final
+                            // page.
                             const int hostDiff = game::difficultyIndex(entries[static_cast<size_t>(selected)].difficulty);
                             if (hostDiff >= 0) {
                                 mpMyDifficulty = hostDiff;
@@ -10146,24 +10244,24 @@ int main(int argc, char** argv)
                             mpConfirmed = true;
                             mpConfirmedEpoch = party.read().epoch;
                             party.setReady(true);
-                            platform::logf(platform::LogParty, "[party] host confirmed (epoch %d)\n", mpConfirmedEpoch);
+                            platform::logf(platform::LogParty, "[party] host pressed start (epoch %d)\n", mpConfirmedEpoch);
                             std::fflush(stdout);
                         }
                     } else if (mpSnap.phase == platform::PartyLobby || mpLocked < 0) {
                         mpStatus = "房主还没有定下本窗口能打的曲子";
-                        platform::logf(platform::LogParty, "[party] confirm ignored (no playable song in this window)\n");
+                        platform::logf(platform::LogParty, "[party] start ignored (no playable song in this window)\n");
                         std::fflush(stdout);
                     } else if (mpMyDifficulty < 0) {
                         mpStatus = "先在手机上选择难度";
-                        platform::logf(platform::LogParty, "[party] confirm ignored (no difficulty picked)\n");
+                        platform::logf(platform::LogParty, "[party] start ignored (no difficulty picked)\n");
                         std::fflush(stdout);
                     } else {
                         mpConfirmed = true;
                         party.setSeat(platform::PartySeatReady);
                         party.setReady(true);
                         party.setDifficulty(mpMyDifficulty);
-                        platform::logf(platform::LogParty, "[party] confirmed, %s (%d)\n", game::difficultyName(mpMyDifficulty),
-                            mpMyDifficulty);
+                        platform::logf(platform::LogParty, "[party] pressed start, %s (%d)\n",
+                            game::difficultyName(mpMyDifficulty), mpMyDifficulty);
                         std::fflush(stdout);
                     }
                 }
@@ -10188,11 +10286,13 @@ int main(int argc, char** argv)
                         } else {
                             partyAutoMemberAt = uiClock + 0.5;
                         }
-                    } else if (!mpConfirmed) {
-                        mpConfirmed = true;
-                        party.setSeat(platform::PartySeatReady);
-                        party.setReady(true);
-                        platform::logf(platform::LogParty, "[party] auto confirm (debug)\n");
+                    } else if (!mpConfirmed && partyAutoStartAt < 0.0) {
+                        // Drive the real page: 确定 opens it, the generic block
+                        // above presses 开始 once it is up.
+                        game::debugRequestFinalConfirm(mpLocked, mpMyDifficulty, selectedVocal,
+                            static_cast<float>(uiClock));
+                        partyAutoStartAt = uiClock + 1.2;
+                        platform::logf(platform::LogParty, "[party] auto-open final page (debug)\n");
                         std::fflush(stdout);
                     }
                 }
@@ -10255,6 +10355,7 @@ int main(int argc, char** argv)
                             mpStatus = "本窗口没有这首曲子";
                             platform::logf(platform::LogParty, "[party] charge failed: chart missing\n");
                             std::fflush(stdout);
+                            game::dismissFinalConfirm();
                         } else {
                             mpEntry = entries[static_cast<size_t>(mpEntryIndex)];
                             if (host) {
@@ -10275,6 +10376,7 @@ int main(int argc, char** argv)
                                 error.clear();
                                 mpConfirmed = false;
                                 party.setReady(false);
+                                game::dismissFinalConfirm();
                                 // The host's own load failed, so there is no
                                 // chart to start: hand the room back to the
                                 // lobby instead of leaving it charging for an
@@ -10298,6 +10400,7 @@ int main(int argc, char** argv)
                                 mpHostPaused = false;
                                 mpStartPending = true;
                                 loadedCoverPath = session.entry.coverPath;
+                                game::dismissFinalConfirm();
                                 touches.clear();
                                 std::fill(std::begin(keyHeld), std::end(keyHeld), false);
                                 lanePress.fill(0.0f);
@@ -10420,23 +10523,6 @@ int main(int argc, char** argv)
             drawDeleteAskDialog();
             // 多人游玩刚打开时问的那句「立即重启？」。
             drawRestartAskDialog();
-            // Who else is in the room (hidden while the settings card is up:
-            // it draws on the foreground list, above the card). A room with a
-            // single seat is just this window, so the badge and its hint - the
-            // one thing that would say "waiting for other players" - stay away
-            // until somebody actually joins.
-            if (party.active() && party.playerCount() > 1 && !showDebug) {
-                std::string hint;
-                if (party.isHost()) {
-                    hint = mpConfirmed ? "等待其他玩家" : "准备好的话就开始吧";
-                } else if (mpConfirmed) {
-                    hint = "等待其他玩家";
-                } else {
-                    hint = "请选择难度";
-                }
-                game::drawPartyBadge(party.players(), party.slot(), windowW, windowH,
-                    userSettings.uiScale, hint);
-            }
             // Headless check: dump the song list shortly after startup. An
             // explicit --screenshot-time overrides the default 1.2s here as
             // well, which is how a scroll / animation is let to settle first.
@@ -10892,7 +10978,7 @@ int main(int argc, char** argv)
                 paused = false;
                 countdownActive = false;
                 systemMedia.setTaskbarProgress(-1.0, false);
-                if (party.active()) {
+                if (partyUsable()) {
                     // The live is over for this window. The host hands the room
                     // back to the lobby (which is also what re-arms the next
                     // round: see the song-select branch) so the others stop
@@ -10916,7 +11002,6 @@ int main(int argc, char** argv)
                     mine.cleared = st.life > 0.0f;
                     mine.fullCombo = mine.cleared && st.miss == 0;
                     mine.allPerfect = mine.fullCombo && st.great == 0 && st.good == 0 && st.bad == 0;
-                    mine.card = account.card;
                     party.publishResult(mine);
                     party.setHostPaused(false);
                     party.setSeat(platform::PartySeatResult);
@@ -11359,6 +11444,7 @@ int main(int argc, char** argv)
                             fake.combo = kCombos[i];
                             fake.life = kLives[i];
                             fake.host = i == 0;
+                            fake.avatar = avatarFullPath();
                             shown.push_back(fake);
                         }
                         shownSlot = 0;
@@ -11489,7 +11575,7 @@ int main(int argc, char** argv)
                     // makes a retry reach the other windows, see the play state).
                     pauseDialogOpen = false;
                     paused = false;
-                    if (party.active()) {
+                    if (partyUsable()) {
                         pauseDialogAlive = false;
                         party.setHostPaused(false);
                         party.setSeat(platform::PartySeatLobby);
@@ -11511,7 +11597,7 @@ int main(int argc, char** argv)
                     // Without this the dialog's alive flag stays set and the
                     // next session redraws a half-closed dialog.
                     pauseDialogAlive = false;
-                    if (party.active()) {
+                    if (partyUsable()) {
                         // The room follows: the host drops back to the lobby,
                         // which is what tells every other window to stop playing
                         // (see the play state's room watch).
@@ -11624,7 +11710,7 @@ int main(int argc, char** argv)
             // simply draws whoever has reported, and the last cards fill in as
             // they arrive. The host also decides the awards here, for the same
             // reason - it must wait for the final row.
-            if (party.active()) {
+            if (partyUsable()) {
                 if (party.isHost()) {
                     party.decideAwards(); // idempotent; no-op until every row is in
                 }

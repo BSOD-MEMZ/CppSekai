@@ -9,7 +9,7 @@
 > 都是 sprite，源码里没有对应字符串）、以及数据表内容（`musics.json` 歌名、
 > `music-aliases.json` 别名、`assets/story/scripts/*.json` 剧情台词）。
 >
-> 共 **547** 条，分 **87** 个区块。行号会随代码漂移，区块标题比行号可靠。
+> 共 **654** 条，分 **87** 个区块。行号会随代码漂移，区块标题比行号可靠。
 >
 > ⚠️ 两块**不要翻译**：
 > 1. `platform/ChartDlGuide.cpp` 的「全部完成 / 完成，失败 / 下载完成 / 已经下载完整」——
@@ -20,526 +20,264 @@
 
 | 文件:行 | 原文 |
 |---|---|
-| `main.cpp:117` | SUS 谱面 (*.sus) |
-| `main.cpp:118` | 所有文件 (*.*) |
-| `main.cpp:127` | 打开 SUS 谱面 |
+| `main.cpp:118` | SUS 谱面 (*.sus) |
+| `main.cpp:119` | 所有文件 (*.*) |
+| `main.cpp:128` | 打开 SUS 谱面 |
 
 ### 命令行 --help（面向高级用户，一般不进翻译）
 
 | 文件:行 | 原文 |
 |---|---|
-| `main.cpp:609` | into the window (letterbox). Same as the 渲染模式 setting.\n |
-| `main.cpp:616` | copy logs in as a different user. Same as 设置 -> 系统.\n |
-| `main.cpp:617` | --party [--party-name <name>]: force 多人游玩 on for this run and join\n |
-| `main.cpp:620` | host alone plays the BGM). Same as 设置 -> 系统 ->\n |
-| `main.cpp:621` | 多人游玩.\n |
-| `main.cpp:622` | --no-party: force 多人游玩 off for this run (plain single window),\n |
-| `main.cpp:625` | 下载谱面 button from the log (a posted click cannot\n |
-| `main.cpp:631` | the window: the host presses 确定 on whatever chart the\n |
-| `main.cpp:633` | the phone panel and presses 确定.\n |
-| `main.cpp:643` | saved 判定 > Flick 视作 Tap setting is not changed).\n |
-| `main.cpp:648` | --confirm-flash [<sec>]: play the 确定 white burst in the song list (debug;\n |
-| `main.cpp:651` | given page (0 演奏 / 1 画面 / 2 外观 / 3 判定 / 4 系统 / 5 账户 /\n |
-| `main.cpp:652` | 6 关于).\n |
-| `main.cpp:654` | --guess: open the 猜歌 alias quiz (the header button's card) at boot.\n |
-| `main.cpp:655` | --singer-panel: open the 切换歌手 vocal-version panel (the phone panel's\n |
-| `main.cpp:660` | produced; same switch as settings > 判定 > 触摸轨迹日志).\n |
-
-### 启动失败 · OpenGL 版本过低
-
-| 文件:行 | 原文 |
-|---|---|
-| `main.cpp:2341` | CppSekai 需要 OpenGL 3.3，而当前上下文只提供了 %d.%d。\n\n |
-| `main.cpp:2342` | 最常见的原因：显卡驱动没装（Windows 只给了「Microsoft 基本显示适配器」）， |
-| `main.cpp:2343` | 或者在云主机 / 远程桌面 / 没有 3D 加速的虚拟机里运行。\n\n |
-| `main.cpp:2344` | 如果这台机器确实没有能用的显卡驱动，可以到发布页下载「无显卡补丁」 |
-| `main.cpp:2345` | （Mesa 软件渲染），解压到本程序所在的文件夹再启动。\n |
-| `main.cpp:2346` | 具体信息见程序目录下的 cppsekai.log。 |
-
-### 启动失败 · OpenGL 初始化失败
-
-| 文件:行 | 原文 |
-|---|---|
-| `main.cpp:2421` | OpenGL 初始化失败：无法加载 3.3 的函数入口点。\n\n |
-| `main.cpp:2422` | 这台机器的 OpenGL 驱动不完整，多半是没装显卡驱动， |
-| `main.cpp:2423` | 或者在云主机 / 远程桌面 / 没有 3D 加速的虚拟机里运行。\n\n |
-| `main.cpp:2424` | 没有可用显卡驱动的机器，可以到发布页下载「无显卡补丁」 |
-| `main.cpp:2425` | （Mesa 软件渲染），解压到本程序所在的文件夹再启动。 |
-
-### 窗口标题 · 谱面下载器
-
-| 文件:行 | 原文 |
-|---|---|
-| `main.cpp:3519` | CppSekai 谱面下载器 |
-| `main.cpp:3521` | CppSekai 谱面下载器 |
-
-### 多人游玩 · 暂停提示
-
-| 文件:行 | 原文 |
-|---|---|
-| `main.cpp:3835` | 多人游玩中：暂停由房主控制 |
-
-### 谱面加载失败
-
-| 文件:行 | 原文 |
-|---|---|
-| `main.cpp:4070` | 谱面加载失败，文件可能损坏或不是 SUS 谱面： |
-
-### 未设置昵称
-
-| 文件:行 | 原文 |
-|---|---|
-| `main.cpp:4544` | (无昵称) |
-
-### 歌手版本标签
-
-| 文件:行 | 原文 |
-|---|---|
-| `main.cpp:4616` | 虚拟歌手 ver |
-| `main.cpp:4621` | 指定歌手 |
-| `main.cpp:4624` | 指定歌手 |
-| `main.cpp:4626` | セカイver |
-
-### 设置 · 页签名
-
-| 文件:行 | 原文 |
-|---|---|
-| `main.cpp:4693` | 演奏 |
-| `main.cpp:4693` | 画面 |
-| `main.cpp:4693` | 外观 |
-| `main.cpp:4693` | 判定 |
-| `main.cpp:4694` | 系统 |
-| `main.cpp:4694` | 账户 |
-| `main.cpp:4694` | 关于 |
+| `main.cpp:610` | into the window (letterbox). Same as the 渲染模式 setting.\n |
+| `main.cpp:617` | copy logs in as a different user. Same as 设置 -> 系统.\n |
+| `main.cpp:618` | --party [--party-name <name>]: force 多人游玩 on for this run and join\n |
+| `main.cpp:621` | host alone plays the BGM). Same as 设置 -> 系统 ->\n |
+| `main.cpp:622` | 多人游玩.\n |
+| `main.cpp:623` | --no-party: force 多人游玩 off for this run (plain single window),\n |
+| `main.cpp:626` | 下载谱面 button from the log (a posted click cannot\n |
+| `main.cpp:632` | the window: the host presses 确定 on whatever chart the\n |
+| `main.cpp:634` | the phone panel and presses 确定.\n |
+| `main.cpp:644` | saved 判定 > Flick 视作 Tap setting is not changed).\n |
+| `main.cpp:649` | --confirm-flash [<sec>]: play the 确定 white burst in the song list (debug;\n |
+| `main.cpp:652` | given page (0 演奏 / 1 画面 / 2 外观 / 3 判定 / 4 系统 / 5 账户 /\n |
+| `main.cpp:653` | 6 关于).\n |
+| `main.cpp:654` | --select-filter: open the song-select 筛选 card (the header funnel).\n |
+| `main.cpp:658` | assets (tab logos / 楽曲Lv. plate); default zh-CN.\n |
+| `main.cpp:659` | --unit <0-7>: preselect a 团体 tab (0 all / 1 VS / 2 L/N / 3 MMJ / 4 VBS /\n |
+| `main.cpp:662` | --guess: open the 猜歌 alias quiz (the header button's card) at boot.\n |
+| `main.cpp:663` | --singer-panel: open the 切换歌手 vocal-version panel (the phone panel's\n |
+| `main.cpp:668` | produced; same switch as settings > 判定 > 触摸轨迹日志).\n |
 
 ### 设置 · 演奏 / 画面 / 外观
 
 | 文件:行 | 原文 |
 |---|---|
-| `main.cpp:4811` | 音量 |
-| `main.cpp:4813` | BGM 音量 |
-| `main.cpp:4824` | 音效音量 |
-| `main.cpp:4837` | 手感 |
-| `main.cpp:4839` | 音频偏移 |
-| `main.cpp:4846` | 音符速度 |
-| `main.cpp:4861` | 奖励 |
-| `main.cpp:4864` | 演出能量（经验 ×%.0f） |
-| `main.cpp:4875` | 玩法 |
-| `main.cpp:4877` | 默认歌手 |
-| `main.cpp:4892` | 自动演出 |
-| `main.cpp:4906` | 无 MV |
-| `main.cpp:4906` | 原曲 MV |
-| `main.cpp:4921` | 输入 |
-| `main.cpp:4923` | 按键映射 |
-| `main.cpp:4937` | 按键映射　%s |
-| `main.cpp:4955` | 手柄 |
-| `main.cpp:4957` | 手柄震动 |
-| `main.cpp:4968` | 震动 |
-| `main.cpp:4973` | 命中 Flick 时震动 |
-| `main.cpp:4980` | 命中绝赞（黄键）时震动 |
-| `main.cpp:4987` | MISS 时震动 |
-| `main.cpp:5034` | 界面与渲染 |
-| `main.cpp:5039` | 界面缩放 |
-| `main.cpp:5050` | 渲染模式 |
-| `main.cpp:5056` | 跟随窗口分辨率 |
-| `main.cpp:5056` | 固定分辨率 |
-| `main.cpp:5071` | 性能 |
-| `main.cpp:5073` | 帧率上限 |
-| `main.cpp:5081` | 显示帧率 |
-| `main.cpp:5087` | 实测 %.0f fps · %d Hz 关垂直同步 |
-| `main.cpp:5092` | 窗口 |
-| `main.cpp:5094` | 分辨率 |
-| `main.cpp:5099` | 自定义… |
-| `main.cpp:5133` | 窗口模式 |
-| `main.cpp:5159` | 原生菜单栏 |
-| `main.cpp:5175` | 界面 |
-| `main.cpp:5178` | 显示播放进度条 |
-| `main.cpp:5189` | 经典开屏画面 |
-| `main.cpp:5197` | 打击特效 |
-| `main.cpp:5207` | 弱化打击特效 |
-| `main.cpp:5217` | 背景 |
-| `main.cpp:5222` | 选曲背景 |
-| `main.cpp:5228` | 默认渐变 |
-| `main.cpp:5228` | 桌面壁纸 |
-| `main.cpp:5228` | Aero 玻璃 |
-| `main.cpp:5229` | 默认渐变 |
-| `main.cpp:5229` | 桌面壁纸 |
-| `main.cpp:5253` | 背景模糊 |
-| `main.cpp:5260` | 背景模糊 |
-| `main.cpp:5270` | 背景变暗 |
-| `main.cpp:5273` | 背景变暗 |
-| `main.cpp:5286` | 窗口玻璃 |
-| `main.cpp:5289` | 玻璃实现 |
-| `main.cpp:5296` | 无边框窗口 |
+| `main.cpp:4803` | 指定歌手 |
+| `main.cpp:4806` | 指定歌手 |
+| `main.cpp:4808` | セカイver |
+| `main.cpp:4875` | 演奏 |
+| `main.cpp:4875` | 画面 |
+| `main.cpp:4875` | 外观 |
+| `main.cpp:4875` | 判定 |
+| `main.cpp:4876` | 系统 |
+| `main.cpp:4876` | 账户 |
+| `main.cpp:4876` | 关于 |
+| `main.cpp:4993` | 音量 |
+| `main.cpp:4995` | BGM 音量 |
+| `main.cpp:5006` | 音效音量 |
+| `main.cpp:5019` | 手感 |
+| `main.cpp:5021` | 音频偏移 |
+| `main.cpp:5028` | 音符速度 |
+| `main.cpp:5043` | 奖励 |
+| `main.cpp:5046` | 演出能量（经验 ×%.0f） |
+| `main.cpp:5057` | 玩法 |
+| `main.cpp:5059` | 默认歌手 |
+| `main.cpp:5074` | 自动演出 |
+| `main.cpp:5088` | 无 MV |
+| `main.cpp:5088` | 原曲 MV |
+| `main.cpp:5103` | 输入 |
+| `main.cpp:5105` | 按键映射 |
+| `main.cpp:5119` | 按键映射　%s |
+| `main.cpp:5137` | 手柄 |
+| `main.cpp:5139` | 手柄震动 |
+| `main.cpp:5150` | 震动 |
+| `main.cpp:5155` | 命中 Flick 时震动 |
+| `main.cpp:5162` | 命中绝赞（黄键）时震动 |
+| `main.cpp:5169` | MISS 时震动 |
+| `main.cpp:5216` | 界面与渲染 |
+| `main.cpp:5221` | 界面缩放 |
+| `main.cpp:5236` | 选曲页最高 100%（固定两栏版式） |
+| `main.cpp:5239` | 渲染模式 |
+| `main.cpp:5245` | 跟随窗口分辨率 |
+| `main.cpp:5245` | 固定分辨率 |
+| `main.cpp:5260` | 性能 |
+| `main.cpp:5262` | 帧率上限 |
+| `main.cpp:5270` | 显示帧率 |
+| `main.cpp:5276` | 实测 %.0f fps · %d Hz 关垂直同步 |
+| `main.cpp:5281` | 窗口 |
+| `main.cpp:5283` | 分辨率 |
+| `main.cpp:5288` | 自定义… |
 
 ### 设置 · 判定 / 系统
 
 | 文件:行 | 原文 |
 |---|---|
-| `main.cpp:5368` | 判定窗口 (ms) |
-| `main.cpp:5400` | Bad 与 Miss 同步 |
-| `main.cpp:5421` | 长条容错 (ms) |
-| `main.cpp:5435` | 松手容错 %.0f |
-| `main.cpp:5437` | 起按容错 %.0f |
-| `main.cpp:5450` | 严格 Flick 方向 |
-| `main.cpp:5457` | Flick 视作 Tap |
-| `main.cpp:5470` | 触摸轨迹日志 |
-| `main.cpp:5483` | 生命 / 综合力 |
-| `main.cpp:5549` | 窗口行为 |
-| `main.cpp:5552` | 失焦时自动暂停 |
-| `main.cpp:5559` | 最小化窗口静音 |
-| `main.cpp:5570` | 系统集成 |
-| `main.cpp:5573` | 启用 SMTC 汇报 |
-| `main.cpp:5591` | 关联 .sus 谱面文件 |
-| `main.cpp:5608` | 开始游戏时切到英文输入法 |
-| `main.cpp:5618` | 隐藏系统触摸特效 |
-| `main.cpp:5630` | 多实例 |
-| `main.cpp:5632` | 多开 |
-| `main.cpp:5636` | 只允许一个实例 |
-| `main.cpp:5636` | 允许多开，新实例登录另一个用户 |
-| `main.cpp:5666` | 多人演出 |
-| `main.cpp:5698` | 多人游玩已开启，重开所有窗口生效。 |
+| `main.cpp:5364` | 界面 |
+| `main.cpp:5367` | 显示播放进度条 |
+| `main.cpp:5378` | 经典开屏画面 |
+| `main.cpp:5386` | 打击特效 |
+| `main.cpp:5396` | 弱化打击特效 |
+| `main.cpp:5406` | 背景 |
+| `main.cpp:5411` | 选曲背景 |
+| `main.cpp:5417` | 默认渐变 |
+| `main.cpp:5417` | 桌面壁纸 |
+| `main.cpp:5417` | Aero 玻璃 |
+| `main.cpp:5418` | 默认渐变 |
+| `main.cpp:5418` | 桌面壁纸 |
+| `main.cpp:5442` | 背景模糊 |
+| `main.cpp:5449` | 背景模糊 |
+| `main.cpp:5459` | 背景变暗 |
+| `main.cpp:5462` | 背景变暗 |
+| `main.cpp:5475` | 窗口玻璃 |
+| `main.cpp:5478` | 玻璃实现 |
+| `main.cpp:5485` | 无边框窗口 |
+| `main.cpp:5557` | 判定窗口 (ms) |
+| `main.cpp:5589` | Bad 与 Miss 同步 |
+| `main.cpp:5610` | 长条容错 (ms) |
+| `main.cpp:5624` | 松手容错 %.0f |
+| `main.cpp:5626` | 起按容错 %.0f |
+| `main.cpp:5639` | 严格 Flick 方向 |
+| `main.cpp:5646` | Flick 视作 Tap |
+| `main.cpp:5659` | 触摸轨迹日志 |
+| `main.cpp:5672` | 生命 / 综合力 |
 
 ### 设置 · 诊断（日志分类 / 结束实例）
 
 | 文件:行 | 原文 |
 |---|---|
-| `main.cpp:5704` | 诊断 |
-| `main.cpp:5714` | 日志输出　%d/%d 类 |
-| `main.cpp:5726` | 结束当前实例 |
-| `main.cpp:5734` | 确认结束？ |
-| `main.cpp:5746` | 结束所有实例 |
+| `main.cpp:5738` | 窗口行为 |
+| `main.cpp:5741` | 失焦时自动暂停 |
+| `main.cpp:5748` | 最小化窗口静音 |
 
 ### 设置 · 账户（用户 / 导入导出）
 
 | 文件:行 | 原文 |
 |---|---|
-| `main.cpp:5818` | 当前 |
-| `main.cpp:5842` | 新建用户 |
-| `main.cpp:5843` | 用户 2 |
-| `main.cpp:5845` | 用户 |
-| `main.cpp:5877` | 确认删除？ |
-| `main.cpp:5905` | 删除用户 |
-| `main.cpp:5912` | 导出 |
-| `main.cpp:5930` | 已导出： |
-| `main.cpp:5938` | 导入 |
-| `main.cpp:5950` | (无昵称) |
-| `main.cpp:5956` | 不是用户数据文件： |
+| `main.cpp:5819` | 多实例 |
+| `main.cpp:5821` | 多开 |
+| `main.cpp:5825` | 只允许一个实例 |
+| `main.cpp:5825` | 允许多开，新实例登录另一个用户 |
+| `main.cpp:5855` | 多人演出 |
+| `main.cpp:5887` | 多人游玩已开启，重开所有窗口生效。 |
+| `main.cpp:5893` | 诊断 |
+| `main.cpp:5903` | 日志输出　%d/%d 类 |
+| `main.cpp:5915` | 结束当前实例 |
+| `main.cpp:5923` | 确认结束？ |
+| `main.cpp:5935` | 结束所有实例 |
 
 ### 设置 · 关于
 
 | 文件:行 | 原文 |
 |---|---|
-| `main.cpp:5978` | 资料 |
-| `main.cpp:5980` | 昵称 |
-| `main.cpp:6008` | 学校 / 组织 |
-| `main.cpp:6022` | 等级 |
-| `main.cpp:6022` | 本级经验 |
-| `main.cpp:6026` | 签名 |
-| `main.cpp:6048` | 版本 1.0.0.7 · 许可 AGPL-3.0-only |
-| `main.cpp:6054` | 策划 / 开发　xxt8582753（BSOD-MEMZ） |
-| `main.cpp:6056` | 测试　Shitakara4banme |
-| `main.cpp:6058` | 株洲市南方中学 · 2026 年 9 月 |
-| `main.cpp:6073` | 访问 xxtsoft |
-| `main.cpp:6077` | 许可与免责声明 |
-| `main.cpp:6085` | 重播新手教学 |
-| `main.cpp:6109` | 本项目免费、开源、非营利，与 SEGA、Colorful Palette 及《初音未来： |
-| `main.cpp:6110` | 缤纷舞台》官方没有任何关系，仅供本地学习与练习使用。 |
-| `main.cpp:6111` | 全部曲名、角色、美术与音频的权利归各自权利人所有。 |
+| `main.cpp:5970` | 用户 |
+| `main.cpp:6007` | 当前 |
+| `main.cpp:6031` | 新建用户 |
+| `main.cpp:6032` | 用户 2 |
+| `main.cpp:6034` | 用户 |
+| `main.cpp:6066` | 确认删除？ |
+| `main.cpp:6094` | 删除用户 |
+| `main.cpp:6101` | 导出 |
+| `main.cpp:6119` | 已导出： |
 
 ### 键位设置 / 多开确认
 
 | 文件:行 | 原文 |
 |---|---|
-| `main.cpp:6160` | 确定 |
-| `main.cpp:6222` | 按键映射 |
-| `main.cpp:6240` | %d 按新键… |
-| `main.cpp:6256` | 恢复默认键位 |
-| `main.cpp:6263` | 确定 |
-| `main.cpp:6309` | 默认歌手 |
-| `main.cpp:6324` | セカイver |
-| `main.cpp:6329` | 虚拟歌手 ver |
-| `main.cpp:6334` | 指定歌手 |
-| `main.cpp:6389` | 确定 |
-| `main.cpp:6424` | 日志输出 |
-| `main.cpp:6455` | 全部启用 |
-| `main.cpp:6461` | 全部关闭 |
-| `main.cpp:6467` | 确定 |
-| `main.cpp:6507` | 开启多开？ |
-| `main.cpp:6509` | 多人演出是实验性功能：同一台机器开几个窗口，每个窗口各登录一个用户，窗口多了可能掉帧或时钟漂移，并且存在大量已知 Bug，确定开启吗？ |
-| `main.cpp:6511` | 取消 |
-| `main.cpp:6511` | 确定开启 |
+| `main.cpp:6167` | 资料 |
+| `main.cpp:6169` | 昵称 |
+| `main.cpp:6197` | 学校 / 组织 |
+| `main.cpp:6211` | 等级 |
+| `main.cpp:6211` | 本级经验 |
+| `main.cpp:6215` | 签名 |
+| `main.cpp:6233` | 头像 |
+| `main.cpp:6260` | 无 |
+| `main.cpp:6271` | 选择图片… |
+| `main.cpp:6278` | 清除头像 |
+| `main.cpp:6283` | PNG / JPG / BMP，建议使用正方形图片。多人演出时会显示。 |
+| `main.cpp:6299` | 版本 1.0.0.7 · 许可 AGPL-3.0-only |
+| `main.cpp:6305` | 策划 / 开发　xxt8582753（BSOD-MEMZ） |
+| `main.cpp:6307` | 测试　Shitakara4banme |
+| `main.cpp:6309` | 株洲市南方中学 · 2026 年 9 月 |
+| `main.cpp:6324` | 访问 xxtsoft |
+| `main.cpp:6328` | 许可与免责声明 |
+| `main.cpp:6336` | 重播新手教学 |
+| `main.cpp:6360` | 本项目免费、开源、非营利，与 SEGA、Colorful Palette 及《初音未来： |
+| `main.cpp:6361` | 缤纷舞台》官方没有任何关系，仅供本地学习与练习使用。 |
+| `main.cpp:6362` | 全部曲名、角色、美术与音频的权利归各自权利人所有。 |
+| `main.cpp:6411` | 确定 |
+| `main.cpp:6473` | 按键映射 |
+| `main.cpp:6491` | %d 按新键… |
+| `main.cpp:6507` | 恢复默认键位 |
+| `main.cpp:6514` | 确定 |
 
 ### 退出确认
 
 | 文件:行 | 原文 |
 |---|---|
-| `main.cpp:6557` | 要退出吗？ |
-| `main.cpp:6559` | 现在退出不会保存本局的成绩。 |
-| `main.cpp:6561` | 继续演出 |
-| `main.cpp:6561` | 退出 |
+| `main.cpp:6560` | 默认歌手 |
 
 ### 删除歌曲 · 文件统计
 
 | 文件:行 | 原文 |
 |---|---|
-| `main.cpp:6697` | 将删除 |
-| `main.cpp:6697` | 个文件： |
-| `main.cpp:6698` | 个谱面 + |
-| `main.cpp:6698` | 张曲绘 + |
-| `main.cpp:6699` | 个音频 |
-| `main.cpp:6701` | 个元数据 |
+| `main.cpp:6706` | 全部启用 |
+| `main.cpp:6712` | 全部关闭 |
 
 ### 删除歌曲确认
 
 | 文件:行 | 原文 |
 |---|---|
-| `main.cpp:6746` | 删除这首歌？ |
-| `main.cpp:6748` | 歌曲： |
-| `main.cpp:6750` | 位置： |
-| `main.cpp:6751` | 本操作不可逆！ |
-| `main.cpp:6753` | 取消 |
-| `main.cpp:6753` | 删除 |
+| `main.cpp:6758` | 开启多开？ |
+| `main.cpp:6760` | 多人演出是实验性功能：同一台机器开几个窗口，每个窗口各登录一个用户，窗口多了可能掉帧或时钟漂移，并且存在大量已知 Bug，确定开启吗？ |
 
 ### 导入用户数据
 
 | 文件:行 | 原文 |
 |---|---|
-| `main.cpp:6815` | 导入用户数据？ |
-| `main.cpp:6817` | 文件： |
-| `main.cpp:6818` | 用户： |
-| `main.cpp:6818` | ，成绩 |
-| `main.cpp:6818` | 条 |
-| `main.cpp:6819` | 导入会用这份数据覆盖当前用户（ |
-| `main.cpp:6819` | ）的设置、成绩和资料，无法撤销。 |
-| `main.cpp:6821` | 取消 |
-| `main.cpp:6821` | 覆盖导入 |
-| `main.cpp:6841` | 导入失败： |
-| `main.cpp:6866` | 已导入： |
-
-### 多人游玩已开启 · 重启提示
-
-| 文件:行 | 原文 |
-|---|---|
-| `main.cpp:6888` | 多人游玩已开启 |
-| `main.cpp:6890` | 现在这个窗口还在单人模式里，立即重启窗口来准备多人游玩。 |
-| `main.cpp:6892` | 稍后 |
-| `main.cpp:6892` | 立即重启 |
-
-### 关闭所有实例确认
-
-| 文件:行 | 原文 |
-|---|---|
-| `main.cpp:8774` | 关掉本机所有 CppSekai 窗口？ |
-| `main.cpp:8775` | 结束所有实例 |
-
-### 多人 · 等待 / 选曲状态
-
-| 文件:行 | 原文 |
-|---|---|
-| `main.cpp:9503` | 请选择歌曲 |
-| `main.cpp:9505` | 准备好的话就开始吧 |
-| `main.cpp:9507` | 即将开始 |
-| `main.cpp:9509` | 等待其他玩家 |
-| `main.cpp:9512` | 等待房主选曲 |
-| `main.cpp:9516` | 本窗口没有 |
-| `main.cpp:9517` | ，无法参加本曲 |
-| `main.cpp:9519` | 请选择难度 |
-| `main.cpp:9521` | 准备好的话就开始吧 |
-| `main.cpp:9523` | 等待其他玩家 |
-
-### 谱面下载器缺失
-
-| 文件:行 | 原文 |
-|---|---|
-| `main.cpp:9760` | 没能打开谱面下载器：chartdl.exe 不在游戏目录里 |
+| `main.cpp:6810` | 现在退出不会保存本局的成绩。 |
+| `main.cpp:6812` | 继续演出 |
+| `main.cpp:6812` | 退出 |
 
 ### 多人 · 房主状态 / 加载失败
 
 | 文件:行 | 原文 |
 |---|---|
-| `main.cpp:9841` | 房主还没有定下本窗口能打的曲子 |
-| `main.cpp:9845` | 先在手机上选择难度 |
-| `main.cpp:9931` | 本曲已经开始 |
-| `main.cpp:9931` | 房主已开始，你未确定 |
-| `main.cpp:9943` | 本窗口没有这首曲子 |
-| `main.cpp:9960` | 谱面加载失败 |
-
-### 多人 · 房主放弃
-
-| 文件:行 | 原文 |
-|---|---|
-| `main.cpp:10188` | 房主已放弃本曲 |
-
-### 多人 · 房主暂停
-
-| 文件:行 | 原文 |
-|---|---|
-| `main.cpp:11032` | 房主已暂停 |
-
-### 多人 · 继续 / 放弃 / 重试
-
-| 文件:行 | 原文 |
-|---|---|
-| `main.cpp:11142` | 是否继续演出？ |
-| `main.cpp:11143` | 重试 |
-| `main.cpp:11143` | 放弃 |
-| `main.cpp:11143` | 继续演出 |
-| `main.cpp:11163` | 房主重开本曲 |
-
-### 关于本软件
-
-| 文件:行 | 原文 |
-|---|---|
-| `main.cpp:11396` | 关于本软件 |
-| `main.cpp:11398` | CppSekai 是免费、开源、非营利的同人练习工具（AGPL-3.0）。它与 SEGA、Colorful Palette 以及《初音未来：缤纷舞台》官方没有任何关系，仅供本地学习与练习使用。一切权利归各自权利人所有。 |
-| `main.cpp:11400` | 以后不再显示 |
-| `main.cpp:11400` | 知道了 |
-
-### 选曲 · 版本标签
-
-| 文件:行 | 原文 |
-|---|---|
-| `game/SongSelect.cpp:506` | 「世界」ver. |
-| `game/SongSelect.cpp:509` | 虚拟歌手ver. |
-
-### 选曲 · 默认用户
-
-| 文件:行 | 原文 |
-|---|---|
-| `game/SongSelect.cpp:1086` | 默认用户 |
+| `main.cpp:9836` | 等待房主选曲 |
+| `main.cpp:9841` | 本窗口没有 |
+| `main.cpp:9842` | ，无法参加本曲 |
+| `main.cpp:9844` | 请选择难度 |
+| `main.cpp:9846` | 准备好的话就开始吧 |
+| `main.cpp:9848` | 等待其他玩家 |
+| `main.cpp:9855` | 即将开始 |
+| `main.cpp:9855` | 谱面加载中… |
 
 ### 选曲 · 五十音 / 分组标签
 
 | 文件:行 | 原文 |
 |---|---|
-| `game/SongSelect.cpp:1900` | その他 |
-| `game/SongSelect.cpp:1915` | その他 |
-| `game/SongSelect.cpp:1928` | その他 |
-| `game/SongSelect.cpp:1941` | あ |
-| `game/SongSelect.cpp:1941` | か |
-| `game/SongSelect.cpp:1941` | さ |
-| `game/SongSelect.cpp:1941` | た |
-| `game/SongSelect.cpp:1942` | な |
-| `game/SongSelect.cpp:1942` | は |
-| `game/SongSelect.cpp:1942` | ま |
-| `game/SongSelect.cpp:1942` | や |
-| `game/SongSelect.cpp:1943` | ら |
-| `game/SongSelect.cpp:1943` | わ |
-| `game/SongSelect.cpp:1945` | その他 |
-| `game/SongSelect.cpp:1955` | あ |
-| `game/SongSelect.cpp:1958` | た |
-| `game/SongSelect.cpp:1961` | や |
-| `game/SongSelect.cpp:1965` | その他 |
-
-### 选曲 · 分组「其他」
-
-| 文件:行 | 原文 |
-|---|---|
-| `game/SongSelect.cpp:2069` | 收藏 |
-| `game/SongSelect.cpp:2069` | 其他 |
-
-### 选曲 · 版本分类
-
-| 文件:行 | 原文 |
-|---|---|
-| `game/SongSelect.cpp:2920` | セカイ |
-| `game/SongSelect.cpp:2923` | バーチャル |
-| `game/SongSelect.cpp:2931` | 他 |
-
-### 选曲 · 搜索框 / 右键菜单
-
-| 文件:行 | 原文 |
-|---|---|
-| `game/SongSelect.cpp:3600` | 搜索 |
-| `game/SongSelect.cpp:3629` | 剪切 |
-| `game/SongSelect.cpp:3634` | 复制 |
-| `game/SongSelect.cpp:3637` | 粘贴 |
-| `game/SongSelect.cpp:3650` | 清空 |
-
-### 选曲 · 排序 / 分组下拉
-
-| 文件:行 | 原文 |
-|---|---|
-| `game/SongSelect.cpp:3688` | 按名称 |
-| `game/SongSelect.cpp:3688` | 按难度 |
-| `game/SongSelect.cpp:3689` | 关闭 |
-| `game/SongSelect.cpp:3689` | 按难度段 |
-| `game/SongSelect.cpp:3689` | 按读音 |
-| `game/SongSelect.cpp:3689` | 按首字 |
-| `game/SongSelect.cpp:3689` | 按收藏 |
-| `game/SongSelect.cpp:3690` | 排序： |
-| `game/SongSelect.cpp:3691` | 分组： |
-
-### 选曲 · 顶栏按钮
-
-| 文件:行 | 原文 |
-|---|---|
-| `game/SongSelect.cpp:3789` | 刷新 |
-| `game/SongSelect.cpp:3793` | 音乐商店 |
-| `game/SongSelect.cpp:3798` | 猜歌 |
-| `game/SongSelect.cpp:3813` | 设置 |
-
-### 选曲 · 收藏 / 删除谱面
-
-| 文件:行 | 原文 |
-|---|---|
-| `game/SongSelect.cpp:4123` | 取消收藏 |
-| `game/SongSelect.cpp:4123` | 加入收藏夹 |
-| `game/SongSelect.cpp:4137` | 删除谱面文件… |
-
-### 选曲 · 空列表 / 下载谱面
-
-| 文件:行 | 原文 |
-|---|---|
-| `game/SongSelect.cpp:4270` | 没有找到谱面。把 .sus 放到 charts/ 目录下，再按 F5 重新扫描 |
-| `game/SongSelect.cpp:4278` | 下载谱面 |
-| `game/SongSelect.cpp:4286` | 这会跳转到音乐商店。 |
-
-### 选曲 · 切换歌手
-
-| 文件:行 | 原文 |
-|---|---|
-| `game/SongSelect.cpp:5344` | 切换歌手 |
-
-### 选曲 · 无其他演唱版本
-
-| 文件:行 | 原文 |
-|---|---|
-| `game/SongSelect.cpp:5512` | 暂无其他演唱版本 |
+| `game/SongSelect.cpp:1945` | 初音ミク |
+| `game/SongSelect.cpp:1945` | 鏡音リン |
+| `game/SongSelect.cpp:1945` | 鏡音レン |
+| `game/SongSelect.cpp:1946` | 巡音ルカ |
+| `game/SongSelect.cpp:1947` | 星乃一歌 |
+| `game/SongSelect.cpp:1947` | 天馬咲希 |
+| `game/SongSelect.cpp:1948` | 望月穂波 |
+| `game/SongSelect.cpp:1948` | 日野森志歩 |
+| `game/SongSelect.cpp:1949` | 花里みのり |
+| `game/SongSelect.cpp:1949` | 桐谷遥 |
+| `game/SongSelect.cpp:1950` | 桃井愛莉 |
+| `game/SongSelect.cpp:1950` | 日野森雫 |
+| `game/SongSelect.cpp:1951` | 小豆沢こはね |
+| `game/SongSelect.cpp:1951` | 白石杏 |
+| `game/SongSelect.cpp:1952` | 東雲彰人 |
+| `game/SongSelect.cpp:1952` | 青柳冬弥 |
+| `game/SongSelect.cpp:1953` | 天馬司 |
+| `game/SongSelect.cpp:1953` | 鳳えむ |
+| `game/SongSelect.cpp:1954` | 草薙寧々 |
+| `game/SongSelect.cpp:1954` | 神代類 |
+| `game/SongSelect.cpp:1955` | 宵崎奏 |
+| `game/SongSelect.cpp:1955` | 朝比奈まふゆ |
+| `game/SongSelect.cpp:1956` | 東雲絵名 |
+| `game/SongSelect.cpp:1956` | 暁山瑞希 |
 
 ### 选曲 · 个人资料卡
 
 | 文件:行 | 原文 |
 |---|---|
-| `game/SongSelect.cpp:5567` | 个人资料 |
-| `game/SongSelect.cpp:5573` | 昵称 |
-| `game/SongSelect.cpp:5576` | （未设置） |
-| `game/SongSelect.cpp:5578` | 学校 / 组织 |
-| `game/SongSelect.cpp:5581` | （未设置） |
-| `game/SongSelect.cpp:5584` | 签名 |
-| `game/SongSelect.cpp:5596` | %d 次   平均 %.0f |
-| `game/SongSelect.cpp:5600` | 等级 |
-| `game/SongSelect.cpp:5601` | 游玩 / 平均分 |
-| `game/SongSelect.cpp:5617` | 到下一级 %d / %d EXP |
-
-### 选曲 · 猜歌
-
-| 文件:行 | 原文 |
-|---|---|
-| `game/SongSelect.cpp:5670` | 猜歌 |
-| `game/SongSelect.cpp:5678` | 正在准备题库… |
-| `game/SongSelect.cpp:5678` | 没有可用的题库 |
-| `game/SongSelect.cpp:5682` | 首次加载请耐心等待。 |
-| `game/SongSelect.cpp:5683` | 找不到 music-aliases.json 或别名表过小。 |
-| `game/SongSelect.cpp:5700` | 关闭 |
-| `game/SongSelect.cpp:5706` | 这个别名指的是哪首歌？ |
-| `game/SongSelect.cpp:5797` | 答对了！ |
-| `game/SongSelect.cpp:5798` | 答错了，正确答案是「 |
-| `game/SongSelect.cpp:5801` | 答对 %d / %d    连对 %d（最佳 %d） |
-| `game/SongSelect.cpp:5814` | 下一题 |
-| `game/SongSelect.cpp:5814` | 跳过 |
-| `game/SongSelect.cpp:5818` | 关闭 |
+| `game/SongSelect.cpp:5580` | 搜索 |
+| `game/SongSelect.cpp:5611` | 剪切 |
+| `game/SongSelect.cpp:5616` | 复制 |
+| `game/SongSelect.cpp:5619` | 粘贴 |
 
 ### 原生菜单栏
 
@@ -585,35 +323,6 @@
 | `game/Intro.cpp:726` | 编曲： |
 | `game/Intro.cpp:727` | 演唱： |
 
-### 多人 · 玩家名条
-
-| 文件:行 | 原文 |
-|---|---|
-| `game/PartyScreen.cpp:170` | 多人演出 |
-| `game/PartyScreen.cpp:178` | (房主) |
-| `game/PartyScreen.cpp:181` | (你) |
-
-### 结算 · 分数 / 最高分
-
-| 文件:行 | 原文 |
-|---|---|
-| `game/Result.cpp:1081` | 得分 |
-| `game/Result.cpp:1087` | 新纪录! |
-| `game/Result.cpp:1099` | 最高得分 |
-
-### 结算 · 歌曲等级
-
-| 文件:行 | 原文 |
-|---|---|
-| `game/Result.cpp:996` | 歌曲等级 |
-
-### 结算 · 升级 / 继续
-
-| 文件:行 | 原文 |
-|---|---|
-| `game/Result.cpp:1227` | 等级提升!  +%d EXP |
-| `game/Result.cpp:1265` | 继续 |
-
 ### 教学 · 命名提示
 
 | 文件:行 | 原文 |
@@ -648,161 +357,11 @@
 |---|---|
 | `game/StoryUi.cpp:963` | （图片没找到） |
 
-### 通用控件 · 等级
-
-| 文件:行 | 原文 |
-|---|---|
-| `game/Ui.cpp:2015` | 等级 |
-
-### 选曲 · 曲目信息
-
-| 文件:行 | 原文 |
-|---|---|
-| `game/SongSelect.cpp:4410` | 原曲 |
-| `game/SongSelect.cpp:4457` | 歌曲等级 |
-
-### 选曲 · 确定
-
-| 文件:行 | 原文 |
-|---|---|
-| `game/SongSelect.cpp:5114` | 确定 |
-| `game/SongSelect.cpp:5120` | 确定 |
-
-### 选曲 · 关闭
-
-| 文件:行 | 原文 |
-|---|---|
-| `game/SongSelect.cpp:5626` | 关闭 |
-
-### 导入 · 用户
-
-| 文件:行 | 原文 |
-|---|---|
-| `main.cpp:1931` | 用户 |
-
-### 导入 · 玩家
-
-| 文件:行 | 原文 |
-|---|---|
-| `main.cpp:1990` | 玩家 |
-
-### 选曲 · 收藏 / 最近播放
-
-| 文件:行 | 原文 |
-|---|---|
-| `main.cpp:3082` | 收藏 |
-| `main.cpp:3085` | 最近播放 |
-
-### 设置 · 判定预设名
-
-| 文件:行 | 原文 |
-|---|---|
-| `main.cpp:4272` | 宽松 |
-| `main.cpp:4272` | 标准 |
-| `main.cpp:4272` | 严格 |
-| `main.cpp:4280` | 宽容 |
-| `main.cpp:4280` | 较紧 |
-| `main.cpp:4280` | 严格 |
-
-### 打开用户数据 · 文件对话框
-
-| 文件:行 | 原文 |
-|---|---|
-| `main.cpp:4380` | 用户数据 (*.json)\0*.json\0所有文件 (*.*)\0*.*\0 |
-
-### 角色 / 团体名对照表（数据，中日双名已内置，不需翻译）
-
-| 文件:行 | 原文 |
-|---|---|
-| `main.cpp:4569` | 星乃一歌 |
-| `main.cpp:4569` | 星乃一歌 |
-| `main.cpp:4569` | 天馬咲希 |
-| `main.cpp:4569` | 天马咲希 |
-| `main.cpp:4570` | 望月穂波 |
-| `main.cpp:4570` | 望月穗波 |
-| `main.cpp:4570` | 日野森志歩 |
-| `main.cpp:4570` | 日野森志步 |
-| `main.cpp:4571` | 花里みのり |
-| `main.cpp:4571` | 花里实乃里 |
-| `main.cpp:4571` | 桐谷遥 |
-| `main.cpp:4571` | 桐谷遥 |
-| `main.cpp:4572` | 桃井愛莉 |
-| `main.cpp:4572` | 桃井爱莉 |
-| `main.cpp:4572` | 日野森雫 |
-| `main.cpp:4572` | 日野森雫 |
-| `main.cpp:4573` | 小豆沢こはね |
-| `main.cpp:4573` | 小豆泽心羽 |
-| `main.cpp:4573` | 白石杏 |
-| `main.cpp:4573` | 白石杏 |
-| `main.cpp:4574` | 東雲彰人 |
-| `main.cpp:4574` | 东云彰人 |
-| `main.cpp:4574` | 青柳冬弥 |
-| `main.cpp:4574` | 青柳冬弥 |
-| `main.cpp:4575` | 天馬司 |
-| `main.cpp:4575` | 天马司 |
-| `main.cpp:4575` | 鳳えむ |
-| `main.cpp:4575` | 凤笑梦 |
-| `main.cpp:4576` | 草薙寧々 |
-| `main.cpp:4576` | 草薙宁宁 |
-| `main.cpp:4576` | 神代類 |
-| `main.cpp:4576` | 神代类 |
-| `main.cpp:4577` | 宵崎奏 |
-| `main.cpp:4577` | 宵崎奏 |
-| `main.cpp:4577` | 朝比奈まふゆ |
-| `main.cpp:4577` | 朝比奈真冬 |
-| `main.cpp:4578` | 東雲絵名 |
-| `main.cpp:4578` | 东云绘名 |
-| `main.cpp:4578` | 暁山瑞希 |
-| `main.cpp:4578` | 晓山瑞希 |
-| `main.cpp:4579` | 初音ミク |
-| `main.cpp:4579` | 初音未来 |
-| `main.cpp:4579` | 鏡音リン |
-| `main.cpp:4579` | 镜音铃 |
-| `main.cpp:4580` | 鏡音レン |
-| `main.cpp:4580` | 镜音连 |
-| `main.cpp:4580` | 巡音ルカ |
-| `main.cpp:4580` | 巡音流歌 |
-| `main.cpp:4585` | Wonderlands×Showtime |
-| `main.cpp:4585` | 25時、ナイトコードで。 |
-| `main.cpp:4585` | 虚拟歌手 |
-| `main.cpp:4593` | 系统（启动/窗口/菜单） |
-| `main.cpp:4594` | 选曲（界面/下载/猜歌） |
-| `main.cpp:4595` | 剧情（教学/脚本） |
-| `main.cpp:4596` | 演奏（判定/暂停/结算） |
-| `main.cpp:4597` | 音频（播放/音效） |
-| `main.cpp:4598` | 输入（手柄/键盘/触摸） |
-| `main.cpp:4599` | 渲染（OpenGL/帧统计） |
-| `main.cpp:4600` | 多人游玩（房间同步） |
-
 ### 设置 · 账户 / 新建用户
 
 | 文件:行 | 原文 |
 |---|---|
-| `main.cpp:5781` | 用户 |
-
-### 多人 · 准备中 / 加载中
-
-| 文件:行 | 原文 |
-|---|---|
-| `main.cpp:9533` | 准备中… |
-| `main.cpp:9533` | 谱面加载中… |
-| `main.cpp:9534` | 即将开始 |
-| `main.cpp:9534` | 谱面加载中… |
-
-### 多人 · 状态提示
-
-| 文件:行 | 原文 |
-|---|---|
-| `main.cpp:10119` | 等待其他玩家 |
-| `main.cpp:10119` | 准备好的话就开始吧 |
-| `main.cpp:10121` | 等待其他玩家 |
-| `main.cpp:10123` | 请选择难度 |
-
-### 多人 · 玩家
-
-| 文件:行 | 原文 |
-|---|---|
-| `platform/Party.cpp:668` | 玩家 |
+| `main.cpp:5780` | 关联 .sus 谱面文件 |
 
 ### 系统集成 · 文件类型名
 
@@ -829,171 +388,464 @@
 
 | 文件:行 | 原文 |
 |---|---|
-| `downloader/chartdl.cpp:1217` | [--delete-selected]       press 删除文件 on that row, with no\n |
-
-### 下载器 · 列表列名
-
-| 文件:行 | 原文 |
-|---|---|
-| `downloader/chartdl.cpp:1482` | 曲名 |
-| `downloader/chartdl.cpp:1482` | 读音 |
-| `downloader/chartdl.cpp:1482` | 演唱版本 |
-| `downloader/chartdl.cpp:1483` | 已下载 |
-
-### 下载器 · 窗口标题
-
-| 文件:行 | 原文 |
-|---|---|
-| `downloader/chartdl.cpp:2190` | CppSekai 谱面下载器 |
+| `downloader/chartdl.cpp:1233` | 不到 1 秒 |
+| `downloader/chartdl.cpp:1238` | %d 分 %d 秒 |
+| `downloader/chartdl.cpp:1240` | %d 秒 |
 
 ### 下载器 · 详情面板
 
 | 文件:行 | 原文 |
 |---|---|
-| `downloader/chartdl.cpp:3181` | （在左边选一首歌） |
-| `downloader/chartdl.cpp:3294` | 曲绘 |
-| `downloader/chartdl.cpp:3297` | 元数据 (sidecar json) |
-
-### 下载器 · 窗口标题
-
-| 文件:行 | 原文 |
-|---|---|
-| `downloader/chartdl.cpp:3521` | CppSekai 谱面下载器 |
-
-### 下载器 · 剩余时间
-
-| 文件:行 | 原文 |
-|---|---|
-| `downloader/chartdl.cpp:1183` | 不到 1 秒 |
-| `downloader/chartdl.cpp:1188` | %d 分 %d 秒 |
-| `downloader/chartdl.cpp:1190` | %d 秒 |
-
-### 下载器 · 列表列
-
-| 文件:行 | 原文 |
-|---|---|
-| `downloader/chartdl.cpp:1721` | 版本 |
-| `downloader/chartdl.cpp:1729` | 已下载 |
-| `downloader/chartdl.cpp:1731` | 缺 MV |
-| `downloader/chartdl.cpp:1733` | 部分 |
-
-### 下载器 · 删除结果
-
-| 文件:行 | 原文 |
-|---|---|
-| `downloader/chartdl.cpp:1909` | 个文件（ |
-| `downloader/chartdl.cpp:1912` | ，失败 |
-| `downloader/chartdl.cpp:1912` | 个（可能被占用） |
-
-### 下载器 · 设置页 / 致谢
-
-| 文件:行 | 原文 |
-|---|---|
-| `downloader/chartdl.cpp:2264` | 关闭窗口时 |
-| `downloader/chartdl.cpp:2265` | 退出程序 |
-| `downloader/chartdl.cpp:2267` | 隐藏到托盘（后台继续下载） |
-| `downloader/chartdl.cpp:2269` | 提醒 |
-| `downloader/chartdl.cpp:2270` | 下载完成后弹出气泡提醒 |
-| `downloader/chartdl.cpp:2272` | 最小化时收进托盘 |
-| `downloader/chartdl.cpp:2283` | 数据来源与致谢 |
-| `downloader/chartdl.cpp:2284` | 谱面 / BGM / 曲绘：unipjsk（assets.unipjsk.com） |
-| `downloader/chartdl.cpp:2285` | 国服独占曲目：sekai.best（storage.sekai.best） |
-| `downloader/chartdl.cpp:2286` | 2D MV（.usm）：exmeaning（storage.exmeaning.com） |
-| `downloader/chartdl.cpp:2287` | 感谢以上镜像站，以及 sekai-world 的 master 镜像。 |
-| `downloader/chartdl.cpp:2289` | 确定 |
-| `downloader/chartdl.cpp:2290` | 取消 |
+| `downloader/chartdl.cpp:3276` | （在左边选一首歌） |
 
 ### 下载器 · 主窗口控件
 
 | 文件:行 | 原文 |
 |---|---|
-| `downloader/chartdl.cpp:2373` | 下载器设置 |
-| `downloader/chartdl.cpp:2430` | 输出目录 |
-| `downloader/chartdl.cpp:2432` | 浏览… |
-| `downloader/chartdl.cpp:2433` | 打开目录 |
-| `downloader/chartdl.cpp:2435` | 搜索 |
-| `downloader/chartdl.cpp:2437` | 下载勾选的歌曲 |
-| `downloader/chartdl.cpp:2438` | 全选 / 全不选 |
-| `downloader/chartdl.cpp:2439` | 取消 |
-| `downloader/chartdl.cpp:2442` | 删除文件 |
-| `downloader/chartdl.cpp:2450` | 不含 MV |
-| `downloader/chartdl.cpp:2451` | 原曲 MV |
-| `downloader/chartdl.cpp:2452` | セカイ MV |
-| `downloader/chartdl.cpp:2453` | 两个都要 |
-| `downloader/chartdl.cpp:2455` | 设置… |
-| `downloader/chartdl.cpp:2477` | 下载内容 |
-| `downloader/chartdl.cpp:2506` | （在左边选一首歌） |
-| `downloader/chartdl.cpp:2529` | 曲绘 |
-| `downloader/chartdl.cpp:2530` | 元数据 (sidecar json) |
-| `downloader/chartdl.cpp:2539` | 别名 |
-| `downloader/chartdl.cpp:2552` | 别名 |
-| `downloader/chartdl.cpp:2561` | 就绪 |
+| `downloader/chartdl.cpp:2460` | 下载器设置 |
+| `downloader/chartdl.cpp:2517` | 输出目录 |
+| `downloader/chartdl.cpp:2519` | 浏览… |
+| `downloader/chartdl.cpp:2520` | 打开目录 |
+| `downloader/chartdl.cpp:2522` | 搜索 |
+| `downloader/chartdl.cpp:2524` | 下载勾选的歌曲 |
+| `downloader/chartdl.cpp:2525` | 全选 / 全不选 |
+| `downloader/chartdl.cpp:2526` | 取消 |
+| `downloader/chartdl.cpp:2529` | 删除文件 |
+| `downloader/chartdl.cpp:2537` | 不含 MV |
+| `downloader/chartdl.cpp:2538` | 原曲 MV |
+| `downloader/chartdl.cpp:2539` | セカイ MV |
+| `downloader/chartdl.cpp:2540` | 两个都要 |
+| `downloader/chartdl.cpp:2542` | 设置… |
+| `downloader/chartdl.cpp:2564` | 下载内容 |
 
 ### 下载器 · 托盘 / 气泡
 
 | 文件:行 | 原文 |
 |---|---|
-| `downloader/chartdl.cpp:2646` | 显示主窗口 |
-| `downloader/chartdl.cpp:2648` | 退出 |
-| `downloader/chartdl.cpp:2677` | CppSekai 谱面下载器 |
-| `downloader/chartdl.cpp:2678` | 已隐藏到托盘，下载会继续。双击托盘图标可以恢复窗口。 |
-| `downloader/chartdl.cpp:2692` | 选择谱面输出目录 |
+| `downloader/chartdl.cpp:2648` | 就绪 |
 
 ### 下载器 · 删除确认 / 提示
 
 | 文件:行 | 原文 |
 |---|---|
-| `downloader/chartdl.cpp:2745` | 正在取消… |
-| `downloader/chartdl.cpp:2758` | 删除《 |
-| `downloader/chartdl.cpp:2759` | 》在本地已下载的文件？\n\n |
-| `downloader/chartdl.cpp:2760` | 谱面 / 音频 / 曲绘 / 2D MV / 元数据都会删掉，游戏里这首歌会回到未下载状态。\n |
-| `downloader/chartdl.cpp:2761` | 目录： |
-| `downloader/chartdl.cpp:2762` | CppSekai 谱面下载器 |
-| `downloader/chartdl.cpp:2764` | 已取消删除 |
-| `downloader/chartdl.cpp:2798` | 右边至少要勾一样东西（难度 / 演唱版本 / 曲绘 / 元数据）。 |
-| `downloader/chartdl.cpp:2799` | CppSekai 谱面下载器 |
+| `downloader/chartdl.cpp:2764` | CppSekai 谱面下载器仍在运行 |
+| `downloader/chartdl.cpp:2765` | 双击托盘图标可恢复窗口。 |
+| `downloader/chartdl.cpp:2779` | 选择谱面输出目录 |
 
 ### 下载器 · 下载队列状态
 
 | 文件:行 | 原文 |
 |---|---|
-| `downloader/chartdl.cpp:2842` | 勾选的歌曲都已经下载过了，没有需要下载的文件。 |
-| `downloader/chartdl.cpp:2843` | 没有勾选任何歌曲。 |
-| `downloader/chartdl.cpp:2844` | CppSekai 谱面下载器 |
-| `downloader/chartdl.cpp:2851` | 开始下载… |
-| `downloader/chartdl.cpp:2852` | 首歌曲，共 |
-| `downloader/chartdl.cpp:2853` | 个文件 === |
-| `downloader/chartdl.cpp:2855` | 首已下载完整，已跳过 |
+| `downloader/chartdl.cpp:2845` | 删除《 |
+| `downloader/chartdl.cpp:2846` | 》在本地已下载的文件？\n\n |
+| `downloader/chartdl.cpp:2847` | 谱面 / 音频 / 曲绘 / 2D MV / 元数据等将被永久删除。\n |
+| `downloader/chartdl.cpp:2848` | 目录： |
+| `downloader/chartdl.cpp:2849` | CppSekai 谱面下载器 |
+| `downloader/chartdl.cpp:2851` | 已取消删除 |
 
 ### 下载器 · 已下载完整
 
 | 文件:行 | 原文 |
 |---|---|
-| `downloader/chartdl.cpp:2941` | 这首歌已经下载完整了 |
+| `downloader/chartdl.cpp:2937` | 所有歌曲已下载完成。 |
+| `downloader/chartdl.cpp:2938` | 没有勾选任何歌曲。 |
+| `downloader/chartdl.cpp:2939` | CppSekai 谱面下载器 |
+| `downloader/chartdl.cpp:2946` | 开始下载… |
+| `downloader/chartdl.cpp:2947` | 首歌曲，共 |
+| `downloader/chartdl.cpp:2948` | 个文件 === |
+| `downloader/chartdl.cpp:2950` | 首已下载完整，已跳过 |
 
 ### 下载器 · 进度 / 完成
 
 | 文件:行 | 原文 |
 |---|---|
-| `downloader/chartdl.cpp:3030` | 剩余 |
-| `downloader/chartdl.cpp:3033` | 下载中 |
-| `downloader/chartdl.cpp:3034` | 个文件 |
-| `downloader/chartdl.cpp:3040` | 全部完成 |
-| `downloader/chartdl.cpp:3040` | 完成，失败 |
-| `downloader/chartdl.cpp:3040` | 个 |
-| `downloader/chartdl.cpp:3061` | 成功 %zu，跳过 %zu，失败 %zu |
-| `downloader/chartdl.cpp:3065` | 下载完成 |
-| `downloader/chartdl.cpp:3065` | 下载完成（有失败） |
+| `downloader/chartdl.cpp:3036` | 这首歌已经下载完整了 |
 
 ### 下载器 · 详情面板
 
 | 文件:行 | 原文 |
 |---|---|
-| `downloader/chartdl.cpp:3320` | （无） |
-| `downloader/chartdl.cpp:3323` | 已下载 |
-| `downloader/chartdl.cpp:3353` | 已下载 |
-| `downloader/chartdl.cpp:3366` | （没有演唱版本数据） |
-| `downloader/chartdl.cpp:3384` | 曲绘  ✓已下载 |
-| `downloader/chartdl.cpp:3384` | 曲绘 |
-| `downloader/chartdl.cpp:3390` | 元数据 (sidecar json)  ✓已下载 |
-| `downloader/chartdl.cpp:3390` | 元数据 (sidecar json) |
+| `downloader/chartdl.cpp:3389` | 曲绘 |
+| `downloader/chartdl.cpp:3392` | 元数据 (sidecar json) |
+
+### 其他（未归类，需人工确认）
+
+| 文件:行 | 原文 |
+|---|---|
+| `downloader/chartdl.cpp:1267` | [--delete-selected]       press 删除文件 on that row, with no\n |
+| `downloader/chartdl.cpp:1535` | 曲名 |
+| `downloader/chartdl.cpp:1535` | 演唱版本 |
+| `downloader/chartdl.cpp:1535` | 读音 |
+| `downloader/chartdl.cpp:1536` | 已下载 |
+| `downloader/chartdl.cpp:1774` | 版本 |
+| `downloader/chartdl.cpp:1782` | 已下载 |
+| `downloader/chartdl.cpp:1784` | 缺 MV |
+| `downloader/chartdl.cpp:1786` | 部分 |
+| `downloader/chartdl.cpp:1962` | 个文件（ |
+| `downloader/chartdl.cpp:1965` | 个（可能被占用） |
+| `downloader/chartdl.cpp:1965` | ，失败 |
+| `downloader/chartdl.cpp:2243` | CppSekai 谱面下载器 |
+| `downloader/chartdl.cpp:2319` | 关闭窗口时 |
+| `downloader/chartdl.cpp:2320` | 退出程序 |
+| `downloader/chartdl.cpp:2322` | 隐藏到托盘（后台继续下载） |
+| `downloader/chartdl.cpp:2324` | 下载与提醒 |
+| `downloader/chartdl.cpp:2325` | 下载完成后弹出气泡提醒 |
+| `downloader/chartdl.cpp:2327` | 最小化时收进托盘 |
+| `downloader/chartdl.cpp:2329` | 批量下载全部演唱版本（流量大、速度慢） |
+| `downloader/chartdl.cpp:2332` | 并发连接数 |
+| `downloader/chartdl.cpp:2349` | 数据来源与致谢 |
+| `downloader/chartdl.cpp:2350` | 谱面 / BGM / 曲绘：unipjsk（assets.unipjsk.com） |
+| `downloader/chartdl.cpp:2351` | 国服独占曲目：sekai.best（storage.sekai.best） |
+| `downloader/chartdl.cpp:2352` | 2D MV（.usm）：exmeaning（storage.exmeaning.com） |
+| `downloader/chartdl.cpp:2353` | 感谢以上镜像站，以及 sekai-world 的 master 镜像。 |
+| `downloader/chartdl.cpp:2355` | 确定 |
+| `downloader/chartdl.cpp:2356` | 取消 |
+| `downloader/chartdl.cpp:2593` | （在左边选一首歌） |
+| `downloader/chartdl.cpp:2616` | 曲绘 |
+| `downloader/chartdl.cpp:2617` | 元数据 (sidecar json) |
+| `downloader/chartdl.cpp:2626` | 别名 |
+| `downloader/chartdl.cpp:2639` | 别名 |
+| `downloader/chartdl.cpp:2733` | 显示主窗口 |
+| `downloader/chartdl.cpp:2735` | 退出 |
+| `downloader/chartdl.cpp:2832` | 正在取消… |
+| `downloader/chartdl.cpp:2885` | 请选择要下载的文件。 |
+| `downloader/chartdl.cpp:2886` | CppSekai 谱面下载器 |
+| `downloader/chartdl.cpp:3125` | 剩余 |
+| `downloader/chartdl.cpp:3128` | 下载中 |
+| `downloader/chartdl.cpp:3129` | 个文件 |
+| `downloader/chartdl.cpp:3135` | 个 |
+| `downloader/chartdl.cpp:3135` | 全部完成 |
+| `downloader/chartdl.cpp:3135` | 完成，失败 |
+| `downloader/chartdl.cpp:3156` | 成功 %zu，跳过 %zu，失败 %zu |
+| `downloader/chartdl.cpp:3160` | 下载完成 |
+| `downloader/chartdl.cpp:3160` | 下载完成（有失败） |
+| `downloader/chartdl.cpp:3415` | （无） |
+| `downloader/chartdl.cpp:3418` | 已下载 |
+| `downloader/chartdl.cpp:3448` | 已下载 |
+| `downloader/chartdl.cpp:3461` | （没有演唱版本数据） |
+| `downloader/chartdl.cpp:3479` | 曲绘 |
+| `downloader/chartdl.cpp:3479` | 曲绘 已下载 |
+| `downloader/chartdl.cpp:3485` | 元数据 (sidecar json) |
+| `downloader/chartdl.cpp:3485` | 元数据 (sidecar json) 已下载 |
+| `downloader/chartdl.cpp:3617` | CppSekai 谱面下载器 |
+| `game/Result.cpp:1316` | 歌曲等级 |
+| `game/Result.cpp:1401` | 得分 |
+| `game/Result.cpp:1407` | 新纪录! |
+| `game/Result.cpp:1419` | 最高得分 |
+| `game/Result.cpp:1547` | 等级提升!  +%d EXP |
+| `game/Result.cpp:1585` | 继续 |
+| `game/SongSelect.cpp:623` | 「世界」ver. |
+| `game/SongSelect.cpp:626` | 虚拟歌手ver. |
+| `game/SongSelect.cpp:1239` | 默认用户 |
+| `game/SongSelect.cpp:2152` | その他 |
+| `game/SongSelect.cpp:2167` | その他 |
+| `game/SongSelect.cpp:2180` | その他 |
+| `game/SongSelect.cpp:2193` | あ |
+| `game/SongSelect.cpp:2193` | か |
+| `game/SongSelect.cpp:2193` | さ |
+| `game/SongSelect.cpp:2193` | た |
+| `game/SongSelect.cpp:2194` | な |
+| `game/SongSelect.cpp:2194` | は |
+| `game/SongSelect.cpp:2194` | ま |
+| `game/SongSelect.cpp:2194` | や |
+| `game/SongSelect.cpp:2195` | ら |
+| `game/SongSelect.cpp:2195` | わ |
+| `game/SongSelect.cpp:2197` | その他 |
+| `game/SongSelect.cpp:2207` | あ |
+| `game/SongSelect.cpp:2210` | た |
+| `game/SongSelect.cpp:2213` | や |
+| `game/SongSelect.cpp:2217` | その他 |
+| `game/SongSelect.cpp:2321` | 其他 |
+| `game/SongSelect.cpp:2321` | 收藏 |
+| `game/SongSelect.cpp:3164` | 暂无其他演唱版本 |
+| `game/SongSelect.cpp:3533` | 音乐商店 |
+| `game/SongSelect.cpp:3534` | 猜歌 |
+| `game/SongSelect.cpp:3535` | 刷新列表 |
+| `game/SongSelect.cpp:3536` | 设置 |
+| `game/SongSelect.cpp:3537` | 个人资料 |
+| `game/SongSelect.cpp:3538` | 随机选曲 |
+| `game/SongSelect.cpp:3539` | 筛选 |
+| `game/SongSelect.cpp:3540` | 排序 |
+| `game/SongSelect.cpp:3570` | 排序：名称 |
+| `game/SongSelect.cpp:3570` | 排序：难度 |
+| `game/SongSelect.cpp:3669` | 自动编成尚未实现。 |
+| `game/SongSelect.cpp:3844` | 卡组系统尚未实现，现在只有一套队伍。 |
+| `game/SongSelect.cpp:3866` | 自动编成 |
+| `game/SongSelect.cpp:3868` | 自动编成尚未实现。 |
+| `game/SongSelect.cpp:3884` | 当前队伍 |
+| `game/SongSelect.cpp:3898` | 综合力 |
+| `game/SongSelect.cpp:3914` | 综合力 = 队伍里 5 张卡片的数值合计 |
+| `game/SongSelect.cpp:3936` | 角色牵绊等级 |
+| `game/SongSelect.cpp:3938` | 角色羁绊等级尚未实现。 |
+| `game/SongSelect.cpp:3967` | 排序 |
+| `game/SongSelect.cpp:3972` | 排序：按名称 |
+| `game/SongSelect.cpp:3972` | 排序：按等级 |
+| `game/SongSelect.cpp:4008` | 卡组编成功能尚未实现。 |
+| `game/SongSelect.cpp:4257` | 无 MV |
+| `game/SongSelect.cpp:4304` | 关闭 |
+| `game/SongSelect.cpp:4304` | 开启 |
+| `game/SongSelect.cpp:4477` | 确定 |
+| `game/SongSelect.cpp:4715` | セカイ |
+| `game/SongSelect.cpp:4718` | バーチャル |
+| `game/SongSelect.cpp:4726` | 他 |
+| `game/SongSelect.cpp:5632` | 清空 |
+| `game/SongSelect.cpp:6216` | 加入收藏夹 |
+| `game/SongSelect.cpp:6216` | 取消收藏 |
+| `game/SongSelect.cpp:6230` | 删除谱面文件… |
+| `game/SongSelect.cpp:6368` | 这个筛选条件下没有谱面。换个团体，或者点「筛选」把条件放开 |
+| `game/SongSelect.cpp:6369` | 没有找到谱面。把 .sus 放到 charts/ 目录下，再按 F5 重新扫描 |
+| `game/SongSelect.cpp:6374` | 清除全部筛选 |
+| `game/SongSelect.cpp:6390` | 这会清掉团体页签、搜索框和「筛选」里的全部条件。 |
+| `game/SongSelect.cpp:6400` | 下载谱面 |
+| `game/SongSelect.cpp:6408` | 这会跳转到音乐商店。 |
+| `game/SongSelect.cpp:6553` | 原曲 |
+| `game/SongSelect.cpp:6616` | 楽曲Lv. |
+| `game/SongSelect.cpp:6616` | 歌曲等级 |
+| `game/SongSelect.cpp:7507` | 确定 |
+| `game/SongSelect.cpp:7648` | 没有 |
+| `game/SongSelect.cpp:7649` | 失败 |
+| `game/SongSelect.cpp:7650` | 已开始 |
+| `game/SongSelect.cpp:7651` | 未确定 |
+| `game/SongSelect.cpp:7652` | 选择难度 |
+| `game/SongSelect.cpp:7702` | 按名称 |
+| `game/SongSelect.cpp:7702` | 按难度 |
+| `game/SongSelect.cpp:7706` | 排序： |
+| `game/SongSelect.cpp:7976` | 音乐商店 |
+| `game/SongSelect.cpp:7977` | 猜歌 |
+| `game/SongSelect.cpp:7978` | 刷新列表 |
+| `game/SongSelect.cpp:7979` | 设置 |
+| `game/SongSelect.cpp:7980` | 个人资料 |
+| `game/SongSelect.cpp:7981` | 随机选曲 |
+| `game/SongSelect.cpp:7982` | 筛选 |
+| `game/SongSelect.cpp:7983` | 排序 |
+| `game/SongSelect.cpp:8019` | 排序：名称 |
+| `game/SongSelect.cpp:8019` | 排序：难度 |
+| `game/SongSelect.cpp:8123` | 个人资料 |
+| `game/SongSelect.cpp:8129` | 昵称 |
+| `game/SongSelect.cpp:8132` | （未设置） |
+| `game/SongSelect.cpp:8134` | 学校 / 组织 |
+| `game/SongSelect.cpp:8137` | （未设置） |
+| `game/SongSelect.cpp:8140` | 签名 |
+| `game/SongSelect.cpp:8152` | %d 次   平均 %.0f |
+| `game/SongSelect.cpp:8156` | 等级 |
+| `game/SongSelect.cpp:8157` | 游玩 / 平均分 |
+| `game/SongSelect.cpp:8173` | 到下一级 %d / %d EXP |
+| `game/SongSelect.cpp:8182` | 关闭 |
+| `game/SongSelect.cpp:8226` | 猜歌 |
+| `game/SongSelect.cpp:8234` | 正在准备题库… |
+| `game/SongSelect.cpp:8234` | 没有可用的题库 |
+| `game/SongSelect.cpp:8238` | 首次加载请耐心等待。 |
+| `game/SongSelect.cpp:8239` | 找不到 music-aliases.json，或者别名表过小。 |
+| `game/SongSelect.cpp:8256` | 关闭 |
+| `game/SongSelect.cpp:8262` | 这个别名指的是哪首歌？ |
+| `game/SongSelect.cpp:8353` | 答对了！ |
+| `game/SongSelect.cpp:8354` | 答错了，正确答案是「 |
+| `game/SongSelect.cpp:8357` | 答对 %d / %d    连对 %d（最佳 %d） |
+| `game/SongSelect.cpp:8370` | 下一题 |
+| `game/SongSelect.cpp:8370` | 跳过 |
+| `game/SongSelect.cpp:8374` | 关闭 |
+| `game/SongSelect.cpp:8634` | クリア状況 |
+| `game/SongSelect.cpp:8634` | 通关状况 |
+| `game/SongSelect.cpp:8645` | すべて |
+| `game/SongSelect.cpp:8645` | 全部 |
+| `game/SongSelect.cpp:8646` | 未クリア |
+| `game/SongSelect.cpp:8646` | 未通关 |
+| `game/SongSelect.cpp:8647` | 未フルコンボ |
+| `game/SongSelect.cpp:8647` | 未全连 |
+| `game/SongSelect.cpp:8648` | 未AP |
+| `game/SongSelect.cpp:8648` | 未AP |
+| `game/SongSelect.cpp:8649` | 未S评级 |
+| `game/SongSelect.cpp:8649` | 未スコアS |
+| `game/SongSelect.cpp:8668` | 2DMVあり |
+| `game/SongSelect.cpp:8668` | 3DMVあり |
+| `game/SongSelect.cpp:8668` | MVなし |
+| `game/SongSelect.cpp:8668` | 原曲MVあり |
+| `game/SongSelect.cpp:8670` | 无MV |
+| `game/SongSelect.cpp:8670` | 有2DMV |
+| `game/SongSelect.cpp:8670` | 有3DMV |
+| `game/SongSelect.cpp:8670` | 有原曲MV |
+| `game/SongSelect.cpp:8685` | 曲目 |
+| `game/SongSelect.cpp:8685` | 楽曲 |
+| `game/SongSelect.cpp:8688` | APPENDあり |
+| `game/SongSelect.cpp:8688` | すべて |
+| `game/SongSelect.cpp:8688` | クリエイト譜面あり |
+| `game/SongSelect.cpp:8688` | 書き下ろし楽曲 |
+| `game/SongSelect.cpp:8690` | 全部 |
+| `game/SongSelect.cpp:8690` | 新创作曲 |
+| `game/SongSelect.cpp:8690` | 有APPEND |
+| `game/SongSelect.cpp:8690` | 有自制谱面 |
+| `game/SongSelect.cpp:8750` | キャンセル |
+| `game/SongSelect.cpp:8750` | 取消 |
+| `game/SongSelect.cpp:8753` | 决定 |
+| `game/SongSelect.cpp:8753` | 決定 |
+| `game/Ui.cpp:2030` | 等级 |
+| `main.cpp:1969` | 用户 |
+| `main.cpp:2036` | 玩家 |
+| `main.cpp:2387` | CppSekai 需要 OpenGL 3.3，而当前上下文只提供了 %d.%d。\n\n |
+| `main.cpp:2388` | 最常见的原因：显卡驱动没装（Windows 只给了「Microsoft 基本显示适配器」）， |
+| `main.cpp:2389` | 或者在云主机 / 远程桌面 / 没有 3D 加速的虚拟机里运行。\n\n |
+| `main.cpp:2390` | 如果这台机器确实没有能用的显卡驱动，可以到发布页下载「无显卡补丁」 |
+| `main.cpp:2391` | （Mesa 软件渲染），解压到本程序所在的文件夹再启动。\n |
+| `main.cpp:2392` | 具体信息见程序目录下的 cppsekai.log。 |
+| `main.cpp:2467` | OpenGL 初始化失败：无法加载 3.3 的函数入口点。\n\n |
+| `main.cpp:2468` | 这台机器的 OpenGL 驱动不完整，多半是没装显卡驱动， |
+| `main.cpp:2469` | 或者在云主机 / 远程桌面 / 没有 3D 加速的虚拟机里运行。\n\n |
+| `main.cpp:2470` | 没有可用显卡驱动的机器，可以到发布页下载「无显卡补丁」 |
+| `main.cpp:2471` | （Mesa 软件渲染），解压到本程序所在的文件夹再启动。 |
+| `main.cpp:3146` | 收藏 |
+| `main.cpp:3149` | 最近播放 |
+| `main.cpp:3595` | CppSekai 谱面下载器 |
+| `main.cpp:3597` | CppSekai 谱面下载器 |
+| `main.cpp:3911` | 多人游玩中：暂停由房主控制 |
+| `main.cpp:4149` | 谱面加载失败，文件可能损坏或不是 SUS 谱面： |
+| `main.cpp:4351` | 严格 |
+| `main.cpp:4351` | 宽松 |
+| `main.cpp:4351` | 标准 |
+| `main.cpp:4359` | 严格 |
+| `main.cpp:4359` | 宽容 |
+| `main.cpp:4359` | 较紧 |
+| `main.cpp:4459` | 用户数据 (*.json)\0*.json\0所有文件 (*.*)\0*.*\0 |
+| `main.cpp:4505` | 图片 (*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tga)\0*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tga\0 |
+| `main.cpp:4506` | 所有文件 (*.*)\0*.*\0 |
+| `main.cpp:4518` | 选择头像图片 |
+| `main.cpp:4552` | 头像保存失败，请选择另一张图片。 |
+| `main.cpp:4726` | (无昵称) |
+| `main.cpp:4751` | 天馬咲希 |
+| `main.cpp:4751` | 天马咲希 |
+| `main.cpp:4751` | 星乃一歌 |
+| `main.cpp:4751` | 星乃一歌 |
+| `main.cpp:4752` | 日野森志步 |
+| `main.cpp:4752` | 日野森志歩 |
+| `main.cpp:4752` | 望月穂波 |
+| `main.cpp:4752` | 望月穗波 |
+| `main.cpp:4753` | 桐谷遥 |
+| `main.cpp:4753` | 桐谷遥 |
+| `main.cpp:4753` | 花里みのり |
+| `main.cpp:4753` | 花里实乃里 |
+| `main.cpp:4754` | 日野森雫 |
+| `main.cpp:4754` | 日野森雫 |
+| `main.cpp:4754` | 桃井愛莉 |
+| `main.cpp:4754` | 桃井爱莉 |
+| `main.cpp:4755` | 小豆沢こはね |
+| `main.cpp:4755` | 小豆泽心羽 |
+| `main.cpp:4755` | 白石杏 |
+| `main.cpp:4755` | 白石杏 |
+| `main.cpp:4756` | 东云彰人 |
+| `main.cpp:4756` | 東雲彰人 |
+| `main.cpp:4756` | 青柳冬弥 |
+| `main.cpp:4756` | 青柳冬弥 |
+| `main.cpp:4757` | 凤笑梦 |
+| `main.cpp:4757` | 天馬司 |
+| `main.cpp:4757` | 天马司 |
+| `main.cpp:4757` | 鳳えむ |
+| `main.cpp:4758` | 神代类 |
+| `main.cpp:4758` | 神代類 |
+| `main.cpp:4758` | 草薙宁宁 |
+| `main.cpp:4758` | 草薙寧々 |
+| `main.cpp:4759` | 宵崎奏 |
+| `main.cpp:4759` | 宵崎奏 |
+| `main.cpp:4759` | 朝比奈まふゆ |
+| `main.cpp:4759` | 朝比奈真冬 |
+| `main.cpp:4760` | 东云绘名 |
+| `main.cpp:4760` | 晓山瑞希 |
+| `main.cpp:4760` | 暁山瑞希 |
+| `main.cpp:4760` | 東雲絵名 |
+| `main.cpp:4761` | 初音ミク |
+| `main.cpp:4761` | 初音未来 |
+| `main.cpp:4761` | 鏡音リン |
+| `main.cpp:4761` | 镜音铃 |
+| `main.cpp:4762` | 巡音ルカ |
+| `main.cpp:4762` | 巡音流歌 |
+| `main.cpp:4762` | 鏡音レン |
+| `main.cpp:4762` | 镜音连 |
+| `main.cpp:4767` | 25時、ナイトコードで。 |
+| `main.cpp:4767` | Wonderlands×Showtime |
+| `main.cpp:4767` | 虚拟歌手 |
+| `main.cpp:4775` | 系统（启动/窗口/菜单） |
+| `main.cpp:4776` | 选曲（界面/下载/猜歌） |
+| `main.cpp:4777` | 剧情（教学/脚本） |
+| `main.cpp:4778` | 演奏（判定/暂停/结算） |
+| `main.cpp:4779` | 音频（播放/音效） |
+| `main.cpp:4780` | 输入（手柄/键盘/触摸） |
+| `main.cpp:4781` | 渲染（OpenGL/帧统计） |
+| `main.cpp:4782` | 多人游玩（房间同步） |
+| `main.cpp:4798` | 虚拟歌手 ver |
+| `main.cpp:5322` | 窗口模式 |
+| `main.cpp:5348` | 原生菜单栏 |
+| `main.cpp:5759` | 系统集成 |
+| `main.cpp:5762` | 启用 SMTC 汇报 |
+| `main.cpp:5797` | 开始游戏时切到英文输入法 |
+| `main.cpp:5807` | 隐藏系统触摸特效 |
+| `main.cpp:6127` | 导入 |
+| `main.cpp:6139` | (无昵称) |
+| `main.cpp:6145` | 不是用户数据文件： |
+| `main.cpp:6575` | セカイver |
+| `main.cpp:6580` | 虚拟歌手 ver |
+| `main.cpp:6585` | 指定歌手 |
+| `main.cpp:6640` | 确定 |
+| `main.cpp:6675` | 日志输出 |
+| `main.cpp:6718` | 确定 |
+| `main.cpp:6762` | 取消 |
+| `main.cpp:6762` | 确定开启 |
+| `main.cpp:6808` | 要退出吗？ |
+| `main.cpp:6948` | 个文件： |
+| `main.cpp:6948` | 将删除 |
+| `main.cpp:6949` | 个谱面 + |
+| `main.cpp:6949` | 张曲绘 + |
+| `main.cpp:6950` | 个音频 |
+| `main.cpp:6952` | 个元数据 |
+| `main.cpp:6997` | 删除这首歌？ |
+| `main.cpp:6999` | 歌曲： |
+| `main.cpp:7001` | 位置： |
+| `main.cpp:7002` | 删掉无法恢复；这个目录里别的歌不受影响。 |
+| `main.cpp:7004` | 删除 |
+| `main.cpp:7004` | 取消 |
+| `main.cpp:7066` | 导入用户数据？ |
+| `main.cpp:7068` | 文件： |
+| `main.cpp:7069` | 条 |
+| `main.cpp:7069` | 用户： |
+| `main.cpp:7069` | ，成绩 |
+| `main.cpp:7070` | 导入会用这份数据覆盖当前用户（ |
+| `main.cpp:7070` | ）的设置、成绩和资料，无法撤销。 |
+| `main.cpp:7072` | 取消 |
+| `main.cpp:7072` | 覆盖导入 |
+| `main.cpp:7092` | 导入失败： |
+| `main.cpp:7117` | 已导入： |
+| `main.cpp:7139` | 多人游玩已开启 |
+| `main.cpp:7141` | 现在这个窗口还在单人模式里，立即重启窗口来准备多人游玩。 |
+| `main.cpp:7143` | 稍后 |
+| `main.cpp:7143` | 立即重启 |
+| `main.cpp:7570` | 小豆沢こはね |
+| `main.cpp:7570` | 星乃一歌 |
+| `main.cpp:7570` | 花里みのり |
+| `main.cpp:7571` | 天馬司 |
+| `main.cpp:7571` | 日野森雫 |
+| `main.cpp:7571` | 朝比奈まふゆ |
+| `main.cpp:7571` | 東雲絵名 |
+| `main.cpp:7571` | 桃井愛莉 |
+| `main.cpp:9096` | 关掉本机所有 CppSekai 窗口？ |
+| `main.cpp:9097` | 结束所有实例 |
+| `main.cpp:9827` | 请选择歌曲 |
+| `main.cpp:9829` | 准备好的话就开始吧 |
+| `main.cpp:9831` | 即将开始 |
+| `main.cpp:9833` | 等待其他玩家 |
+| `main.cpp:10155` | 没能打开谱面下载器：chartdl.exe 不在游戏目录里 |
+| `main.cpp:10251` | 房主还没有定下本窗口能打的曲子 |
+| `main.cpp:10255` | 先在手机上选择难度 |
+| `main.cpp:10343` | 房主已开始，你未确定 |
+| `main.cpp:10343` | 本曲已经开始 |
+| `main.cpp:10355` | 本窗口没有这首曲子 |
+| `main.cpp:10373` | 谱面加载失败 |
+| `main.cpp:10586` | 房主已放弃本曲 |
+| `main.cpp:11454` | 房主已暂停 |
+| `main.cpp:11564` | 是否继续演出？ |
+| `main.cpp:11565` | 放弃 |
+| `main.cpp:11565` | 继续演出 |
+| `main.cpp:11565` | 重试 |
+| `main.cpp:11585` | 房主重开本曲 |
+| `main.cpp:11839` | 关于本软件 |
+| `main.cpp:11841` | CppSekai 是免费、开源、非营利的同人练习工具（AGPL-3.0）。它与 SEGA、Colorful Palette 以及《初音未来：缤纷舞台》官方没有任何关系，仅供本地学习与练习使用。一切权利归各自权利人所有。 |
+| `main.cpp:11843` | 以后不再显示 |
+| `main.cpp:11843` | 知道了 |
+| `platform/Party.cpp:742` | 玩家 |
+| `platform/Party.cpp:1026` | 玩家 |

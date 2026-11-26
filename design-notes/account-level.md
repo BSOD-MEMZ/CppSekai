@@ -43,22 +43,21 @@
 - **坑**：`--sus` 的相对路径在 Git Bash 下不可靠（MSYS 会改写 `../x` 这类参数，
   实测 `--sus ../charts/x.sus` 和 `--sus charts/x.sus` 都读不到，绝对路径正常）。
   脚本里一律给绝对路径。另外 `--screenshot` 收的是**文件路径**不是目录，指到目录上会静默不写。
-## 卡面（2026-11-21 加）
+## 头像（2026-11-25 取代卡面）
 
-`AccountData.card` 存的是**卡的 bundle 名**（`res001_no056`），不是路径也不是 id：
+原来的「选卡面」整块删掉了（`assets/card/` 与 `fetch_card_art.py` 一并删除）。
+现在玩家在 **设置 → 账户 → 头像** 上传一张本地图片，存成
+`<data>/profiles/<profileId>_avatar.<ext>`，`AccountData.avatar` 只记这个**相对路径**
+（换机器 / 改目录 / 重建 build 都不会丢）。空串 = 没头像，多人计分板回退到昵称首字。
 
-- 路径会在换 assets 目录 / 换分辨率后失效；
-- id 要用 36 MB 的 master 表反查 bundle，而画的时候需要的正是 bundle。
-
-`userdata.json` 的 `account.card` 读写成对，空串 = 没选卡面（结算卡就只画面板）。
-设置 → 账户 里是一个缩略图网格（读 `assets/card/card-index.tsv`），点一下即存；
-另有「不用卡面」把它清回空串 —— 原作结算卡本来就有无卡状态，不该只能靠改存档回去。
-
-贴图走 `Renderer::cardArt(path)`：按路径缓存、**上限 24 张**。选卡界面一页会同时显示
-十几张 800×457 的图，没有缓存的话同一张每帧都会重新上传。
-
-无头检查：`--card res001_no056`（只改内存，和 `--player` 同性质）；
-配合 `CPSEKAI_RESULT_PARTY=5 --result-preview --screenshot-time 4.5` 可以截出
-「五人成员页 + 每人一张卡面」。
-
-卡面素材怎么来、为什么只入库 24 张，见 [`tools.md`](tools.md) 里的 `fetch_card_art.py`。
+- 选图走系统 `GetOpenFileNameW`（PNG / JPG / BMP / GIF / TGA），**复制**进 profile
+  目录而不是引用原路径；替换 / 清除都会删旧文件。`--avatar <path>` 是无头检查用的
+  临时覆盖（绝对路径，不写盘、不会被「清除」误删）。
+- 显示位置：多人演奏的队友计分块（`drawPartyScores`，cover-fit 进 80px 方块）和多人
+  结算的成员卡（`Result.cpp`，成员卡上方 200px 圆）。贴图走
+  `Renderer::avatarArt(path)`（按路径缓存，上限 24 张）。
+- 房间协议 v6 给每个座位加了 `avatar` 字段（绝对路径，最长 780 字节 = MAX_PATH 个
+  CJK 字符）；同机所有窗口共用文件系统，所以别的窗口能直接加载。结果块不再带卡面。
+- 无头检查：`--avatar <image>`（只改内存，和 `--player` 同性质）；
+  配合 `CPSEKAI_RESULT_PARTY=5 --result-preview --screenshot-time 4.5` 可以截出
+  「五人成员页 + 每人一个头像」。

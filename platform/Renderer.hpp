@@ -119,18 +119,17 @@ class Renderer
     void clearCover();
     [[nodiscard]] const HudSprite* cover() const { return mCover.id != 0 ? &mCover : nullptr; }
 
-    // ---- card art ("卡面") -------------------------------------------------
-    // The account's chosen card, looked up lazily and cached by path. Card art
-    // is a 2338x1440 sheet (~4 MB on disk) that we ship downscaled under
-    // assets/card/, and a multi result can show one per player at once, so the
-    // cache is what keeps the same texture from being uploaded five times.
+    // ---- avatar art --------------------------------------------------------
+    // The player's uploaded avatar, looked up lazily and cached by path. A
+    // multi-live can show one per player at once, so the cache keeps the same
+    // texture from being uploaded five times.
     //
-    // Returns null when the file is missing - callers draw the card without art
+    // Returns null when the file is missing - callers draw the fallback initial
     // rather than failing. `error` is only filled on the first miss.
-    [[nodiscard]] const HudSprite* cardArt(const std::string& path, std::string* error = nullptr);
-    // Drops every cached card texture (profile switch, or a card the user just
-    // downloaded while the game was running).
-    void clearCardArt();
+    [[nodiscard]] const HudSprite* avatarArt(const std::string& path, std::string* error = nullptr);
+    // Drops every cached avatar texture (profile switch, or an avatar the user
+    // just replaced while the game was running).
+    void clearAvatarArt();
 
     // Lane highlight: a soft additive glow drawn on the playfield for the
     // lanes the player is touching / hovering. Width is in lane units
@@ -285,9 +284,10 @@ class Renderer
     std::vector<float> mStaticMvLineVertices;
 
     std::map<std::string, HudSprite> mHudSprites;
-    // Card art cache, keyed by file path. Bounded in cardArt(): an unbounded map
-    // would let a player walk through hundreds of cards and never free VRAM.
-    std::map<std::string, HudSprite> mCardArt;
+    // Avatar cache, keyed by file path. Bounded in avatarArt(): an unbounded map
+    // would let the party result screen keep hundreds of images and never free
+    // VRAM.
+    std::map<std::string, HudSprite> mAvatarArt;
     bool mDrawCoreEffects = false;
     bool mTransparentBackground = false;
     bool mBackgroundIsVideo = false;

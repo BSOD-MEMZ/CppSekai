@@ -17,7 +17,6 @@ namespace
 constexpr const char* kDifficultyNames[7] = {"EASY", "NORMAL", "HARD", "EXPERT", "MASTER", "APPEND",
     "ETERNAL"};
 
-constexpr ImU32 kText = IM_COL32(236, 238, 248, 255);
 constexpr ImU32 kTextFaint = IM_COL32(116, 122, 148, 255);
 constexpr ImU32 kAccent = IM_COL32(106, 232, 208, 255);
 
@@ -111,47 +110,6 @@ const char* difficultyName(int index)
     return kDifficultyNames[index];
 }
 
-void drawPartyBadge(const std::vector<platform::PartyPlayer>& players, int mySlot, int windowW,
-    int windowH, float uiScale, const std::string& hint)
-{
-    if (players.empty()) {
-        return;
-    }
-    Canvas c = makeCanvas(windowW, windowH, uiScale);
-    c.dl = ImGui::GetForegroundDrawList();
-
-    ImFont* body = bodyFont() != nullptr ? bodyFont() : ImGui::GetFont();
-    std::string text = "多人演出 " + std::to_string(players.size()) + "/"
-        + std::to_string(platform::kPartyMaxSlots) + "  ";
-    for (std::size_t i = 0; i < players.size(); ++i) {
-        if (i > 0) {
-            text += " · ";
-        }
-        text += players[i].name;
-        if (players[i].host) {
-            text += "(房主)";
-        }
-        if (players[i].slot == mySlot) {
-            text += "(你)";
-        }
-    }
-    const float size = 22.0f;
-    const float px = size * c.scale;
-    const float w = textWidth(body, px, text);
-    const float h = 44.0f;
-    const float x = 24.0f;
-    const float y = 1080.0f - 24.0f - h;
-    c.dl->AddRectFilled(ImVec2(c.x(x), c.y(y)), ImVec2(c.x(x) + w + c.s(56.0f), c.y(y + h)),
-        IM_COL32(10, 12, 24, 190), c.s(h * 0.5f));
-    c.dl->AddCircleFilled(ImVec2(c.x(x + 26.0f), c.y(y + h * 0.5f)), c.s(7.0f), kAccent);
-    c.dl->AddText(body, px, ImVec2(c.x(x + 44.0f), textTopForCenterPx(body, px, c.y(y + h * 0.5f), text)),
-        kText, text.c_str());
-    if (!hint.empty()) {
-        const float hx = x + (w + c.s(56.0f)) / c.scale + 20.0f;
-        textLeft(c, body, 18.0f, hx, y + h * 0.5f, kTextFaint, hint);
-    }
-}
-
 void drawPartyScores(platform::Renderer& renderer, const std::vector<platform::PartyPlayer>& players,
     int mySlot, int windowW, int windowH, const std::string& note, bool paused, float chartRating)
 {
@@ -226,15 +184,43 @@ void drawPartyScores(platform::Renderer& renderer, const std::vector<platform::P
                 IM_COL32(240, 70, 90, static_cast<int>(120 + 100 * fill)), c.s(10.0f), 0, c.s(2.0f));
         }
 
-        // Initial as a stand-in for the card thumbnail (we have no card data).
+        // The player's uploaded avatar (2026-11-25), cover-fitted inside the
+        // plate. Falls back to the first glyph when no avatar was set - the
+        // official block carries a card thumbnail and something has to say who
+        // this seat is.
         {
-            const std::string initial = firstGlyph(player.name);
-            const float px = 26.0f * c.scale;
-            const float tw = textWidth(title, px, initial);
-            c.dl->AddText(title, px,
-                ImVec2(c.x(bx + block * 0.5f) - tw * 0.5f,
-                    textTopForCenterPx(title, px, c.y(y + block * 0.42f), initial)),
-                dead ? IM_COL32(150, 155, 170, 200) : IM_COL32(cr, cg, cb, 235), initial.c_str());
+            const platform::Renderer::HudSprite* face =
+                player.avatar.empty() ? nullptr : renderer.avatarArt(player.avatar);
+            if (face != nullptr && face->id != 0 && face->width > 0 && face->height > 0) {
+                const float ax = bx + 3.0f;
+                const float ay = y + 5.0f;
+                const float aw = block - 6.0f;
+                const float ah = block - 8.0f;
+                const float srcW = static_cast<float>(face->width);
+                const float srcH = static_cast<float>(face->height);
+                const float boxW = c.s(aw);
+                const float boxH = c.s(ah);
+                const float fit = std::max(boxW / srcW, boxH / srcH);
+                const float visW = std::clamp(boxW / (srcW * fit), 0.0f, 1.0f);
+                const float visH = std::clamp(boxH / (srcH * fit), 0.0f, 1.0f);
+                const float u0 = (1.0f - visW) * 0.5f;
+                const float v0 = (1.0f - visH) * 0.5f;
+                c.dl->AddImageRounded(
+                    reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(face->id)),
+                    ImVec2(c.x(ax), c.y(ay)), ImVec2(c.x(ax + aw), c.y(ay + ah)),
+                    ImVec2(u0, v0), ImVec2(u0 + visW, v0 + visH),
+                    dead ? IM_COL32(255, 255, 255, 120) : IM_COL32(255, 255, 255, 255),
+                    c.s(8.0f), ImDrawFlags_RoundCornersAll);
+            } else {
+                const std::string initial = firstGlyph(player.name);
+                const float px = 26.0f * c.scale;
+                const float tw = textWidth(title, px, initial);
+                c.dl->AddText(title, px,
+                    ImVec2(c.x(bx + block * 0.5f) - tw * 0.5f,
+                        textTopForCenterPx(title, px, c.y(y + block * 0.42f), initial)),
+                    dead ? IM_COL32(150, 155, 170, 200) : IM_COL32(cr, cg, cb, 235),
+                    initial.c_str());
+            }
         }
 
         // Rim. The official frame is a 20x20 nine-slice and ImGui has no

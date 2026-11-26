@@ -1237,58 +1237,58 @@ void Renderer::clearCover()
     mCover.height = 0;
 }
 
-// ---- card art ("卡面") -----------------------------------------------------
+// ---- avatar art ------------------------------------------------------------
 //
-// One texture per distinct file, uploaded on first use. The cap matters: a player
-// browsing the picker could otherwise touch hundreds of 800x493 sheets in one
-// session, and nothing would ever free them.
+// One texture per distinct file, uploaded on first use. The cap matters: a
+// party can switch between profiles and each avatar is a full-size photo, so
+// nothing should stay resident for ever.
 namespace
 {
-    constexpr std::size_t kCardArtCacheMax = 24;
+    constexpr std::size_t kAvatarArtCacheMax = 24;
 }
 
-const Renderer::HudSprite* Renderer::cardArt(const std::string& path, std::string* error)
+const Renderer::HudSprite* Renderer::avatarArt(const std::string& path, std::string* error)
 {
     if (path.empty()) {
         return nullptr;
     }
-    const auto found = mCardArt.find(path);
-    if (found != mCardArt.end()) {
+    const auto found = mAvatarArt.find(path);
+    if (found != mAvatarArt.end()) {
         return found->second.id != 0 ? &found->second : nullptr;
     }
-    // Simple FIFO eviction: the picker draws a whole page at a time and the
-    // result screen draws at most kPartyMaxSlots cards, so recency beyond
-    // insertion order buys nothing worth the bookkeeping.
-    if (mCardArt.size() >= kCardArtCacheMax) {
-        auto oldest = mCardArt.begin();
+    // Simple FIFO eviction: the result screen draws at most kPartyMaxSlots
+    // avatars, so recency beyond insertion order buys nothing worth the
+    // bookkeeping.
+    if (mAvatarArt.size() >= kAvatarArtCacheMax) {
+        auto oldest = mAvatarArt.begin();
         if (oldest->second.id != 0) {
             glDeleteTextures(1, &oldest->second.id);
         }
-        mCardArt.erase(oldest);
+        mAvatarArt.erase(oldest);
     }
     std::string localError;
     const Texture texture = loadTextureFromFile(path, localError);
     if (texture.id == 0) {
         // Cache the miss so a missing file is not re-opened every frame.
-        mCardArt[path] = HudSprite{0, 0, 0};
+        mAvatarArt[path] = HudSprite{0, 0, 0};
         if (error != nullptr && error->empty()) {
             *error = localError;
         }
         return nullptr;
     }
     HudSprite sprite{texture.id, texture.width, texture.height};
-    mCardArt[path] = sprite;
-    return &mCardArt[path];
+    mAvatarArt[path] = sprite;
+    return &mAvatarArt[path];
 }
 
-void Renderer::clearCardArt()
+void Renderer::clearAvatarArt()
 {
-    for (auto& entry : mCardArt) {
+    for (auto& entry : mAvatarArt) {
         if (entry.second.id != 0) {
             glDeleteTextures(1, &entry.second.id);
         }
     }
-    mCardArt.clear();
+    mAvatarArt.clear();
 }
 
 namespace

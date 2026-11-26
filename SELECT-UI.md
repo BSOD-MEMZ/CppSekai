@@ -505,6 +505,10 @@ cd /d/Tools/rea/work/jp && python arip_search.py "MusicSelect" PrefabHierarchyOb
   956 宽、整窗高、#444466/80%，全屏 #000022/50% 压暗；列表 828 宽、行 164 高、
   `#DFDFEB`/圆角 20/无描边；单选 72、勾 36、文字 36/32；去掉了原来的标题行。
   资源 `icon_radio_gn.png` / `btn_close_wh.png` 已进 `assets/select/`。
+- **2026-11-25 修**：面板改成**独立顶层窗口**（`drawSingerPanel`，在选曲窗口
+  `End()` 之后），因为列表是 ImGui 子窗口、会在父窗口之后合成——旧实现里面板
+  右缘会被列表的 2D/原曲徽章和选中行高亮盖住，关闭 X 也被顶栏菜单钮抢 hover。
+  最终确认页复用同一个函数（不再用 toast 循环音源）。
 
 ### 12.3 选取确认动画（`SoloLiveTransitionEffectContent`）
 

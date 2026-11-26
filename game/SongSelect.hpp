@@ -89,12 +89,13 @@ struct AccountData
     std::string name; // 昵称
     std::string org;  // 学校 / 组织
     std::string note; // 个性签名
-    // 卡面 (2026-11-21): the card bundle name the player picked in
-    // 设置 > 账户, e.g. "res001_no056". Stored as the bundle name rather than a
-    // full path so moving the assets folder or switching to the after-training
-    // art does not need a data migration. Empty = no card (the cell then shows
-    // the plain frame, same as the official "no card" state).
-    std::string card;
+    // 头像 (2026-11-25): a player-supplied image shown in multiplayer. Stored
+    // as a path relative to the user-data folder (e.g.
+    // "profiles/default_avatar.png") so moving the game folder keeps it
+    // working. Empty = no avatar (the party scoreboard falls back to the
+    // player's initial). Unlike the old card-face picker this is the user's
+    // own image, uploaded from disk in 设置 > 账户.
+    std::string avatar;
 
     int rank = 1;
     // Exp banked towards the *next* rank, i.e. addPlayerExp() already rolled
@@ -562,12 +563,6 @@ void closeMenuDrawer();
 // `--select-menu` / CPSEKAI_SELECT_MENU=1 use this for a headless screenshot.
 void debugOpenMenuDrawer(bool open);
 
-// Absolute path of one card's art: <assets>\card\<bundle>.png. Empty when the
-// assets root was never set. The file may not exist - the art is downloaded by
-// .workbuddy/tools/fetch_card_art.py and only a starter set ships with the
-// build, so callers must treat a missing file as "no art", not as an error.
-std::string cardArtPath(const std::string& bundle);
-
 // Optional song-select backdrop (the blurred desktop wallpaper). `texture` 0
 // falls back to the built-in gradient. texW/texH are the texture's pixel size
 // (used to cover the screen without distorting it) and `dim` (0..1) is a dark
@@ -685,7 +680,13 @@ struct SelectPartyInfo
 struct SelectPartyResult
 {
     int difficulty = -1;   // the player picked this canonical difficulty index
-    bool confirm = false;  // 确定 was pressed (confirm / start the round)
+    // 开始 was pressed on the final-confirm page. In 多人游玩 this marks the
+    // seat ready and the round starts once every seat has done it; solo runs
+    // never produce it (the page hands back the chart index instead).
+    bool confirm = false;
+    // The final-confirm page was left with 返回 / ESC: withdraw this seat from
+    // the round the host is about to start.
+    bool cancel = false;
 };
 
 // Draws the screen. `selected` is kept between frames; returns the index of
@@ -753,6 +754,9 @@ bool guessDialogOpen();
 bool filterDialogOpen();
 // 最终确认页是否开着（main 的 Enter / ESC 分支要区分列表页和确认页）。
 bool finalConfirmOpen();
+// 多人游玩: the shared charge has taken over (the chart is loading / the start
+// instant is armed), so the final page is done. Closes it without an action.
+void dismissFinalConfirm();
 // 最终页按下开始钮时已经从按钮上 spawn 过 decide burst 了；main 拿到 action
 // 时不要再 spawn 第二份，直接把白闪接上。取走即清零。
 bool finalConfirmBurstQueued();
@@ -762,5 +766,11 @@ void clearFinalConfirmBurstQueued();
 // button) at boot, same reason. It only appears on a song that has a vocal
 // version table, so pair it with --select-id / --select-vocal.
 void debugOpenSingerPanel(bool open);
+// Debug: open the final-confirm page for `entry` as if 确定 had been pressed
+// (used by --party-auto so a headless round covers the real page).
+void debugRequestFinalConfirm(int entryIndex, int difficulty, int vocalIndex, float timeSec);
+// True while the 切换歌手 drawer is up. main's ESC chain checks it so ESC closes
+// the drawer instead of leaving the song select / quitting the game.
+bool singerPanelOpen();
 
 } // namespace game

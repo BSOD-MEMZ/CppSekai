@@ -83,6 +83,7 @@ struct Api
     int (*readData)(void*, void*, unsigned long, unsigned long*) = nullptr;
     int (*closeHandle)(void*) = nullptr;
     int (*setTimeouts)(void*, int, int, int, int) = nullptr;
+    int (*setOption)(void*, unsigned long, void*, unsigned long) = nullptr;
 
     bool valid() const { return dll != nullptr && readData != nullptr && openRequest != nullptr; }
 };
@@ -121,6 +122,7 @@ Api& api()
         a.readData = loadSymbol<decltype(a.readData)>(dll, "WinHttpReadData");
         a.closeHandle = loadSymbol<decltype(a.closeHandle)>(dll, "WinHttpCloseHandle");
         a.setTimeouts = loadSymbol<decltype(a.setTimeouts)>(dll, "WinHttpSetTimeouts");
+        a.setOption = loadSymbol<decltype(a.setOption)>(dll, "WinHttpSetOption");
         return a;
     }();
     return instance;
@@ -216,6 +218,20 @@ bool get(const std::string& url, const std::function<bool(const char*, size_t, l
         }
         if (a.setTimeouts != nullptr) {
             a.setTimeouts(cached.session, 15000, 15000, 30000, 30000);
+        }
+        // Speed: the asset hosts sit behind Cloudflare, which speaks HTTP/2.
+        // Multiplexing every request of a chart pack over one connection removes
+        // the per-file round trips that dominated the wall clock. Decompression
+        // then makes .sus / .json (text, often 10-70 KB each) travel gzipped -
+        // exactly what a slow uplink notices first. Both options are newer than
+        // Win7; a failure just means the old behaviour.
+        if (a.setOption != nullptr) {
+            unsigned long protocols = 0x1; // WINHTTP_PROTOCOL_FLAG_HTTP2
+            a.setOption(cached.session, 133 /*WINHTTP_OPTION_ENABLE_HTTP_PROTOCOL*/,
+                &protocols, sizeof(protocols));
+            unsigned long decompression = 0x1 | 0x2; // gzip | deflate
+            a.setOption(cached.session, 118 /*WINHTTP_OPTION_DECOMPRESSION*/,
+                &decompression, sizeof(decompression));
         }
     }
     // Re-dial only when the host/port changes: every asset this program pulls
@@ -368,6 +384,18 @@ struct Song
 
 const char* kDiffNames[5] = {"easy", "normal", "hard", "expert", "master"};
 
+// The version the game itself would pick for a song (music-vocals' セカイver),
+// used when a bulk download should not drag every alternate vocal along.
+std::size_t defaultVocalIndex(const Song& song)
+{
+    for (std::size_t i = 0; i < song.vocals.size(); ++i) {
+        if (song.vocals[i].type == "sekai") {
+            return i;
+        }
+    }
+    return 0;
+}
+
 std::vector<Song> gSongs;
 // Community song aliases (music-aliases.json), small-cased alias -> song ids.
 // The same table the game's song select reads; the list here searches by title
@@ -470,6 +498,11 @@ struct DlSettings
     int closeAction = 0; // 0 = 退出程序, 1 = 隐藏到托盘
     bool notifyOnDone = true; // 下载完成弹气球
     bool minimizeToTray = false; // 最小化时也收进托盘
+    // 批量下载时是否把每首歌的**所有**演唱版本都拉下来。关着（默认）时，
+    // 「下载内容」面板没点开过的歌只下默认版本（セカイver，没有就第一个），
+    // 一首歌从 5~7 个 5 MB 的 mp3 降到 1 个 —— 这是"下载很慢"最实际的一刀。
+    bool allVocals = false;
+    int threads = 8; // 并发连接数
     std::string outDir;  // remembered output folder (empty = default)
 };
 
@@ -492,11 +525,14 @@ void loadDlSettings(DlSettings& settings)
         settings.closeAction = doc.value("closeAction", settings.closeAction);
         settings.notifyOnDone = doc.value("notifyOnDone", settings.notifyOnDone);
         settings.minimizeToTray = doc.value("minimizeToTray", settings.minimizeToTray);
+        settings.allVocals = doc.value("allVocals", settings.allVocals);
+        settings.threads = doc.value("threads", settings.threads);
         settings.outDir = doc.value("outDir", settings.outDir);
     } catch (...) {
         // malformed: keep the defaults
     }
     settings.closeAction = std::clamp(settings.closeAction, 0, 1);
+    settings.threads = std::clamp(settings.threads, 2, 16);
 }
 
 void saveDlSettings(const DlSettings& settings)
@@ -505,6 +541,8 @@ void saveDlSettings(const DlSettings& settings)
     doc["closeAction"] = settings.closeAction;
     doc["notifyOnDone"] = settings.notifyOnDone;
     doc["minimizeToTray"] = settings.minimizeToTray;
+    doc["allVocals"] = settings.allVocals;
+    doc["threads"] = settings.threads;
     doc["outDir"] = settings.outDir;
     std::ofstream file(settingsPath(), std::ios::binary);
     if (file) {
@@ -738,6 +776,13 @@ std::atomic<bool> gRunning{false};
 // would otherwise report the queue as finished while its siblings are still
 // downloading (and the UI would stop updating the progress).
 std::atomic<int> gActiveWorkers{0};
+// How many files are fetched at once. A chart pack is dozens of small .sus
+// files plus a few MB of audio, so the per-file cost is dominated by TLS / TTFB
+// rather than bandwidth - parallel connections are what moves the wall clock.
+// The asset hosts are behind Cloudflare; 4 was visibly under-using a normal
+// home connection, so the default is 8 and the settings window can pick
+// 4 / 8 / 12 / 16 (some links / CDNs rate-limit very high fan-out).
+std::atomic<int> gDownloadThreads{8};
 // Wall clock (GetTickCount64 seconds) when the current queue started, and the
 // smoothed remaining-time estimate built from it. gEtaSec is UI-thread only.
 std::atomic<double> gQueueStartSec{-1.0};
@@ -998,7 +1043,12 @@ void queueSong(const Song& song, const Request& request, const fs::path& dir, bo
     };
 
     for (int d = 0; d < 5; ++d) {
-        if (request.diffs[d]) {
+        // The detail panel may still have all five ticked, but the master table
+        // says this song only has three: queueing the other two only produces
+        // 404s (and a retry each, since a 404 is a final answer but still costs
+        // a request). Unknown levels keep all five - a CN-only song with no row
+        // in music-levels.json must not silently lose its charts.
+        if (request.diffs[d] && (!song.levelsKnown || song.levels[static_cast<std::size_t>(d)] > 0)) {
             add(chartUrl(song, kDiffNames[d]), chartPath(dir, song.id, kDiffNames[d]));
         }
     }
@@ -1136,12 +1186,11 @@ void worker()
     }
 }
 
-// How many files are fetched at once. A chart pack is dozens of small .sus
-// files plus a few MB of audio, so the per-file cost is dominated by the
-// TCP + TLS handshake rather than by bandwidth - parallel connections are what
-// moves the wall clock, and http::get() keeping its WinHTTP session per thread
-// is what removes most of those handshakes.
-constexpr int kDownloadThreads = 4;
+// How many files are fetched at once (see gDownloadThreads).
+int downloadThreads()
+{
+    return std::clamp(gDownloadThreads.load(), 2, 16);
+}
 
 void startWorker()
 {
@@ -1149,8 +1198,9 @@ void startWorker()
         return;
     }
     gCancel.store(false);
-    gActiveWorkers.store(kDownloadThreads);
-    for (int i = 0; i < kDownloadThreads; ++i) {
+    const int threads = downloadThreads();
+    gActiveWorkers.store(threads);
+    for (int i = 0; i < threads; ++i) {
         std::thread(worker).detach();
     }
 }
@@ -1231,11 +1281,12 @@ int runJobQueue(std::string& error)
     }
     gRunning.store(true);
     gQueueStartSec.store(nowSeconds());
-    gActiveWorkers.store(kDownloadThreads);
+    const int threads = downloadThreads();
+    gActiveWorkers.store(threads);
     {
         std::vector<std::thread> pool;
-        pool.reserve(kDownloadThreads);
-        for (int i = 0; i < kDownloadThreads; ++i) {
+        pool.reserve(threads);
+        for (int i = 0; i < threads; ++i) {
             pool.emplace_back(worker);
         }
         for (std::thread& thread : pool) {
@@ -1302,6 +1353,8 @@ namespace
     constexpr int kIdSetMinTray = 1203;
     constexpr int kIdSetOk = 1204;
     constexpr int kIdSetCancel = 1205;
+    constexpr int kIdSetAllVocals = 1206;
+    constexpr int kIdSetThreads = 1207;
 
     // Tray callback + the balloon the worker thread asks for. The tray icon
     // never calls back with the parent disabled, so WM_APP + 1 is free.
@@ -2233,6 +2286,8 @@ namespace
     HWND gSetCloseTray = nullptr;
     HWND gSetNotify = nullptr;
     HWND gSetMinTray = nullptr;
+    HWND gSetAllVocals = nullptr;
+    HWND gSetThreads = nullptr;
     HFONT gSetFont = nullptr;
 
     LRESULT CALLBACK settingsProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
@@ -2254,7 +2309,7 @@ namespace
                 const int group1Y = dp(16);
                 const int group1H = dp(92);
                 const int group2Y = group1Y + group1H + dp(12);
-                const int group2H = dp(76);
+                const int group2H = dp(126);
                 // The credits band. Everything this program downloads comes off
                 // third-party mirrors, so say who they are instead of leaving
                 // the source buried in CHARTS.md only.
@@ -2266,11 +2321,22 @@ namespace
                     kIdSetCloseExit, left + dp(14), group1Y + dp(22), width - dp(28), dp(22));
                 gSetCloseTray = create(L"BUTTON", L"隐藏到托盘（后台继续下载）", BS_AUTORADIOBUTTON,
                     kIdSetCloseTray, left + dp(14), group1Y + dp(46), width - dp(28), dp(22));
-                create(L"BUTTON", L"提醒", BS_GROUPBOX, -1, left, group2Y, width, group2H);
+                create(L"BUTTON", L"下载与提醒", BS_GROUPBOX, -1, left, group2Y, width, group2H);
                 gSetNotify = create(L"BUTTON", L"下载完成后弹出气泡提醒", BS_AUTOCHECKBOX, kIdSetNotify,
                     left + dp(14), group2Y + dp(22), width - dp(28), dp(22));
                 gSetMinTray = create(L"BUTTON", L"最小化时收进托盘", BS_AUTOCHECKBOX, kIdSetMinTray,
                     left + dp(14), group2Y + dp(46), width - dp(28), dp(22));
+                gSetAllVocals = create(L"BUTTON", L"批量下载全部演唱版本（流量大、速度慢）",
+                    BS_AUTOCHECKBOX, kIdSetAllVocals, left + dp(14), group2Y + dp(70),
+                    width - dp(28), dp(22));
+                create(L"STATIC", L"并发连接数", SS_LEFT, -1, left + dp(14),
+                    group2Y + dp(98), dp(90), dp(20));
+                gSetThreads = create(L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL, kIdSetThreads,
+                    left + dp(108), group2Y + dp(94), dp(90), dp(200));
+                ComboBox_AddString(gSetThreads, L"4");
+                ComboBox_AddString(gSetThreads, L"8");
+                ComboBox_AddString(gSetThreads, L"12");
+                ComboBox_AddString(gSetThreads, L"16");
 
                 // ---- 数据来源与致谢 -------------------------------------------
                 // chartdl 本身不运营任何资源，谱面/BGM/曲绘和 2D MV 全部来自
@@ -2304,6 +2370,17 @@ namespace
                     gDlSettings.closeAction == 1 ? BST_CHECKED : BST_UNCHECKED, 0);
                 SendMessageW(gSetNotify, BM_SETCHECK, gDlSettings.notifyOnDone ? BST_CHECKED : BST_UNCHECKED, 0);
                 SendMessageW(gSetMinTray, BM_SETCHECK, gDlSettings.minimizeToTray ? BST_CHECKED : BST_UNCHECKED, 0);
+                SendMessageW(gSetAllVocals, BM_SETCHECK, gDlSettings.allVocals ? BST_CHECKED : BST_UNCHECKED, 0);
+                {
+                    static const int kThreadOptions[4] = {4, 8, 12, 16};
+                    int pick = 1;
+                    for (int i = 0; i < 4; ++i) {
+                        if (gDlSettings.threads >= kThreadOptions[i]) {
+                            pick = i;
+                        }
+                    }
+                    ComboBox_SetCurSel(gSetThreads, pick);
+                }
                 return 0;
             }
             case WM_COMMAND: {
@@ -2315,11 +2392,21 @@ namespace
                         SendMessageW(gSetNotify, BM_GETCHECK, 0, 0) == BST_CHECKED;
                     gDlSettings.minimizeToTray =
                         SendMessageW(gSetMinTray, BM_GETCHECK, 0, 0) == BST_CHECKED;
+                    gDlSettings.allVocals =
+                        SendMessageW(gSetAllVocals, BM_GETCHECK, 0, 0) == BST_CHECKED;
+                    {
+                        static const int kThreadOptions[4] = {4, 8, 12, 16};
+                        const int pick = std::clamp(ComboBox_GetCurSel(gSetThreads), 0, 3);
+                        gDlSettings.threads = kThreadOptions[pick];
+                        gDownloadThreads.store(gDlSettings.threads);
+                    }
                     gDlSettings.outDir = pathText(fs::path(gOutDir));
                     saveDlSettings(gDlSettings);
                     logLine("[cfg] close=" + std::string(gDlSettings.closeAction == 1 ? "tray" : "exit")
                         + " notify=" + (gDlSettings.notifyOnDone ? "on" : "off")
-                        + " minTray=" + (gDlSettings.minimizeToTray ? "on" : "off"));
+                        + " minTray=" + (gDlSettings.minimizeToTray ? "on" : "off")
+                        + " allVocals=" + (gDlSettings.allVocals ? "on" : "off")
+                        + " threads=" + std::to_string(gDlSettings.threads));
                     DestroyWindow(hwnd);
                     return 0;
                 }
@@ -2830,8 +2917,16 @@ namespace
                         Request songRequest = request;
                         if (songIndex != gDetailSong || song.vocals.empty()) {
                             songRequest.vocalIndexes.clear();
-                            for (std::size_t v = 0; v < song.vocals.size(); ++v) {
-                                songRequest.vocalIndexes.push_back(v);
+                            if (gDlSettings.allVocals) {
+                                for (std::size_t v = 0; v < song.vocals.size(); ++v) {
+                                    songRequest.vocalIndexes.push_back(v);
+                                }
+                            } else if (!song.vocals.empty()) {
+                                // Only the default version: a six-version song is
+                                // 30+ MB of mp3 the player did not ask for. The
+                                // detail panel still offers per-version ticks for
+                                // the one song being looked at.
+                                songRequest.vocalIndexes.push_back(defaultVocalIndex(song));
                             }
                         }
                         queueSong(song, songRequest, fs::path(gOutDir), false);
@@ -3458,6 +3553,7 @@ namespace
     {
         gOutDir = outDir.native();
         loadDlSettings(gDlSettings);
+        gDownloadThreads.store(gDlSettings.threads);
         // DPI before anything else: the window size below and every layout number
         // that follows are scaled by it (dp()). WM_CREATE re-asserts the value for
         // the case where the window is created some other way.
@@ -3657,6 +3753,7 @@ int main(int argc, char** argv)
     }
     DlSettings dlSettings;
     loadDlSettings(dlSettings);
+    gDownloadThreads.store(dlSettings.threads);
     fs::path outDir = defaultChartsDir();
     if (!dlSettings.outDir.empty()) {
         // The JSON holds UTF-8; fs::path(<narrow>) would go through the ANSI

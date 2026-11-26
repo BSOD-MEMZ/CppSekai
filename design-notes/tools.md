@@ -150,27 +150,6 @@
   **打到结算画面（两边同一 chart time）并回到选曲、房间重新武装**。
   纯文本 PASS/FAIL，不需要看截图（三轮约 4 分钟）。
 
-- .workbuddy/tools/fetch_card_art.py：**下载卡面**（2026-11-21 加）。
-  一张卡面是 character/member/<assetbundleName>/card_normal.png，**2338×1440 RGBA、约 4 MB**，
-  master 里 1478 张 —— 全量 5.9 GB，所以只入库 starter set，其余按需下。
-
-  `ash
-  python .workbuddy/tools/fetch_card_art.py --per-character --rarity 4   # 每人一张 4★
-  python .workbuddy/tools/fetch_card_art.py --ids 3 149 400
-  python .workbuddy/tools/fetch_card_art.py --characters 1 2 --rarity 3
-  `
-
-  输出 ssets/card/<bundle>.png（缩到 --width，默认 800）+ ssets/card/card-index.tsv。
-  **TSV 不是 JSON**：main.cpp 没有 json 解析器，选卡界面只要 undle + 标签 五列。
-
-  三个坑：
-  1. **镜像对 python-urllib 的默认 UA 返回 403**，必须带浏览器 UA。
-  2. 镜像的 TLS 时不时 UNEXPECTED_EOF_WHILE_READING，一次卡住的读能挂住整轮 ——
-     所以超时 60s + 重试 4 次 + **已存在的文件直接跳过**（断了重跑即可）。
-  3. **master 里所有日文字段都是乱码**（prefix / cardSkillName / gachaPhrase，
-     原始字节不是 UTF-8 且已被有损替换，latin-1 → EUC-JP 也救不回来）。所以角色名取
-     gameCharacters.json 的 givenNameEnglish / firstNameEnglish（干净的罗马音）。
-
 ## 2026-11-22 新增：读 prefab / 屏数据的那一组（[`SELECT-HEADER.md`](../SELECT-HEADER.md) 用的）
 
 都在 `.workbuddy/tools/`，都走 AssetRipper 的本地 HTTP API（`127.0.0.1:17654`，

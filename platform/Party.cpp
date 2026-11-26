@@ -28,11 +28,13 @@ constexpr LONG kStaleMs = 6000;
 // v4: added the per-seat result block (P/G/Gr/B/M, maxCombo, flags) and the
 //     host's award decision (awardGen / mvpSlot / superStarSlot) - the multi
 //     result screen needs everybody's final stats, not just the live score.
-// v5: the result block also carries the seat's chosen card bundle ("卡面"), so
-//     every window can draw another player's card art and not just its own.
+// v5: the result block also carried the seat's chosen card bundle ("卡面").
+// v6: that card picker is gone; seats now publish the player's uploaded avatar
+//     path instead. The result block no longer carries it (the seat does), and
+//     the path is much longer than a bundle name, so the layout grew.
 // The layout is part of the protocol, so an old build simply opens a different
 // mapping instead of reading these fields at the wrong offsets.
-constexpr wchar_t kMappingName[] = L"Local\\CppSekai.Party.v5";
+constexpr wchar_t kMappingName[] = L"Local\\CppSekai.Party.v6";
 
 // Seat flags for the result block (SharedSeat::resFlags).
 enum SeatResultFlag
@@ -71,10 +73,10 @@ struct SharedSeat
     volatile LONG resLifePermille;
     volatile LONG resScore;
     volatile LONG resFlags;
-    // The player's chosen card bundle name ("res001_no056"), copied from the
-    // account at publish time. Text, not an id: the asset lookup is by bundle
-    // name and the id would need the 36 MB master table to resolve.
-    char resCard[kPartyNameBytes];
+    // The player's uploaded avatar, as an absolute path owned by this window.
+    // Text, not an id: every window is on the same machine, so the path is
+    // enough to load it (see PartyLink::setAvatar).
+    char avatar[kPartyAvatarBytes];
     char name[kPartyNameBytes];
 };
 
@@ -265,6 +267,7 @@ bool PartyLink::init()
         seat.resLifePermille = 0;
         seat.resScore = 0;
         seat.resFlags = 0;
+        seat.avatar[0] = '\0';
         seat.name[0] = '\0';
         std::atomic_thread_fence(std::memory_order_release);
         if (InterlockedCompareExchange(&seat.alive, 1, 0) != 0) {
@@ -479,6 +482,14 @@ void PartyLink::setName(const std::string& name)
         return;
     }
     copyUtf8(gBlock->seats[mSlot].name, kPartyNameBytes, name);
+}
+
+void PartyLink::setAvatar(const std::string& path)
+{
+    if (!mActive || gBlock == nullptr) {
+        return;
+    }
+    copyUtf8(gBlock->seats[mSlot].avatar, kPartyAvatarBytes, path);
 }
 
 void PartyLink::setSeat(int seat)
@@ -730,6 +741,7 @@ std::vector<PartyPlayer> PartyLink::players() const
         if (player.name.empty()) {
             player.name = "玩家 " + std::to_string(i + 1);
         }
+        player.avatar = readUtf8(seat.avatar, kPartyAvatarBytes);
         player.ready = seat.ready != 0;
         player.difficulty = seat.difficulty;
         player.seat = seat.seat;
@@ -828,7 +840,6 @@ void PartyLink::publishResult(const PartyResult& result)
         flags |= SeatResAllPerfect;
     }
     seat.resFlags = flags;
-    copyUtf8(seat.resCard, kPartyNameBytes, result.card);
     seat.resGen = gen;
     std::atomic_thread_fence(std::memory_order_release);
     seat.resReady = 1;
@@ -1025,7 +1036,7 @@ std::vector<PartyResultRow> PartyLink::results() const
         row.cleared = (seat.resFlags & SeatResCleared) != 0;
         row.fullCombo = (seat.resFlags & SeatResFullCombo) != 0;
         row.allPerfect = (seat.resFlags & SeatResAllPerfect) != 0;
-        row.card = readUtf8(seat.resCard, kPartyNameBytes);
+        row.avatar = readUtf8(seat.avatar, kPartyAvatarBytes);
         list.push_back(row);
     }
     std::sort(list.begin(), list.end(), [](const PartyResultRow& a, const PartyResultRow& b) {

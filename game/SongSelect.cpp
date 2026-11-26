@@ -478,14 +478,6 @@ std::string gSelectAssetDir; // set via setSelectAssetDir()
         gVocalPrefMode = clamped;
         gVocalPrefSinger = singer;
     }
-std::string cardArtPath(const std::string& bundle)
-{
-    if (gSelectAssetDir.empty() || bundle.empty()) {
-        return {};
-    }
-    return gSelectAssetDir + "\\card\\" + bundle + ".png";
-}
-
 void setSelectAssetDir(const std::string& dir)
 {
     gSelectAssetDir = dir;
@@ -614,6 +606,11 @@ int gVocalPanelSong = -1;       // musicId the offset belongs to (a new song res
 void debugOpenSingerPanel(bool open)
 {
     gVocalPanelOpen = open;
+}
+
+bool singerPanelOpen()
+{
+    return gVocalPanelOpen;
 }
 
 // zh-CN label of one vocal version, mirroring the official client's captions
@@ -993,6 +990,12 @@ bool filterDialogOpen()
 bool finalConfirmOpen()
 {
     return gFinalConfirmOpen;
+}
+
+void dismissFinalConfirm()
+{
+    gFinalConfirmOpen = false;
+    gVocalPanelOpen = false;
 }
 
 bool finalConfirmBurstQueued()
@@ -1464,7 +1467,7 @@ void loadUserData(const std::string& path, UserSettings& settings,
             account.name = a.value("name", account.name);
             account.org = a.value("org", account.org);
             account.note = a.value("note", account.note);
-        account.card = a.value("card", account.card);
+            account.avatar = a.value("avatar", account.avatar);
             account.rank = a.value("rank", account.rank);
             account.exp = a.value("exp", account.exp);
             account.plays = a.value("plays", account.plays);
@@ -1640,7 +1643,7 @@ void saveUserData(const std::string& path, const UserSettings& settings,
         {"name", account.name},
         {"org", account.org},
         {"note", account.note},
-        {"card", account.card},
+        {"avatar", account.avatar},
         {"rank", account.rank},
         {"exp", account.exp},
         {"plays", account.plays},
@@ -2950,6 +2953,245 @@ namespace
     }
 
 
+    // ------------------------------------------------------------------
+    // 切换歌手 (vocal version picker) - the panel itself.
+    //
+    // It is a *top-level* window, not a block drawn into the song-select window:
+    // the song list lives in an ImGui child (`song_list`) and child windows are
+    // composited after their parent, so anything drawn on the parent's list at
+    // the end (the panel) gets covered by the child's row badges on the right
+    // edge. A window of its own is also what fixes the input side: ImGui gives
+    // the hover to the *first* submitted item under the pointer, so while this
+    // was in the select window the header's menu button (top right) kept the
+    // close X from ever being clickable.
+    //
+    // `panelT` is the eased 0..1 slide, computed once per frame by the caller
+    // (ui::anim with the same key) so the two branches - song select and final
+    // confirm - do not advance the same animation twice.
+    // ------------------------------------------------------------------
+    void drawSingerPanel(platform::Renderer& renderer, const ChartEntry& song,
+        const std::vector<VocalVersion>& versions, int& vocalIndex, float w, float h, float k,
+        ImFont* body, float panelT)
+    {
+        if (!gVocalPanelOpen && panelT <= 0.0005f) {
+            return;
+        }
+        if (gVocalPanelSong != song.musicId) {
+            gVocalPanelSong = song.musicId;
+            gVocalPanelScroll = 0.0f;
+        }
+        const float vpEase = [&] {
+            const float inv = 1.0f - std::clamp(panelT, 0.0f, 1.0f);
+            return 1.0f - inv * inv * inv;
+        }();
+        // ChangeVocalSubWindowDialog prefab: Bg 956 wide on the 1920 canvas
+        // (956/1920 = 0.4979), full height, flush with the right edge.
+        const float vpW = std::min(956.0f * k, w * 0.4979f);
+        const float vpX0 = w + (1.0f - vpEase) * (vpW + 44.0f * k) - vpW;
+        const float vpX1 = vpX0 + vpW;
+        const float vpY0 = 0.0f;
+        const float vpY1 = h;
+
+        ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
+        ImGui::SetNextWindowSize(ImVec2(w, h));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, IM_COL32(0, 0, 0, 0));
+        ImGui::Begin("##singerpanel", nullptr,
+            ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize
+                | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar
+                | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoBackground
+                | ImGuiWindowFlags_NoCollapse);
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+
+        if (gVocalPanelOpen && ui::keyPressed(ImGuiKey_Escape, false)) {
+            ui::se(ui::SeWindowClose);
+            gVocalPanelOpen = false;
+        }
+        if (gVocalPanelOpen) {
+            const ImVec2 vpMouse = ImGui::GetIO().MousePos;
+            if (vpMouse.x < vpX0 && ui::mouseClicked(ImGuiMouseButton_Left)) {
+                ui::se(ui::SeWindowClose);
+                gVocalPanelOpen = false;
+            }
+        }
+
+        const int vpVtxFirst = dl->VtxBuffer.Size;
+
+        // Full-screen dim (CloseArea/Cover) then the opaque 956-wide panel.
+        dl->AddRectFilled(ImVec2(0.0f, 0.0f), ImVec2(w, h),
+            IM_COL32(0, 0, 34, static_cast<int>(128.0f * vpEase)));
+        dl->AddRectFilled(ImVec2(vpX0, vpY0), ImVec2(vpX1, vpY1),
+            IM_COL32(68, 68, 102, static_cast<int>(204.0f * vpEase)));
+
+        // Close button: 44x44, inset 18.1/18.5 from the top-right corner.
+        {
+            const float closeD = 44.0f * k;
+            const ImVec2 closeC(vpX1 - 18.1f * k - closeD * 0.5f, 18.5f * k + closeD * 0.5f);
+            ImGui::SetCursorScreenPos(ImVec2(closeC.x - closeD * 0.5f, closeC.y - closeD * 0.5f));
+            ImGui::PushID("vocalclose");
+            ImGui::InvisibleButton("x", ImVec2(closeD, closeD));
+            const bool xHot = ImGui::IsItemHovered();
+            const bool xHit = ImGui::IsItemClicked();
+            ImGui::PopID();
+            const GLuint closeTex = selectTex(renderer, "btn_close_wh");
+            if (closeTex != 0) {
+                dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(closeTex)),
+                    ImVec2(closeC.x - closeD * 0.5f, closeC.y - closeD * 0.5f),
+                    ImVec2(closeC.x + closeD * 0.5f, closeC.y + closeD * 0.5f), ImVec2(0.0f, 0.0f),
+                    ImVec2(1.0f, 1.0f), IM_COL32(255, 255, 255, xHot ? 255 : 230));
+            } else {
+                const float d = closeD * 0.25f;
+                dl->AddLine(ImVec2(closeC.x - d, closeC.y - d), ImVec2(closeC.x + d, closeC.y + d),
+                    IM_COL32(240, 240, 248, 255), 2.6f * k);
+                dl->AddLine(ImVec2(closeC.x + d, closeC.y - d), ImVec2(closeC.x - d, closeC.y + d),
+                    IM_COL32(240, 240, 248, 255), 2.6f * k);
+            }
+            if (xHit) {
+                ui::se(ui::SeWindowClose);
+                gVocalPanelOpen = false;
+            }
+        }
+        // A click that dismissed the drawer (X / outside / ESC) must not also
+        // select a row: the X's hitbox overlaps the first card's top edge.
+        const bool vpInteractive = gVocalPanelOpen;
+
+        // ListView geometry: 828 wide, top 40, bottom inset 95 (the prefab's
+        // -128 / -135 sizeDelta and -27.5 offset resolve to those numbers at
+        // 1080p). Row height 164, 12 gap.
+        const float vpListL = vpX0 + 64.0f * k;
+        const float vpListR = vpX1 - 64.0f * k;
+        const float vpListTop = 40.0f * k;
+        const float vpListBot = vpY1 - 95.0f * k;
+        const float vpCardW = vpListR - vpListL;
+        const float vpCardH = 164.0f * k;
+        const float vpCardGap = 12.0f * k;
+        const float vpNameSize = 36.0f * k;
+        const float vpLineSize = 32.0f * k;
+        const float vpTextXOff = 102.0f * k;
+        const float vpTextMaxW = vpCardW - vpTextXOff - 24.0f * k;
+
+        std::vector<std::vector<std::string>> vpLines(versions.size());
+        for (size_t i = 0; i < versions.size(); ++i) {
+            vpLines[i] = vocalSingerLines(versions[i].singers, body, vpLineSize, vpTextMaxW);
+            if (vpLines[i].size() > 2) {
+                vpLines[i].resize(2);
+            }
+        }
+        const float vpTotal = versions.empty()
+            ? 0.0f
+            : static_cast<float>(versions.size()) * vpCardH
+                + static_cast<float>(versions.size() - 1) * vpCardGap;
+        const float vpViewH = vpListBot - vpListTop;
+        const float vpMaxScroll = std::max(0.0f, vpTotal - vpViewH);
+        {
+            const ImVec2 mouse = ImGui::GetIO().MousePos;
+            if (mouse.x >= vpListL && mouse.x <= vpListR && mouse.y >= vpListTop
+                && mouse.y <= vpListBot) {
+                gVocalPanelScroll -= ImGui::GetIO().MouseWheel * 62.0f * k;
+            }
+            gVocalPanelScroll = std::clamp(gVocalPanelScroll, 0.0f, vpMaxScroll);
+        }
+
+        int vpCurrent = defaultVocalIndex(song.musicId, versions);
+        if (const auto it = gVocalChoiceBySong.find(song.musicId);
+            it != gVocalChoiceBySong.end()) {
+            vpCurrent = it->second;
+        }
+
+        ImGui::PushClipRect(ImVec2(vpListL, vpListTop), ImVec2(vpListR, vpListBot), true);
+        float vpY = vpListTop - gVocalPanelScroll;
+        for (size_t i = 0; i < versions.size(); ++i) {
+            const float vpTop = vpY;
+            const float vpBot = vpY + vpCardH;
+            vpY = vpBot + vpCardGap;
+            if (vpBot <= vpListTop || vpTop >= vpListBot) {
+                continue;
+            }
+            const bool vpPicked = static_cast<int>(i) == vpCurrent;
+            const ImVec2 c0(vpListL, vpTop);
+            const ImVec2 c1(vpListR, vpBot);
+
+            ImGui::SetCursorScreenPos(c0);
+            ImGui::PushID(static_cast<int>(i) + 7100);
+            ImGui::InvisibleButton("vocalrow", ImVec2(vpCardW, vpCardH));
+            const bool vpHot = ImGui::IsItemHovered();
+            const bool vpHit = ImGui::IsItemClicked();
+            ImGui::PopID();
+            const float vpGlow = ui::anim(0x4a577000u + static_cast<ImGuiID>(i), vpHot, 18.0f);
+
+            // #DFDFEB fill, radius 20, no outline (bg_base_r20_wh).
+            dl->AddRectFilled(c0, c1,
+                ui::mix(IM_COL32(223, 223, 235, 255), IM_COL32(234, 235, 246, 255), vpGlow),
+                20.0f * k);
+
+            // Radio: UIPartsRadioToggle 72x72 at left 16, vertically centred.
+            const float vpRadioD = 72.0f * k;
+            const ImVec2 vpRc(c0.x + 16.0f * k + vpRadioD * 0.5f, (c0.y + c1.y) * 0.5f);
+            dl->AddCircleFilled(vpRc, vpRadioD * 0.5f, IM_COL32(255, 255, 255, 255), 48);
+            if (vpPicked) {
+                const GLuint checkTex = selectTex(renderer, "icon_radio_gn");
+                if (checkTex != 0) {
+                    const float checkD = 36.0f * k;
+                    dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(checkTex)),
+                        ImVec2(vpRc.x - checkD * 0.5f, vpRc.y - checkD * 0.5f),
+                        ImVec2(vpRc.x + checkD * 0.5f, vpRc.y + checkD * 0.5f), ImVec2(0.0f, 0.0f),
+                        ImVec2(1.0f, 1.0f), IM_COL32(255, 255, 255, 255));
+                }
+            }
+
+            // Name centre at +40, member block at +107 with 40px lines.
+            const float vpTextX = c0.x + vpTextXOff;
+            const std::string vpLabel = vocalVersionLabel(versions[i]);
+            addTextLeft(dl, body, vpNameSize, ImVec2(vpTextX, c0.y + 40.0f * k),
+                IM_COL32(85, 85, 119, 255), vpLabel.c_str());
+            float vpLineY = c0.y + 87.0f * k;
+            for (const std::string& vpLine : vpLines[i]) {
+                addTextLeft(dl, body, vpLineSize, ImVec2(vpTextX, vpLineY),
+                    IM_COL32(68, 68, 102, 255), vpLine.c_str());
+                vpLineY += 40.0f * k;
+            }
+
+            if (vpHit && vpInteractive) {
+                ui::se(ui::SeClick);
+                gVocalChoiceBySong[song.musicId] = static_cast<int>(i);
+                vocalIndex = static_cast<int>(i);
+            }
+        }
+        if (versions.empty()) {
+            addTextCentered(dl, body, 22.0f * k,
+                ImVec2((vpListL + vpListR) * 0.5f, (vpListTop + vpListBot) * 0.5f),
+                IM_COL32(220, 220, 235, 255), "暂无其他演唱版本");
+        }
+        ImGui::PopClipRect();
+
+        // Scrollbar: 6 wide at the right inset, like the prefab.
+        if (vpMaxScroll > 0.0f) {
+            const float sx = vpListR + 38.0f * k;
+            const float thumbH = std::max(40.0f * k, vpViewH * (vpViewH / vpTotal));
+            const float thumbY = vpListTop + (vpViewH - thumbH) * (gVocalPanelScroll / vpMaxScroll);
+            dl->AddRectFilled(ImVec2(sx, vpListTop), ImVec2(sx + 6.0f * k, vpListBot),
+                IM_COL32(223, 223, 234, 51), 3.0f * k);
+            dl->AddRectFilled(ImVec2(sx, thumbY), ImVec2(sx + 6.0f * k, thumbY + thumbH),
+                IM_COL32(235, 235, 242, 255), 3.0f * k);
+        }
+
+        // Slide-in fade: drop the alpha of everything the panel just added.
+        const int vpFade = static_cast<int>(std::clamp(vpEase, 0.0f, 1.0f) * 255.0f);
+        if (vpFade < 255) {
+            for (int v = vpVtxFirst; v < dl->VtxBuffer.Size; ++v) {
+                ImU32& col = dl->VtxBuffer[v].col;
+                const ImU32 a = (col >> IM_COL32_A_SHIFT) & 0xFF;
+                col = (col & ~IM_COL32_A_MASK)
+                    | (static_cast<ImU32>(a * static_cast<ImU32>(vpFade) / 255u) << IM_COL32_A_SHIFT);
+            }
+        }
+
+        ImGui::End();
+        ImGui::PopStyleColor();
+        ImGui::PopStyleVar(2);
+    }
+
     // Level text: the chart's own #PLAYLEVEL / sidecar, else the official table
     // for its difficulty. Charts with no data at all show "-" instead of 0.
     const char* levelText(const ChartEntry& entry, char* buf, size_t bufSize)
@@ -3400,12 +3642,19 @@ namespace
     int drawFinalConfirm(platform::Renderer& renderer, const std::vector<ChartEntry>& entries,
         int entryIndex, int difficulty, int vocalIndex, float w, float h, float k, float timeSec,
         ImFont* title, ImFont* body, int deckPower, bool& autoLive, int& mvMode,
-        DecideBurst* decideBurst, int* sortMode, int* groupIndex, int groupCount)
+        DecideBurst* decideBurst, int* sortMode, int* groupIndex, int groupCount,
+        const SelectPartyInfo* party, SelectPartyResult* partyOut, bool panelBlocking)
     {
         if (entryIndex < 0 || entryIndex >= static_cast<int>(entries.size())) {
             gFinalConfirmOpen = false;
             return SelectNone;
         }
+        // 多人游玩: the final page is the "everyone starts" screen. Pressing 开始
+        // marks this seat ready and stays on the page; the host begins the round
+        // once every seat has done so. Alone in the room the caller passes no
+        // party info at all, so the page behaves exactly like solo.
+        const bool partyFlow = party != nullptr && party->active;
+        const bool partyWaiting = partyFlow && party->confirmed;
         const ChartEntry& entry = entries[static_cast<size_t>(entryIndex)];
         {
             static bool dbgMenu = false;
@@ -3437,7 +3686,7 @@ namespace
         // 转场期间整页不接受点击：淡出那 0.15 s 里玩家还能点到开始钮的话，
         // 白屏上会先爆一颗闪再换页。提示框开着时同理（先把框关掉再说）。
         const bool clicked = ui::mouseClicked(ImGuiMouseButton_Left) && !finalMenuUp
-            && !pageSwitchBusy() && !gFinalDialogOpen;
+            && !pageSwitchBusy() && !gFinalDialogOpen && !panelBlocking && !partyWaiting;
         if (ui::keyPressed(ImGuiKey_Escape)) {
             if (gFinalDialogOpen) {
                 // 先关提示框：它开着的时候 ESC 不该把人踢回选曲页。
@@ -3447,8 +3696,16 @@ namespace
                 // ESC 先关抽屉；抽屉开着时不要顺手退出最终页。
                 gMenuOpen = false;
                 ui::se(ui::SeWindowClose);
+            } else if (gVocalPanelOpen) {
+                // The singer drawer is on top of the page; ESC closes it first.
+                gVocalPanelOpen = false;
+                ui::se(ui::SeWindowClose);
             } else {
                 ui::se(ui::SeWindowClose);
+                gVocalPanelOpen = false;
+                if (partyFlow && partyOut != nullptr) {
+                    partyOut->cancel = true;
+                }
                 requestPageSwitch(false, static_cast<float>(timeSec));
                 return SelectNone;
             }
@@ -3846,7 +4103,8 @@ namespace
                 const ImVec2 lm(mouse.x - pivot.x, mouse.y - pivot.y);
                 const ImVec2 lp(pivot.x + lm.x * tc + lm.y * ts, pivot.y - lm.x * ts + lm.y * tc);
                 const float half = playD * 0.5f;
-                playHover = !finalMenuUp && lp.x >= playC.x - half && lp.x <= playC.x + half
+                playHover = !finalMenuUp && !panelBlocking && !partyWaiting
+                    && lp.x >= playC.x - half && lp.x <= playC.x + half
                     && lp.y >= playC.y - half && lp.y <= playC.y + half;
                 playDown = playHover && ImGui::IsMouseDown(ImGuiMouseButton_Left);
             }
@@ -3886,16 +4144,25 @@ namespace
             // the 0.4167 s burst lead; main starts the white flash when we
             // return (it sees finalConfirmBurstQueued() and skips its spawn).
             if (gFinalStartAt < 0.0f) {
-                const bool enterPressed = !finalMenuUp
+                const bool enterPressed = !finalMenuUp && !panelBlocking && !partyWaiting
                     && (ui::keyPressed(ImGuiKey_Enter) || ui::keyPressed(ImGuiKey_KeypadEnter));
                 if (enterPressed || (playHover && clicked)) {
-                    gFinalStartAt = static_cast<float>(timeSec);
-                    if (decideBurst != nullptr) {
-                        decideBurst->spawn(gFinalPlayCenter.x, gFinalPlayCenter.y,
-                            w * 0.24f, gFinalPhoneScreen);
+                    if (partyFlow) {
+                        // Mark this seat ready and keep the page up: the round
+                        // begins when every seat has pressed 开始 here.
+                        if (partyOut != nullptr) {
+                            partyOut->confirm = true;
+                        }
+                        ui::se(ui::SeStart);
+                    } else {
+                        gFinalStartAt = static_cast<float>(timeSec);
+                        if (decideBurst != nullptr) {
+                            decideBurst->spawn(gFinalPlayCenter.x, gFinalPlayCenter.y,
+                                w * 0.24f, gFinalPhoneScreen);
+                        }
+                        gFinalBurstQueued = true;
+                        ui::se(ui::SeStart);
                     }
-                    gFinalBurstQueued = true;
-                    ui::se(ui::SeStart);
                 }
             }
             if (gFinalStartAt >= 0.0f
@@ -3944,19 +4211,12 @@ namespace
                     phoneSettingsHit = true;
                 }
                 if (vocHot && clicked) {
-                    const std::vector<VocalVersion> vers = availableVocals(entry);
-                    if (vers.size() > 1) {
-                        gFinalVocal = (std::clamp(gFinalVocal, 0, static_cast<int>(vers.size()) - 1) + 1)
-                            % static_cast<int>(vers.size());
-                        const std::string& cap = vers[static_cast<size_t>(gFinalVocal)].caption;
-                        gFinalToast = cap.empty() ? "下一个音源" : ("Vo. " + cap);
-                        gFinalToastUntil = static_cast<double>(timeSec) + 2.0;
-                        ui::se(ui::SeClick);
-                    } else {
-                        gFinalToast = "这首歌只有一个音源";
-                        gFinalToastUntil = static_cast<double>(timeSec) + 2.0;
-                        ui::se(ui::SeClick);
-                    }
+                    // Same drawer as the song-select page (2026-11-25), not a
+                    // toast: the user asked for one behaviour on both pages.
+                    gVocalPanelOpen = !gVocalPanelOpen;
+                    gVocalPanelScroll = 0.0f;
+                    gMenuOpen = false; // the two right drawers never stack
+                    ui::se(ui::SeClick);
                 }
             }
 
@@ -4089,6 +4349,13 @@ namespace
             addTextCentered(dl, body, 22.0f * k, ImVec2(cx, ty + th * 0.5f),
                 IM_COL32(255, 255, 255, 255), gFinalToast.c_str());
         }
+        // 多人游玩: after 开始 this seat is waiting for the others. The old
+        // phone-panel status line is gone (user request), so the final page is
+        // where the room says what it is waiting for.
+        if (partyFlow && partyWaiting && party != nullptr && !party->status.empty()) {
+            addTextCentered(dl, body, 22.0f * k, ImVec2(cx, 905.0f * k),
+                IM_COL32(236, 238, 248, 235), party->status.c_str());
+        }
         if (ox != 0.0f || oy != 0.0f) {
             for (int v = contentVtx0; v < dl->VtxBuffer.Size; ++v) {
                 dl->VtxBuffer[v].pos.x += ox;
@@ -4135,6 +4402,10 @@ namespace
             const bool backHit = headerButton(leftX, "finalback", backTex, 42.0f * k, 42.0f * k);
             const bool menuHit = headerButton(rightX, "finalmenu", menuTex, 40.0f * k, 34.0f * k);
             if (backHit) {
+                gVocalPanelOpen = false;
+                if (partyFlow && partyOut != nullptr) {
+                    partyOut->cancel = true;
+                }
                 requestPageSwitch(false, static_cast<float>(timeSec));
                 ui::se(ui::SeClick);
                 finalResult = SelectNone;
@@ -4148,6 +4419,13 @@ namespace
                 const int cmd = drawMenuDrawer(renderer, dl, w, h, k, title, body,
                     sortMode != nullptr ? *sortMode : 0);
                 if (cmd != CmdNone) {
+                    // Leaving the page through the menu is a withdrawal too: a
+                    // seat that already pressed 开始 must not keep the room
+                    // waiting while its window is back on the song list.
+                    gVocalPanelOpen = false;
+                    if (partyFlow && partyOut != nullptr) {
+                        partyOut->cancel = true;
+                    }
                     requestPageSwitch(false, static_cast<float>(timeSec));
                     switch (cmd) {
                     case CmdRescan:
@@ -4206,6 +4484,14 @@ namespace
         return finalResult;
     }
 } // namespace
+
+void debugRequestFinalConfirm(int entryIndex, int difficulty, int vocalIndex, float timeSec)
+{
+    if (entryIndex < 0 || gFinalConfirmOpen) {
+        return;
+    }
+    requestPageSwitch(true, timeSec, entryIndex, difficulty, vocalIndex);
+}
 
 void loadMusicLevels(const std::string& path)
 {
@@ -4800,6 +5086,11 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     const float fit = std::clamp(w / 1920.0f, 0.4f, 4.0f);
     const float scale = std::clamp(uiScale, 0.5f, 1.0f);
     const float k = fit * scale;
+    // 切换歌手 drawer animation, advanced exactly once per frame: both the
+    // song-select page and the final-confirm page draw the same panel, and the
+    // panel is a top-level window now (see drawSingerPanel).
+    const float singerPanelT = ui::anim(0x4a576000u, gVocalPanelOpen, 15.0f);
+    const bool singerPanelUp = gVocalPanelOpen || singerPanelT > 0.0005f;
 
     static std::vector<SongGroup> groups;
     static int groupIndex = 0;
@@ -4993,7 +5284,8 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         int mvValue = mvMode != nullptr ? *mvMode : 0;
         const int finalAction = drawFinalConfirm(renderer, entries, gFinalEntry, gFinalDifficulty,
             gFinalVocal, w, h, k, static_cast<float>(timeSec), title, body, deckPower, autoValue,
-            mvValue, decideBurst, &sortMode, &groupIndex, static_cast<int>(groups.size()));
+            mvValue, decideBurst, &sortMode, &groupIndex, static_cast<int>(groups.size()),
+            partyRoom ? party : nullptr, partyOut, singerPanelUp);
         if (autoLive != nullptr) {
             *autoLive = autoValue;
         }
@@ -5019,6 +5311,18 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             ImGui::PopStyleColor();
         }
         ImGui::PopStyleVar(2);
+        // The final page shares the song-select singer drawer. It is a window of
+        // its own, so it has to come after the page's window (and after the
+        // popvars) to sit on top of the header / phone.
+        if (singerPanelUp && gFinalEntry >= 0 && gFinalEntry < static_cast<int>(entries.size())) {
+            const ChartEntry& finalSong = entries[static_cast<size_t>(gFinalEntry)];
+            const std::vector<VocalVersion> finalVersions = availableVocals(finalSong);
+            drawSingerPanel(renderer, finalSong, finalVersions, gFinalVocal, w, h, k, body,
+                singerPanelT);
+            // main reads `vocalIndex` for the host's BGM even when the party flow
+            // keeps the page open instead of returning an action.
+            vocalIndex = gFinalVocal;
+        }
         return action;
     }
 
@@ -5126,8 +5430,7 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     if (vocalSong == nullptr) {
         gVocalPanelOpen = false;
     }
-    const float vocalPanelT = ui::anim(0x4a576000u, gVocalPanelOpen, 15.0f);
-    const bool vocalPanelUp = gVocalPanelOpen || vocalPanelT > 0.0005f;
+    const bool vocalPanelUp = singerPanelUp;
     // The drawer's own geometry, hoisted for the same reason: its left edge is
     // what tells a click on the blank area (close me) from a click on the drawer
     // itself, and that test has to run before the frame's widgets are built.
@@ -5138,11 +5441,8 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         const float inv = 1.0f - std::clamp(t, 0.0f, 1.0f);
         return 1.0f - inv * inv * inv;
     };
-    const float vocalEase = easeOutCubic(vocalPanelT);
-    // ChangeVocalSubWindowDialog prefab: Bg 956 wide on the 1920 canvas
-    // (956/1920 = 0.4979), full height, flush with the right edge.
-    const float vocalPW = std::min(956.0f * k, w * 0.4979f);
-    const float vocalPX0 = w + (1.0f - vocalEase) * (vocalPW + 44.0f * k) - vocalPW;
+    // (The drawer's own geometry lives in drawSingerPanel; the slide is only
+    // needed here through `vocalPanelUp` for gating input.)
 
     // 右上角菜单抽屉（原作 ScreenLayerHeader 的 menuButton -> MenuDialog，见
     // SELECT-UI.md §「右上角菜单」）。它和 切换歌手 是同一类右侧 SubWindow，
@@ -5884,7 +6184,14 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             const SongGroup& g = groups[static_cast<size_t>(rows[static_cast<size_t>(hoverRow)].group)];
             if (g.idx[diffIndex] >= 0) {
                 ui::se(ui::SeClick);
-                action = g.idx[diffIndex];
+                if (partyRoom) {
+                    // 多人游玩: 确定 and double-click both go to the final page;
+                    // the round starts only from that page's 开始.
+                    requestPageSwitch(true, static_cast<float>(timeSec), g.idx[diffIndex], diffIndex,
+                        vocalIndex);
+                } else {
+                    action = g.idx[diffIndex];
+                }
             }
         }
         // 右键一行 → 收藏夹菜单（触摸屏上是长按，main.cpp 会把长按合成成这个右键）。
@@ -6626,9 +6933,12 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             moveTo(-1);
         }
         if (!overlayUp && (ui::keyPressed(ImGuiKey_Enter) || ui::keyPressed(ImGuiKey_KeypadEnter))) {
-            if (partyReadOnly) {
-                if (partyOut != nullptr) {
-                    partyOut->confirm = true;
+            if (partyRoom) {
+                const int entry = partyReadOnly ? party->lockedEntry : selected;
+                const int diff = partyReadOnly ? party->myDifficulty : diffIndex;
+                if (entry >= 0 && (!partyReadOnly || (partyPickable && party->myDifficulty >= 0))) {
+                    requestPageSwitch(true, static_cast<float>(timeSec), entry, diff, vocalIndex);
+                    action = SelectNone;
                 }
             } else if (selected >= 0) {
                 // Enter on the list = 确定: go to the final-confirm page first;
@@ -7214,8 +7524,15 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         if (okPressed) {
             ui::se(ui::SeClick);
             if (partyRoom) {
-                if (partyOut != nullptr) {
-                    partyOut->confirm = true;
+                // Both roles go to the final-confirm page now. A member can only
+                // do so once the host has a song this window can play and a
+                // difficulty is picked (the button is dimmed otherwise).
+                if (okReady) {
+                    const int entry = partyReadOnly ? party->lockedEntry : selected;
+                    const int diff = partyReadOnly ? party->myDifficulty : diffIndex;
+                    if (entry >= 0) {
+                        requestPageSwitch(true, static_cast<float>(timeSec), entry, diff, vocalIndex);
+                    }
                 }
             } else if (selected >= 0) {
                 // 原作：确定 → ScreenLayerFreeLiveFinalConfirmation（卡组 /
@@ -7321,15 +7638,24 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             }
         }
 
-        // 多人游玩 status line, under both round buttons so it can never land on
-        // one: what the room is waiting for ("等待房主选曲" / "已确定 · 等待其他
-        // 玩家" / "本窗口没有这首曲子"). Mint once this window has confirmed.
+        // The old mint room-status line under these buttons is gone (user
+        // request, 2026-11-25). Only a real problem is still said here (missing
+        // chart / failed load / no difficulty yet): those lines are not the
+        // "waiting for others" chrome the user wanted gone, and without them a
+        // member whose window cannot play the host's song has no feedback at all.
         if (partyRoom && !party->status.empty()) {
-            const float statusY = ibY + ibD * 0.5f + 26.0f * k;
-            const std::string line = ellipsize(body, 16.0f * k, party->status, sw * 0.96f);
-            addTextCentered(dl, body, 16.0f * k, ImVec2(cx, statusY),
-                party->confirmed ? IM_COL32(106, 232, 208, 255) : IM_COL32(178, 178, 198, 255),
-                line.c_str());
+            const std::string& status = party->status;
+            const bool problem = status.find("没有") != std::string::npos
+                || status.find("失败") != std::string::npos
+                || status.find("已开始") != std::string::npos
+                || status.find("未确定") != std::string::npos
+                || status.find("选择难度") != std::string::npos;
+            if (problem) {
+                const float statusY = ibY + ibD * 0.5f + 26.0f * k;
+                const std::string line = ellipsize(body, 16.0f * k, status, sw * 0.96f);
+                addTextCentered(dl, body, 16.0f * k, ImVec2(cx, statusY),
+                    IM_COL32(214, 150, 168, 255), line.c_str());
+            }
         }
     }
 
@@ -7551,211 +7877,6 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         }
     }
 
-    // ------------------------------------------------------------------
-    // 切换歌手 panel (state + rationale at the top of this file). A dark panel
-    // that slides in from the right edge over everything: one radio card per
-    // vocal version the song actually has.
-    //
-    // Drawn after the tilt pass on purpose: it is a screen-space overlay, not
-    // part of the phone, so it must not rotate with it. Its slide + fade is the
-    // same vertex-rewrite trick the phone uses for a song change.
-    // ------------------------------------------------------------------
-    if (vocalSong != nullptr && vocalPanelUp) {
-        if (gVocalPanelSong != vocalSong->musicId) {
-            gVocalPanelSong = vocalSong->musicId;
-            gVocalPanelScroll = 0.0f;
-        }
-        // 2026-11-21: rebuilt from prefab 1960/1961. The original is a
-        // right-side SubWindowDialog, not a narrow rounded drawer:
-        //   Bg 956xfull, bg_base_wh, #444466 at 80%;
-        //   full-screen Cover #000022 at 50%;
-        //   ListView 828 wide (956-128), rows 828x164;
-        //   row card bg_base_r20_wh #DFDFEB, radius 20, no border;
-        //   radio 72x72 at +16, text starts at +102 (name 36 / members 32).
-        // Its prefab has no header text (`header: null`), so no title row.
-        {
-            const ImVec2 vpMouse = ImGui::GetIO().MousePos;
-            if (vpMouse.x < vocalPX0 && ui::mouseClicked(ImGuiMouseButton_Left)) {
-                ui::se(ui::SeWindowClose);
-                gVocalPanelOpen = false;
-            }
-        }
-        const float vpEase = vocalEase;
-        const float vpW = vocalPW;
-        const float vpX0 = vocalPX0;
-        const float vpX1 = vpX0 + vpW;
-        const float vpY0 = 0.0f;
-        const float vpY1 = h;
-        const int vpVtxFirst = dl->VtxBuffer.Size;
-
-        // Full-screen dim (CloseArea/Cover) then the opaque 956-wide panel.
-        dl->AddRectFilled(ImVec2(0.0f, 0.0f), ImVec2(w, h),
-            IM_COL32(0, 0, 34, static_cast<int>(128.0f * vpEase)));
-        dl->AddRectFilled(ImVec2(vpX0, vpY0), ImVec2(vpX1, vpY1),
-            IM_COL32(68, 68, 102, static_cast<int>(204.0f * vpEase)));
-
-        // Close button: 44x44, inset 18.1/18.5 from the top-right corner.
-        {
-            const float closeD = 44.0f * k;
-            const ImVec2 closeC(vpX1 - 18.1f * k - closeD * 0.5f, 18.5f * k + closeD * 0.5f);
-            ImGui::SetCursorScreenPos(
-                ImVec2(closeC.x - closeD * 0.5f, closeC.y - closeD * 0.5f));
-            ImGui::PushID("vocalclose");
-            ImGui::InvisibleButton("x", ImVec2(closeD, closeD));
-            const bool xHot = ImGui::IsItemHovered();
-            const bool xHit = ImGui::IsItemClicked();
-            ImGui::PopID();
-            const GLuint closeTex = selectTex(renderer, "btn_close_wh");
-            if (closeTex != 0) {
-                dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(closeTex)),
-                    ImVec2(closeC.x - closeD * 0.5f, closeC.y - closeD * 0.5f),
-                    ImVec2(closeC.x + closeD * 0.5f, closeC.y + closeD * 0.5f), ImVec2(0.0f, 0.0f),
-                    ImVec2(1.0f, 1.0f), IM_COL32(255, 255, 255, xHot ? 255 : 230));
-            } else {
-                const float d = closeD * 0.25f;
-                dl->AddLine(ImVec2(closeC.x - d, closeC.y - d), ImVec2(closeC.x + d, closeC.y + d),
-                    IM_COL32(240, 240, 248, 255), 2.6f * k);
-                dl->AddLine(ImVec2(closeC.x + d, closeC.y - d), ImVec2(closeC.x - d, closeC.y + d),
-                    IM_COL32(240, 240, 248, 255), 2.6f * k);
-            }
-            if (xHit) {
-                ui::se(ui::SeWindowClose);
-                gVocalPanelOpen = false;
-            }
-        }
-
-        // ListView geometry: 828 wide, top 40, bottom inset 95 (the prefab's
-        // -128 / -135 sizeDelta and -27.5 offset resolve to those numbers at
-        // 1080p). Row height 164, 12 gap.
-        const float vpListL = vpX0 + 64.0f * k;
-        const float vpListR = vpX1 - 64.0f * k;
-        const float vpListTop = 40.0f * k;
-        const float vpListBot = vpY1 - 95.0f * k;
-        const float vpCardW = vpListR - vpListL;
-        const float vpCardH = 164.0f * k;
-        const float vpCardGap = 12.0f * k;
-        const float vpNameSize = 36.0f * k;
-        const float vpLineSize = 32.0f * k;
-        const float vpTextXOff = 102.0f * k;
-        const float vpTextMaxW = vpCardW - vpTextXOff - 24.0f * k;
-
-        std::vector<std::vector<std::string>> vpLines(vocalVersions.size());
-        for (size_t i = 0; i < vocalVersions.size(); ++i) {
-            vpLines[i] = vocalSingerLines(vocalVersions[i].singers, body, vpLineSize, vpTextMaxW);
-            if (vpLines[i].size() > 2) {
-                vpLines[i].resize(2);
-            }
-        }
-        const float vpTotal = vocalVersions.empty()
-            ? 0.0f
-            : static_cast<float>(vocalVersions.size()) * vpCardH
-                + static_cast<float>(vocalVersions.size() - 1) * vpCardGap;
-        const float vpViewH = vpListBot - vpListTop;
-        const float vpMaxScroll = std::max(0.0f, vpTotal - vpViewH);
-        {
-            const ImVec2 mouse = ImGui::GetIO().MousePos;
-            if (mouse.x >= vpListL && mouse.x <= vpListR && mouse.y >= vpListTop
-                && mouse.y <= vpListBot) {
-                gVocalPanelScroll -= ImGui::GetIO().MouseWheel * 62.0f * k;
-            }
-            gVocalPanelScroll = std::clamp(gVocalPanelScroll, 0.0f, vpMaxScroll);
-        }
-
-        int vpCurrent = defaultVocalIndex(vocalSong->musicId, vocalVersions);
-        if (const auto it = gVocalChoiceBySong.find(vocalSong->musicId);
-            it != gVocalChoiceBySong.end()) {
-            vpCurrent = it->second;
-        }
-
-        ImGui::PushClipRect(ImVec2(vpListL, vpListTop), ImVec2(vpListR, vpListBot), true);
-        float vpY = vpListTop - gVocalPanelScroll;
-        for (size_t i = 0; i < vocalVersions.size(); ++i) {
-            const float vpTop = vpY;
-            const float vpBot = vpY + vpCardH;
-            vpY = vpBot + vpCardGap;
-            if (vpBot <= vpListTop || vpTop >= vpListBot) {
-                continue;
-            }
-            const bool vpPicked = static_cast<int>(i) == vpCurrent;
-            const ImVec2 c0(vpListL, vpTop);
-            const ImVec2 c1(vpListR, vpBot);
-
-            ImGui::SetCursorScreenPos(c0);
-            ImGui::PushID(static_cast<int>(i) + 7100);
-            ImGui::InvisibleButton("vocalrow", ImVec2(vpCardW, vpCardH));
-            const bool vpHot = ImGui::IsItemHovered();
-            const bool vpHit = ImGui::IsItemClicked();
-            ImGui::PopID();
-            const float vpGlow = ui::anim(0x4a577000u + static_cast<ImGuiID>(i), vpHot, 18.0f);
-
-            // #DFDFEB fill, radius 20, no outline (bg_base_r20_wh).
-            dl->AddRectFilled(c0, c1,
-                ui::mix(IM_COL32(223, 223, 235, 255), IM_COL32(234, 235, 246, 255), vpGlow),
-                20.0f * k);
-
-            // Radio: UIPartsRadioToggle 72x72 at left 16, vertically centred.
-            const float vpRadioD = 72.0f * k;
-            const ImVec2 vpRc(c0.x + 16.0f * k + vpRadioD * 0.5f, (c0.y + c1.y) * 0.5f);
-            dl->AddCircleFilled(vpRc, vpRadioD * 0.5f, IM_COL32(255, 255, 255, 255), 48);
-            if (vpPicked) {
-                const GLuint checkTex = selectTex(renderer, "icon_radio_gn");
-                if (checkTex != 0) {
-                    const float checkD = 36.0f * k;
-                    dl->AddImage(
-                        reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(checkTex)),
-                        ImVec2(vpRc.x - checkD * 0.5f, vpRc.y - checkD * 0.5f),
-                        ImVec2(vpRc.x + checkD * 0.5f, vpRc.y + checkD * 0.5f), ImVec2(0.0f, 0.0f),
-                        ImVec2(1.0f, 1.0f), IM_COL32(255, 255, 255, 255));
-                }
-            }
-
-            // Name centre at +40, member block at +107 with 40px lines.
-            const float vpTextX = c0.x + vpTextXOff;
-            const std::string vpLabel = vocalVersionLabel(vocalVersions[i]);
-            addTextLeft(dl, body, vpNameSize, ImVec2(vpTextX, c0.y + 40.0f * k),
-                IM_COL32(85, 85, 119, 255), vpLabel.c_str());
-            float vpLineY = c0.y + 87.0f * k;
-            for (const std::string& vpLine : vpLines[i]) {
-                addTextLeft(dl, body, vpLineSize, ImVec2(vpTextX, vpLineY),
-                    IM_COL32(68, 68, 102, 255), vpLine.c_str());
-                vpLineY += 40.0f * k;
-            }
-
-            if (vpHit) {
-                ui::se(ui::SeClick);
-                gVocalChoiceBySong[vocalSong->musicId] = static_cast<int>(i);
-                vocalIndex = static_cast<int>(i);
-            }
-        }
-        if (vocalVersions.empty()) {
-            addTextCentered(dl, body, 22.0f * k,
-                ImVec2((vpListL + vpListR) * 0.5f, (vpListTop + vpListBot) * 0.5f),
-                IM_COL32(220, 220, 235, 255), "暂无其他演唱版本");
-        }
-        ImGui::PopClipRect();
-
-        // Scrollbar: 6 wide at the right inset, like the prefab.
-        if (vpMaxScroll > 0.0f) {
-            const float sx = vpListR + 38.0f * k;
-            const float thumbH = std::max(40.0f * k, vpViewH * (vpViewH / vpTotal));
-            const float thumbY = vpListTop + (vpViewH - thumbH) * (gVocalPanelScroll / vpMaxScroll);
-            dl->AddRectFilled(ImVec2(sx, vpListTop), ImVec2(sx + 6.0f * k, vpListBot),
-                IM_COL32(223, 223, 234, 51), 3.0f * k);
-            dl->AddRectFilled(ImVec2(sx, thumbY), ImVec2(sx + 6.0f * k, thumbY + thumbH),
-                IM_COL32(235, 235, 242, 255), 3.0f * k);
-        }
-
-        // Slide-in fade: drop the alpha of everything the panel just added.
-        const int vpFade = static_cast<int>(std::clamp(vpEase, 0.0f, 1.0f) * 255.0f);
-        if (vpFade < 255) {
-            for (int v = vpVtxFirst; v < dl->VtxBuffer.Size; ++v) {
-                ImU32& col = dl->VtxBuffer[v].col;
-                const ImU32 a = (col >> IM_COL32_A_SHIFT) & 0xFF;
-                col = (col & ~IM_COL32_A_MASK)
-                    | (static_cast<ImU32>(a * static_cast<ImU32>(vpFade) / 255u) << IM_COL32_A_SHIFT);
-            }
-        }
-    }
 
     // ------------------------------------------------------------------
     // 右上角菜单抽屉（原作 ScreenLayerHeader 的 menuButton -> MenuDialog）
@@ -8643,6 +8764,13 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         } else {
             gFilterAlive = false;
         }
+    }
+
+    // 切换歌手 drawer last, as a top-level window: it must sit above the list
+    // child, the phone, the header and every card (see drawSingerPanel).
+    if (singerPanelUp && vocalSong != nullptr) {
+        drawSingerPanel(renderer, *vocalSong, vocalVersions, vocalIndex, w, h, k, body,
+            singerPanelT);
     }
 
     (void)windowW;
