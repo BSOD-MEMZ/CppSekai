@@ -11199,7 +11199,10 @@ int main(int argc, char** argv)
                 std::vector<std::uint8_t> plate;
                 if (!session.entry.coverPath.empty()) {
                     const auto buildStart = std::chrono::steady_clock::now();
-                    plate = game::buildStageBackground(baseDir + "assets/mmw/overlay/bggen/v3",
+                    // overlay_opt/bggen/v3 是 2048x1168 原图的 1024x584 版本
+                    // （888 KB vs 3.2 MB）。拼贴坐标按加载尺寸缩放，见
+                    // StageBackground.cpp 的 kPlateW / quadScaleX。
+                    plate = game::buildStageBackground(baseDir + "assets/mmw/overlay_opt/bggen/v3",
                         session.entry.coverPath, plateW, plateH);
                     const auto buildMs = std::chrono::duration_cast<std::chrono::milliseconds>(
                         std::chrono::steady_clock::now() - buildStart)

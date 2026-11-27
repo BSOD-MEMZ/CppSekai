@@ -32,6 +32,13 @@ namespace
     // are meant to be composited - they are not a separate playfield layout).
     // The plate is wrapped into a square afterwards (toSquareBackground);
     // upstream does not scroll it.
+    //
+    // These coordinates are for the ORIGINAL 2048x1168 plate. The shipped copy
+    // is the 1024x584 one under overlay_opt/ (the 3.2 MB originals are only the
+    // shrink source), so buildStageBackground() rescales them by the loaded
+    // base image's size - see kPlateW / kPlateH below.
+    constexpr float kPlateW = 2048.0f;
+    constexpr float kPlateH = 1168.0f;
     constexpr std::array<Point, 4> kSideLeft{{{566, 161}, {1183, 134}, {633, 731}, {1226, 682}}};
     constexpr std::array<Point, 4> kSideRight{{{966, 104}, {1413, 72}, {954, 525}, {1390, 524}}};
     constexpr std::array<Point, 4> kCenterNormal{{{824, 227}, {1224, 227}, {833, 608}, {1216, 608}}};
@@ -367,8 +374,22 @@ std::vector<std::uint8_t> buildStageBackground(const std::string& bggenDir, cons
     // A layer is the whole plate with one quad's jacket projected into it; the
     // order below is the upstream one (normal screens first, then the dim
     // reflections, then the glass on top).
+    //
+    // The quad table above is in 2048x1168 space; the plate we actually load may
+    // be a downscaled copy (overlay_opt/bggen is 1024x584), so scale the quads
+    // by the loaded size. Without this the projections land outside the image
+    // and the plate comes out empty.
+    const float quadScaleX = static_cast<float>(base.width) / kPlateW;
+    const float quadScaleY = static_cast<float>(base.height) / kPlateH;
+    const auto scaledQuad = [&](const std::array<Point, 4>& quad) {
+        std::array<Point, 4> out{};
+        for (int i = 0; i < 4; ++i) {
+            out[i] = {quad[i].x * quadScaleX, quad[i].y * quadScaleY};
+        }
+        return out;
+    };
     const auto projectInto = [&](Image& layer, const std::array<Point, 4>& quad) {
-        overlayImage(layer, morph(cover, quad, base.width, base.height), 0, 0);
+        overlayImage(layer, morph(cover, scaledQuad(quad), base.width, base.height), 0, 0);
     };
 
     // Side screens: both side quads into one layer, then the glass on top.
