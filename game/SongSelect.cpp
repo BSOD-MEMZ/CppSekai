@@ -5449,11 +5449,10 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     // 两个叠在一起没有意义，所以谁开就收另一个。
     const float menuT = ui::anim(0x4a57b000u, gMenuOpen, 20.0f);
     const bool menuUp = gMenuOpen || menuT > 0.0005f;
-    const float menuEase = easeOutCubic(menuT);
     // MenuDialog prefab 1775：Bg x=56..960（1920 画布）→ 904 宽、满高、贴右缘；
     // 内容区 856 宽（左右各 24）；关闭钮 44x44、右缘 18.1、顶 18.5。
-    const float menuW = 904.0f * k;
-    const float menuX0 = w - menuW * menuEase;
+    // 抽屉本体由 drawMenuDrawer() 画（它自己算同一套 menuT / menuW），这里只留
+    // 输入门控要用的 menuUp。
     // 抽屉/卡片任意一个立着的时候，底下那一层（列表、手机、顶栏）的点击都要
     // 关掉。抽屉是半透明的，视觉上还看得见，但输入归它。
     const bool overlayUp = vocalPanelUp || menuUp;
@@ -7897,163 +7896,13 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
     // 我们放进去的是本作真正有的功能（用户的四颗顶栏按钮 + 筛选/排序/资料/
     // 随机）：刷新列表、音乐商店、猜歌、设置、个人资料、随机选曲、筛选、排序。
     // ------------------------------------------------------------------
-    if (menuUp) {
-        const float openX = w - menuW; // 完全展开后的左缘（"点外面"用）
-        // 点抽屉左边 = 关（原作 CloseArea）。只在基本展开后判定，否则打开它的
-        // 那一下点击会立刻把它关掉。
-        if (gMenuOpen && menuT > 0.9f && ui::mouseClicked(ImGuiMouseButton_Left)
-            && ImGui::GetIO().MousePos.x < openX) {
-            ui::se(ui::SeWindowClose);
-            gMenuOpen = false;
-        }
-        const int menuAlpha = static_cast<int>(204.0f * menuEase); // 原作 80%
-        // Bg：纯色 #444466 / 80%、满高、贴右（原作 MenuDialog 的 Bg）。左缘一条
-        // 2px 的淡白边把抽屉和背景分开（原作贴图没有投影）。
-        dl->AddRectFilled(ImVec2(menuX0, 0.0f), ImVec2(menuX0 + menuW, h),
-            IM_COL32(68, 68, 102, menuAlpha));
-        dl->AddRectFilled(ImVec2(menuX0, 0.0f), ImVec2(menuX0 + 2.0f * k, h),
-            IM_COL32(255, 255, 255, static_cast<int>(26.0f * menuEase)));
-
-        // 关闭钮：44x44，距右缘 18.1、距顶 18.5（prefab 的 UIPartsCloseButton）。
-        {
-            const float closeD = 44.0f * k;
-            const ImVec2 closeC(menuX0 + menuW - 18.1f * k - closeD * 0.5f,
-                18.5f * k + closeD * 0.5f);
-            ImGui::SetCursorScreenPos(
-                ImVec2(closeC.x - closeD * 0.5f, closeC.y - closeD * 0.5f));
-            ImGui::PushID("menuclose");
-            ImGui::InvisibleButton("x", ImVec2(closeD, closeD));
-            const bool xHot = ImGui::IsItemHovered();
-            const bool xHit = ImGui::IsItemClicked();
-            ImGui::PopID();
-            const GLuint closeTex = selectTex(renderer, "btn_close_wh");
-            const int xA = static_cast<int>((xHot ? 255.0f : 230.0f) * menuEase);
-            if (closeTex != 0) {
-                dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(closeTex)),
-                    ImVec2(closeC.x - closeD * 0.5f, closeC.y - closeD * 0.5f),
-                    ImVec2(closeC.x + closeD * 0.5f, closeC.y + closeD * 0.5f),
-                    ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), IM_COL32(255, 255, 255, xA));
-            } else {
-                const float d = closeD * 0.25f;
-                dl->AddLine(ImVec2(closeC.x - d, closeC.y - d), ImVec2(closeC.x + d, closeC.y + d),
-                    IM_COL32(240, 240, 248, xA), 2.6f * k);
-                dl->AddLine(ImVec2(closeC.x + d, closeC.y - d), ImVec2(closeC.x - d, closeC.y + d),
-                    IM_COL32(240, 240, 248, xA), 2.6f * k);
-            }
-            if (xHit) {
-                ui::se(ui::SeWindowClose);
-                gMenuOpen = false;
-            }
-        }
-
-        struct MenuCellDef
-        {
-            const char* label;
-            const char* icon;
-            float iconW; // 官方 sprite 的原尺寸，按比例塞进右下角的方框
-            float iconH;
-            float x;
-            float y;
-            float w;
-            float h;
-            bool big;
-            int command;
-        };
-        enum MenuCommand
-        {
-            CmdRescan = 1,
-            CmdDownload,
-            CmdSettings,
-            CmdGuess,
-            CmdProfile,
-            CmdShuffle,
-            CmdFilter,
-            CmdSort,
-        };
-        // 坐标全部相对抽屉左缘，单位是 1920 画布（再乘 k）。y 用的是 1920x1080
-        // 屏上的绝对 y（= 1080 - prefab 的 y-up 值），和 rect_resolve 的输出对齐。
-        static const MenuCellDef kMenuCells[] = {
-            {"音乐商店", "store", 40.0f, 40.0f, 56.0f, 96.4f, 392.0f, 184.0f, true, CmdDownload},
-            {"猜歌", "guess", 40.0f, 40.0f, 456.0f, 96.4f, 392.0f, 184.0f, true, CmdGuess},
-            {"刷新列表", "refresh", 40.0f, 40.0f, 56.0f, 287.4f, 392.0f, 184.0f, true, CmdRescan},
-            {"设置", "musicsetting", 40.0f, 40.0f, 456.0f, 287.4f, 392.0f, 184.0f, true, CmdSettings},
-            {"个人资料", "icon_menu_profile", 70.0f, 48.0f, 56.0f, 480.4f, 192.0f, 184.0f, false, CmdProfile},
-            {"随机选曲", "btn_random_lgr", 60.0f, 52.0f, 256.0f, 480.4f, 192.0f, 184.0f, false, CmdShuffle},
-            {"筛选", "icon_refine_wh", 29.0f, 28.0f, 456.0f, 480.4f, 192.0f, 184.0f, false, CmdFilter},
-            {"排序", "icon_menu_text", 94.0f, 34.0f, 656.0f, 480.4f, 192.0f, 184.0f, false, CmdSort},
-        };
-        int menuCommand = 0;
-        const int kMenuCellCount = static_cast<int>(sizeof(kMenuCells) / sizeof(kMenuCells[0]));
-        for (int i = 0; i < kMenuCellCount; ++i) {
-            const MenuCellDef& def = kMenuCells[i];
-            const ImVec2 c0(menuX0 + def.x * k, def.y * k);
-            const ImVec2 c1(c0.x + def.w * k, c0.y + def.h * k);
-            ImGui::SetCursorScreenPos(c0);
-            ImGui::PushID(8100 + i);
-            ImGui::InvisibleButton("cell", ImVec2(c1.x - c0.x, c1.y - c0.y));
-            const bool hot = ImGui::IsItemHovered();
-            const bool hitCell = ImGui::IsItemClicked();
-            ImGui::PopID();
-            const float glow = ui::anim(0x4a57c000u + static_cast<ImGuiID>(i), hot, 18.0f);
-            if (hitCell && gMenuOpen) {
-                menuCommand = def.command;
-            }
-
-            // 卡片：白 80%（官方 btn_menu_* 的底），悬停提亮；圆角 20、无描边。
-            ui::dropShadow(dl, c0, c1, 20.0f * k, k, 0.8f);
-            dl->AddRectFilled(c0, c1,
-                ui::mix(IM_COL32(235, 235, 242, static_cast<int>(204.0f * menuEase)),
-                    IM_COL32(247, 247, 252, static_cast<int>(235.0f * menuEase)), glow),
-                20.0f * k);
-            // 悬停时的白色光晕（官方 Effect 是 eff_cell_r20_wh 的 0→可见）。
-            if (glow > 0.01f) {
-                dl->AddRect(c0, c1,
-                    IM_COL32(255, 255, 255, static_cast<int>(70.0f * glow * menuEase)),
-                    20.0f * k, 0, 2.0f * k);
-            }
-
-            // 左上角深蓝标题牌 + 白字（官方 btn_menu_* 的标题就是一块 #444466）。
-            // 用 title（粗体）而不是 body：官方的标题是粗圆体，细字压不住那块深蓝。
-            // 排序格子把当前模式写进标签（和顶栏下拉是同一个 sortMode），
-            // 否则点一下只看到列表顺序变了、不知道切到了哪种。
-            const std::string sortLabel = sortMode == 0 ? "排序：名称" : "排序：难度";
-            const char* cellLabel = def.command == CmdSort ? sortLabel.c_str() : def.label;
-            ImFont* plateFont = title != nullptr ? title : body;
-            const float textSize = (def.big ? 32.0f : 24.0f) * k;
-            const float plateH = (def.big ? 50.0f : 40.0f) * k;
-            const float platePadX = (def.big ? 16.0f : 12.0f) * k;
-            const float plateInset = 10.0f * k;
-            const ImVec2 labelSize = plateFont->CalcTextSizeA(textSize, FLT_MAX, 0.0f, cellLabel);
-            const float maxPlateW = (c1.x - c0.x) - plateInset * 2.0f;
-            const float plateW = std::min(maxPlateW, labelSize.x + platePadX * 2.0f);
-            const ImVec2 p0(c0.x + plateInset, c0.y + plateInset);
-            dl->AddRectFilled(p0, ImVec2(p0.x + plateW, p0.y + plateH),
-                IM_COL32(68, 68, 102, static_cast<int>(255.0f * menuEase)), 10.0f * k);
-            dl->AddText(plateFont, textSize,
-                ImVec2(p0.x + platePadX, p0.y + (plateH - labelSize.y) * 0.5f),
-                IM_COL32(255, 255, 255, static_cast<int>(255.0f * menuEase)), cellLabel);
-
-            // 右下角图标：官方白色单色图，染 #444466；大格 84（MenuCell 的 Icon
-            // 尺寸），小格 56。按原图长宽比塞进方框，别把 ABC / 资料卡压成正方形。
-            const float maxBox = (def.big ? 84.0f : 56.0f) * k;
-            const float iconAspect = def.iconW / def.iconH;
-            const float drawW = iconAspect >= 1.0f ? maxBox : maxBox * iconAspect;
-            const float drawH = iconAspect >= 1.0f ? maxBox / iconAspect : maxBox;
-            const float iconMargin = (def.big ? 22.0f : 16.0f) * k;
-            const GLuint iconTex = selectTex(renderer, def.icon);
-            const ImVec2 ic1(c1.x - iconMargin, c1.y - iconMargin);
-            const ImVec2 ic0(ic1.x - drawW, ic1.y - drawH);
-            if (iconTex != 0) {
-                dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(iconTex)),
-                    ic0, ic1, ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f),
-                    IM_COL32(68, 68, 102, static_cast<int>((190.0f + 50.0f * glow) * menuEase)));
-            }
-        }
-
-        if (menuCommand != 0) {
-            ui::se(ui::SeClick);
-            gMenuOpen = false;
-            switch (menuCommand) {
+    // 抽屉本身由 drawMenuDrawer() 画（最终确认页也调它）。这份内联副本是
+    // 2026-11-27 之前留下的第二份实现，和函数版只差外层包装和局部 enum，
+    // 改一处忘另一处就会两边长得不一样。
+    {
+        const int menuCmd = drawMenuDrawer(renderer, dl, w, h, k, title, body, sortMode);
+        if (menuCmd != CmdNone) {
+            switch (menuCmd) {
             case CmdRescan:
                 action = SelectRescan;
                 break;
@@ -8423,9 +8272,12 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
         ImVec2 cardSize(winW * wk, winH * wk);
         ImVec2 cardCenter(w * 0.5f, h * 0.5f);
         bool closeClicked = false;
-        // 卡片本体仍走 ui::beginCard（缩放进场 + 拖动 + 关闭 X 的命中测试都是它），
-        // 但底板 / 内容区 / 按钮全部自己画 —— 原作的九宫格和这套卡片的圆角不是一回事。
-        if (ui::beginCard("##sselectfilter", &cardCenter, &cardSize, false, true, &closeClicked,
+        // 卡片本体/阴影/关闭 X 全部交给 ui::beginCard —— 2026-11-27 之前这一屏
+        // 在它上面又盖了一层 bg_base_r30_wh 九宫格 + bg_base_shadow_r30，等于
+        // 每帧画两个卡体两套阴影（矢量卡体 r16 的角还从 r30 位图板下面露出来），
+        // 而且那 4 张图里有 4 张在 assets/select 根本不存在、静默走了手绘回退。
+        // 现在和设置/资料/猜歌/键位卡一样，只用这一套矢量卡片。
+        if (ui::beginCard("##sselectfilter", &cardCenter, &cardSize, true, true, &closeClicked,
                 gFilterOpen)) {
             if (closeClicked) {
                 gFilterOpen = false;
@@ -8437,64 +8289,18 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             const ImVec2 lo(cardCenter.x - cardSize.x * 0.5f, cardCenter.y - cardSize.y * 0.5f);
             const ImVec2 hi(cardCenter.x + cardSize.x * 0.5f, cardCenter.y + cardSize.y * 0.5f);
 
-            // 底板：bg_base_r30_wh（九宫格 r30 = 源码 34px slice）+ 阴影 r30。
-            const GLuint plateTex = selectTex(renderer, "bg_base_r30_wh");
-            const GLuint plateShadow = selectTex(renderer, "bg_base_shadow_r30");
-            if (plateShadow != 0) {
-                // Shadow 在原件里外扩 8（1184x16 的那条就是这么来的），这里按
-                // "四周各 8 设计 px" 摊开；sprite 自己带 42px 的软边。
-                addNinePatch(dl, plateShadow, 86, 86,
-                    ImVec2(lo.x - 8.0f * wk, lo.y - 8.0f * wk),
-                    ImVec2(hi.x + 8.0f * wk, hi.y + 8.0f * wk), 42.0f, 42.0f, wk,
-                    IM_COL32(0, 0, 0, 46));
-            }
-            if (plateTex != 0) {
-                addNinePatch(dl, plateTex, 70, 70, lo, hi, 34.0f, 34.0f, wk,
-                    IM_COL32(235, 235, 242, 255));
-            } else {
-                dl->AddRectFilled(lo, hi, IM_COL32(235, 235, 242, 255), 30.0f * wk);
-            }
+            // 卡体 / 阴影 / 关闭 X 已经由 beginCard() 画好了，这里不再叠位图板。
 
-            // 关闭 X：原件 44x44，锚右上、偏移 (-15,-15)。ui::beginCard 自己那颗
-            // 是 38x38 的手绘 X，位置也不同（8,8），所以这里盖一颗官方的。
-            const GLuint closeTex = selectTex(renderer, "btn_close_dbl");
-            {
-                const float d = 44.0f * wk;
-                const ImVec2 c0(hi.x - 15.0f * wk - d, lo.y + 15.0f * wk);
-                ImGui::SetCursorScreenPos(c0);
-                ImGui::PushID("filterclose");
-                ImGui::InvisibleButton("##x", ImVec2(d, d));
-                const bool hot = ImGui::IsItemHovered();
-                const bool hit = ImGui::IsItemClicked();
-                ImGui::PopID();
-                if (closeTex != 0) {
-                    dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(closeTex)),
-                        c0, ImVec2(c0.x + d, c0.y + d), ImVec2(0, 0), ImVec2(1, 1),
-                        hot ? IM_COL32(255, 255, 255, 210) : IM_COL32(255, 255, 255, 255));
-                }
-                if (hit) {
-                    ui::se(ui::SeClick);
-                    gFilterOpen = false;
-                }
-            }
-
-            // 内容区：bg_base_r20_wh 白 29.8%（原件 m_Color a=0.298）。
+            // 内容区：白 29.8%（原件 m_Color a=0.298）。
             const float padX = 64.0f * wk; // 内容列表 padding L64 R64
             const float contentW = 1032.0f * wk;
             const float contentX = cardCenter.x - contentW * 0.5f;
             const float contentTop = lo.y + 92.0f * wk;
             const float contentBottom = hi.y - 24.0f * wk - 96.0f * wk - 26.0f * wk;
             {
-                const GLuint box = selectTex(renderer, "bg_base_r20_wh");
-                if (box != 0) {
-                    addNinePatch(dl, box, 50, 50, ImVec2(contentX, contentTop),
-                        ImVec2(contentX + contentW, contentBottom), 24.0f, 24.0f, wk,
-                        IM_COL32(255, 255, 255, 76));
-                } else {
-                    dl->AddRectFilled(ImVec2(contentX, contentTop),
-                        ImVec2(contentX + contentW, contentBottom),
-                        IM_COL32(255, 255, 255, 76), 20.0f * wk);
-                }
+                dl->AddRectFilled(ImVec2(contentX, contentTop),
+                    ImVec2(contentX + contentW, contentBottom),
+                    IM_COL32(255, 255, 255, 76), 20.0f * wk);
             }
             (void)padX;
 
@@ -8508,20 +8314,11 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
                 // UIPartsDialogMainTitle: 1032x44 = 文字 40 + 下划线 4。
                 dl->AddText(sfont, 32.0f * wk, ImVec2(contentX + 6.0f * wk, y + 2.0f * wk),
                     titleInk, title);
-                const GLuint lineTex = selectTex(renderer, "bg_base_wh");
-                const ImVec2 l0(contentX, y + 40.0f * wk);
-                const ImVec2 l1(contentX + contentW, y + 44.0f * wk);
-                if (lineTex != 0) {
-                    dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(lineTex)),
-                        l0, l1, ImVec2(0, 0), ImVec2(1, 1), lineInk);
-                } else {
-                    dl->AddRectFilled(l0, l1, lineInk);
-                }
+                dl->AddRectFilled(ImVec2(contentX, y + 40.0f * wk),
+                    ImVec2(contentX + contentW, y + 44.0f * wk), lineInk);
             };
 
             // 单选一行：72 圆盘 + 36 勾 + 标签（原件 256x50 @ +78）。
-            const GLuint radioTex = selectTex(renderer, "btn_circle56_wh");
-            const GLuint tickTex = selectTex(renderer, "icon_radio_gn");
             const auto drawRadio = [&](int slot, float x, float y, const char* label, bool on,
                                        bool enabled = true) {
                 ImGui::SetCursorScreenPos(ImVec2(x, y));
@@ -8544,37 +8341,21 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
                 const ImU32 discTint = enabled ? (hot && !on ? IM_COL32(255, 255, 255, 255)
                                                              : IM_COL32(255, 255, 255, 245))
                                                : IM_COL32(230, 230, 238, 255);
-                if (radioTex != 0) {
-                    dl->AddImage(reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(radioTex)),
-                        c0, c1, ImVec2(0, 0), ImVec2(1, 1), discTint);
-                } else {
-                    dl->AddCircleFilled(ImVec2((c0.x + c1.x) * 0.5f, (c0.y + c1.y) * 0.5f),
-                        36.0f * wk, discTint, 32);
-                }
+                dl->AddCircleFilled(ImVec2((c0.x + c1.x) * 0.5f, (c0.y + c1.y) * 0.5f),
+                    36.0f * wk, discTint, 32);
                 if (on) {
                     // 勾 36x36，在 72 盘里居中（原件 Checkmark 与 Radio 同尺寸、
-                    // 内缩 18）—— icon_radio_gn 本身就是一颗薄荷圆点。
-                    const ImVec2 t0(x + 18.0f * wk, y + 18.0f * wk);
-                    const ImVec2 t1(x + 54.0f * wk, y + 54.0f * wk);
-                    if (tickTex != 0) {
-                        dl->AddImage(
-                            reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(tickTex)),
-                            t0, t1, ImVec2(0, 0), ImVec2(1, 1),
-                            enabled ? IM_COL32(255, 255, 255, 255) : IM_COL32(200, 200, 210, 255));
-                    } else {
-                        dl->AddCircleFilled(ImVec2(x + 36.0f * wk, y + 36.0f * wk),
-                            18.0f * wk, IM_COL32(119, 238, 221, 255), 28);
-                    }
+                    // 内缩 18）—— 原作那颗就是一颗薄荷圆点。
+                    dl->AddCircleFilled(ImVec2(x + 36.0f * wk, y + 36.0f * wk),
+                        18.0f * wk,
+                        enabled ? IM_COL32(119, 238, 221, 255) : IM_COL32(200, 200, 210, 255), 28);
                 }
                 dl->AddText(sfont, 32.0f * wk, ImVec2(x + 78.0f * wk, y + 20.0f * wk),
                     !enabled ? dimInk : (on ? labelInk : IM_COL32(85, 85, 119, 200)), label);
                 return hit;
             };
 
-            // 复选一行：56 方框（bg_base_r16_wh）+ 44x34 勾 + 标签（200x50 @ +78）。
-            const GLuint boxTex = selectTex(renderer, "bg_base_r16_wh");
-            const GLuint boxShadow = selectTex(renderer, "bg_base_shadow_r16");
-            const GLuint checkTex = selectTex(renderer, "icon_check_pk");
+            // 复选一行：56 方框 + 44x34 勾 + 标签（200x50 @ +78）。
             const auto drawCheck = [&](int slot, float x, float y, const char* label, bool on,
                                        bool enabled) {
                 const float hitW = 288.0f * wk;
@@ -8594,34 +8375,21 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
                 }
                 const ImVec2 b0(x + 8.0f * wk, y + 8.0f * wk);
                 const ImVec2 b1(x + 64.0f * wk, y + 64.0f * wk);
-                if (boxShadow != 0) {
-                    addNinePatch(dl, boxShadow, 60, 60, ImVec2(b0.x - 2.0f * wk, b0.y - 2.0f * wk),
-                        ImVec2(b1.x + 2.0f * wk, b1.y + 2.0f * wk), 30.0f, 30.0f, wk,
-                        IM_COL32(0, 0, 0, 30));
-                }
+                // 原件在这底下还有一层 bg_base_shadow_r16，但那张图仓库里从来没有
+                // （assets/ 全局搜不到），所以一直就是"没有阴影"的样子 —— 保持原样。
                 const ImU32 fill = enabled ? IM_COL32(255, 255, 255, 255)
                                            : IM_COL32(230, 230, 238, 255);
-                if (boxTex != 0) {
-                    addNinePatch(dl, boxTex, 44, 44, b0, b1, 21.0f, 21.0f, wk, fill);
-                } else {
-                    dl->AddRectFilled(b0, b1, fill, 16.0f * wk);
-                }
+                dl->AddRectFilled(b0, b1, fill, 16.0f * wk);
                 if (on) {
                     const ImVec2 t0((b0.x + b1.x) * 0.5f - 22.0f * wk,
                         (b0.y + b1.y) * 0.5f - 17.0f * wk);
-                    const ImVec2 t1(t0.x + 44.0f * wk, t0.y + 34.0f * wk);
-                    if (checkTex != 0) {
-                        dl->AddImage(
-                            reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(checkTex)),
-                            t0, t1, ImVec2(0, 0), ImVec2(1, 1),
-                            enabled ? IM_COL32(255, 255, 255, 255) : IM_COL32(200, 200, 210, 255));
-                    } else {
-                        const ImVec2 p0(t0.x + 6.0f * wk, t0.y + 16.0f * wk);
-                        const ImVec2 p1(t0.x + 17.0f * wk, t0.y + 27.0f * wk);
-                        const ImVec2 p2(t0.x + 38.0f * wk, t0.y + 7.0f * wk);
-                        dl->AddLine(p0, p1, IM_COL32(255, 119, 172, 255), 4.0f * wk);
-                        dl->AddLine(p1, p2, IM_COL32(255, 119, 172, 255), 4.0f * wk);
-                    }
+                    const ImVec2 p0(t0.x + 6.0f * wk, t0.y + 16.0f * wk);
+                    const ImVec2 p1(t0.x + 17.0f * wk, t0.y + 27.0f * wk);
+                    const ImVec2 p2(t0.x + 38.0f * wk, t0.y + 7.0f * wk);
+                    const ImU32 ink = enabled ? IM_COL32(255, 119, 172, 255)
+                                              : IM_COL32(200, 200, 210, 255);
+                    dl->AddLine(p0, p1, ink, 4.0f * wk);
+                    dl->AddLine(p1, p2, ink, 4.0f * wk);
                 }
                 dl->AddText(sfont, 32.0f * wk, ImVec2(x + 78.0f * wk, y + 20.0f * wk),
                     enabled ? labelInk : dimInk, label);
@@ -8710,7 +8478,6 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
             const float gap = 24.0f * wk;
             const float btnX0 = cardCenter.x - (bw * 2.0f + gap) * 0.5f;
             const float btnY = hi.y - 24.0f * wk - bh;
-            const GLuint btnTex = selectTex(renderer, "btn_round_h80_wh");
             const GLuint glowTex = selectTex(renderer, "eff_btn_round_h80_a70_wh");
             const auto drawOkCancel = [&](int slot, float x, const char* label, bool primary) {
                 const ImVec2 b0(x, btnY);
@@ -8732,16 +8499,13 @@ int drawSongSelect(platform::Renderer& renderer, const std::vector<ChartEntry>& 
                         ImVec2(b1.x + 4.0f * wk, b1.y + 4.0f * wk), 56.0f, 52.0f, wk,
                         IM_COL32(255, 255, 255, held ? 200 : (hot ? 150 : 110)));
                 }
-                // ButtonImage = btn_round_h80_wh（白胶囊，51/0/51/0 的九宫格）。
+                // 白胶囊。原作那张 btn_round_h80_wh 的描边是 51/0/51/0，在 96 高
+                // 的按钮上就是一枚整圆头胶囊 —— 和 bh*0.5f 的手绘结果一致。
                 const ImU32 fill = primary ? (held ? IM_COL32(227, 252, 248, 255)
                                                    : IM_COL32(255, 255, 255, 255))
                                            : (held ? IM_COL32(238, 238, 246, 255)
                                                    : IM_COL32(255, 255, 255, 255));
-                if (btnTex != 0) {
-                    addNinePatch4(dl, btnTex, 106, 96, b0, b1, 51.0f, 51.0f, 0.0f, 0.0f, wk, fill);
-                } else {
-                    dl->AddRectFilled(b0, b1, fill, bh * 0.5f);
-                }
+                dl->AddRectFilled(b0, b1, fill, bh * 0.5f);
                 const ImVec2 ts = sfont->CalcTextSizeA(32.0f * wk, FLT_MAX, 0.0f, label);
                 dl->AddText(sfont, 32.0f * wk,
                     ImVec2(b0.x + (bw - ts.x) * 0.5f, b0.y + (bh - ts.y) * 0.5f), titleInk, label);
