@@ -92,11 +92,22 @@ cp -f musics.json music-vocals.json music-levels.json music-aliases.json \
 # exe, so the folder has to keep its name).
 if [ "$WITH_ASSETS" = "1" ]; then
     cp -r assets "$OUT/assets"
-    # assets/mmw/overlay/** is never read at runtime: Renderer::loadHud() looks in
-    # overlay_opt/ first and the whole overlay_opt tree exists, so the upstream
-    # originals there are only the source shrink_hud regenerates from. That is
-    # ~5 MB of official art that does not belong in a download (see COPYRIGHT.md).
-    rm -rf "$OUT/assets/mmw/overlay"
+    # assets/mmw/overlay/** 里只有一部分是 overlay_opt/** 的源图。shrink_hud 生成
+    # _opt 的时候只覆盖了当时存在的那批（2026-09-19），之后新增的 result/、
+    # multi/、multi_result/、select_bg/、select_badge/、mv_line.png **没有**
+    # _opt 副本，而运行时 Renderer::loadHud()、SongSelect 的 selectBgTex()/
+    # badgeTex()、StageBackground 都会回落到 overlay/。
+    #
+    # 原来这里是一句 `rm -rf assets/mmw/overlay`，结果成品包缺 69 个素材：
+    # 结算第一段（LIVE RESULT 大字 + SCORERANK 牌 + 进度条）、多人 HUD、
+    # 选曲背景图案、舞台底板全部静默消失（2026-11-27 修）。现在只删**有
+    # _opt 孪生**的文件，剩下的照发。
+    if [ -d "$OUT/assets/mmw/overlay_opt" ]; then
+        ( cd "$OUT/assets/mmw/overlay_opt" && find . -type f -print ) | while IFS= read -r rel; do
+            rm -f "$OUT/assets/mmw/overlay/$rel"
+        done
+        find "$OUT/assets/mmw/overlay" -type d -empty -delete 2>/dev/null || true
+    fi
     # assets/mmw/effects/*.json are compiled into the exe as C++ strings and
     # assets/mmw/sound is the upstream copy of assets/se - neither is read.
     rm -rf "$OUT/assets/mmw/effects" "$OUT/assets/mmw/sound"

@@ -18,6 +18,18 @@ main.cpp 的直连路径）。贴图/音效都是按 key 缓存加载的，没�
   - assets/mmw/overlay/**  是 overlay_opt/** 的源图（shrink_hud.cpp 生成 _opt），
     运行时读的是 _opt；删了原图就再也生成不出来了。
   - CREDITS.md/COPYRIGHT.md 里登记的素材要按那两份文档的结论处理。
+
+⚠ **2026-11-27 更正：下面这份 spec 是 2026-09-19 的快照，已经过期。**
+  它不认 assets/select/（selectTex 的 80 多张）、assets/final/、
+  assets/story/ui/pjsk/、assets/mmw/overlay/select_badge|select_bg，
+  也**没有** result/、multi/、multi_result/、mv_line 这些后来才加进 overlay/ 的目录。
+  更要紧的是"overlay 运行时全都不读"这句只对**有 _opt 孪生**的那 103 个文件成立：
+  2026-10-25 之后新增的 result/、multi/、select_bg/、select_badge/、mv_line.png
+  从来就没有 _opt 副本，运行时是直接读 overlay/ 的。
+  当时 package.sh 信了这句话、`rm -rf assets/mmw/overlay`，结果成品包缺 69 个素材
+  （结算第一段、多人 HUD、选曲背景图案、舞台底板全没了）。
+  **要判"某个文件到底会不会被读"，以 `package.sh` 里那段"只删有 _opt 孪生的文件"
+  的实测逻辑为准，别信这里的静态清单。**
 """
 import fnmatch
 import os
